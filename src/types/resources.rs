@@ -467,6 +467,25 @@ impl ListResourceTemplatesResult {
     ///
     /// Emitted only on the `2026-07-28` projection; stripped on v1 (D-11).
     ///
+    /// # ⚠ Not reachable through either native dispatcher
+    ///
+    /// Unlike the same builder on [`ListResourcesResult`] and
+    /// [`ReadResourceResult`], this one cannot be reached by configuring a
+    /// server. [`ResourceHandler`](crate::server::ResourceHandler) declares only
+    /// `read` and `list` — it has NO templates method — so both native
+    /// dispatchers answer `resources/templates/list` from a hardcoded empty
+    /// result (`ServerCore::handle_list_resource_templates` in
+    /// `src/server/core.rs`, and the same-named method in `src/server/mod.rs`).
+    /// A `resources/templates/list` response therefore always carries the SDK
+    /// default (`ttlMs: 0`, `cacheScope: "private"`) on v2, whatever a handler
+    /// would have preferred.
+    ///
+    /// The builder is kept rather than removed because the type is `pub` and
+    /// constructible by anyone assembling the result themselves — a custom
+    /// transport, a proxy, or a test. Adding a templates seam to
+    /// `ResourceHandler` would be a breaking trait change and is deliberately
+    /// out of Phase 115's scope (recorded as a deferred item).
+    ///
     /// ```rust
     /// use pmcp::types::ListResourceTemplatesResult;
     ///

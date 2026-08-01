@@ -440,20 +440,28 @@ bindings:
   notes: TKIT-08 / D-10 / review R7 — fallible companion to `code_mode_from_config`. R9 enforcement fires here before `.build()` is reached.
 
 # === JSON Schema 2020-12 + Caching Hints (Phase 115) ===
-# Written in wave 1, BEFORE the implementation plans run (CLAUDE.md § Contract-First
-# Development). Every entry below carries the `planned` status EXCEPT
-# `CallToolResult::structured`, which exists today and whose binding records the D-06
-# freeze. A `planned` status means "this plan
-# has not landed yet", NOT "this binding is exempt": tests/phase115_contract_bindings.rs
-# scopes `planned` to exactly these three equations so it cannot become an escape hatch,
-# and 115-10 flips each entry to `implemented` as its owning plan lands.
+# Written in wave 1, BEFORE the implementation plans ran (CLAUDE.md § Contract-First
+# Development). Twelve of the thirteen entries landed as `status: planned` — the
+# functions did not exist yet — with `CallToolResult::structured` the exception, an
+# entry that exists today and records the D-06 freeze.
+#
+# 115-10 (wave 6) flipped ALL of them to `implemented` once every owning plan had
+# landed, verified each `signature:` against the shipped source, and added a
+# fourteenth binding for `compile_for_era`, which 115-03 delivered without a
+# contract entry (deferred item, ledger entry J). From that point the ghost-binding
+# check in tests/phase115_contract_bindings.rs is LOAD-BEARING over all fourteen:
+# a binding naming a symbol nobody wrote now fails the gate.
+#
+# `planned` was never an exemption — tests/phase115_contract_bindings.rs scopes it to
+# exactly these three equations so it cannot become an escape hatch elsewhere. There
+# are now ZERO `planned` bindings in this file, which is the intended end state.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
   function: warn_on_schema_mismatch
   module_path: pmcp::server::output_validation
   signature: 'pub(crate) fn warn_on_schema_mismatch(tool: &str, schema: &Value, value: &Value, era: Option<Era>)'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-03 Task 2. Exists today with the same name but WITHOUT the trailing
     `era` parameter; the plan threads the era through as the LAST parameter so the
@@ -464,7 +472,7 @@ bindings:
   function: schema_mismatch
   module_path: pmcp::server::output_validation
   signature: 'pub(crate) fn schema_mismatch(schema: &Value, value: &Value, era: Option<Era>) -> Option<String>'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-03 Task 2. `#[cfg(feature = "validation")]`. Returns `Some` on mismatch
     AND on a schema that fails to compile — the message names `outputSchema` in the latter
@@ -474,19 +482,23 @@ bindings:
   equation: output_schema_draft_pin
   function: cached_validator
   module_path: pmcp::server::output_validation
-  signature: 'fn cached_validator(era: Option<Era>, schema: &Value) -> Result<Arc<jsonschema::Validator>, Arc<str>>'
-  status: planned
+  signature: 'fn cached_validator(era: Option<Era>, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>, std::sync::Arc<str>>'
+  status: implemented
   notes: >-
     Written by 115-03 Task 2. `#[cfg(feature = "validation")]`. The cache key becomes
     `(Era, canonical schema text)` so one era's validator is never served to the other;
     the Arc-cached, error-cached, poison-recovering shape is preserved. SCHM-01 / D-01.
+    115-10 SIGNATURE CORRECTION: 115-11 recorded the return type as
+    `Result<Arc<…>, Arc<str>>`; the shipped source writes both paths in full
+    (`std::sync::Arc`) because the `use` is function-local. Same types, different
+    spelling — recorded rather than silently rewritten (ledger entry F).
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
   function: normalize_schema_dialect
   module_path: pmcp::server::output_validation
   signature: "fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value>"
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Pure and idempotent:
     `Cow::Borrowed` when the root `$schema` is absent or already 2020-12, otherwise a clone
@@ -498,7 +510,7 @@ bindings:
   function: compile_2020_12
   module_path: pmcp::server::output_validation
   signature: "fn compile_2020_12(schema: &Value) -> Result<jsonschema::Validator, jsonschema::ValidationError<'static>>"
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Calls
     `normalize_schema_dialect` then `jsonschema::draft202012::new`, warning when the
@@ -506,11 +518,28 @@ bindings:
     disabled — an external `$ref` must fail to COMPILE with zero I/O. SCHM-01 / D-02, D-03.
 
 - contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: compile_for_era
+  module_path: pmcp::server::output_validation
+  signature: "fn compile_for_era(era: Era, schema: &Value) -> Result<jsonschema::Validator, std::sync::Arc<str>>"
+  status: implemented
+  notes: >-
+    ADDED BY 115-10, not by wave 1 — 115-03 Task 2(c) mandated this uncached per-era
+    compile path but no binding was written for it, which 115-03 REPORTED as a deferred
+    item rather than absorbing (ledger entry J). It is the era BRANCH itself: `Era::V1`
+    is today's `jsonschema::validator_for` auto-detect VERBATIM (D-01's freeze, and the
+    only auto-detect entry point left in the module), `Era::V2` is `compile_2020_12`.
+    Split out of `cached_validator` so a fuzz or property target can compile arbitrary
+    generated schemas without growing the process-global cache — which is what makes
+    115-09's `fuzzing`-gated `SchemaVerdict` seam possible.
+    `#[cfg(feature = "validation")]`. SCHM-01 / D-01, D-02.
+
+- contract: mcp-protocol-sdk-v1.yaml
   equation: structured_content_shape
   function: CallToolResult::structured_value
   module_path: pmcp::types::tools
   signature: 'pub fn structured_value(value: Value) -> Self'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-04 Task 2. The ADDITIVE widening sibling for non-object payloads —
     array, string, number, boolean and null. `Some(Value::Null)` must serialize as an
@@ -533,7 +562,7 @@ bindings:
   function: CacheScope
   module_path: pmcp::types::caching
   signature: 'pub enum CacheScope { Public, Private }'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-05 Task 1(a). The CLOSED union the published 2026-07-28 schema declares;
     an unknown value must fail to deserialize. Its rustdoc carries the spec's security
@@ -545,7 +574,7 @@ bindings:
   function: DEFAULT_TTL_MS
   module_path: pmcp::types::caching
   signature: 'pub const DEFAULT_TTL_MS: u64'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-05 Task 1(b). Value `0` — "immediately stale, the client MAY re-fetch
     every time", i.e. the default asserts nothing about cacheability. `u64` (not `f64`)
@@ -557,7 +586,7 @@ bindings:
   function: Cacheable
   module_path: pmcp::types::caching
   signature: 'pub(crate) enum Cacheable { Yes, No }'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-05 Task 1(c). The caller's classification, needed because the request is
     already moved by the time the native chokepoint runs. Exactly six results extend
@@ -567,9 +596,14 @@ bindings:
   equation: result_caching_hints
   function: project_caching_hints
   module_path: pmcp::types::caching
-  signature: 'pub(crate) fn project_caching_hints(value: &mut Value, era: Option<Era>, cacheable: Cacheable)'
-  status: planned
+  signature: 'pub(crate) fn project_caching_hints(value: &mut serde_json::Value, era: Option<crate::types::protocol::Era>, cacheable: Cacheable)'
+  status: implemented
   notes: >-
+    115-10 SIGNATURE CORRECTION: 115-11 recorded `&mut Value` / `Option<Era>`; the
+    shipped source writes both paths in FULL, deliberately — `src/types/caching.rs` is
+    cfg-free so the wasm32-only dispatcher can call it, and writing
+    `crate::types::protocol::Era` inline avoids a `use` that would have to survive both
+    cfg worlds. Same types, different spelling (ledger entry F).
     Written by 115-05 Task 1(d). THE single projection point (D-12): `Cacheable::No` is the
     identity, `Some(Era::V2)` ensures both keys without overwriting handler intent, and
     every other input — v1 AND a `None` protocol context — STRIPS both. Deliberately
@@ -579,9 +613,13 @@ bindings:
   equation: result_caching_hints
   function: inject_v2_result_envelope
   module_path: pmcp::server::core
-  signature: 'pub(crate) fn inject_v2_result_envelope(response: &mut JSONRPCResponse, protocol_context: Option<&ProtocolContext>, server_info: &Implementation, disposition: ResponseDisposition, owner: ReservedFieldOwner, cacheable: Cacheable)'
-  status: planned
+  signature: 'pub(crate) fn inject_v2_result_envelope(response: &mut JSONRPCResponse, protocol_context: Option<&crate::types::protocol::ProtocolContext>, server_info: &Implementation, disposition: ResponseDisposition, owner: ReservedFieldOwner, cacheable: Cacheable)'
+  status: implemented
   notes: >-
+    115-10 SIGNATURE CORRECTION: 115-11 recorded `Option<&ProtocolContext>`; the shipped
+    source writes `Option<&crate::types::protocol::ProtocolContext>` in full. Same type,
+    different spelling (ledger entry F). Every other parameter, including the trailing
+    `cacheable`, landed exactly as recorded.
     EXISTS TODAY (src/server/core.rs:1561) but WITHOUT the trailing `cacheable` parameter,
     and it early-returns on v1 — so 115-06 Task 1 both extends the signature and
     restructures it so the strip arm runs on BOTH eras. `cacheable` has no default and
@@ -592,7 +630,7 @@ bindings:
   function: request_is_cacheable
   module_path: pmcp::server::core
   signature: 'pub(crate) fn request_is_cacheable(request: &Request) -> Cacheable'
-  status: planned
+  status: implemented
   notes: >-
     Written by 115-06 Task 2. ONE shared classifier both native dispatchers call — never a
     second copy in `src/server/mod.rs`. Returns `Yes` for exactly the five list/read client

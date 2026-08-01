@@ -282,10 +282,16 @@ pub struct ListPromptsResult {
     /// **No builder by design.** `ListPromptsResult` is built by the dispatcher
     /// from the registered prompt set, with no handler seam, so a builder
     /// method here would be public API no server author can reach through
-    /// normal configuration — unlike the three resource-side results, which a
-    /// `ResourceHandler` returns and which therefore do carry builders. The
-    /// field stays `pub`, so a caller constructing the struct directly can
-    /// still set it.
+    /// normal configuration — unlike `ListResourcesResult` and
+    /// `ReadResourceResult`, which a
+    /// [`ResourceHandler`](crate::server::ResourceHandler) returns from `list`
+    /// and `read` and which therefore do carry builders. The field stays `pub`,
+    /// so a caller constructing the struct directly can still set it.
+    ///
+    /// (`ListResourceTemplatesResult` carries builders too, but is NOT
+    /// handler-reachable — see its own note. Two of the six cacheable results
+    /// are settable through a handler, not three; 115-10 corrected an earlier
+    /// version of this paragraph that said three.)
     ///
     /// Adding this field is additive rather than a major bump because this
     /// struct is `#[non_exhaustive]`, so `cargo semver-checks`'

@@ -1,59 +1,776 @@
 # Phase 115 — Deferred Items
 
-Out-of-scope discoveries logged during execution. 115-10 owns booking these.
+Out-of-scope discoveries logged during execution. Each was **measured, attributed and NOT fixed**
+inside the plan that found it — either because it is pre-existing and unrelated, or because it
+belongs to a later plan or a later phase.
 
-## From 115-11 (contract-first equations + binding resolver)
+**Closed out by `115-10` on 2026-08-01.** Every entry below names an **Owner:** or says explicitly
+that it is **unowned**. An unowned item is acceptable; an undocumented one is not.
 
-| # | Item | Evidence | Suggested owner |
-|---|------|----------|-----------------|
-| D-115-11-A | **Contract location deviation (T-115-32).** CLAUDE.md § "Contract-First Development" names `../provable-contracts/contracts/<crate>/`, which does not exist in this checkout (`ls ../provable-contracts` → `No such file or directory`). pmat's CB-1200 advisory points at the same missing path. The contracts this repo uses are in-repo at `contracts/`. | 115-11 SUMMARY § Deferred Items 1 | 115-10 — decide: correct CLAUDE.md, or document the sibling repo as a prerequisite |
-| D-115-11-B | **21 bound-but-uncontracted equations.** All 46 pre-existing `contracts/binding.yaml` entries declare `contract: mcp-protocol-sdk-v1.yaml`, but 21 of their equations (the `pmcp-server-toolkit` set from Phase 83+) are defined in no contract file. Frozen in `LEGACY_UNCONTRACTED_EQUATIONS`. | `tests/phase115_contract_bindings.rs` | needs an owner: write `contracts/toolkit-v1.yaml`, or move those bindings to their own file |
-| D-115-11-C | **`function: ErrorCode constants` is prose, not an identifier** (`contracts/binding.yaml:119`). Frozen as the single `LEGACY_UNRESOLVED` entry. One-line fix, outside 115-11's zero-production-byte scope. | 115-11 SUMMARY § Deviation 2 | 115-10 |
-| D-115-11-D | **Signature drift is caught by review, not by the gate.** The resolver matches on function NAME. Four Phase 115 bindings (`warn_on_schema_mismatch`, `schema_mismatch`, `cached_validator`, `inject_v2_result_envelope`) name functions that exist today with DIFFERENT signatures than the ones recorded. | `contracts/binding.yaml` Phase 115 section | 115-10 must diff each recorded `signature:` against what landed |
-| D-115-11-E | **pmat CB-1208's binding count is cache-driven** — it moved 49 → 50 for a +13-binding change, and matches neither on-disk total. `Makefile:802-804` already documents the detector as needing `pmat comply refresh-bindings`. | 115-11 SUMMARY § comply diff, finding 3 | anyone who later wants to rely on pmat's ghost-binding detector |
-| D-115-11-F | **New pmat info advisory** `CB-951: Excessive nesting depth 18 (threshold: 14)` at `contracts/mcp-protocol-sdk-v1.yaml:323` — a continuation line inside a `formula: \|` literal block scalar. Assessed as a heuristic false positive; left in place rather than re-indented for a counter. | 115-11 SUMMARY § comply diff, finding 4 | 115-10 (record only) |
-| D-115-11-G | **REQUIREMENTS.md books SCHM-01/02/03 `Complete` on contract-only evidence.** 115-11's frontmatter declares all three (as 115-01 does), so the per-plan `requirements mark-complete` step flipped them while the implementation plans 115-03..115-09 have not run. The checkbox text describes runtime behaviour, not a contract equation. | `.planning/REQUIREMENTS.md:146-148, 276-278` | 115-10 — reconcile the booking against what actually landed before the phase closes |
+---
 
-## From 115-03 (Draft 2020-12 pin + era-keyed validator cache)
+## Renumbering, and why the old IDs are written without their `D-` prefix
 
-| # | Item | Evidence | Suggested owner |
-|---|------|----------|-----------------|
-| D-115-03-A | **The five `output_schema_draft_pin` bindings still read `status: planned`** after this plan landed all five functions. `contracts/binding.yaml` was deliberately NOT edited: it is not in 115-03's `files_modified`, and the plan's Task 2 `read_first` frames the contract as read-only for this task ("a divergence is a finding to report, not to absorb"). `tests/phase115_contract_bindings.rs` passes either way — `planned` is legal on the three Phase 115 equations — so nothing is red, but the ledger now understates reality. | `contracts/binding.yaml:452-506`; `src/server/output_validation.rs` | 115-10 — flip the five to `implemented` (this also discharges D-115-11-D for three of its four entries: the recorded signatures match what landed byte-for-byte) |
-| D-115-03-B | **`compile_for_era` has no binding entry.** Plan 115-03 Task 2(c) mandates the uncached per-era compile path (it is what lets 115-09's fuzz seam compile without growing the process-global cache), but `contracts/binding.yaml`'s `output_schema_draft_pin` section records only five functions and does not include it. Reported, not absorbed, per the plan's own instruction. `EXPECTED_PHASE_115_BINDINGS` requires ≥5, so adding a sixth needs no test edit. | `src/server/output_validation.rs` `compile_for_era`; `contracts/binding.yaml:452-506` | 115-10 — add the sixth binding, or record why the fuzz seam is deliberately uncontracted |
-| D-115-03-C | **115-RESEARCH's era-divergence example is wrong for `jsonschema` 0.49.2.** The plan (and the research it cites) names `dependencies` as the keyword that "stops applying under the pin" because 2020-12 split it into `dependentRequired`/`dependentSchemas`. Measured: `jsonschema` 0.49.2 still honours `dependencies` under the 2020-12 pin, so BOTH eras reject the same instance and the cache-fence test built on it failed. Corrected inline (Rule 1) to `contentEncoding` — an assertion in draft-07, an annotation from 2019-09 on. The plan's broader non-monotonicity claim survives and is now measured in BOTH directions (`contentEncoding`: v2 more permissive; `$ref` siblings: v2 stricter). | `src/server/output_validation.rs` `era_divergent_schema`; 115-03 SUMMARY § Deviations | 115-10 — correct 115-RESEARCH § Pattern 2 / Finding 1 so 115-09 does not inherit the wrong example |
-| D-115-03-D | **The plan's `pmat analyze complexity` jq path does not exist in pmat 3.15.0.** `pmat analyze complexity --format json --max-cognitive 25 \| jq '.violations[]'` yields `null` (jq exits 5), because violations live at `.summary.violations[]`. Separately, the top-level `.files[]` array is truncated to `--top-files` (default 5), so a per-file lookup by path silently finds nothing regardless of the flag. The check was run correctly via `.summary.violations` and via `pmat quality-gate --fail-on-violation --checks complexity`. | This plan's Task 2/Task 4 `<verify>` blocks | 115-10 — fix the command in any remaining plan that copies it (115-06, 115-07, 115-09 verify blocks) |
+The wave-1..wave-5 plans appended to this file as a **table** of plan-scoped IDs of the form
+`D-115-<plan>-<letter>`. `115-10` rewrote the file into the Phase 114 one-heading-per-item form so
+that every item can carry an owner, a verdict and a body rather than a table cell.
 
-## From 115-04 (non-object structuredContent on v2)
+Two consequences a reader should know about:
 
-| # | Item | Evidence | Suggested owner |
-|---|------|----------|-----------------|
-| D-115-04-A | **A present `structuredContent: null` does not survive a typed re-read.** The SERVER is correct — `skip_serializing_if = "Option::is_none"` omits the key for `None` and emits an explicit `null` for `Some(Value::Null)`, and both dispatchers put `"structuredContent":null` on the wire (asserted twice). The collapse is on the way BACK IN: serde's default `Option<T>` deserializer maps a JSON `null` onto `None`, so `CallToolResult`'s own `Deserialize` cannot distinguish "structured content is null" from "no structured content" — a distinction the 2026-07-28 schema explicitly permits (`structuredContent?: unknown`, "…or null"). NOT fixed in 115-04: it is pre-existing (the field has always been `Option<Value>` with default serde semantics), it is not a wire defect, and a `deserialize_with` fix would change the client-side meaning of every `CallToolResult` on BOTH eras. Fenced by the tripwire test `present_null_structured_content_does_not_survive_a_typed_reread`. | `tests/structured_tool_output.rs` § the tripwire test; `src/types/tools.rs:565` | 115-10 — decide: accept and document as a v2 client limitation, or book a `deserialize_with` change as its own plan with a client-side impact review |
-| D-115-04-B | **The `structured_value` binding still reads `status: planned`** after 115-04 landed the function with the exact recorded signature (`pub fn structured_value(value: Value) -> Self`). `contracts/binding.yaml` was deliberately NOT edited — same posture 115-03 took (D-115-03-A), and it is not in 115-04's `files_modified`. `tests/phase115_contract_bindings.rs` passes either way, so nothing is red; the ledger just understates reality. | `contracts/binding.yaml:509-517`; `src/types/tools.rs` | 115-10 — flip alongside 115-03's five `output_schema_draft_pin` bindings |
-| D-115-04-C | **`tests/test_websocket_server.rs` binds a hardcoded `127.0.0.1:9005`**, so two concurrent `make quality-gate` runs (or any process holding that port) turn the gate red with `Address already in use (os error 48)` — a false red that costs a full gate cycle to diagnose. The tests pass in isolation (6 passed). Not a Phase 115 defect; surfaced because 115-04 hit it. | 115-04 SUMMARY § `make quality-gate`, first attempt | anyone touching the websocket test harness — bind port 0 and read back the assigned port |
+1. **The IDs changed.** The crosswalk below maps every old ID to its new one. Landed SUMMARY files
+   are **not** being rewritten — a reader arriving from `115-03-SUMMARY.md` looking for the old
+   `03-A` should read entry **`H`** here.
+2. **The old IDs are spelled without their leading `D-` in the crosswalk.** `115-10`'s own
+   acceptance criteria include a duplicate-ID check —
+   `grep -n 'D-115-' … | awk -F'D-115-' '{print $2}' | cut -c1 | sort | uniq -d` must return
+   nothing — which is only meaningful if *every* line containing the literal `D-115-` is a heading.
+   Writing the old plan-scoped IDs with their leading `D-` prefix in a crosswalk row would make the
+   check report a false duplicate on a digit. The prefix is dropped rather than the crosswalk — the
+   IDs stay greppable as `115-03-A` and friends. This collision between a
+   grep-shaped criterion and a prose requirement is itself recorded, as entry **`1`**.
 
-## From 115-05 (CacheableResult slots + the cfg-free projector)
+**For the next plan that appends here:** every letter `A`–`Z` and every digit `0`–`9` is taken.
+Run `grep -c "^## D-115-"` before choosing an ID, and since the alphabet is full, start a
+two-character scheme deliberately rather than by accident — Phase 114's ledger records an
+ID-collision incident caused by exactly that omission. Note that a two-character scheme also
+breaks the first-character duplicate check quoted above; extend the check with it.
 
-| # | Item | Evidence | Suggested owner |
-|---|------|----------|-----------------|
-| D-115-05-A | **The wasm v1 strip is proven only NATIVELY and at COMPILE time.** `project_caching_hints`'s `era = None` arm is what stops a `WasmMcpServer` handler's `with_cache_scope` reaching that dispatcher's v1 wire, but no wasm test executes it: `src/server/wasm_server_tests.rs` is `cfg(all(test, target_arch = "wasm32"))` and `cargo check --target wasm32-unknown-unknown --profile test` cannot build the dev-dependency graph (`mio` has no wasm32 support). The runnable proof is the NATIVE unit test `no_context_strips_both_keys_which_is_the_wasm_path`; the wasm proof is `make wasm-build` (compile only). 115-08's source tripwire is the third leg. | `src/types/caching.rs` § `projection_tests`; `src/server/mod.rs:231` | 115-10 — decide whether a `wasm-bindgen-test` harness is worth standing up, or accept the three-legged proof |
-| D-115-05-B | **`src/server/traits.rs` and `src/server/wasm_server_tests.rs` are both ORPHANS.** There is no `mod traits` declaration anywhere, so `traits.rs` compiles on NO target. `wasm_server_tests.rs` is declared but its cfg cannot be satisfied by any runnable command, and it imports `CallToolParams` / `ListToolsParams` / `InitializeParams`, none of which exist in `src/types/` today — it has not compiled in a long time. Both were edited by this plan for consistency (3 of the 25 `ttl_ms: None` insertions live in them), and a green build — native OR wasm — proves nothing about either. | `src/server/mod.rs:229-231`; `git grep -n "mod traits"` → no server-side hit | 115-10 — decide: delete both, or wire them back into the build so edits are verified |
-| D-115-05-C | **No server-builder-level default override for the three dispatcher-built results.** Only `ListResourcesResult`, `ListResourceTemplatesResult` and `ReadResourceResult` reach a `ResourceHandler`, so a server author can set caching hints on those three and on NOTHING else. `ListToolsResult`, `ListPromptsResult` and `ServerDiscoverResult` are built by the dispatcher and will always carry the SDK default (`ttlMs: 0`, `cacheScope: "private"`) on v2. Inventing a builder-level override is outside CONTEXT.md's decisions and was deliberately NOT done. | `src/server/core.rs:574`, `:871`, `:1283`; the three types' field rustdoc | 115-10 — decide whether a `ServerCoreBuilder::default_cache_hints(..)` is wanted, or document the asymmetry as intended |
-| D-115-05-D | **The D-10 cross-import tripwire was DECLINED at this layer.** CONTEXT.md leaves it optional; D-10's actual mandate is "disambiguate in rustdoc", which is discharged by the reciprocal links on `TaskV2::ttl_ms` and on `types::caching`'s module doc plus the module separation (neither module imports the other). 115-08 is the cheaper structural home for an assertion. | `src/types/tasks.rs` `ttl_ms` rustdoc; `src/types/caching.rs` module doc | 115-08 — add the structural assertion; 115-10 — book the declination |
-| D-115-05-E | **The four `result_caching_hints` bindings this plan implemented still read `status: planned`.** `CacheScope`, `DEFAULT_TTL_MS`, `Cacheable` and `project_caching_hints` all landed with the EXACT signatures 115-11 recorded (verified line by line), but `contracts/binding.yaml` is not in this plan's `files_modified` and its Task 1 `read_first` frames the contract as read-only ("a divergence is a finding to report"). Same posture as D-115-03-A and D-115-04-B. | `contracts/binding.yaml:530-576`; `src/types/caching.rs` | 115-10 — flip alongside 115-03's five and 115-04's one |
-| D-115-05-F | **`make lint` / `make quality-gate` stdout is CORRUPTED when redirected to a file** in this environment (the rtk command proxy). A genuinely FAILING `make lint` produced a 34-line log containing only the echoed clippy flags and no error text, while the real failure (`clippy::items_after_statements` in `src/types/caching.rs`) was visible only by re-running clippy through the absolute cargo path. A second symptom: `make quality-gate > log 2>&1` wrote a log that literally ends with the line `... (6855 lines truncated)`. **Trust the EXIT CODE, not the captured text**, and use `/usr/bin/make` for a faithful transcript. | scratchpad `qg.log` (truncated, exit 0) vs `qg2.log` (8435 lines, exit 0) | anyone running gates in this environment; worth a note in AGENTS.md |
-| D-115-05-G | **This plan's acceptance criterion says 26 `ttl_ms: None` insertions; its own `<measured_construction_sites>` block enumerates 25.** The file:line list sums to 6+1+6+3+3+3+2+1 = 25, and the compiler found exactly those 25 sites (12 native lib + 7 native test + 3 wasm + 2 wasm-test + 1 orphan). No site was missed — the criterion's total is an arithmetic slip, not a coverage gap. | `git show 807d1f9a --stat`; `grep -c 'ttl_ms: None' <the eight files>` | 115-10 — record only |
-| D-115-05-H | **Two of this plan's acceptance criteria contradict its own `<action>` text.** (1) "`grep -rn 'with_ttl_ms\|with_cache_scope'` in `tools.rs`/`prompts.rs`/`protocol/mod.rs` returns nothing" versus "record that asymmetry in each of the three types' field rustdoc" — satisfied by wording the rustdoc as "a builder method here would be…" instead of naming the method. (2) "the ONLY `#[cfg(...)]` in `caching.rs` is `#[cfg(test)]`" versus a module doc that must explain the two disjoint dispatcher cfgs — satisfied by writing them as `cfg(target_arch = "wasm32")` without the attribute brackets. Both are grep-shaped criteria colliding with prose requirements. | `src/types/tools.rs:466`, `src/types/caching.rs:45` | 115-10 — record only; future plans should scope such greps to definitions |
+| Old ID | Filed by | Subject | **New ID** |
+|---|---|---|---|
+| `115-11-A` | 115-11 | contract location deviation | **`A`** |
+| `115-11-B` | 115-11 | 21 bound-but-uncontracted equations | **`B`** |
+| `115-11-C` | 115-11 | `ErrorCode constants` is prose, not an identifier | **`C`** |
+| `115-11-D` | 115-11 | signature drift is caught by review, not by the gate | **`F`** |
+| `115-11-E` | 115-11 | pmat `CB-1208`'s binding count is cache-driven | **`D`** |
+| `115-11-F` | 115-11 | pmat `CB-951` nesting-depth advisory | **`E`** |
+| `115-11-G` | 115-11 | SCHM booked `Complete` on contract-only evidence | **`G`** |
+| `115-03-A` | 115-03 | five bindings still read `status: planned` | **`H`** |
+| `115-03-B` | 115-03 | `compile_for_era` has no binding entry | **`J`** |
+| `115-03-C` | 115-03 | the era-divergence example is wrong for jsonschema 0.49 | **`I`** |
+| `115-03-D` | 115-03 | the pmat complexity `jq` path does not exist in pmat 3.15.0 | **`K`** |
+| `115-04-A` | 115-04 | a present `structuredContent: null` does not survive a typed re-read | **`L`** |
+| `115-04-B` | 115-04 | the `structured_value` binding still reads `status: planned` | **`H`** |
+| `115-04-C` | 115-04 | `tests/test_websocket_server.rs` binds a hardcoded port | **`M`** |
+| `115-05-A` | 115-05 | the wasm v1 strip is proven only natively and at compile time | **`N`** |
+| `115-05-B` | 115-05 | `traits.rs` and `wasm_server_tests.rs` are orphans | **`O`** |
+| `115-05-C` | 115-05 | no server-builder-level default override | **`P`** |
+| `115-05-D` | 115-05 | the D-10 cross-import tripwire was declined at the types layer | **`S`** |
+| `115-05-E` | 115-05 | four `result_caching_hints` bindings still read `status: planned` | **`H`** |
+| `115-05-F` | 115-05 | `make` stdout is corrupted when redirected in this environment | **`T`** |
+| `115-05-G` | 115-05 | the plan says 26 insertion sites; its own block enumerates 25 | **`1`** |
+| `115-05-H` | 115-05 | two acceptance criteria contradict their own action text | **`1`** |
+| `115-09-A` | 115-09 | `make test-fuzz` is fail-open twice over | **`U`** |
+| `115-09-B` | 115-09 | `make test-property` selects ZERO tests | **`V`** |
+| `115-09-C` | 115-09 | `make test-examples` builds but never runs | **`W`** |
+| `115-09-D` | 115-09 | `fuzz/corpus` was gitignored wholesale | **`Z`** |
+| `115-09-E` | 115-09 | `fuzz/Cargo.lock` was stale enough to block an existing feature | **`Z`** |
+| `115-09-F` | 115-09 | disk exhaustion manufactured phantom test failures | **`0`** |
+| `115-09-G` | 115-09 | a substring-counting criterion was unachievable | **`1`** |
+| `115-09-H` | 115-09 | 115-03's wrong divergence example was inherited, as predicted | **`I`** |
 
+---
 
-## From 115-09 (ALWAYS: fuzz, property, example)
+# Contract and provable-contract items
 
-| # | Item | Evidence | Suggested owner |
-|---|------|----------|-----------------|
-| D-115-09-A | **`make test-fuzz` is fail-open TWICE OVER, and the second half is worse than the plan measured.** `Makefile:241` wraps every target in `\|\| echo "… completed"`, which the plan already recorded. MEASURED here: it also invokes the PLAIN `cargo fuzz run`, and `cargo fuzz` passes `-Zsanitizer=address`, which stable rustc REFUSES ("the option `Z` is only accepted on the nightly compiler"). On a stable default toolchain — this checkout's — EVERY one of the 20 targets fails to BUILD, the `\|\|` swallows it, and the target prints "✓ Fuzz testing completed" having fuzzed nothing at all. This is not "crashes are swallowed"; it is "no fuzzer has ever run under `make`". | `/tmp/g10_fuzz.log`: `make test-fuzz` exit 0, 20 × "completed", `error: the option Z is only accepted on the nightly compiler` | 115-10 — book a Makefile fix (`cargo +nightly fuzz run` and drop the `\|\|`), or state explicitly that fuzzing is a manual/CI-only activity |
-| D-115-09-B | **`make test-property` selects ZERO tests, confirmed by measurement.** The plan predicted it; this run proves it. Every one of the 101 `test result:` lines in the transcript reads `ok. 0 passed; 0 failed; … N filtered out` and NOT ONE line has a non-zero pass count. `--ignored property_` selects only `#[ignore]`d tests and no `property_*` function in the repo is `#[ignore]`d. This plan deliberately did NOT "fix" it by adding `#[ignore]` to its two new tests, because that would remove them from the default `cargo test` run. | `/tmp/g6_prop.log`: `grep -c "^test result: ok. 0 passed"` → 101; the complement grep → empty | 115-10 — book the Makefile fix (select by name, not by `--ignored`); a repo-wide change with its own review |
-| D-115-09-C | **`make test-examples` builds but never RUNS**, and prints "⚠ … (skipped)" on a build failure (`Makefile:248+`). `s52_v2_caching_hints` asserts four behaviours at runtime; that target would report success even if every assertion failed, because it never executes the binary. This plan verified with `timeout 30s cargo run --example …` instead. | `/tmp/g7_ex.log`: 81 × "built successfully", zero executions | 115-10 — record; running examples in the gate needs a per-example timeout policy |
-| D-115-09-D | **`fuzz/corpus` was gitignored WHOLESALE (`fuzz/.gitignore:2`), so no seed corpus could exist in this repo.** The plan's `must_haves` and threat T-115-41 both require a committed corpus. Fixed narrowly (Rule 3): the ignore now excludes `corpus/*` but re-includes `corpus/fuzz_schema_draft_pin/` and, inside it, ONLY `README.md` and `[0-9][0-9]_*`, so libFuzzer's runtime-discovered units still stay ignored and a local fuzzing session never dirties the tree. Every other target still has no committed seeds. | `fuzz/.gitignore`; commit `ddfb450b` | 115-10 — record; other fuzz targets may want the same treatment |
-| D-115-09-E | **`fuzz/Cargo.lock` was stale enough that adding an EXISTING pmcp feature could not resolve.** Enabling `validation` on the fuzz crate's `pmcp` path dependency pulled `jsonschema`, which needs `getrandom ^0.3.4`, against a lock pinning `getrandom 0.3.3`; a targeted `cargo update -p getrandom` then hit a second conflict via `regex-automata`. Resolved with a full `cargo update` inside `fuzz/`. The file is gitignored, so NOTHING was committed and the next contributor to touch fuzz features will hit the same wall with no record of it. | the two resolver transcripts; `fuzz/.gitignore` | 115-10 — record; a note in `fuzz/README.md` would pay for itself |
-| D-115-09-F | **Disk exhaustion manufactured 9 phantom test failures across two gate runs.** With 227 MiB free, 8 `session_validation_tests` failed with a keychain `Os { code: -36 }` panic at the pre-existing native-root-certificates `.expect` in `src/shared/streamable_http.rs:458`; separately `sse_parser::take_utf8_prefix_cost_grows_linearly_not_quadratically` failed at 10.29x (ceiling 8.0x) with absolute timings 6–20× the documented shape, i.e. load, not complexity. Both pass in isolation on a healthy volume. `target/debug/incremental` alone was 35 GiB. This is the third phase to lose time to it. | `/tmp/qg.log`; `/tmp/g4_unit.log`; `/tmp/sess.log` and `/tmp/sse.log` (both green in isolation) | anyone running the gate here — `df -h /` BEFORE bisecting; consider `CARGO_INCREMENTAL=0` in the Makefile |
-| D-115-09-G | **The plan's "exactly 5 tests" criterion for `-E 'test(/fuzz_support/)'` is unachievable: the correct count is 6.** `server::request_state::tests::fuzz_support_seam_rejects_garbage` predates this plan and matches the same substring. The new module is therefore named `fuzz_support_tests` so `-E 'test(/output_validation::fuzz_support/)'` selects exactly the 5 new ones, and both counts are recorded. | 115-09 SUMMARY § Deviations; both nextest transcripts | 115-10 — record only; a criterion counting a substring match should name the module path |
-| D-115-09-H | **This plan inherited D-115-03-C's wrong divergence example, exactly as 115-03 predicted.** Its Task 1(a) mandated a seam test asserting `Some((Violates, Conforms))` for `{"dependencies": {"a": ["b"]}}`, which is FALSE on `jsonschema` 0.49.2. Corrected inline to `contentEncoding`; the seed corpus keeps a `dependencies` case (`05_…`) because it still exercises the neutrality SKIP, and the README says why. 115-RESEARCH § Finding 1 / Pattern 2 is still uncorrected upstream. | `src/server/output_validation.rs` `fuzz_support_reports_the_divergent_content_encoding_case_asymmetrically`; `fuzz/corpus/fuzz_schema_draft_pin/README.md` | 115-10 — correct 115-RESEARCH itself, which D-115-03-C already asked for |
+## D-115-A — Contracts live in-repo at `contracts/`, not at the path CLAUDE.md names
+
+**Filed by:** 115-11. **Threat:** T-115-32.
+
+`CLAUDE.md` § *Contract-First Development* instructs writing the contract YAML in
+`../provable-contracts/contracts/<crate>/`. That directory **does not exist in this checkout**
+(`ls ../provable-contracts` → *No such file or directory*), and pmat's `CB-1200` advisory points at
+the same missing path. The contracts this repository actually uses are in-repo at `contracts/`
+(`mcp-protocol-sdk-v1.yaml` + `binding.yaml`). 115-11 used the in-repo location and recorded the
+deviation; every Phase 115 plan followed it.
+
+**115-10's decision: keep the in-repo location and DO NOT edit `CLAUDE.md` here.** Rewriting a
+project-wide standing instruction is not a phase-scoped change — the sibling repository may exist
+on other machines, and a phase executor is the wrong actor to decide that it should not. What
+`115-10` does instead is state the deviation inside the SCHM bookings in `REQUIREMENTS.md`, where a
+reader auditing Phase 115's contract-first compliance will hit it, and record it in the ROADMAP's
+Phase 115 deviation note.
+
+**Owner:** the next contributor with authority over `CLAUDE.md` — decide between correcting the
+path and documenting `../provable-contracts/` as a prerequisite checkout. Not this phase's.
+
+## D-115-B — 21 bound-but-uncontracted equations from Phase 83+
+
+**Filed by:** 115-11. All 46 pre-existing `contracts/binding.yaml` entries declare
+`contract: mcp-protocol-sdk-v1.yaml`, but 21 of their equations — the whole `pmcp-server-toolkit`
+set added from Phase 83 onward — are defined in **no contract file at all**. They are frozen in
+`LEGACY_UNCONTRACTED_EQUATIONS` in `tests/phase115_contract_bindings.rs`, a ledger that can only
+shrink: a 22nd fails the gate immediately.
+
+Not fixed because writing `contracts/toolkit-v1.yaml` means writing 21 equations for a subsystem
+Phase 115 does not touch.
+
+**unowned** — needs a phase that owns the toolkit surface. Candidate work: write
+`contracts/toolkit-v1.yaml`, or move those bindings into their own binding file.
+
+## D-115-C — `function: ErrorCode constants` is prose, not a Rust identifier
+
+**Filed by:** 115-11. `contracts/binding.yaml` records a binding whose `function:` value names a
+GROUP of associated constants in English rather than one identifier, so it can never resolve. It is
+the single entry in `LEGACY_UNRESOLVED`.
+
+`115-10` deliberately did **not** fix it, despite `binding.yaml` being in its `files_modified`: the
+one-line fix would make the entry resolve, at which point the frozen ledger's own staleness
+assertion (*a ledger entry that is no longer drifted also fails*) fires and
+`tests/phase115_contract_bindings.rs` — a file outside this plan's scope — must be edited in the
+same commit. That coupled edit belongs to whoever owns `error_code_mapping`, not to a phase-closing
+sweep.
+
+**unowned** — a two-line change (binding + ledger) for the next plan touching error-code mapping.
+
+## D-115-D — pmat `CB-1208`'s binding count is cache-driven and matches nothing on disk
+
+**Filed by:** 115-11. `pmat comply check`'s binding-count detector moved 49 → 50 for a
+**+13-binding** change, and matches neither on-disk total. `Makefile:802-804` already documents the
+detector as needing `pmat comply refresh-bindings` first.
+
+Consequence worth stating: **pmat's ghost-binding detector cannot be relied on as the gate.** The
+gate that actually resolves `contracts/binding.yaml` is `tests/phase115_contract_bindings.rs`,
+which 115-11 wrote for exactly this reason.
+
+**unowned** — relevant to anyone who later wants to trust pmat's detector instead.
+
+## D-115-E — pmat `CB-951` nesting-depth advisory on a YAML literal block
+
+**Filed by:** 115-11. New info-level advisory
+`CB-951: Excessive nesting depth 18 (threshold: 14)` at `contracts/mcp-protocol-sdk-v1.yaml:323` —
+a continuation line inside a `formula: |` literal block scalar. Assessed as a heuristic false
+positive (the "nesting" is prose indentation inside a string) and left in place rather than
+re-indented to satisfy a counter.
+
+**Owner:** 115-10 — recorded here, no action. Re-assess only if the advisory is ever promoted to
+blocking.
+
+## D-115-F — Signature drift is caught by review, not by the gate — three divergences found
+
+**Filed by:** 115-11; **resolved for Phase 115 by 115-10 Task 1(a).**
+
+The resolver in `tests/phase115_contract_bindings.rs` matches on the function **NAME**. A binding
+may therefore record a `signature:` that no longer matches the shipped source and still pass. 115-11
+flagged four Phase 115 bindings as needing a manual diff.
+
+`115-10` diffed all fourteen recorded signatures against the shipped source line by line. **Eleven
+matched byte-for-byte.** Three diverged, all in the same harmless way — the recorded signature
+elided a path that the source writes in full:
+
+| Function | Recorded by 115-11 | Shipped |
+|---|---|---|
+| `cached_validator` | `Result<Arc<…>, Arc<str>>` | `Result<std::sync::Arc<…>, std::sync::Arc<str>>` |
+| `project_caching_hints` | `&mut Value`, `Option<Era>` | `&mut serde_json::Value`, `Option<crate::types::protocol::Era>` |
+| `inject_v2_result_envelope` | `Option<&ProtocolContext>` | `Option<&crate::types::protocol::ProtocolContext>` |
+
+**Same types in every case — different spelling, not different behaviour.** No plan under-delivered.
+The `project_caching_hints` case has a reason worth keeping: `src/types/caching.rs` is deliberately
+cfg-free so the wasm32-only dispatcher can call it, and writing the era path inline avoids a `use`
+that would have to survive both cfg worlds. Each binding was updated to the shipped text with an
+inline `115-10 SIGNATURE CORRECTION:` note rather than silently rewritten.
+
+**Owner:** closed for Phase 115. The **residual is unowned**: the resolver still cannot detect
+signature drift on any other binding in the file, because it matches on name only. Making it
+signature-aware needs a real Rust parser, not a grep.
+
+## D-115-G — REQUIREMENTS.md booked SCHM-01/02/03 on contract-only evidence
+
+**Filed by:** 115-11; **resolved by 115-10 Task 2(e).**
+
+115-11's frontmatter declared all three SCHM requirements (as 115-01's did), so the per-plan
+`requirements mark-complete` step flipped them to `Complete` in wave 1 — **before any runtime
+behaviour existed**. The checkbox text describes runtime behaviour, not a contract equation, so the
+booking was true of nothing at the moment it was written. Every later plan deliberately left the
+ledger alone and deferred the reconciliation here.
+
+`115-10` re-derived each booking from measured evidence — named test binaries with counts, the
+pinned vendored artifact with its commit SHA, and the `wasm,validation` build — and rewrote the
+three lines with the evidence attached. The marker did not change value; **what changed is that it
+is now supported.** The deviations (0.49 vs the literal 0.48, six results vs five) are stated
+INSIDE the booking rather than in a footnote.
+
+**Owner:** 115-10 — closed. **Process residual, unowned:** `requirements mark-complete` flips a
+requirement whenever ANY plan naming it lands, including a contract-only or test-only plan. Any
+phase whose wave 1 is contract-first will reproduce this. Either that step should be scoped to the
+plan that delivers the behaviour, or every phase needs a reconciliation plan like this one.
+
+## D-115-H — Twelve Phase 115 bindings were left at `status: planned` after their plans landed
+
+**Filed by:** 115-03, 115-04 and 115-05 independently; **resolved by 115-10 Task 1(a).**
+
+Each of those plans landed its functions with the exact recorded signatures but did **not** edit
+`contracts/binding.yaml`, because the file was not in their `files_modified` and their `read_first`
+blocks framed the contract as read-only for the task (*"a divergence is a finding to report, not to
+absorb"*). Nothing was red — `planned` is legal on the three Phase 115 equations — but the ledger
+understated reality: twelve bindings claimed work was unlanded that had shipped.
+
+`115-10` flipped all twelve to `implemented`. `contracts/binding.yaml` now carries **zero**
+`status: planned` entries, and
+`phase115_contract_bindings_every_implemented_binding_resolves_to_real_source` is load-bearing over
+all fourteen Phase 115 bindings: 5 tests pass, and a binding naming a symbol nobody wrote now fails.
+
+**Owner:** 115-10 — closed. See entry **`9`** for the assertion that had to be repaired to allow it.
+
+## D-115-I — The era-divergence example was WRONG for `jsonschema` 0.49, and shipped into two plans
+
+**Filed by:** 115-03, then inherited and re-measured by 115-09 exactly as 115-03 predicted;
+**corrected in `115-RESEARCH.md` by 115-10 Task 1(b).**
+
+`115-RESEARCH.md` § *Finding 1 / Pattern 2* named `dependencies` (split in 2020-12 into
+`dependentRequired`/`dependentSchemas`) as the keyword that "stops applying under the pin".
+**Measured on `jsonschema` 0.49.2 that is false** — the library still honours `dependencies` under
+the 2020-12 pin, so both eras reject the same instance and any cache-fence test built on it does
+not fire. 115-03 corrected it inline to `contentEncoding` (an assertion in draft-07, an annotation
+from 2019-09 on); 115-09 then inherited the same wrong example from its own plan text and corrected
+it again.
+
+The broader non-monotonicity claim survives and is now measured in **both** directions:
+`contentEncoding` makes v2 more permissive, `$ref` siblings make v2 stricter.
+
+`115-10` struck the sentence in `115-RESEARCH.md` and replaced it with the measured version plus an
+instruction to re-measure any example copied out of that section. **The lesson generalises:** a
+research finding stated without a measured command shipped wrong into two plans before anyone
+caught it.
+
+**Owner:** 115-10 — closed at the source document.
+
+## D-115-J — `compile_for_era` shipped with no contract binding
+
+**Filed by:** 115-03; **resolved by 115-10 Task 1(a).**
+
+115-03 Task 2(c) mandated the uncached per-era compile path — it is what lets 115-09's fuzz seam
+compile arbitrary generated schemas without growing the process-global cache — but
+`contracts/binding.yaml`'s `output_schema_draft_pin` section recorded only five functions and
+omitted it. 115-03 reported rather than absorbed it, per its own instruction.
+
+`115-10` added the fourteenth binding. `EXPECTED_PHASE_115_BINDINGS` sets a **minimum** of five for
+that equation, so no test edit was required. `compile_for_era` is worth contracting on its own
+merits: it *is* the era branch — `Era::V1` is `jsonschema::validator_for` verbatim (D-01's freeze,
+and the only auto-detect entry point left in the module), `Era::V2` is `compile_2020_12`.
+
+**Owner:** 115-10 — closed.
+
+---
+
+# Verification-instrument findings
+
+These affect **every future phase in this repository**, not just Phase 115. They are the reason this
+plan re-ran the phase's evidence by name instead of trusting `make validate-always`.
+
+## D-115-K — `pmat analyze complexity … | jq '.violations[]'` returns null on pmat 3.15.0
+
+**Filed by:** 115-03. The `jq` path embedded in several Phase 115 plan `<verify>` blocks
+(`.violations[]`) **does not exist** in pmat 3.15.0's output: violations live at
+`.summary.violations[]`, and `jq` exits 5. Separately, the top-level `.files[]` array is truncated
+to `--top-files` (default 5), so a per-file lookup by path silently finds nothing regardless of the
+flag.
+
+**A run using the plan's command reports a false clean.** The working paths are
+`.summary.violations[]` and `pmat quality-gate --fail-on-violation --checks complexity`; both were
+used by 115-03 and by `115-10` Task 2.
+
+**Owner:** 115-10 — recorded, and the working command is used in this plan's SUMMARY. **Residual,
+unowned:** the wrong path is still embedded verbatim in the landed `<verify>` blocks of 115-06,
+115-07 and 115-09, which are not being rewritten (landed artifacts). Any future plan copying from
+them inherits the defect.
+
+## D-115-U — `make test-fuzz` is fail-open TWICE OVER: no fuzzer has ever run under `make`
+
+**Filed by:** 115-09, and this is the sharpest of the three ALWAYS-target findings.
+
+`Makefile:234-245`. Two independent defects compound:
+
+1. Every target invocation is wrapped in `|| echo "… completed"`, so a non-zero exit becomes
+   success. (The plan predicted this half.)
+2. It invokes the **plain** `cargo fuzz run`. `cargo fuzz` passes `-Zsanitizer=address`, which
+   stable rustc **refuses** (*"the option `Z` is only accepted on the nightly compiler"*). On a
+   stable default toolchain — this checkout's — **every one of the 20 targets fails to BUILD**, the
+   `||` swallows it, and the target prints `✓ Fuzz testing completed` having fuzzed nothing.
+
+This is not "crashes are swallowed". It is **"no fuzzer has ever run under `make` on this
+toolchain"**, while `CLAUDE.md` lists fuzzing as a mandatory ALWAYS gate for every new feature.
+115-09 and `115-10` both verified `fuzz_schema_draft_pin` with direct
+`cargo +nightly fuzz run` commands instead.
+
+**unowned** — the fix is a Makefile change (`cargo +nightly fuzz run`, drop the `||`, or state
+explicitly that fuzzing is a manual/CI-only activity) with repo-wide blast radius across 20 targets.
+It must not be smuggled in by a phase-closing plan: `115-10`'s own acceptance criteria forbid
+modifying a gate file.
+
+## D-115-V — `make test-property` selects ZERO tests
+
+**Filed by:** 115-09, **confirmed by measurement, not prediction.**
+
+`Makefile:228-232` runs `cargo test --features "full" -- --ignored property_`, which selects only
+`#[ignore]`d tests. **No `property_*` function in this repository is `#[ignore]`d** —
+`tests/property_tests.rs` alone has 13 of them, none ignored. Measured: all **101** `test result:`
+lines in the transcript read `ok. 0 passed; 0 failed; … N filtered out`, and not one line has a
+non-zero pass count.
+
+115-09 deliberately did **not** "fix" it by adding `#[ignore]` to its two new property tests,
+because that would remove them from the default `cargo test` run — trading a silent zero-selection
+for a silent skip.
+
+**unowned** — the fix is a Makefile change (select by name, not by `--ignored`) whose blast radius
+is every property test in the repo, and which will surface whatever those 13+ tests actually assert
+for the first time. That deserves its own review, not a line in a closing plan.
+
+## D-115-W — `make test-examples` builds but never RUNS, and reports a build failure as "skipped"
+
+**Filed by:** 115-09. `Makefile:247+` builds each example and prints `⚠ … (skipped)` on failure,
+continuing. It never executes the binary. Measured: 81 × *"built successfully"*, **zero
+executions**.
+
+This matters concretely here: `examples/s52_v2_caching_hints.rs` asserts four behaviours at
+**runtime**, and that target would report success even if every assertion failed. 115-09 and
+`115-10` verified it with `timeout 30s cargo run --example s52_v2_caching_hints --features full`.
+
+**unowned** — running examples inside the gate needs a per-example timeout and a policy for the
+ones that intentionally block on I/O (servers). Recorded so nobody reads a green `test-examples` as
+runtime evidence.
+
+## D-115-X — `make wasm-build` never compiles the `validation` feature
+
+**Filed by:** the 2026-08-01 replan; **used as a correction by 115-03 and by 115-10 Task 2.**
+
+`Makefile:59-62` runs
+`cargo build --target wasm32-unknown-unknown --no-default-features --features wasm`. The
+`validation` feature is **not** in that list, so `jsonschema` — the whole subject of SCHM-01's
+wasm-clean claim — **is never compiled for wasm by the gate**. A green `make wasm-build` is not
+evidence that the Draft 2020-12 pin is wasm-clean.
+
+The command that IS evidence, and which SCHM-01's booking cites:
+
+```
+cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"
+```
+
+**unowned** — adding `validation` to the gate's feature list is a one-line Makefile change, but it
+is a gate change, which `115-10` is forbidden to make. Worth doing deliberately, because without it
+a future dependency bump can break wasm+validation with every gate green.
+
+## D-115-Y — `nextest -E 'test(/stem/)'` silently selects ZERO tests and exits 0
+
+**Filed by:** `115-RESEARCH.md` § Pitfall 4; re-asserted here because it is a repo-wide trap.
+
+A `test(/stem/)` selector matches **test NAMES**, not file names. Against a test file whose
+functions are not prefixed with the file stem it selects nothing — and nextest **exits 0**. A plan
+whose verification is `nextest -E 'test(/foo/)'` can therefore "pass" having run nothing at all.
+
+Two mitigations are in use and both should be kept: `binary(<stem>)` selects by binary and cannot
+silently empty; and every Phase 115 test file prefixes its function names with its own stem so both
+selector forms work.
+
+**unowned** — this is guidance, not a code change. It belongs in `AGENTS.md` alongside entry `T`.
+
+## D-115-T — `make` stdout is CORRUPTED when redirected to a file in this environment
+
+**Filed by:** 115-05, and it cost more than one plan real time.
+
+Under this environment's command proxy, redirecting a `make` gate to a file produces an
+**unfaithful** transcript:
+
+- A genuinely **FAILING** `make lint` produced a 34-line log containing only the echoed clippy
+  flags and **no error text**. The real failure (`clippy::items_after_statements` in
+  `src/types/caching.rs`) was visible only by re-running clippy through the absolute cargo path.
+- `make quality-gate > log 2>&1` wrote a log that literally ends with the line
+  `... (6855 lines truncated)`.
+
+**Trust the EXIT CODE, not the captured text.** `/usr/bin/make` and `$HOME/.cargo/bin/cargo` give
+faithful transcripts.
+
+**unowned** — worth a note in `AGENTS.md`. Not a repository defect; an environment one.
+
+## D-115-0 — Disk exhaustion manufactures phantom test failures, and `df -h /` will not show it
+
+**Filed by:** 115-09; this is the **third** phase to lose time to it.
+
+With 227 MiB free, eight `session_validation_tests` failed with a keychain `Os { code: -36 }` panic
+at the pre-existing native-root-certificates `.expect` in `src/shared/streamable_http.rs:458`, and
+`sse_parser::take_utf8_prefix_cost_grows_linearly_not_quadratically` failed at 10.29× against an 8.0×
+ceiling with absolute timings 6–20× the documented shape — i.e. **load, not complexity**. All nine
+pass in isolation on a healthy volume. `target/debug/incremental` alone was 35 GiB.
+
+**On this APFS machine `df -h /` reads healthy** — `/` is the sealed system volume. The real figure
+is `df -h /System/Volumes/Data`. Check it BEFORE bisecting any test failure.
+
+**unowned** — candidate mitigations: `CARGO_INCREMENTAL=0` in the Makefile, and a pre-gate free-space
+check. Neither is a Phase 115 change.
+
+## D-115-1 — Grep-shaped acceptance criteria collide with the prose requirements they accompany
+
+**Filed by:** 115-05 (twice), 115-09, and `115-10` itself. Four measured instances:
+
+1. 115-05's criterion said **26** `ttl_ms: None` insertion sites; its own
+   `<measured_construction_sites>` block enumerated **25**, and the compiler found exactly those 25.
+   An arithmetic slip in the criterion, not a coverage gap.
+2. 115-05's criterion *"`grep -rn 'with_ttl_ms|with_cache_scope'` in `tools.rs` returns nothing"*
+   versus its action text *"record that asymmetry in each type's field rustdoc"* — satisfiable only
+   by wording the rustdoc as *"a builder method here would be…"* without naming the method.
+3. 115-09's criterion *"exactly 5 tests for `-E 'test(/fuzz_support/)'`"* was **unachievable**: a
+   pre-existing `fuzz_support_seam_rejects_garbage` matches the same substring, so the true count is
+   6. Resolved by naming the new module `fuzz_support_tests` and recording both counts.
+4. `115-10`'s own duplicate-ID criterion constrains **every** line of this file that contains the
+   ledger-ID prefix to a distinct first character, which is why the crosswalk at the top spells old
+   IDs without their `D-` prefix.
+
+**The generalisable rule:** a criterion that counts grep hits must scope the grep to definitions and
+name the module path, or it will collide with the prose requirement beside it.
+
+**Owner:** 115-10 — recorded. Applies to plan authorship, so the audience is every future
+`/gsd:plan-phase` run.
+
+---
+
+# Structural findings in the codebase
+
+## D-115-O — `traits.rs` and `wasm_server_tests.rs` are ORPHANS: edits to them are unverified
+
+**Filed by:** 115-05, measured.
+
+- **`src/server/traits.rs`** has **no `mod traits` declaration anywhere**, so it compiles on **no
+  target**. It nevertheless constructs `ListToolsResult`, and 115-05 edited it for consistency.
+- **`src/server/wasm_server_tests.rs`** is declared but gated
+  `#[cfg(all(test, target_arch = "wasm32"))]`, and
+  `cargo check --target wasm32-unknown-unknown --profile test` **cannot build the dev-dependency
+  graph** (`mio` has no wasm32 support). It also imports `CallToolParams`, `ListToolsParams` and
+  `InitializeParams`, **none of which exist in `src/types/` today** — it has not compiled in a long
+  time.
+
+Three of 115-05's 25 `ttl_ms: None` insertions live in these two files. **A green build — native or
+wasm — proves nothing about either.** Worth stating plainly, because a reader seeing them in a diff
+will assume the compiler checked them.
+
+**unowned** — the decision is *delete both* or *wire them back into the build*. Both are outside a
+schema/caching phase, and deleting `traits.rs` in particular needs a check that no doc or external
+consumer references it.
+
+## D-115-N — The wasm v1 strip is proven only NATIVELY and at COMPILE time
+
+**Filed by:** 115-05, extended by 115-06 and 115-08.
+
+`project_caching_hints`'s `era = None` arm is what stops a `WasmMcpServer` handler's
+`with_cache_scope` reaching that dispatcher's v1 wire. **No wasm test executes it** — see entry `O`
+for why the wasm test module cannot build. The proof is three-legged:
+
+1. the NATIVE unit test `no_context_strips_both_keys_which_is_the_wasm_path` (runtime behaviour),
+2. `make wasm-build` (compile only — 115-06 MEASURED that removing the call leaves that build
+   green), and
+3. 115-08's source tripwire on the call site (the only automated gate that catches its removal).
+
+**unowned** — the closing move is a `wasm-bindgen-test` harness. That is real infrastructure, not a
+phase-closing edit. `115-10` accepts the three-legged proof and records that it is three-legged.
+
+## D-115-P — Only TWO of the six cacheable results are handler-settable, and `resources/templates/list` has NO handler hook at all
+
+**Filed by:** 115-05 (as "no server-builder-level override"), sharpened by 115-07, and **corrected by
+115-10 Task 1(b), which measured it.**
+
+115-05 recorded that three resource-side results reach a `ResourceHandler`. **That is wrong, and the
+claim had been written into production rustdoc on `ListToolsResult`, `ListPromptsResult` and
+`ServerDiscoverResult`.** Measured 2026-08-01:
+
+`ResourceHandler` (`src/server/mod.rs:382`) declares exactly **two** methods — `read` and `list`.
+There is no templates method. Both native dispatchers answer `resources/templates/list` from a
+**hardcoded empty result**: `ServerCore::handle_list_resource_templates`
+(`src/server/core.rs:1013`) and the same-named method in `src/server/mod.rs:2512` each construct
+`ListResourceTemplatesResult { resource_templates: vec![], … }`.
+
+So on v2:
+
+| Result | Handler-settable? |
+|---|---|
+| `ListResourcesResult` | **yes** (`ResourceHandler::list`) |
+| `ReadResourceResult` | **yes** (`ResourceHandler::read`) |
+| `ListResourceTemplatesResult` | **no** — builders exist but no dispatcher path reaches them |
+| `ListToolsResult` | no — dispatcher-built |
+| `ListPromptsResult` | no — dispatcher-built |
+| `ServerDiscoverResult` | no — built from capabilities |
+
+**Four of the six always carry the SDK default (`ttlMs: 0`, `cacheScope: "private"`) on v2**, whatever
+a server author would prefer. `115-10` corrected all three copies of the false rustdoc sentence and
+added an explicit *"not reachable through either native dispatcher"* note to
+`ListResourceTemplatesResult::with_ttl_ms`. The builders are **kept**, because the type is `pub` and
+constructible by a custom transport, a proxy or a test.
+
+**unowned** — two separable pieces of future work: (a) a `ServerCoreBuilder::default_cache_hints(..)`
+override for the dispatcher-built results, and (b) a templates seam on `ResourceHandler`, which is a
+**breaking trait change** and must wait for a major. Inventing either is outside `115-CONTEXT.md`'s
+decisions.
+
+## D-115-Q — `extract_request_meta_value` reads the era signal from only THREE request types
+
+**Filed by:** the 2026-08-01 replan, measured; **bounded at a named test by 115-07.**
+
+`extract_request_meta_value` (`src/server/core.rs:3833`) reads the typed `_meta` era signal from
+**only** `CallTool`, `GetPrompt` and `ReadResource`. Four of the six cacheable methods —
+`tools/list`, `prompts/list`, `resources/templates/list` and `server/discover` — therefore **cannot
+reach `Era::V2` through in-process `ServerCore` dispatch at all**.
+
+This is a real scope bound on SCHM-03, not a test artifact. 115-07 covers those four over **HTTP**,
+where the era arrives on the transport rather than in `_meta`, and asserts the bound at a named test
+so it cannot silently widen or silently persist.
+
+SCHM-03's booking in `REQUIREMENTS.md` states this explicitly rather than absorbing it.
+
+**unowned** — widening `_meta` era extraction to every request type is a Phase 112 ingress change
+with its own compatibility surface. Recorded so nobody reads "six methods on v2" as "six methods on
+every transport".
+
+## D-115-R — `process_response_with_context` runs AFTER the projection and can still forge or strip the hints
+
+**Filed by:** 115-06 (threat T-115-38); **documented, tested and fenced rather than fixed.**
+
+Response middleware (`src/shared/middleware.rs:481`) runs **after** the caching projection
+(`src/server/core.rs:3249`). A middleware can therefore remove `ttlMs`/`cacheScope` from a v2
+response, or add them to a v1 one — defeating D-11's strip and D-12's single-writer property.
+
+**Deliberately NOT reordered.** Moving the projection after middleware would change what middleware
+observes about Phase 114's `resultType`/`serverInfo` envelope, which is a different phase's
+contract. The limitation is instead:
+
+- measured and documented (115-06),
+- covered by a behavioural test (115-06 Task 3, test 10), and
+- fenced by an ordering tripwire (115-08, test 11) so the ordering cannot change unnoticed.
+
+**unowned** — if the hints ever need to be tamper-proof against middleware, the fix is a projection
+pass after the middleware chain, and it must be designed against Phase 114's envelope expectations.
+
+## D-115-L — A present `structuredContent: null` does not survive a typed re-read
+
+**Filed by:** 115-04.
+
+**The SERVER is correct.** `skip_serializing_if = "Option::is_none"` omits the key for `None` and
+emits an explicit `null` for `Some(Value::Null)`; both dispatchers put `"structuredContent":null` on
+the wire, asserted twice. The collapse is on the way **back in**: serde's default `Option<T>`
+deserializer maps a JSON `null` onto `None`, so `CallToolResult`'s own `Deserialize` cannot
+distinguish *"structured content is null"* from *"no structured content"* — a distinction the
+2026-07-28 schema explicitly permits (`structuredContent?: unknown`, "…or null").
+
+Not fixed: it is pre-existing (the field has always been `Option<Value>` with default serde
+semantics), it is not a wire defect, and a `deserialize_with` fix would change the **client-side**
+meaning of every `CallToolResult` on **both** eras. Fenced by the tripwire test
+`present_null_structured_content_does_not_survive_a_typed_reread`.
+
+**115-10's decision: ACCEPT and document as a v2 client-side limitation.** Changing it is a
+client-visible semantic change on v1 as well as v2, which is exactly the kind of thing D-05 freezes.
+
+**unowned** — a future `deserialize_with` change needs its own plan with a client-side impact review.
+
+## D-115-S — The D-10 cross-import tripwire was declined at the types layer
+
+**Filed by:** 115-05; **discharged by 115-08.**
+
+`115-CONTEXT.md` leaves the D-10 tripwire optional, and D-10's actual mandate is *"disambiguate in
+rustdoc"* — discharged by reciprocal links between `TaskV2::ttl_ms` (task LIFETIME) and
+`types::caching`'s module doc (cache FRESHNESS), plus the module separation: neither module imports
+the other. 115-08 added the cheap structural assertion at the tripwire layer instead (test 13).
+
+**Owner:** 115-08 — delivered; 115-10 — declination booked here. Closed.
+
+## D-115-6 — `CacheScope::Display` and four of the ten planned builders were TRIMMED
+
+**Filed by:** 115-05. The plan sketched ten builder methods plus a `Display` impl on `CacheScope`.
+Six builders shipped (`with_ttl_ms`/`with_cache_scope` on the three resource-side results) and
+`Display` did not, on the ground that the wire does not require them and public surface is
+permanent.
+
+Recorded because *"the plan said ten, six shipped"* looks like under-delivery in a diff and is not:
+serde already provides the wire spelling, and the four trimmed builders were on
+dispatcher-built types nobody can reach through configuration (entry `P`).
+
+**Owner:** 115-10 — recorded. Re-add on demand, never speculatively.
+
+---
+
+# Dependency, tooling and residual-risk items
+
+## D-115-7 — `pmcp-agent`'s `validator_for` is unpinned, and is deliberately allowlisted
+
+**Filed by:** 115-08. `crates/pmcp-agent/src/iteration/decide.rs:218` calls
+`jsonschema::validator_for(schema)` — the **auto-detect** entry point Phase 115 pins away from on
+the MCP `outputSchema` seam. 115-08's tripwire allowlists it with a written justification: it
+validates an **agent's own submit-result** against a locally-declared schema, not an MCP wire
+result, so MCP 2026-07-28's dialect pin does not govern it.
+
+**unowned** — worth revisiting if `pmcp-agent` ever validates a server's `outputSchema` directly, at
+which point the allowlist entry becomes wrong rather than merely permissive.
+
+## D-115-8 — `pmcp-server-toolkit` carries a DEAD optional `jsonschema` dep, and `make unused-deps` is a no-op
+
+**Filed by:** 115-03/115-08. `crates/pmcp-server-toolkit/Cargo.toml:54` declares
+`jsonschema = { version = "0.49", … optional = true }` behind an `input-validation` feature, and
+**`grep -rn jsonschema crates/pmcp-server-toolkit/src/` returns nothing** — zero usages anywhere in
+the crate.
+
+It was bumped 0.46 → 0.49 with the others to keep the workspace on one resolved version, which is
+the right call while it exists. The reason nothing caught it: **`make unused-deps` is a no-op** —
+`Makefile:201-205` prints *"⚠ cargo machete not installed - skipping"* and the actual invocation is
+commented out.
+
+**unowned** — two separable fixes: remove the dead dep + feature, and install `cargo machete` so the
+gate stops lying. Both are outside a schema phase.
+
+## D-115-4 — `Cargo.lock` is gitignored, so the `jsonschema` bump has no reviewable lockfile diff
+
+**Filed by:** 115-03. The root `Cargo.lock` is gitignored, so the 0.46 → 0.49 bump produced **no
+reviewable diff** and the dependency tree re-resolves on every machine and every CI run. An exact
+`=0.49.2` pin was **DECLINED**: pinning an exact version in a published **library** crate propagates
+the constraint to every downstream consumer and can make `pmcp` uncombinable with any other crate
+depending on `jsonschema`. `"0.49"` (caret) is the correct library posture.
+
+The residual is that a future 0.49.x patch can change validation behaviour with no lockfile diff to
+review. `115-08`'s tripwires and `115-03`'s draft-07 fence are what would catch it — measured, with
+their negative controls observed to fire.
+
+**unowned** — checking in `Cargo.lock` is a repo-wide policy decision, and there are real arguments
+both ways for a library.
+
+## D-115-Z — `fuzz/corpus` was gitignored wholesale, and `fuzz/Cargo.lock` blocked an existing feature
+
+**Filed by:** 115-09. Two related fuzz-infrastructure findings:
+
+1. **`fuzz/.gitignore:2` ignored `fuzz/corpus` WHOLESALE**, so no seed corpus could exist in this
+   repository — while 115-09's `must_haves` and threat T-115-41 both require a committed one. Fixed
+   narrowly: the ignore now excludes `corpus/*` but re-includes
+   `corpus/fuzz_schema_draft_pin/` and, inside it, only `README.md` and `[0-9][0-9]_*`, so
+   libFuzzer's runtime-discovered units stay ignored and a local session never dirties the tree.
+   **Every other fuzz target still has no committed seeds.**
+2. **`fuzz/Cargo.lock` was stale enough that enabling an EXISTING pmcp feature could not resolve.**
+   Turning on `validation` for the fuzz crate's path dependency pulled `jsonschema`, which needs
+   `getrandom ^0.3.4`, against a lock pinning `getrandom 0.3.3`; a targeted update then hit a second
+   conflict via `regex-automata`. Resolved with a full `cargo update` inside `fuzz/`. **That file is
+   gitignored, so nothing was committed** and the next contributor to touch fuzz features will hit
+   the same wall with no record of it.
+
+**unowned** — the cheap mitigation is a note in `fuzz/README.md`; the fuller one is committed seeds
+for the other 19 targets.
+
+## D-115-M — `tests/test_websocket_server.rs` binds a hardcoded `127.0.0.1:9005`
+
+**Filed by:** 115-04, surfaced by hitting it. Two concurrent `make quality-gate` runs — or any
+process holding that port — turn the gate red with `Address already in use (os error 48)`. The tests
+pass in isolation (6 passed). **A false red that costs a full gate cycle to diagnose**, and the
+reason this phase never runs two cargo/make invocations concurrently.
+
+**unowned** — the fix is to bind port 0 and read back the assigned port. Not a Phase 115 defect;
+belongs to whoever next touches the websocket test harness.
+
+## D-115-3 — v2 `outputSchema` mismatch stays WARN-ONLY
+
+**Filed by:** `115-RESEARCH.md` § Open Question 1; **deliberately not decided inside a plan.**
+
+On both eras, a `structuredContent` value that does not conform to its declared `outputSchema`
+produces a `tracing::warn!` and never an error result. Escalating v2 to a hard error would be a
+**new production failure mode** — a server that ships today would start returning errors on the same
+traffic after a version bump — and the diagnostic value of the warning is the module's whole point.
+
+Recorded here rather than resolved because the choice is a product decision, not an implementation
+one, and a plan is the wrong place to make it silently.
+
+**unowned** — needs an explicit decision, probably at the milestone level, with a migration story
+(warn → opt-in strict → default strict).
+
+## D-115-5 — `ttlMs`'s `u64` mapping has no upper bound in the schema
+
+**Filed by:** 115-01/115-05. The vendored artifact declares
+`$defs.CacheableResult.properties.ttlMs` as `{"type": "integer", "minimum": 0}` — integral and
+non-negative are **contract**, asserted by `tests/v2_core_schema_facts.rs`, which is why `u64` and
+not `f64`. There is **no `maximum`**, while `u64` is bounded.
+
+**The residual is ACCEPTED**: `u64::MAX` milliseconds is roughly 584 million years. A conforming
+producer emitting a larger integer would fail to deserialize; that is not a scenario worth code.
+
+**Owner:** 115-10 — recorded as an accepted residual, so a future reader finds the reasoning rather
+than re-deriving it. Re-open only if the schema ever gains a `maximum` that `u64` cannot represent.
+
+## D-115-2 — Phase 115 deviated from its own requirement TEXT in four places
+
+**Filed by:** 115-01, 115-03, 115-05, 115-06 and 115-07 collectively. All four are stated INSIDE the
+SCHM bookings in `REQUIREMENTS.md`, not in a footnote, and in the ROADMAP's Phase 115 deviation
+note:
+
+1. **`jsonschema` shipped at 0.49**, while SCHM-01's text says **0.48**. 0.48.0–0.48.2 carry
+   packaging defects fixed in 0.48.3–0.48.5, and 0.49 is additive-only over 0.48.
+2. **An exact `=0.49.2` pin was DECLINED** for library-semver reasons — see entry `4`.
+3. **SIX result types carry caching hints**, while SCHM-03's text and `115-CONTEXT.md` both say
+   **five**. `DiscoverResult extends CacheableResult` in the pinned published schema.
+4. **`server/discover` is the sixth**, so a v2 client's **first** call is conformant. Excluding it
+   would have shipped a knowingly non-conformant first call to every v2 client — more expensive than
+   including it, since `ServerDiscoverResult` already routes through the same
+   `inject_v2_result_envelope` chokepoint.
+
+**Owner:** 115-10 — booked. Nothing outstanding; recorded here so the ledger is a complete account
+of the phase rather than only of its surprises.
+
+## D-115-9 — The wave-1 anti-vacuity assertion INVERTED on success
+
+**Filed by:** 115-10 Task 1(a), and it blocked the task until fixed.
+
+`phase115_contract_bindings_planned_entries_are_scoped_to_phase_115` carried
+`assert!(planned > 0, …)` as an anti-vacuity guard. That predicate was true only **while the Phase
+115 implementation plans were unlanded**, and went **false at exactly the moment the section reached
+its intended end state** — zero `planned` bindings. Flipping the twelve entries (entry `H`) made a
+green test red for the right reason and the wrong assertion.
+
+Fixed under deviation Rule 1: the guard now asserts that **at least 13 Phase 115 bindings parse**,
+which is what "the section is present and the parser works" actually means, and its failure message
+states explicitly that `planned == 0` is expected so nobody restores a `planned` entry to satisfy
+it. The module doc was corrected in the same edit.
+
+**The generalisable lesson:** an anti-vacuity guard must assert an invariant, not a transient state.
+`planned > 0` was a state; `the section parses` is the invariant.
+
+**Owner:** 115-10 — closed. `tests/phase115_contract_bindings.rs` was outside this plan's declared
+`files_modified`; the edit is recorded as a deviation in `115-10-SUMMARY.md`.
+
+---
+
+# Inherited items
+
+## D-114-R — "the published core schema is not vendored" — **CLOSED by 115-01**
+
+Raised by the 2026-07-29 spec run and carried in Phase 114's ledger. **Closed:** `115-01` vendored
+`modelcontextprotocol/modelcontextprotocol` at pinned commit
+`271ecc9accafdd9b83a3c869fa67c22953b2af80` into `schema/vendored/core-2026-07-28/`, with a
+`PROVENANCE.md` carrying SHA-256 and git-blob digests proven two independent ways,
+`tests/vendored_schema_provenance.rs` generalized to fence **every** tree under `schema/vendored/`,
+and `tests/v2_core_schema_facts.rs` re-deriving the `CacheableResult` contract from the pinned bytes
+at runtime.
+
+**Redirect for a reader arriving from Phase 114's ledger: this item is closed here, in Phase 115.**
+
+**Owner:** 115-01 — closed 2026-08-01.
+
+## D-114-S — nothing watches `modelcontextprotocol/ext-tasks` for publication — **STILL UNOWNED**
+
+Re-asserted, unchanged. Nothing in this repository or its CI watches the `ext-tasks` upstream for a
+versioned (non-`draft`) schema directory. Phase 114's **D-18 hold** — six `TASK-*` requirements
+booked `[~]`, `114-SPEC-RECHECK.md` § Verdict `PENDING` — is released by a **condition**, and no
+mechanism detects that the condition has become true. Someone must look.
+
+`115-01` made a *second* vendored tree cheap (the provenance test now generalizes over
+`schema/vendored/*`) but that is **not a watcher**, and `115-CONTEXT.md` deferred the watcher
+explicitly. Measured 2026-08-01: `ext-tasks` still ships `schema/draft/` and
+`specification/draft/` only, 0 tags, 0 releases — a partial publication, i.e. `STILL-ABSENT`, so the
+hold stays engaged.
+
+**unowned.** Candidate: a scheduled CI job asserting the absence, so the day it flips is a failing
+build rather than a thing nobody noticed.
+
+## D-113-U — still needs an owner before this branch merges
+
+Carried forward from Phase 113 through Phase 114's ledger, still **unowned**, and still carrying the
+same qualifier: it needs an owner **before this branch merges**, not before Phase 115 closes. Phase
+115 did not touch its subject matter and is not the right place to resolve it.
+
+**unowned** — flagged to the phase sign-off so it is not lost at merge time.
+
+## D-114-U — the +13 `make test-feature-flags` dead-code lints
+
+Carried forward, **unowned**, and explicitly **not this phase's**: the lints predate Phase 115 and
+none of them is in a file Phase 115 touched. `115-10` Task 2 measures `test-feature-flags` warnings
+as a **delta against the phase base** precisely so this inherited count cannot be mistaken for
+something Phase 115 introduced, and so a genuine Phase 115 regression cannot hide inside it.
+
+**unowned.**

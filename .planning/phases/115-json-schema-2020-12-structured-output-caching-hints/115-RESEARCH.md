@@ -597,9 +597,23 @@ Corroborating details, all measured:
   - `exclusiveMinimum: true` → `COMPILE-ERR: true is not of type "number"`
   - `items: [ {...}, {...} ]` → `COMPILE-ERR: [...] is not of types "boolean", "object"`
   - Both then surface through the existing `"declared outputSchema is not a valid JSON Schema: …"` warning.
-- **Keywords legitimately removed in 2020-12 do change meaning, correctly.** `dependencies` (split
-  into `dependentRequired`/`dependentSchemas`) stops applying under the pin. That one *is* the
-  "validates differently" case D-02 describes, and it is acceptable.
+- **Keywords whose STATUS changed between drafts do change meaning, correctly.** ~~`dependencies`
+  (split into `dependentRequired`/`dependentSchemas`) stops applying under the pin.~~
+  **CORRECTED 2026-08-01 by `115-10` (raised by `115-03` as a measured finding, then inherited and
+  re-measured by `115-09`): `dependencies` is the WRONG example.** Measured on `jsonschema`
+  0.49.2, the library still honours `dependencies` under the 2020-12 pin, so BOTH eras reject the
+  same instance and a cache-fence test built on it does not fire. The real, measured divergence
+  case is **`contentEncoding`**: an *assertion* in draft-07 (so v1's auto-detect ENFORCES it) and
+  an *annotation* from 2019-09 onward (so the v2 pin ACCEPTS the same instance). That one *is* the
+  "validates differently" case D-02 describes, and it is acceptable. It is what
+  `era_divergent_schema` in `src/server/output_validation.rs` uses, and what the fuzz seam test
+  `fuzz_support_reports_the_divergent_content_encoding_case_asymmetrically` asserts.
+
+  The broader non-monotonicity claim survives and is now measured in BOTH directions:
+  `contentEncoding` makes v2 **more permissive**, while `$ref` siblings make v2 **stricter**
+  (draft-07 ignores keywords alongside `$ref`; 2020-12 applies them). Anyone copying an example
+  out of this section must re-measure it against the pinned `jsonschema` version first — this
+  paragraph shipped wrong into two plans before it was caught.
 - **Unknown `$schema` URIs get MORE permissive under the pin**, not less: `validator_for` errors
   (`Unknown meta-schema: 'https://example.com/…'`) while the pin compiles and enforces. A small
   behavioral win for v2.

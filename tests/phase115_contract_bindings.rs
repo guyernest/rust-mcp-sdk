@@ -19,15 +19,26 @@
 //!
 //! # The `planned` status, and why it is fenced
 //!
-//! Phase 115 wave 1 writes the contract BEFORE the implementation plans run, so
-//! twelve of its thirteen bindings land as `status: planned` — the functions do
+//! Phase 115 wave 1 wrote the contract BEFORE the implementation plans ran, so
+//! twelve of its thirteen bindings landed as `status: planned` — the functions did
 //! not exist yet. `planned` is an honest statement of that, not an exemption:
 //! [`phase115_contract_bindings_planned_entries_are_scoped_to_phase_115`] confines
 //! `planned` to exactly the three Phase 115 equations, so it cannot become a
-//! universal escape hatch for unrelated binding drift. 115-10 flips each entry
-//! to `implemented` as its owning plan lands, at which point
+//! universal escape hatch for unrelated binding drift.
+//!
+//! **115-10 (wave 6) flipped every one of them to `implemented`**, so the file now
+//! carries ZERO `planned` bindings and
 //! [`phase115_contract_bindings_every_implemented_binding_resolves_to_real_source`]
-//! becomes load-bearing for it.
+//! is load-bearing over all fourteen Phase 115 entries (thirteen from wave 1 plus
+//! `compile_for_era`, which 115-03 delivered without a contract entry).
+//!
+//! That end state is why the anti-vacuity assertion in
+//! [`phase115_contract_bindings_planned_entries_are_scoped_to_phase_115`] cannot be
+//! `planned > 0`, which is how wave 1 wrote it: that predicate was true only while
+//! the implementation plans were unlanded and became FALSE at exactly the moment
+//! the section reached its intended state. The invariant that survives is that the
+//! Phase 115 SECTION is still present and still parses — `planned` is a transient
+//! property of it, not an invariant.
 //!
 //! # The two legacy ledgers
 //!
@@ -488,11 +499,24 @@ fn phase115_contract_bindings_planned_entries_are_scoped_to_phase_115() {
          exists to force."
     );
 
+    // Anti-vacuity. Wave 1 wrote this as `planned > 0`, which held only while the
+    // implementation plans were unlanded and went FALSE the moment 115-10 flipped
+    // the last entry to `implemented` — i.e. the moment the section reached the
+    // state it exists to reach. `planned` is transient; the presence of the Phase
+    // 115 section is the invariant, so that is what is asserted here. A broken
+    // parser or a deleted section still fails, which is the whole point.
+    let phase_115_records = records
+        .iter()
+        .filter(|record| PHASE_115_EQUATIONS.contains(&record.equation.as_str()))
+        .count();
     assert!(
-        planned > 0,
-        "FAILURE MODE: zero `status: planned` bindings parsed. Phase 115 wave 1 writes twelve of \
-         them, so either the parser is broken or the Phase 115 section was removed from \
+        phase_115_records >= 13,
+        "FAILURE MODE: only {phase_115_records} Phase 115 bindings parsed (expected at least 13). \
+         Either the parser is broken or the Phase 115 section was removed from \
          {BINDING_FILE}.\n\
+         NOTE: `planned` is EXPECTED to be zero here ({planned} parsed) — 115-10 flipped every \
+         Phase 115 binding to `implemented`. Do not restore a `planned` entry to satisfy an \
+         anti-vacuity check.\n\
          WHAT TO DO: restore the section or fix the parser; do not delete this assertion."
     );
 }

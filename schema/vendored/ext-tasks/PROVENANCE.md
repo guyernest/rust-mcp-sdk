@@ -35,11 +35,19 @@ Stated explicitly so it is never inferred otherwise:
   "fixed". Any edit invalidates the digests below and is a test failure by design. If upstream
   changes, re-fetch at a new pinned commit and rewrite this record — do not patch in place.
 
-`schema/` is deliberately **not** added to `Cargo.toml`'s `[package] exclude` list. The total is
-56,324 bytes, which is immaterial against the crates.io limit, and excluding it would break
-`tests/vendored_schema_provenance.rs` for anyone running `cargo test` on the published crate —
-the same failure mode that forced `tests/team_contracts_conformance.rs` out of the package when
-`contracts/` was excluded (see the comment at `Cargo.toml:41-45`).
+`schema/` is deliberately **not** added to `Cargo.toml`'s `[package] exclude` list. The two files
+vendored here are 56,324 bytes, which is immaterial against the crates.io limit, and excluding
+them would break `tests/vendored_schema_provenance.rs` for anyone running `cargo test` on the
+published crate — the same failure mode that forced `tests/team_contracts_conformance.rs` out of
+the package when `contracts/` was excluded (see the comment at `Cargo.toml:41-45`).
+
+> **Amended 2026-08-01 by Phase 115 plan `115-10`.** As written in Phase 114 this paragraph said
+> *"The total is 56,324 bytes"*, meaning the whole of `schema/`. That stopped being true when
+> `115-01` vendored a SECOND tree beside this one at
+> `schema/vendored/core-2026-07-28/`. `schema/` now holds roughly **336,000 bytes** of vendored
+> content; the 56,324 figure above has been rescoped to the two files in THIS directory, which is
+> what the digest table below covers. The conclusion is unchanged — still immaterial against the
+> crates.io limit, still not excluded.
 
 ## Source
 
@@ -112,9 +120,22 @@ diff /tmp/schema.json schema/vendored/ext-tasks/schema.json
 
 `schema/draft/` is a **draft directory in an Experimental repository**. At the fetch date the
 upstream `schema/` directory contained only `draft` — there is no versioned (e.g.
-`2026-07-28`) directory in `ext-tasks`, and none in the core
-`modelcontextprotocol/modelcontextprotocol` repository either. Every wire value read out of
-these files is therefore **provisional**.
+`2026-07-28`) directory in `ext-tasks`. Every wire value read out of these files is therefore
+**provisional**.
+
+> **Amended 2026-08-01 by Phase 115 plan `115-10`.** This paragraph originally continued *"and
+> none in the core `modelcontextprotocol/modelcontextprotocol` repository either"*. That half is
+> **no longer true**: `115-01` vendored the core schema from a **versioned**
+> `schema/2026-07-28/` directory in that repository, and the copy sits beside this record at
+> `schema/vendored/core-2026-07-28/` with its own `PROVENANCE.md` and digests.
+>
+> This is a **distinction with consequences, not a typo.** The D-18 hold's trigger is a versioned
+> directory in **BOTH** repositories (see `## RE-VERIFICATION OBLIGATION` below). The core half is
+> now **satisfied**; the `ext-tasks` half is **not** — upstream still ships `schema/draft/` and
+> `specification/draft/` only, with 0 tags and 0 releases. A partial publication is
+> `STILL-ABSENT` under the record's own Third Outcome Policy, so **the hold stays engaged and
+> TASK-01…TASK-06 stay `[~]`.** Phase 115's own values are NOT held, because they come from the
+> published core schema rather than from these files.
 
 This is the same posture Phase 112 took for the `-3202x` error codes in
 `src/types/protocol/error_codes.rs:155-172`, and it carries the same obligation.
