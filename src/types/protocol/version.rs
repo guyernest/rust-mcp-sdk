@@ -39,7 +39,18 @@ pub const PROTOCOL_VERSION_2026_07_28: &str = "2026-07-28";
 /// `2026-07-28` stateless/Tasks/MCP-Apps generation. Unknown or unrecognized
 /// versions conservatively classify as [`Era::V1`] so a malformed or
 /// forward-dated version string can never accidentally reach v2 behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// # Why this derives `Hash`
+///
+/// The emit-time `outputSchema` validator cache in
+/// `crate::server::output_validation` is keyed on `(Era, schema text)`, not on
+/// the schema text alone: under Phase 115 D-01 the SAME schema document
+/// compiles to two DIFFERENT validators depending on the era (v1 auto-detects
+/// the declared `$schema` dialect; v2 pins Draft 2020-12). Keying on text alone
+/// would be first-writer-wins for the process lifetime — whichever era compiled
+/// a given schema first would serve its validator to the other. `Hash` on this
+/// fieldless enum is what makes the tuple key possible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Era {
     /// The 2024/2025 protocol generation (compatibility layer, current default).
     V1,

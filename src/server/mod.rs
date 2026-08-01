@@ -2000,6 +2000,13 @@ impl Server {
         #[cfg(not(target_arch = "wasm32"))]
         let create_path_era = protocol_context.as_ref().map(|ctx| ctx.era);
 
+        // Same capture-before-move reason: the emit-time outputSchema validator
+        // is era-branched (Phase 115 D-01) and `protocol_context` is moved into
+        // `extra` below. UN-cfg'd — unlike `create_path_era` — because the
+        // validation call site compiles on wasm32 too. The twin of the
+        // `ServerCore` capture on its own `CallTool` arm.
+        let validation_era = protocol_context.as_ref().map(|ctx| ctx.era);
+
         // Propagate the request's `_meta` object (raw JSON incl. namespaced
         // `other` keys) so handlers can read it via `extra.request_meta` in the
         // high-level `Server` path too (ServerCore already wires this at core.rs).
@@ -2208,7 +2215,12 @@ impl Server {
             // (via widget enrichment or the schema bridge) — validate the value
             // against it regardless of which branch does the emitting.
             if let Some(schema) = &info.output_schema {
-                output_validation::warn_on_schema_mismatch(&req.name, schema, &result);
+                output_validation::warn_on_schema_mismatch(
+                    &req.name,
+                    schema,
+                    &result,
+                    validation_era,
+                );
             }
             if info.widget_meta().is_some() {
                 call_result = call_result.with_widget_enrichment(info, result);

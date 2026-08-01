@@ -617,6 +617,12 @@ impl ServerCore {
             protocol_context.as_ref(),
         );
 
+        // Same capture-before-move reason as `create_trigger` above: the
+        // emit-time outputSchema validator is era-branched (Phase 115 D-01),
+        // and `protocol_context` is moved into `extra` below. UN-cfg'd because
+        // the validation call site compiles on wasm32 too.
+        let validation_era = protocol_context.as_ref().map(|ctx| ctx.era);
+
         // Create request handler extra data with auth_context and task request.
         // Middleware below takes `&mut extra`, so bind as mut.
         let request_id = format!("tool_{}", req.name);
@@ -812,7 +818,12 @@ impl ServerCore {
         // (via widget enrichment or the schema bridge) — validate the value
         // against it regardless of which branch does the emitting.
         if let Some(schema) = tool_info.and_then(|i| i.output_schema.as_ref()) {
-            crate::server::output_validation::warn_on_schema_mismatch(&req.name, schema, &value);
+            crate::server::output_validation::warn_on_schema_mismatch(
+                &req.name,
+                schema,
+                &value,
+                validation_era,
+            );
         }
 
         let call_result = if let Some(info) = tool_info.filter(|i| i.widget_meta().is_some()) {
