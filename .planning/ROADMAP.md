@@ -2219,7 +2219,7 @@ Plans:
 - [~] **Phase 113: Stateless HTTP + Multi-Round-Trip Elicitation** — v2 requests run handshake-free/session-free on the existing `stateless()` branch; MRTR (`input_required`/`requestState`/`inputResponses`) end-to-end; opt-in `subscriptions/listen` (server + client halves); no SSE resumability + id-replay regression test; the pmcp `Client` speaks v2 and fulfills MRTR. **All 20 plans shipped, but re-verification on 2026-07-26 returned `gaps_found` (4/5 must-haves)** — the original 13, plus the four-plan gap-closure round (113-17 SSE parser bound / 113-18 listen refusal + semaphore prune / 113-20 collected-body cap / 113-19 fuzz-seam gating + phase gate) that answered `113-VERIFICATION.md`'s GAP-A..E. **The progress table's "Complete" for this phase means all 20 plans shipped; the phase itself is NOT complete, for two independent reasons:** (1) **Open codebase gaps.** A fresh `113-REVIEW.md` (2026-07-26) found three BLOCKERs that the gap-closure round neither introduced nor closed, all independently reproduced by re-verification: an uncapped `body.collect()` in `rejection_error` (`src/client/subscriptions.rs:147`), an O(n²) `take_utf8_prefix` upstream of every new bound (`src/shared/sse_parser.rs:164`), and an uncapped `response.collect()` in `HttpTransport::send_request` (`src/shared/http.rs:346`). These leave HTTP-04's memory-bounded-stream criterion genuinely unmet. (2) **Blocked on publication.** The final `schema/2026-07-28` had still not published as of 2026-07-26, so the three v2 error-code constants remain pre-final values held under a written developer exception and HTTP-01..05 / CLNT-01..02 stay `[~]`. Re-run the `113-SPEC-RECHECK.md` checkpoint on or after 2026-07-28 to close (2); (1) needs a further gap-closure round.
 - [x] **Phase 113.1: Merge Unblock** — the three blockers that kept this branch from merging are CLOSED. (1) **PR-blocking PMAT complexity**: `handle_post_fast_path` 30 → **15** and `handle_post_with_middleware` 31 → **15** (pmat 3.15.0, measured per-function), so `pmat quality-gate --fail-on-violation --checks complexity` passes **locally** with zero violations — five points of margin under the phase's ≤ 20 target. Delivered by extracting the copy-pasted v2 header gate into a `resolve_v2_gate` sibling pair, the fast path's inline dispatch into `dispatch_message_fast`, a read/classify preamble per path, and a legacy-version guard per path preserving D-08's deliberate asymmetry. (`FastPathDispatch`/`MiddlewareDispatch` remain field-for-field identical and unmerged — D-07, still deferred.) (2) **D-113-R**: `drain_complete_lines` now searches from a scan-window cursor instead of restarting at 0 each `feed()`, with the per-call `debug_assert` full-buffer scan removed in the same atomic change; guarded by two falsifiable O(n) tests, each demonstrated RED before the fix and RED again under a post-fix negative control, plus a chunking-invariance property. (3) **D-113-Q**: `OptimizedSseTransport::connect_sse` is bounded by a `reqwest::chunk()` running total against the crate's 16 MiB SSE ceiling, and `WHOLE_BODY_ALLOWLIST` is now **EMPTY** — the ratchet at its floor. **HTTP-09 is `[x]`, closed on the merits** with its requirement text byte-unchanged. The auth-surface reads are recorded as `D-113-V` and assigned to Phase 116 — **four** files, not three, and **31** reviewed-unbounded reads, not 18 — the original figure was a raw line-grep count; the tripwire's own scanner strips whitespace and would find all of them, so only its SCOPE FENCE keeps these four files unreported. **Still outstanding for merge, neither caused nor owned by this phase:** the org-required `gate` needs a human push (D-20), and two pre-existing CI failures stand in front of it — `make doc-check`'s 26 rustdoc errors (`D-113-W`) and the Purity Gate's tooling drift.
 - [~] **Phase 114: Tasks Extension Migration** — Tasks negotiated via the extensions map, `tasks/update` added, `tasks/list` era-gated off on v2; `resultType:"task"` + 5-state→v2-enum mapping; stateless owner-binding fails closed; TaskStore/backends survive unchanged (wire reshape behind TaskRouter). **All 20 plans shipped (2026-08-01) and the whole-phase gate is GREEN** — `make quality-gate` exit 0 at 4899 passed / 0 failed across 294 result lines, `make lint` zero warnings, semver 223/223 no-update-required against the phase base, `cargo public-api` 0 REMOVED, pmat 0 violations in `src/`, both examples exit 0, fuzz 20 000 runs clean, `Cargo.lock` byte-unchanged across the phase. **The phase is nonetheless NOT complete, for two independent reasons, exactly as Phase 113's marker records for its own:** (1) **`114-18`'s Task 4 sign-off checkpoint (`checkpoint:human-verify gate="blocking"`) has NOT been answered** — it is a reserved human action and was not self-approved. (2) **Blocked on publication.** `114-SPEC-RECHECK.md` `## Verdict` is `PENDING` and TASK-01..06 are booked `[~]` — *implemented; pending final schema* — under the **D-18** hold. Re-measured 2026-08-01T00:09:19Z with the prescribed `gh api` form: `modelcontextprotocol/modelcontextprotocol` HAS published `schema/2026-07-28/`, but `modelcontextprotocol/ext-tasks` still carries `draft/` only with 0 tags and 0 releases. Under DQ6's both-repositories trigger that is a partial publication, which the record's `## Third Outcome Policy` rule 5 defines as `STILL-ABSENT`. **The sole remaining condition is a ONE-repository check on `ext-tasks`; nothing watches it (`D-114-S`).**
-- [ ] **Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints** — jsonschema 0.48 Draft 2020-12 explicitly pinned (wasm-clean, SEP-2106); `structuredContent` accepts any JSON value on v2; additive `ttlMs`/`cacheScope` on the five list/read results
+- [x] **Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints** — jsonschema **0.49** (not the 0.48 the requirement text names) with Draft 2020-12 explicitly pinned on v2 via normalize-then-compile — *the naive pin is a MEASURED silent validation bypass* — proven wasm-clean by `cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"`, which is the only command that compiles `jsonschema` at all (`make wasm-build` never does), and SEP-2106 fenced against cargo's DECLARED and RESOLVED dependency graphs; `structuredContent` accepts any JSON value on v2 via `CallToolResult::structured_value`, with v1's pre-existing over-permissiveness FROZEN by D-05 rather than corrected (there was no object-only guard in pmcp to remove — measured); additive `ttlMs`/`cacheScope` on **six** results, not five, because `DiscoverResult extends CacheableResult` in the pinned schema — ensured on v2 and STRIPPED on v1 at one shared chokepoint wired into all THREE dispatchers including the wasm one. **All 11 plans shipped (2026-08-01) and the whole-phase gate is GREEN over the SWEPT tree** — `make quality-gate` exit 0 at 5045 passed / 0 failed / 81 ignored across 309 result lines, `cargo semver-checks` 223/223 *no semver update required* against phase base `acd23b64`, `cargo public-api` **+188 added / 0 REMOVED** with `Cacheable`/`project_caching_hints`/`fuzz_support` correctly invisible, pmat 0 violations in `src/`, the fuzz target 660 271 runs with an EMPTY artifacts dir, and `examples/s52_v2_caching_hints` RUN (not merely built) to exit 0. **SCHM-01/02/03 are booked `[x]`, NOT `[~]` — D-15's contingency did not fire** and Phase 114's publication hold is NOT inherited: this phase's wire values come from the PUBLISHED core schema vendored at `schema/vendored/core-2026-07-28/` @ `271ecc9accafdd9b83a3c869fa67c22953b2af80`, digest-fenced by `tests/vendored_schema_provenance.rs`. **Signed off by Guy Ernest (owner) on 2026-08-01** at `115-10`'s Task 3 `checkpoint:human-verify gate="blocking"`, which was returned UNANSWERED rather than self-approved; no completion marker existed on disk before that answer (completed 2026-08-01)
 - [ ] **Phase 116: Auth Hardening SEPs** — RFC 9207 `iss` validation (strict v2 / lenient v1), DCR `application_type`, issuer-keyed credential storage + three clarifications — all source changes to the hand-rolled OAuth stack, no new crates
 - [ ] **Phase 117: Agents, Tester & v1 Severability** — `pmcp-agent` (ToolInvoker + task polling) and `mcp-tester` exercise a v2 server end-to-end; v1-only machinery isolated behind a severable era-gated layer with a documented sunset policy; v2 path carries no session/SSE baggage
 - [ ] **Phase 118: Conformance Against the Official Suite** — official `@modelcontextprotocol/conformance` (commit-pinned) in CI over real HTTP against a dual-version example; Phase-109 Rust harness gains v2 fixtures (v1 stays green, dev-dep-free build); deprecated caps verified functional under v2
@@ -2536,6 +2536,30 @@ Plans:
 > contract-first). Contracts live IN-REPO at `contracts/`, not at the `../provable-contracts/` path
 > CLAUDE.md names — that directory does not exist in this checkout — and `115-11` records the
 > deviation. `115-10` books all three.
+>
+> **Execution deviation (recorded 2026-08-01, `115-10` Task 3, AFTER the owner sign-off).** Both
+> notes above were re-verified against what actually landed. The five-vs-six and 0.48-vs-0.49
+> readings hold as written, and the contract-location deviation is present in the replan note above
+> and is confirmed shipped: the phase's contracts live in-repo at `contracts/`
+> (`mcp-protocol-sdk-v1.yaml` + `binding.yaml`), NOT at the `../provable-contracts/contracts/<crate>/`
+> path CLAUDE.md names, because that directory does not exist in this checkout. **CLAUDE.md was
+> deliberately NOT edited** — rewriting a project-wide standing instruction is not a phase executor's
+> call; the deviation is recorded inside the requirement bookings and in the ledger instead. Four
+> further divergences the phase acquired during execution, none of which change the phase's shape:
+> (1) the contract set is **fourteen** bindings, not the thirteen the replan planned — `115-10` added
+> `compile_for_era`, which had none — and three recorded signatures were corrected to the shipped
+> text (all three were the same harmless kind: an elided path the source writes in full, same types);
+> (2) an exact `=0.49.2` version pin was **DECLINED** for a published library crate on semver
+> grounds, and `Cargo.lock` is gitignored, so the bump has no reviewable lockfile diff;
+> (3) `ResourceHandler` declares only `read` and `list` — there is **no templates method** — so only
+> **two** of the six cacheable results are handler-settable and `resources/templates/list` can only
+> ever carry SDK defaults; three copies of production rustdoc claiming otherwise were corrected;
+> (4) `make test-feature-flags` exits 2 and the acceptance criterion demanding exit 0 was
+> **unsatisfiable as written** — the target was already red at the phase base with a byte-identical
+> 62-error per-file distribution, so **Phase 115's delta is ZERO**. It is carried as `D-114-U`, and
+> the gate was neither weakened nor worked around. Full ledger: 36 items, every one owned or
+> explicitly **unowned**, at
+> `.planning/phases/115-json-schema-2020-12-structured-output-caching-hints/deferred-items.md`.
 
 **Plans**: 11 plans in 6 waves
 
@@ -2568,7 +2592,7 @@ Plans:
 
 **Wave 6**
 
-- [ ] 115-10-PLAN.md — Stale-doc sweep + deferred-items ledger FIRST, then the whole-phase gate measured as deltas against a phase base (including the `wasm,validation` build `make wasm-build` never runs), SCHM-01/02/03 booked `[x]` on published evidence (D-15 — no inherited hold), and an owner sign-off after which — and only after which — the ROADMAP/STATE completion markers are applied
+- [x] 115-10-PLAN.md — Stale-doc sweep + deferred-items ledger FIRST, then the whole-phase gate measured as deltas against a phase base (including the `wasm,validation` build `make wasm-build` never runs), SCHM-01/02/03 booked `[x]` on published evidence (D-15 — no inherited hold), and an owner sign-off after which — and only after which — the ROADMAP/STATE completion markers are applied. **The sign-off was returned UNANSWERED rather than self-approved and was APPROVED by Guy Ernest (owner) on 2026-08-01, with all three refused-to-self-approve items accepted (the 0.49/six-results/in-repo-contracts deviations, the ledger's unowned items, and `[x]` over `[~]`) and no corrections requested.** These markers were written after that answer
 
 ### Phase 116: Auth Hardening SEPs
 
@@ -2633,7 +2657,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 10/11 | In Progress|  |
+| 115. JSON Schema 2020-12 + Caching Hints | 11/11 | Complete   | 2026-08-01 |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
@@ -2677,6 +2701,30 @@ Plans:
 > stand in front of it: `make doc-check` is red on 26 rustdoc errors present at HEAD before Phase
 > 113.1 began (recorded as **D-113-W**), and the Purity Gate carries its own known tooling drift.
 > Neither was caused by Phase 113.1 and neither is in a merge unblock's scope.
+
+> **✅ Phase 115's `Complete` above counts PLANS *and* REQUIREMENTS — unlike Phases 113 and 114, it
+> is genuinely closed.** All 11 plans have SUMMARYs *and* SCHM-01/02/03 are `[x]`, closed on the
+> merits rather than held. **The distinction is not a judgement call and it is not inherited:** the
+> `[~]` on Phases 113/114 exists because their wire values were read from an UNPUBLISHED schema, and
+> D-15 states plainly that *"Phase 115 has NO publication hold and must not inherit a `[~]` booking
+> from Phase 114 by habit."* Phase 115's values come from the PUBLISHED
+> `modelcontextprotocol/modelcontextprotocol` core schema, vendored at
+> `schema/vendored/core-2026-07-28/` @ commit `271ecc9accafdd9b83a3c869fa67c22953b2af80` with both
+> digests known in advance and fenced by `tests/vendored_schema_provenance.rs`, so D-15's contingency
+> (the Phase-113 HTTP-04 split) never fired. Each booking CITES that artifact plus a named test
+> binary and count, so a future reader can re-derive it rather than trust it.
+>
+> The owner sign-off at `115-10` Task 3 is **answered** — approved by Guy Ernest on 2026-08-01, with
+> no corrections — which is the other half of what Phases 113/114 are still missing. The checkpoint
+> was returned UNANSWERED by the executing agent rather than self-approved, and
+> `git diff --stat 2955d28e..HEAD -- .planning/ROADMAP.md .planning/STATE.md` was verified **EMPTY**
+> immediately before the answer: no completion marker existed on disk while the decision was open.
+>
+> **What Phase 115 does NOT close, and must not be read as closing:** `D-114-S` (nothing watches
+> `modelcontextprotocol/ext-tasks` for publication — its `schema/` still carries `draft/` only, so
+> Phase 114's D-18 hold stays engaged and TASK-01..06 stay `[~]`) and `D-113-U` (still needs an owner
+> before this branch merges). `115-01`'s vendoring closed the CORE half of that trigger and
+> `D-114-R` with it; the `ext-tasks` half is untouched.
 
 ---
 
