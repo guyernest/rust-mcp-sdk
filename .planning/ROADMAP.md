@@ -2550,7 +2550,7 @@ Plans:
 **Wave 2**
 
 - [x] 115-03-PLAN.md — SCHM-01: `jsonschema` 0.49 across all three manifests, Draft 2020-12 pinned on v2 via normalize-then-compile (the naive pin is a measured silent validation BYPASS), `Era: Hash`, an era-keyed validator cache, and a draft-07 fence
-- [ ] 115-04-PLAN.md — SCHM-02: `CallToolResult::structured_value` sibling constructor, the era rustdoc, and scalar/array/null `structuredContent` coverage across both dispatchers (there is no object-only guard in pmcp to remove — measured)
+- [x] 115-04-PLAN.md — SCHM-02: `CallToolResult::structured_value` sibling constructor, the era rustdoc, and scalar/array/null `structuredContent` coverage across both dispatchers (there is no object-only guard in pmcp to remove — measured)
 
 **Wave 3**
 
@@ -2633,7 +2633,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 4/11 | In Progress|  |
+| 115. JSON Schema 2020-12 + Caching Hints | 5/11 | In Progress|  |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
