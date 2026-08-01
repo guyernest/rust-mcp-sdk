@@ -144,8 +144,144 @@ checkboxes a verifier can fail on.
 ### JSON Schema 2020-12 & Caching Hints (SCHM)
 
 - [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
+
+> **Booked `[x]`, NOT `[~]`, and the distinction is deliberate.** Phase 114's D-18 hold exists
+> because its wire values come from an unpublished `draft/` directory in an Experimental
+> repository. **Phase 115's do not.** Its values come from the **published** core schema for
+> protocol version `2026-07-28`, vendored at `schema/vendored/core-2026-07-28/` from
+> `modelcontextprotocol/modelcontextprotocol` at pinned commit
+> `271ecc9accafdd9b83a3c869fa67c22953b2af80` — a **versioned** upstream directory, not `draft/`.
+> Both files are digest-fenced by `tests/vendored_schema_provenance.rs` (SHA-256 **and** git blob
+> SHA-1, cross-checked against the GitHub contents API at the pin), and the wire facts are
+> **re-derived from those bytes at runtime** by `tests/v2_core_schema_facts.rs`. Decision **D-15**
+> states the target plainly: *"Phase 115 has NO publication hold and must not inherit a `[~]`
+> booking from Phase 114 by habit."* The contingency D-15 kept available (the Phase-113 HTTP-04
+> split) **did not fire**. Booking `[~]` here would be exactly the habit D-15 named.
+>
+> **Measured evidence** (all re-run by `115-10` at phase close, by binary name, because
+> `make validate-always`'s three ALWAYS targets are fail-open — see `deferred-items.md` entries
+> `U`/`V`/`W`):
+>
+> | Evidence | Count |
+> |---|---|
+> | `binary(vendored_schema_provenance)` | 6 tests |
+> | `binary(v2_core_schema_facts)` | 8 tests |
+> | `binary(v2_schema_tripwires)` | 13 tests (SEP-2106 over cargo's DECLARED **and** RESOLVED graphs) |
+> | `--lib -E 'test(/output_validation::/)'` | 15 tests |
+> | `binary(property_tests)` | 17 (`--features full`) / 18 (`--features "full fuzzing"`) |
+> | `fuzz_schema_draft_pin` | corpus replay of 12 committed seeds exit 0; a 60 s session ran **660,271** executions and left `fuzz/artifacts/fuzz_schema_draft_pin/` **EMPTY** |
+>
+> **The judgement this booking MAKES rather than absorbs.** *"Draft 2020-12 explicitly pinned"* is
+> satisfied by **normalize-then-compile**, not by the naive pin — because the naive pin was
+> **MEASURED to be a silent validation BYPASS**. `jsonschema`'s `draft202012::new` sets the keyword
+> set, but a document declaring a legacy meta-schema still resolves its *vocabularies* from that
+> declaration, and under 2020-12 vocabulary semantics a draft-07 declaration yields an EMPTY
+> vocabulary set — a validator that accepts **every** instance. Measured across `jsonschema`
+> 0.46.10 / 0.47.0 / 0.48.0 / 0.48.5 / 0.49.2, and `draft202012::meta::is_valid` returns `true` for
+> such a document, so there is no library-side detector. The pin is therefore implemented as
+> `normalize_schema_dialect` (pure, idempotent, `Cow`-returning, root `$schema` only) followed by
+> `compile_2020_12`, fenced by a draft-07 test **whose negative control was observed to fire** —
+> see `115-03-SUMMARY.md`. `compile_for_era` keeps v1's `jsonschema::validator_for` auto-detect
+> **verbatim** (D-01 freeze) and is the only auto-detect entry point left in the module.
+>
+> **The wasm-clean half is proven by an explicit command, because the gate does not prove it.**
+> `make wasm-build` (`Makefile:59-62`) passes only `--features wasm` and therefore **never compiles
+> `jsonschema` at all**. The evidence is
+> `cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"`
+> — **exit 0** at phase close. `make wasm-build` also exits 0, but on its own it is not evidence
+> for this requirement (ledger entry `X`).
+>
+> **SEP-2106** (no external `$ref` dereference) is fenced against **both** of cargo's dependency
+> graphs via `cargo metadata` — the declared graph and the feature-resolved graph — rather than by
+> scanning `Cargo.toml` as text, so a renamed or table-style dependency and graph-wide feature
+> unification are all caught. Remote-ref resolution stays disabled: an external `$ref` must fail to
+> **compile**, with zero I/O.
+>
+> **DEVIATION — shipped `jsonschema = "0.49"`, not the literal `0.48` in this requirement's text.**
+> 0.48.0–0.48.2 carry packaging defects fixed in 0.48.3–0.48.5, and 0.49 is additive-only over
+> 0.48. An exact `=0.49.2` pin was **DECLINED**: pinning an exact version in a published *library*
+> crate propagates the constraint to every downstream consumer. The residual — `Cargo.lock` is
+> gitignored, so the bump has no reviewable lockfile diff — is recorded as ledger entry `4`.
+
 - [x] **SCHM-02**: On v2, `structuredContent` accepts any JSON value (scalar/array/null/object); v1-negotiated tools keep the existing object-shaped behavior
+
+> **Booked `[x]` on the same published-artifact evidence as SCHM-01** — the shape claim is
+> re-derived from `schema/vendored/core-2026-07-28/` at pinned commit
+> `271ecc9accafdd9b83a3c869fa67c22953b2af80`, where `CallToolResult.structuredContent` is declared
+> `structuredContent?: unknown` — *"any JSON value (object, array, string, number, boolean, or
+> null)"*. **Not `[~]`:** there is no publication hold on this value.
+>
+> **Measured evidence:** `binary(structured_tool_output)` — **20 tests**, covering scalar, array,
+> string, boolean and explicit-`null` payloads across **both** native dispatchers. Public API:
+> `CallToolResult::structured_value(Value) -> Self` (the additive widening sibling;
+> `CallToolResult::structured` keeps its exact signature and object-shaped intent under the D-06
+> freeze). `s52_v2_caching_hints` prints `"structuredContent":42` on a live v2 wire and
+> `"structuredContent":null` for a present-null payload.
+>
+> **Finding 6 held, and this booking states it rather than absorbing it: THERE WAS NO OBJECT-ONLY
+> GUARD IN pmcp TO REMOVE.** The v1 constraint lived in v1 *spec text*, never in pmcp code — the
+> field has always been `Option<Value>` and neither native dispatcher shape-checks the handler's
+> value on the way out. So pmcp **already emitted** non-object `structuredContent` on v1, which is
+> more permissive than v1's own spec allows. **Decision D-05 FREEZES that over-permissiveness
+> rather than correcting it**, because tightening v1 to reject scalars would itself be a v1 wire
+> change. `tests/structured_tool_output.rs` fences the v1 half on both dispatchers precisely so a
+> later "correctness" tightening fails loudly.
+>
+> **The v2 claim is proven with an IN-BAND era witness.** The pre-review version of these tests
+> would have run as **v1** while asserting v2 behaviour — a green suite proving nothing. The
+> landed tests assert on the in-band `resultType` field arriving in the same response, so a test
+> that silently negotiated v1 fails instead of passing.
+>
+> **KNOWN LIMITATION, accepted not hidden:** a present `structuredContent: null` does not survive a
+> typed re-read. The server is correct on the wire (asserted twice); serde's default `Option<T>`
+> deserializer collapses JSON `null` onto `None` on the way back in, so `CallToolResult`'s own
+> `Deserialize` cannot distinguish "null" from "absent". Pre-existing on both eras, fenced by
+> `present_null_structured_content_does_not_survive_a_typed_reread`, and booked as ledger entry `L`.
+
 - [x] **SCHM-03**: The five list/read results carry `ttlMs`/`cacheScope` caching hints (additive fields)
+
+> **Booked `[x]` on published evidence.** `CacheableResult` **is in the published core schema** —
+> `schema/vendored/core-2026-07-28/` at pinned commit
+> `271ecc9accafdd9b83a3c869fa67c22953b2af80`, digest-fenced by
+> `tests/vendored_schema_provenance.rs`, with the contract re-derived from those bytes at runtime
+> by `tests/v2_core_schema_facts.rs`. That test also measured `ttlMs` as
+> `{"type": "integer", "minimum": 0}` — integrality and non-negativity are **contract**, which is
+> why the Rust mapping is `u64` and not `f64`. **Not `[~]`:** D-15's contingency did not fire.
+>
+> **Measured evidence:**
+>
+> | Evidence | Count |
+> |---|---|
+> | `binary(v2_caching_hints)` | **19 tests** — six methods × two eras × both native dispatchers |
+> | `binary(v1_lists_golden)` | 7 tests — pre-change raw-byte goldens with a leak guard **proven to fire** |
+> | `binary(v2_schema_tripwires)` | 13 tests — D-12 single-projection, the wasm call site, the middleware ordering |
+> | `--lib -E 'test(/types::caching/)'` | 15 tests |
+> | `--lib -E 'test(/inject_v2_result_envelope/)'` | 26 tests |
+> | `s52_v2_caching_hints` | exit 0: `ttlMs`/`cacheScope` present on the v2 responses, **actively stripped** on the v1 one |
+>
+> **DEVIATION — SIX result types carry the hints, not the FIVE in this requirement's text.**
+> `DiscoverResult extends CacheableResult` in the pinned published schema, alongside
+> `ListToolsResult`, `ListResourcesResult`, `ListResourceTemplatesResult`, `ReadResourceResult` and
+> `ListPromptsResult`. `server/discover` is therefore included: excluding it would have shipped a
+> knowingly non-conformant **first call** for every v2 client, and including it is *cheaper*,
+> because `ServerDiscoverResult` already routes through the same `inject_v2_result_envelope`
+> chokepoint. The projection is a single shared, **cfg-free** `project_caching_hints` wired into
+> **all three** dispatchers including the wasm one — closing a v1 leak the cross-AI review found.
+>
+> **SCOPE BOUND, asserted at a named test rather than left implicit.**
+> `extract_request_meta_value` (`src/server/core.rs`) reads the typed `_meta` era signal from only
+> `CallTool`, `GetPrompt` and `ReadResource`, so **four of the six methods cannot reach `Era::V2`
+> through in-process `ServerCore` dispatch at all**. Their v2 evidence is therefore over **HTTP**,
+> where the era arrives on the transport, and the bound is pinned by a named test so it can neither
+> widen nor persist unnoticed (ledger entry `Q`).
+>
+> **Two further limitations this booking names rather than buries.** (1) Only **two** of the six —
+> `ListResourcesResult` and `ReadResourceResult` — are settable by a `ResourceHandler`; the other
+> four, including `resources/templates/list`, always emit the SDK default (`ttlMs: 0`,
+> `cacheScope: "private"`) on v2, because `ResourceHandler` declares only `read` and `list` (ledger
+> entry `P`). (2) Response middleware runs **after** the projection, so it can still remove or
+> forge the keys; not reordered, because that would change what middleware observes about Phase
+> 114's envelope — documented, tested and fenced instead (ledger entry `R`).
 
 ### Auth Hardening (AUTH)
 
