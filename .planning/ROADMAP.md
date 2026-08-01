@@ -2558,7 +2558,7 @@ Plans:
 
 **Wave 4**
 
-- [ ] 115-06-PLAN.md — SCHM-03 projection: a `Cacheable` claim captured before the request is moved, hints ensured on v2 and STRIPPED on v1 at the one shared chokepoint (D-12), wired into ALL THREE dispatchers including `wasm_server.rs` — closing a D-11 v1 leak the review found — with the post-projection response-middleware limitation measured and documented
+- [x] 115-06-PLAN.md — SCHM-03 projection: a `Cacheable` claim captured before the request is moved, hints ensured on v2 and STRIPPED on v1 at the one shared chokepoint (D-12), wired into ALL THREE dispatchers including `wasm_server.rs` — closing a D-11 v1 leak the review found — with the post-projection response-middleware limitation measured and documented
 
 **Wave 5**
 
@@ -2633,7 +2633,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 6/11 | In Progress|  |
+| 115. JSON Schema 2020-12 + Caching Hints | 7/11 | In Progress|  |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |

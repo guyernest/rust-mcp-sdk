@@ -386,4 +386,8 @@ compile gate plus the two other proofs named in `cacheable_result_to_value`'s ru
 | 1 | `d64004f5` | `feat(115-06): project caching hints at the native chokepoint on BOTH eras` |
 | 2 | `d4b87130` | `feat(115-06): one shared cacheability classifier, wired at all three dispatchers` |
 | 3 | `81555ec6` | `test(115-06): cover the caching projection at the chokepoint, both directions` |
-| 4 | (this doc) | `docs(115-06): complete caching-hint dispatcher wiring plan` |
+| 4 | `a2242d48` | `docs(115-06): complete caching-hint dispatcher wiring plan` |
+
+## Self-Check: PASSED
+
+All four modified/created files exist on disk; all four commits resolve in `git log --all`.
