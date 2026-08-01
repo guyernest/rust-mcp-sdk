@@ -2529,8 +2529,15 @@ Plans:
 > Criterion 1 says `jsonschema 0.48`; the plan set pins **0.49** (0.48.0-0.48.2 carry packaging
 > defects fixed by 0.48.3-0.48.5; 0.49 is additive-only). Both deviations are booked inside the
 > requirement records by `115-10`.
+>
+> **Replan deviation (recorded 2026-08-01, `/gsd:plan-phase 115 --reviews`):** a cross-AI review
+> (`115-REVIEWS.md`) found seven blocking defects, all in the VERIFICATION design rather than the
+> architecture. The plan set grew from ten to **eleven** with the addition of `115-11` (wave 1,
+> contract-first). Contracts live IN-REPO at `contracts/`, not at the `../provable-contracts/` path
+> CLAUDE.md names — that directory does not exist in this checkout — and `115-11` records the
+> deviation. `115-10` books all three.
 
-**Plans**: 10 plans in 6 waves
+**Plans**: 11 plans in 6 waves
 
 Plans:
 
@@ -2538,6 +2545,7 @@ Plans:
 
 - [ ] 115-01-PLAN.md — Vendor the published 2026-07-28 core schema at a pinned commit with `PROVENANCE.md`, generalize the provenance tripwire to every tree under `schema/vendored/`, and re-derive the `CacheableResult` contract from the pinned artifact (D-14)
 - [ ] 115-02-PLAN.md — Pre-change raw-byte golden fixtures for the five v1 list/read responses, with a `ttlMs`/`cacheScope` leak guard proven to fire (D-13; MUST land before any field addition)
+- [ ] 115-11-PLAN.md — Contract-first (CLAUDE.md): three provable-contract equations for SCHM-01/02/03 in the IN-REPO `contracts/` tree, thirteen bindings landed as `status: planned`, and `tests/phase115_contract_bindings.rs` — the ghost-binding resolver `make comply` never had for `contracts/binding.yaml`
 
 **Wave 2**
 
@@ -2546,21 +2554,21 @@ Plans:
 
 **Wave 3**
 
-- [ ] 115-05-PLAN.md — SCHM-03 types: the closed `CacheScope` enum in a new `src/types/caching.rs`, `Option`-typed hint slots + builders on all six `CacheableResult` types, 24 struct-literal sites restored, and serde locks derived from the vendored schema
+- [ ] 115-05-PLAN.md — SCHM-03 types: the closed `CacheScope` enum AND the **cfg-free** `Cacheable` + `project_caching_hints` projector in a new `src/types/caching.rs` (cfg-free so the wasm32-only dispatcher can reach it), `Option`-typed hint slots on all six `CacheableResult` types with builders on the three handler-reachable ones, 26 struct-literal sites restored, and serde locks derived from the vendored schema
 
 **Wave 4**
 
-- [ ] 115-06-PLAN.md — SCHM-03 projection: a `Cacheable` discriminator captured before the request is moved, hints ensured on v2 and STRIPPED on v1, at the one shared `inject_v2_result_envelope` chokepoint (D-12)
+- [ ] 115-06-PLAN.md — SCHM-03 projection: a `Cacheable` claim captured before the request is moved, hints ensured on v2 and STRIPPED on v1 at the one shared chokepoint (D-12), wired into ALL THREE dispatchers including `wasm_server.rs` — closing a D-11 v1 leak the review found — with the post-projection response-middleware limitation measured and documented
 
 **Wave 5**
 
-- [ ] 115-07-PLAN.md — SCHM-03 on the wire: six methods, two eras, both dispatchers, plus the v1 strip proven against a handler that genuinely opted in
-- [ ] 115-08-PLAN.md — Tripwires: the SEP-2106 manifest + source fence (D-03; only a manifest scan catches cargo feature unification) and the D-12 single-projection fence
-- [ ] 115-09-PLAN.md — ALWAYS requirements: a `fuzzing`-gated seam + `fuzz_schema_draft_pin`, property tests for `CacheScope`/normalization/shape preservation, and `examples/s52_v2_caching_hints.rs`
+- [ ] 115-07-PLAN.md — SCHM-03 on the wire: six methods, two eras, both native dispatchers with an in-band `resultType` era witness, the v1 strip proven against a handler that genuinely opted in, and the measured bound that four of the six methods cannot reach v2 in-process asserted at a named test
+- [ ] 115-08-PLAN.md — Tripwires: SEP-2106 fenced against cargo's DECLARED and RESOLVED dependency graphs via `cargo metadata` (catching renamed/table-style/unification cases a text scan misses), the D-12 single-projection fence, the wasm call-site fence (the only gate that catches its removal), and the projection/middleware ordering fence
+- [ ] 115-09-PLAN.md — ALWAYS requirements: a `fuzzing`-gated three-state `SchemaVerdict` seam on the UNCACHED compile path, `fuzz_schema_draft_pin` with three TRUE invariants (the pre-review monotonicity invariant was FALSE) and a committed seed corpus, property tests, and `examples/s52_v2_caching_hints.rs` — all verified by direct commands because `make test-fuzz`/`test-property`/`test-examples` are fail-open
 
 **Wave 6**
 
-- [ ] 115-10-PLAN.md — Whole-phase gate measured as deltas against a phase base, SCHM-01/02/03 booked `[x]` on published evidence (D-15 — no inherited hold), stale-doc sweep, deferred-items ledger, and an owner sign-off checkpoint
+- [ ] 115-10-PLAN.md — Stale-doc sweep + deferred-items ledger FIRST, then the whole-phase gate measured as deltas against a phase base (including the `wasm,validation` build `make wasm-build` never runs), SCHM-01/02/03 booked `[x]` on published evidence (D-15 — no inherited hold), and an owner sign-off after which — and only after which — the ROADMAP/STATE completion markers are applied
 
 ### Phase 116: Auth Hardening SEPs
 
@@ -2625,7 +2633,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 0/10 | Planned | - |
+| 115. JSON Schema 2020-12 + Caching Hints | 0/11 | Planned | - |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
