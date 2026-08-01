@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: gaps_found
-stopped_at: Phase 115 REOPENED 2026-08-01 — 11/11 plans shipped and owner-signed-off, but 115-VERIFICATION.md (gaps_found, 3/4) measured SCHM-01's Draft 2020-12 pin as incomplete (nested `$schema` on an `$id`-bearing subschema bypasses normalization). Awaiting `/gsd:plan-phase 115 --gaps`
-last_updated: "2026-08-01T18:21:54.318Z"
-last_activity: 2026-08-01
+status: executing
+stopped_at: Completed 115-10-PLAN.md — **Phase 115 CLOSED by owner sign-off (Guy Ernest, 2026-08-01, no corrections)**
+last_updated: "2026-08-01T22:20:41.182Z"
+last_activity: 2026-08-01 -- Phase 115 planning complete
 progress:
   total_phases: 72
-  completed_phases: 61
-  total_plans: 350
+  completed_phases: 60
+  total_plans: 352
   completed_plans: 350
-  percent: 85
+  percent: 83
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — **REOPENED. 11/11 plans shipped, but NOT complete on the merits: `115-VERIFICATION.md` is `gaps_found` at 3/4 must-haves.** SCHM-02 and SCHM-03 hold (re-measured against the codebase during verification); **SCHM-01 is downgraded `[x]` → `[~]`.**
 Plan: 11 of 11 shipped, all with SUMMARYs — plus a gap-closure plan still to be written
-Status: GAPS FOUND — the `115-10` Task 3 `checkpoint:human-verify gate="blocking"` was returned UNANSWERED rather than self-approved and was APPROVED by Guy Ernest (owner) on 2026-08-01, but **that approval predates `115-REVIEW.md`** (committed `037a7b36`) and so cannot be read as covering its blocker. The owner elected to reopen on 2026-08-01 after seeing the finding.
+Status: Ready to execute
 
 **The gap:** `normalize_schema_dialect` (`src/server/output_validation.rs:146-165`) rewrites only the ROOT `$schema`. Under Draft 2020-12 a `$schema` on an embedded schema resource (a subschema carrying `$id`) is legal and `jsonschema` 0.49.2 honours it, so a legacy dialect declaration there survives the pin and yields the vacuous accept-everything validator the pin exists to prevent. Reproduced independently twice via `output_validation::fuzz_support::validate_bytes`, including `root-draft07 + embedded (v1,v2) = (Violates, Conforms)` — v2 validating **weaker** than v1. Warn-only validation and author-declared schemas bound the blast radius to a lost diagnostic, not a wire defect.
 
@@ -90,7 +90,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-01
+Last activity: 2026-08-01 -- Phase 115 planning complete
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
