@@ -15,6 +15,13 @@ use crate::shared::protocol_helpers::{create_notification, create_request};
 use crate::types::jsonrpc::ResponsePayload;
 #[cfg(target_arch = "wasm32")]
 use crate::types::JSONRPCError;
+// The 2026-07-28 caching-hint projection (115-06, SCHM-03). DEFINED in
+// `crate::types::caching`, never here: `src/server/core.rs` is
+// `cfg(not(target_arch = "wasm32"))`-shaped and `src/server/wasm_server.rs` is
+// `cfg(target_arch = "wasm32")`, so a projector living in either server module
+// would be structurally unreachable from the other — which is exactly how a v1
+// leak on the wasm dispatcher would have shipped. This file CALLS it.
+use crate::types::caching::{project_caching_hints, Cacheable};
 use crate::types::{
     CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptRequest,
     GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCResponse,
@@ -1560,41 +1567,85 @@ impl Default for DispatchEnvelopeClaim {
 /// the full registry.
 pub(crate) const RESERVED_SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serverInfo";
 
-/// Inject the v2-only response envelope (`resultType` + `serverInfo`) at the
-/// era-gated serialization boundary (Phase 112, VERS-07 / D-07 / D-08).
+/// Inject the v2-only response envelope (`resultType` + `serverInfo`) and
+/// project the `2026-07-28` caching hints, at the single era-gated
+/// serialization boundary (Phase 112 VERS-07 / D-07 / D-08; Phase 115 SCHM-03).
 ///
 /// This is the ONE shared implementation BOTH native dispatch sites
 /// (`core.rs` and `server/mod.rs`) call — not a per-site copy. The envelope
 /// model is pinned (Codex HIGH #5):
 ///
-/// - era != V2 (or no resolved context) → response left BYTE-IDENTICAL to
-///   today (the v1 promise — no key added, golden-fixtured).
-/// - error responses / notifications (no `result`) → NO injection.
+/// - era != V2 (or no resolved context) → the response is byte-identical to the
+///   pre-v2 wire **except that the two v2-only caching-hint keys are STRIPPED
+///   if a handler set them** (see the next bullet). No key is ever ADDED on a
+///   legacy wire, and the golden fixtures in `tests/v1_lists_golden.rs` pin
+///   that.
+/// - the `ttlMs` / `cacheScope` caching hints (`2026-07-28` `CacheableResult`,
+///   D-07 / D-08) are projected by [`project_caching_hints`] on **BOTH** eras:
+///   ENSURED on v2 (a handler-set value survives verbatim; an unset one gets
+///   the safe defaults `0` / `"private"`, so the SDK emits a conformant but
+///   INERT cache posture on every v2 list/read response whether or not the
+///   author thought about caching), and actively REMOVED on every other era.
+///   The strip is not an ensure-only omission: D-11 makes "a v1 wire never
+///   carries a v2 field" the severability precedent for Phases 116-119, so a
+///   handler that sets a hint and then serves a legacy client must still emit a
+///   byte-identical legacy response. `cacheable` says whether this result is
+///   one of the six that extend `CacheableResult`; see
+///   [`request_is_cacheable`] for the shared classifier both dispatchers use.
+/// - error responses / notifications (no `result`) → NO injection, NO
+///   projection.
 /// - `result` is a JSON object → the SERVER-OWNED reserved fields are asserted
 ///   over it by [`own_reserved_result_fields`]; every other key, including every
 ///   non-reserved `_meta` key, is left exactly as the handler wrote it.
 /// - `result` is scalar/array/null → left unchanged (cannot key a non-object;
 ///   no in-scope v2 method returns a non-object).
 ///
-/// `owner` states WHICH egress minted the reserved result fields. It has no
-/// default and every call site names it, so a result that no egress minted
-/// cannot acquire one by omission — see [`ReservedFieldOwner`].
+/// `owner` states WHICH egress minted the reserved result fields, and
+/// `cacheable` states whether the result carries caching hints. Neither has a
+/// default and every call site names both, so a result that no egress minted —
+/// and a result that is not a `CacheableResult` — cannot acquire either by
+/// omission. See [`ReservedFieldOwner`] and
+/// [`Cacheable`](crate::types::caching::Cacheable).
+///
+/// # Not the final mutation
+///
+/// This function is NOT the last thing that touches the response.
+/// [`ServerCore::handle_request`] calls
+/// `process_response_with_context(&mut response, &context)` (`src/server/core.rs`,
+/// immediately after this call) and `src/shared/middleware.rs`'s
+/// `process_response_with_context` takes `response: &mut JSONRPCResponse` — so a
+/// registered response middleware CAN add, alter or remove `ttlMs`,
+/// `cacheScope`, `resultType` or `serverInfo` after the projection has run. The
+/// twin site in `src/server/mod.rs` has the same ordering by way of its caller.
+///
+/// **Response middleware MUST NOT mutate `ttlMs`, `cacheScope`, `resultType` or
+/// `serverInfo`.** These are server-owned wire fields with exactly one writer;
+/// a middleware that needs to influence cacheability must set `ttl_ms` /
+/// `cache_scope` on the result TYPE before dispatch returns
+/// (`ListToolsResult::with_ttl_ms`, `with_cache_scope`, and the equivalents on
+/// the other five `CacheableResult` extenders), not rewrite the serialized
+/// value afterwards.
+///
+/// The call was deliberately NOT moved after the middleware chain: doing so
+/// would change what middleware OBSERVES about Phase 114's `resultType` /
+/// `serverInfo`, which is a v2 behaviour change outside SCHM-03's scope. The
+/// current ordering is measured by
+/// `response_middleware_still_runs_after_the_projection_and_this_is_a_known_limitation`
+/// so a future reorder registers as a deliberate decision rather than a silent
+/// conformance change, is fenced by a source tripwire in 115-08, and is booked
+/// as a deferred item by 115-10.
 pub(crate) fn inject_v2_result_envelope(
     response: &mut JSONRPCResponse,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
     server_info: &Implementation,
     disposition: ResponseDisposition,
     owner: ReservedFieldOwner,
+    cacheable: Cacheable,
 ) {
-    // v2-only: a v1 (or non-opted-in) response is left byte-identical.
-    if !matches!(
-        protocol_context.map(|c| c.era),
-        Some(crate::types::protocol::Era::V2)
-    ) {
-        return;
-    }
-
     // Only success results carry the envelope; errors / notifications do not.
+    // This guard runs BEFORE the era gate now, because the caching projection
+    // is era-agnostic (ensure on v2, strip on everything else) while the
+    // `resultType` / `serverInfo` envelope stays strictly v2-only.
     let crate::types::jsonrpc::ResponsePayload::Result(ref mut value) = response.payload else {
         return;
     };
@@ -1604,7 +1655,17 @@ pub(crate) fn inject_v2_result_envelope(
         return;
     }
 
-    own_reserved_result_fields(value, server_info, disposition, owner);
+    // BOTH eras: ensure the hints on v2, strip them on v1 / no-context (D-11).
+    // The wire keys themselves are written ONLY inside `types::caching` (D-12).
+    project_caching_hints(value, protocol_context.map(|c| c.era), cacheable);
+
+    // v2-only: a v1 (or non-opted-in) response gains no envelope key.
+    if matches!(
+        protocol_context.map(|c| c.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        own_reserved_result_fields(value, server_info, disposition, owner);
+    }
 }
 
 /// The `_meta` object of a result, creating it when absent.
@@ -1818,6 +1879,17 @@ pub(crate) fn build_discover_response(
         info,
         ResponseDisposition::Complete,
         ReservedFieldOwner::None,
+        // `server/discover` is `DiscoverResult extends CacheableResult` in the
+        // 2026-07-28 schema, and it is the FIRST call a v2 client makes, so it
+        // must carry the hints. SCHM-03's requirement text says "five" list/read
+        // results; this is the measured SIXTH (115-RESEARCH § Finding 5, asserted
+        // by `tests/v2_core_schema_facts.rs`). Excluding it would ship a
+        // knowingly non-conformant v2 `server/discover`.
+        //
+        // It is also why `request_is_cacheable` has no `server/discover` row:
+        // this method does not ride the `ClientRequest` route at all — it is
+        // answered here, and names its own claim.
+        Cacheable::Yes,
     );
     response
 }
@@ -3265,6 +3337,7 @@ impl ProtocolHandler for ServerCore {
             &self.info,
             claim.disposition,
             claim.owner,
+            Cacheable::No,
         );
 
         // Process response through protocol middleware chain (read-only access)
@@ -4648,6 +4721,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4675,6 +4749,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4714,6 +4789,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4750,6 +4826,7 @@ mod tests {
                 &info,
                 ResponseDisposition::InputRequired,
                 ReservedFieldOwner::Mrtr,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4780,6 +4857,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4804,6 +4882,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -4835,6 +4914,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = created.payload else {
                 panic!("expected result");
@@ -4856,6 +4936,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = merged.payload else {
                 panic!("expected result");
@@ -4879,6 +4960,7 @@ mod tests {
                     &info,
                     ResponseDisposition::Complete,
                     ReservedFieldOwner::None,
+                    Cacheable::No,
                 );
                 let ResponsePayload::Result(v) = resp.payload else {
                     panic!("expected result");
@@ -4912,6 +4994,7 @@ mod tests {
                     &info,
                     ResponseDisposition::Complete,
                     ReservedFieldOwner::None,
+                    Cacheable::No,
                 );
                 let ResponsePayload::Result(v) = resp.payload else {
                     panic!("expected result");
@@ -4934,6 +5017,7 @@ mod tests {
                 &info,
                 ResponseDisposition::InputRequired,
                 ReservedFieldOwner::Mrtr,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = input_required.payload else {
                 panic!("expected result");
@@ -4979,6 +5063,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -5006,6 +5091,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -5057,6 +5143,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = scalar.payload else {
                 panic!("expected result");
@@ -5071,6 +5158,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = null.payload else {
                 panic!("expected result");
@@ -5086,6 +5174,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             assert!(matches!(err.payload, ResponsePayload::Error(_)));
         }
@@ -5106,6 +5195,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v) = resp.payload else {
                 panic!("expected result");
@@ -5120,6 +5210,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let ResponsePayload::Result(v2) = resp_none.payload else {
                 panic!("expected result");
@@ -5139,6 +5230,7 @@ mod tests {
                 &info,
                 ResponseDisposition::Complete,
                 ReservedFieldOwner::None,
+                Cacheable::No,
             );
             let after = serde_json::to_value(&err).unwrap();
             assert_eq!(before, after, "v1 error must stay byte-identical");
@@ -6821,6 +6913,7 @@ mod tests {
                     &server_info,
                     disposition,
                     owner,
+                    Cacheable::No,
                 );
 
                 let result = result_of(&response);

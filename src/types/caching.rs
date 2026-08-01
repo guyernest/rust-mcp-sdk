@@ -173,10 +173,6 @@ pub const DEFAULT_TTL_MS: u64 = 0;
 /// classifier that produces it is a separate shared function
 /// (`request_is_cacheable`), so the two native dispatchers cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Why `allow(dead_code)`: this plan (115-05) adds the projector and its
-// classification input; 115-06 wires them into the three dispatchers. Until
-// then the only non-test constructor is the test module below.
-#[allow(dead_code)]
 pub(crate) enum Cacheable {
     /// The result extends `CacheableResult` and participates in the projection.
     Yes,
@@ -218,10 +214,6 @@ pub(crate) enum Cacheable {
 /// handler-set hint straight onto the wasm server's v1 wire. The `None` arm is
 /// what makes that leak structurally impossible, and it is why this function
 /// lives in a `cfg`-free module rather than in either server module.
-// Why `allow(dead_code)`: 115-06 wires this into `inject_v2_result_envelope`
-// and into the wasm serialization path; until then the callers are the unit
-// tests below.
-#[allow(dead_code)]
 pub(crate) fn project_caching_hints(
     value: &mut serde_json::Value,
     era: Option<crate::types::protocol::Era>,

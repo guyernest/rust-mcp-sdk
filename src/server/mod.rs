@@ -1533,6 +1533,7 @@ impl Server {
             &self.info,
             crate::server::core::ResponseDisposition::Complete,
             crate::server::core::ReservedFieldOwner::None,
+            crate::types::caching::Cacheable::No,
         );
         response
     }
@@ -1708,6 +1709,7 @@ impl Server {
             &self.info,
             claim.disposition,
             claim.owner,
+            crate::types::caching::Cacheable::No,
         );
         response
     }

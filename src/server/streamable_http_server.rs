@@ -3110,6 +3110,9 @@ fn listen_terminal_result_frame(
         crate::server::core::ResponseDisposition::Complete,
         // A listen teardown mints no reserved MRTR/tasks field.
         crate::server::core::ReservedFieldOwner::None,
+        // `SubscriptionsListenResult` does not extend `CacheableResult` in the
+        // 2026-07-28 schema, so this frame carries no caching hint (D-07).
+        crate::types::caching::Cacheable::No,
     );
     serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
 }

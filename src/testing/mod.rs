@@ -508,6 +508,11 @@ mod reserved_fields {
                     &server_info,
                     disposition,
                     owner,
+                    // This probe measures the RESERVED-FIELD registry, not the
+                    // caching projection (which `types::caching`'s own unit
+                    // tests and `mod inject_v2_result_envelope` cover), so it
+                    // deliberately drives the non-cacheable arm.
+                    crate::types::caching::Cacheable::No,
                 );
             });
         }
