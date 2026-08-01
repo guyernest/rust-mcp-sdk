@@ -220,14 +220,49 @@ Performed during this review, at HEAD of `fix/mcp-publisher-oidc-audience`:
 | 1 | 115-09's fuzz invariant contradicts 115-03 Task 3 | `115-09-PLAN.md:161-162` asserts `!(v2_conforms && !v1_conforms)` for legacy-declared schemas; `115-03-PLAN.md:342-344` picks `dependencies` precisely because 2020-12 split it into `dependentRequired`/`dependentSchemas` so it "stops applying under the pin" | **CONFIRMED** — a draft-07-declared `dependencies` schema is exactly `v2_conforms && !v1_conforms`. The fuzz target would flag the phase's own intended behavior as a regression. |
 | 2 | `validate_bytes -> (bool, bool)` cannot express its own skip condition | `115-09-PLAN.md:124-127` returns two bools from `schema_mismatch(..).is_none()`; invariant 2 says "skip when the schema fails to COMPILE under either era" | **CONFIRMED** — `is_none()` collapses *invalid schema* and *valid schema, invalid instance* into the same `false`. The skip is unimplementable at that signature. |
 | 3 | WASM path bypasses the projection helper | `grep inject_v2_result_envelope src/server/*.rs` → **0 hits** (helper is new in 115-06); `src/server/wasm_server.rs:31` has resource providers returning handler-constructed `ReadResourceResult` | **CONFIRMED in mechanism** — once 115-05 adds `with_ttl_ms`/`with_cache_scope`, a WASM handler can set hints on a result that `wasm_server.rs` serializes with no v1 strip. (Codex's `:229` anchor points at `ListResourcesResult`; the leak class is real, the line cite is off.) |
-| 4 | `ttlMs: number` → `u64` is inferred, not proven | `115-05-PLAN.md:277` justifies `u64` from "`@minimum 0` + milliseconds" and parity with `TaskV2::ttl_ms`. No task asserts the generated schema's `type` | **CONFIRMED** — `@minimum 0` constrains range, not integrality. TS `number` admits `1.5`. Nothing in 115-01 re-derives `ttlMs.type`. |
+| 4 | `ttlMs: number` → `u64` is inferred, not proven | `115-05-PLAN.md:277` justifies `u64` from "`@minimum 0` + milliseconds" and parity with `TaskV2::ttl_ms`. No task asserts the generated schema's `type` | **PARTIALLY CONFIRMED — see correction below.** The *process* gap is real (the plan inferred rather than measured). Codex's *conclusion* is **DISPROVEN**. |
 | 5 | 115-04's "both dispatchers" tests run as v1 | `tests/common/duplex.rs:104-113` — `call_via_core` passes `None` as the protocol context to `core.handle_request` | **CONFIRMED** — with no era plumbed, the new scalar/array/null tests prove pre-existing v1 permissiveness, not v2 behavior. |
 | 6 | SCHM-01's wasm-clean claim never builds `validation` for wasm | `Makefile:61` — `cargo build --target wasm32-unknown-unknown --no-default-features --features wasm` | **CONFIRMED** — `jsonschema 0.49` is never compiled for `wasm32` by this target. |
 | 7 | Contract-first workflow absent | `ls ../provable-contracts` → **No such file or directory** | **CONFIRMED** — CLAUDE.md mandates writing the contract YAML first; the directory does not exist in this checkout and no plan creates or updates it. |
 | 8 | ALWAYS gates are partly fail-open | `Makefile:234-244` `test-fuzz` ends each target with `|| echo "... completed"`; `test-property` runs `-- --ignored property_`; `test-examples` prints "⚠ … (skipped)" on build failure | **CONFIRMED** — all three swallow failure. A plan that cites `make test-fuzz`/`test-property`/`test-examples` as its verification proves less than it claims. |
 | 9 | Native projection is not the final mutation point | `src/server/core.rs:3254` calls `process_response_with_context(&mut response, &context)`; `src/shared/middleware.rs:481-485` takes `response: &mut JSONRPCResponse` | **CONFIRMED that the mutation point exists** — whether it lands after 115-06's injection depends on where 115-06 inserts the call. Worth resolving explicitly. |
 
-Nine of nine checked claims hold. The two line-number nits (#3's anchor) do not affect the finding.
+Eight of nine checked claims hold as stated. **Finding #4 was over-confirmed — corrected below.**
+The line-number nit in #3's anchor does not affect that finding.
+
+#### Correction to finding #4 (recorded 2026-08-01, after replanning)
+
+I originally marked #4 CONFIRMED on Codex's reasoning that TypeScript `number` admits `1.5`. That
+reasoning is sound about the *TypeScript* contract but wrong about what a conformant peer actually
+validates against. The `gsd-planner` challenged it during replanning; I re-checked against the
+pinned artifact (`modelcontextprotocol@271ecc9`, `schema/2026-07-28/schema.json`):
+
+```
+$defs.CacheableResult.properties.ttlMs  →  { "type": "integer", "minimum": 0 }
+```
+
+The **generated JSON Schema narrows `number` to `integer`**. Fractional `ttlMs` is not conformant,
+so `u64` is the correct Rust mapping and no conformant peer is rejected by it. Codex's conclusion
+("a pmcp client would reject an otherwise conformant peer response") is **false**.
+
+What survives is the process defect, and it is worth keeping: `115-05-PLAN.md:277` reached the
+right answer by *inference* from `@minimum 0` rather than by *measuring* the artifact. The revised
+plans keep a re-derivation task (115-01 test 3) with a negative control asserting the type is not
+`"number"`. The residual risk is the absent upper bound — `integer` has no maximum, so a peer could
+send a value exceeding `u64::MAX`; the replan records this as accepted risk **T-115-37**.
+
+Two further artifact facts surfaced by the same re-check, which **neither reviewer caught and my
+verification pass also missed** — both would have made a correct artifact fail the original plans'
+assertions:
+
+- `CacheableResult.required` has **three** entries, `["cacheScope", "resultType", "ttlMs"]`. The
+  original 115-01 Task 3 and 115-05 Task 3 both asserted two.
+- The JSON pointer root is **`$defs`, not `definitions`** — top-level keys are exactly
+  `["$schema", "$defs"]`, so `/definitions/CacheableResult/required` does not resolve at all.
+
+**Lesson for the record:** a cross-AI finding that is well-argued from a *secondary* source (the TS
+contract) can still be wrong about the *primary* artifact (the generated schema). Verification
+against the real artifact outranks argument quality — including my own confirmation of it.
 
 ### Agreed strengths
 
