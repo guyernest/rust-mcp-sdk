@@ -640,3 +640,18 @@ the example transcript (§ *Task 2* item 9, demos [2] and [4]).
    decided.
 2. **DQ6's condition is now a ONE-repository check.** The core spec published on 2026-07-28; only
    `ext-tasks` is outstanding.
+
+---
+
+## Self-Check: PASSED
+
+All 12 claimed files exist on disk. All 4 claimed commits resolve in `git log`:
+
+| commit | task |
+|---|---|
+| `6be9f5fe` | Task 1 — era-qualify every tasks doc this phase falsified |
+| `9b7d9a01` | Task 2 — record the three findings the whole-phase gate run measured |
+| `e7b25072` | Task 3 — book TASK-01..06, finalize the hold record, sweep the ledger |
+| `64ec87e5` | this SUMMARY |
+
+No claimed artifact is missing.
