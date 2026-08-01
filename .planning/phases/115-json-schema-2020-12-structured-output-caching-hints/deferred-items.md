@@ -1,0 +1,15 @@
+# Phase 115 — Deferred Items
+
+Out-of-scope discoveries logged during execution. 115-10 owns booking these.
+
+## From 115-11 (contract-first equations + binding resolver)
+
+| # | Item | Evidence | Suggested owner |
+|---|------|----------|-----------------|
+| D-115-11-A | **Contract location deviation (T-115-32).** CLAUDE.md § "Contract-First Development" names `../provable-contracts/contracts/<crate>/`, which does not exist in this checkout (`ls ../provable-contracts` → `No such file or directory`). pmat's CB-1200 advisory points at the same missing path. The contracts this repo uses are in-repo at `contracts/`. | 115-11 SUMMARY § Deferred Items 1 | 115-10 — decide: correct CLAUDE.md, or document the sibling repo as a prerequisite |
+| D-115-11-B | **21 bound-but-uncontracted equations.** All 46 pre-existing `contracts/binding.yaml` entries declare `contract: mcp-protocol-sdk-v1.yaml`, but 21 of their equations (the `pmcp-server-toolkit` set from Phase 83+) are defined in no contract file. Frozen in `LEGACY_UNCONTRACTED_EQUATIONS`. | `tests/phase115_contract_bindings.rs` | needs an owner: write `contracts/toolkit-v1.yaml`, or move those bindings to their own file |
+| D-115-11-C | **`function: ErrorCode constants` is prose, not an identifier** (`contracts/binding.yaml:119`). Frozen as the single `LEGACY_UNRESOLVED` entry. One-line fix, outside 115-11's zero-production-byte scope. | 115-11 SUMMARY § Deviation 2 | 115-10 |
+| D-115-11-D | **Signature drift is caught by review, not by the gate.** The resolver matches on function NAME. Four Phase 115 bindings (`warn_on_schema_mismatch`, `schema_mismatch`, `cached_validator`, `inject_v2_result_envelope`) name functions that exist today with DIFFERENT signatures than the ones recorded. | `contracts/binding.yaml` Phase 115 section | 115-10 must diff each recorded `signature:` against what landed |
+| D-115-11-E | **pmat CB-1208's binding count is cache-driven** — it moved 49 → 50 for a +13-binding change, and matches neither on-disk total. `Makefile:802-804` already documents the detector as needing `pmat comply refresh-bindings`. | 115-11 SUMMARY § comply diff, finding 3 | anyone who later wants to rely on pmat's ghost-binding detector |
+| D-115-11-F | **New pmat info advisory** `CB-951: Excessive nesting depth 18 (threshold: 14)` at `contracts/mcp-protocol-sdk-v1.yaml:323` — a continuation line inside a `formula: \|` literal block scalar. Assessed as a heuristic false positive; left in place rather than re-indented for a counter. | 115-11 SUMMARY § comply diff, finding 4 | 115-10 (record only) |
+| D-115-11-G | **REQUIREMENTS.md books SCHM-01/02/03 `Complete` on contract-only evidence.** 115-11's frontmatter declares all three (as 115-01 does), so the per-plan `requirements mark-complete` step flipped them while the implementation plans 115-03..115-09 have not run. The checkbox text describes runtime behaviour, not a contract equation. | `.planning/REQUIREMENTS.md:146-148, 276-278` | 115-10 — reconcile the booking against what actually landed before the phase closes |

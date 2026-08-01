@@ -143,8 +143,8 @@ checkboxes a verifier can fail on.
 
 ### JSON Schema 2020-12 & Caching Hints (SCHM)
 
-- [ ] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
-- [ ] **SCHM-02**: On v2, `structuredContent` accepts any JSON value (scalar/array/null/object); v1-negotiated tools keep the existing object-shaped behavior
+- [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
+- [x] **SCHM-02**: On v2, `structuredContent` accepts any JSON value (scalar/array/null/object); v1-negotiated tools keep the existing object-shaped behavior
 - [x] **SCHM-03**: The five list/read results carry `ttlMs`/`cacheScope` caching hints (additive fields)
 
 ### Auth Hardening (AUTH)
@@ -273,8 +273,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-04 | Phase 114 | Implemented — pending final schema |
 | TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
 | TASK-06 | Phase 114 | Implemented — pending final schema |
-| SCHM-01 | Phase 115 | Pending |
-| SCHM-02 | Phase 115 | Pending |
+| SCHM-01 | Phase 115 | Complete |
+| SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |
 | AUTH-02 | Phase 116 | Pending |
