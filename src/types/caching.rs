@@ -376,3 +376,293 @@ mod projection_tests {
         assert_eq!(CacheScope::default(), CacheScope::Private);
     }
 }
+
+/// Serde locks binding the RUST side to the vendored `2026-07-28` contract.
+///
+/// These assertions read the vendored artifact at COMPILE time rather than
+/// restating its contents, so a re-vendoring moves them automatically instead
+/// of leaving them asserting yesterday's contract. `tests/v2_core_schema_facts.rs`
+/// locks the SCHEMA itself; this module locks the Rust representation AGAINST
+/// the schema, and deliberately does not duplicate the former's assertions.
+///
+/// Every failure message names the same remedy: if the vendored contract
+/// genuinely changed, re-run the `## Change protocol` in
+/// `schema/vendored/core-2026-07-28/PROVENANCE.md` and update the RUST side —
+/// never the assertion.
+#[cfg(test)]
+mod cacheable_result_serde_locks {
+    use super::{CacheScope, DEFAULT_TTL_MS};
+    use serde_json::Value;
+
+    /// The vendored `2026-07-28` core JSON Schema, embedded at compile time.
+    const CORE_SCHEMA_JSON: &str =
+        include_str!("../../schema/vendored/core-2026-07-28/schema.json");
+
+    /// The remedy every failure message in this module points at.
+    const REMEDY: &str = "if the vendored contract changed, re-run the `## Change protocol` in \
+         schema/vendored/core-2026-07-28/PROVENANCE.md and update the RUST side, never this assertion";
+
+    /// The one `CacheableResult.required` entry that is deliberately NOT a
+    /// struct field: Phase 114's `inject_v2_result_envelope` supplies it.
+    const INJECTED_ELSEWHERE: &[&str] = &["resultType"];
+
+    /// Resolve `/$defs/CacheableResult` from the vendored artifact.
+    ///
+    /// The pointer root is `$defs`, NOT `definitions`.
+    fn cacheable_result_def() -> Value {
+        let schema: Value =
+            serde_json::from_str(CORE_SCHEMA_JSON).expect("the vendored core schema parses");
+        schema
+            .pointer("/$defs/CacheableResult")
+            .unwrap_or_else(|| panic!("/$defs/CacheableResult must resolve — {REMEDY}"))
+            .clone()
+    }
+
+    /// The sorted `required` array of `/$defs/CacheableResult`.
+    fn cacheable_result_required() -> Vec<String> {
+        let def = cacheable_result_def();
+        let mut required: Vec<String> = def["required"]
+            .as_array()
+            .unwrap_or_else(|| panic!("$defs.CacheableResult.required is an array — {REMEDY}"))
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .expect("a required entry is a string")
+                    .to_string()
+            })
+            .collect();
+        required.sort();
+        required
+    }
+
+    /// A `ListResourcesResult` with BOTH caching hints set by the "handler".
+    fn hinted_list_resources() -> crate::types::ListResourcesResult {
+        crate::types::ListResourcesResult::new(vec![])
+            .with_ttl_ms(60_000)
+            .with_cache_scope(CacheScope::Public)
+    }
+
+    /// The Rust field spellings must match the vendored `required` key set.
+    ///
+    /// The vendored array has THREE entries. Two are emitted by the Rust
+    /// structs this phase edits (`cacheScope`, `ttlMs`); the third,
+    /// `resultType`, belongs to the same base but is supplied by Phase 114's
+    /// `inject_v2_result_envelope` and is deliberately NOT a struct field —
+    /// so its absence from the serialized struct is accounted for, not a gap.
+    #[test]
+    fn rust_field_spellings_match_the_vendored_required_set() {
+        let required = cacheable_result_required();
+        assert_eq!(
+            required,
+            vec!["cacheScope", "resultType", "ttlMs"],
+            "the vendored CacheableResult.required set moved — {REMEDY}"
+        );
+
+        let raw = serde_json::to_string(&hinted_list_resources()).expect("serializes");
+        let emitted: Value = serde_json::from_str(&raw).expect("round-trips");
+        let emitted = emitted
+            .as_object()
+            .expect("a result serializes to an object");
+
+        // `INJECTED_ELSEWHERE` is the by-design exception: Phase 114 owns the
+        // v2 result envelope, so `resultType` is accounted for, not missing.
+        for key in &required {
+            if INJECTED_ELSEWHERE.contains(&key.as_str()) {
+                assert!(
+                    !emitted.contains_key(key),
+                    "`{key}` is injected by inject_v2_result_envelope and must NOT be a \
+                     struct field; found it in {raw}"
+                );
+            } else {
+                assert!(
+                    emitted.contains_key(key),
+                    "the vendored contract requires `{key}` but no Rust field emits it — {REMEDY}"
+                );
+            }
+        }
+
+        // A missing struct-level `rename_all` would be invisible to a purely
+        // structural test, so assert the snake_case spellings never reach the wire.
+        assert!(
+            !raw.contains("ttl_ms"),
+            "the wire spelling is `ttlMs`; a snake_case key leaked into {raw}"
+        );
+        assert!(
+            !raw.contains("cache_scope"),
+            "the wire spelling is `cacheScope`; a snake_case key leaked into {raw}"
+        );
+    }
+
+    /// The `CacheScope` wire values must match the vendored enum exactly.
+    #[test]
+    fn cache_scope_wire_values_match_the_vendored_enum() {
+        let def = cacheable_result_def();
+        let mut declared: Vec<String> = def["properties"]["cacheScope"]["enum"]
+            .as_array()
+            .unwrap_or_else(|| panic!("cacheScope declares an enum — {REMEDY}"))
+            .iter()
+            .map(|v| v.as_str().expect("an enum entry is a string").to_string())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            vec!["private", "public"],
+            "the vendored cacheScope variant set moved — {REMEDY}"
+        );
+
+        assert_eq!(
+            serde_json::to_string(&CacheScope::Public).expect("serializes"),
+            "\"public\"",
+            "CacheScope::Public must spell `public` on the wire"
+        );
+        assert_eq!(
+            serde_json::to_string(&CacheScope::Private).expect("serializes"),
+            "\"private\"",
+            "CacheScope::Private must spell `private` on the wire"
+        );
+
+        for variant in [CacheScope::Public, CacheScope::Private] {
+            let raw = serde_json::to_string(&variant).expect("serializes");
+            let back: CacheScope = serde_json::from_str(&raw).expect("round-trips");
+            assert_eq!(
+                back, variant,
+                "a CacheScope round-trip must be the identity, {raw} came back as {back:?}"
+            );
+        }
+    }
+
+    /// `u64` must remain the correct Rust mapping for the declared JSON type.
+    ///
+    /// If a re-vendoring ever changes `ttlMs.type` to `"number"`, `u64` can
+    /// REJECT a conformant peer's fractional value, and the Rust
+    /// representation is what must change — never this assertion.
+    #[test]
+    fn ttl_ms_rust_type_matches_the_vendored_json_schema_type() {
+        let def = cacheable_result_def();
+        let ttl = &def["properties"]["ttlMs"];
+        assert_eq!(
+            ttl["type"], "integer",
+            "ttlMs is no longer an integer; `u64` would reject a conformant peer — {REMEDY}"
+        );
+        assert_eq!(
+            ttl["minimum"], 0,
+            "ttlMs's declared minimum moved — {REMEDY}"
+        );
+
+        // The declared minimum is representable; the absent upper bound is the
+        // one ACCEPTED residual (u64::MAX ms is ~584 million years).
+        assert_eq!(u64::MIN, 0, "u64 must represent the declared minimum of 0");
+
+        let extreme = crate::types::ListResourcesResult::new(vec![]).with_ttl_ms(u64::MAX);
+        let emitted: Value =
+            serde_json::from_str(&serde_json::to_string(&extreme).expect("serializes"))
+                .expect("round-trips");
+        assert!(
+            emitted["ttlMs"].is_u64(),
+            "ttlMs must serialize as a JSON integer, not a float or a string; got {}",
+            emitted["ttlMs"]
+        );
+    }
+
+    /// The union is CLOSED: an unknown value must fail to deserialize.
+    ///
+    /// This is what "closed union" means operationally, and it is the fence
+    /// against a later `#[serde(other)]` or catch-all variant.
+    #[test]
+    fn an_unknown_cache_scope_value_is_rejected() {
+        let parsed = serde_json::from_str::<CacheScope>("\"shared\"");
+        assert!(
+            parsed.is_err(),
+            "CacheScope is a CLOSED union; `shared` must not deserialize, got {parsed:?}"
+        );
+    }
+
+    /// Unset hints must emit NO key at all, on every one of the six types.
+    ///
+    /// This is the byte-neutral property `tests/v1_lists_golden.rs` depends on,
+    /// asserted here at the type level rather than only at the HTTP level.
+    #[test]
+    fn unset_hints_emit_no_key_at_all() {
+        let bodies = vec![
+            (
+                "ListToolsResult",
+                serde_json::to_string(&crate::types::ListToolsResult::new(vec![])),
+            ),
+            (
+                "ListResourcesResult",
+                serde_json::to_string(&crate::types::ListResourcesResult::new(vec![])),
+            ),
+            (
+                "ListResourceTemplatesResult",
+                serde_json::to_string(&crate::types::ListResourceTemplatesResult::new(vec![])),
+            ),
+            (
+                "ReadResourceResult",
+                serde_json::to_string(&crate::types::ReadResourceResult::new(vec![])),
+            ),
+            (
+                "ListPromptsResult",
+                serde_json::to_string(&crate::types::ListPromptsResult::new(vec![])),
+            ),
+            (
+                "ServerDiscoverResult",
+                serde_json::to_string(&crate::types::ServerDiscoverResult {
+                    protocol_version: "2026-07-28".to_string(),
+                    capabilities: crate::types::ServerCapabilities::default(),
+                    server_info: crate::types::Implementation::new("t", "0.0.0"),
+                    ttl_ms: None,
+                    cache_scope: None,
+                }),
+            ),
+        ];
+        for (name, raw) in bodies {
+            let raw = raw.expect("serializes");
+            assert!(
+                !raw.contains("ttlMs"),
+                "{name} with an unset hint must not emit `ttlMs`, got {raw}"
+            );
+            assert!(
+                !raw.contains("cacheScope"),
+                "{name} with an unset hint must not emit `cacheScope`, got {raw}"
+            );
+        }
+    }
+
+    /// The SAFE defaults, pinned.
+    #[test]
+    fn the_default_cache_scope_is_private_and_the_default_ttl_is_zero() {
+        assert_eq!(
+            CacheScope::default(),
+            CacheScope::Private,
+            "changing the default to Public is a cross-authorization-context data leak: a \
+             shared gateway would be authorized to serve one caller's response body to \
+             another caller holding a different access token"
+        );
+        assert_eq!(
+            DEFAULT_TTL_MS, 0,
+            "the SDK default must assert NOTHING about cacheability; 0 means immediately stale"
+        );
+    }
+
+    /// Anti-vacuity: a schema-shape change must fail loudly, not pass over nothing.
+    #[test]
+    fn the_vendored_schema_lookup_is_not_vacuous() {
+        let schema: Value =
+            serde_json::from_str(CORE_SCHEMA_JSON).expect("the vendored core schema parses");
+        assert!(
+            schema.pointer("/$defs/CacheableResult").is_some(),
+            "the CacheableResult definition must resolve at /$defs/CacheableResult — {REMEDY}"
+        );
+        assert_eq!(
+            cacheable_result_required().len(),
+            3,
+            "CacheableResult.required must have exactly three entries — {REMEDY}"
+        );
+        assert!(
+            CORE_SCHEMA_JSON.len() > 150_000,
+            "the vendored artifact shrank to {} bytes; these locks may be asserting over \
+             a truncated schema — {REMEDY}",
+            CORE_SCHEMA_JSON.len()
+        );
+    }
+}
