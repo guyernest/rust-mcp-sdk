@@ -46,6 +46,7 @@
 > docblock was descriptive with **no MUST**. They landed via PRs #2889/#2953 (June 17/23) and open
 > **PR #3006 still targets this exact surface**. This is the highest-drift-risk requirement in the
 > phase — see `113-SPEC-RECHECK-ADDENDUM-2026-07-26.md` Finding 9.
+
 - [~] **HTTP-08**: Subscription delivery is opt-in and self-consistent: the four capability opt-ins (`toolsListChanged`/`promptsListChanged`/`resourcesListChanged`/`resourceSubscriptions`) gate the stream; a server advertising none may answer `subscriptions/listen` with method-not-found and remain conformant **per the conformance suite's SKIPPED grading and the spec's generic method-not-found rule** (the spec says nothing about this for `subscriptions/listen` specifically); a tripwire test enforces that advertising any subscription capability obliges serving the stream — **this advertise-implies-serve rule is CONFORMANCE-SUITE POLICY, not spec: it comes from `conformance/src/scenarios/server/stateless.ts:988-1015`, and no spec sentence creates it** — *implemented; pending final schema*
 
 > **⚠ HTTP-08 is gated on a source the schema re-check cannot see.** Its predicate lives in the
@@ -53,6 +54,7 @@
 > `ServerCapabilities` has no `subscriptions` capability. `113-SPEC-RECHECK.md` pins only a schema
 > sha, so drift in `advertisesSubscriptions` is undetectable by the current gate. The gate needs a
 > second arm pinning a conformance-repo sha (currently `a865118206d4d8cc8dbc5f5201607839281d0c3b`).
+
 - [x] **HTTP-09**: Every peer-controlled read on the v2 transport path is memory-bounded. Closure is **enumerable, not narrative**: a tripwire test asserts that no unbounded whole-body read (`.collect()`, `read_to_end`) and no unbounded accumulation over peer-supplied bytes exists in `src/shared/`, `src/client/subscriptions.rs`, or `src/server/streamable_http_server.rs` outside an explicit reviewed allowlist, and that no scan over peer-chosen input is worse than O(n).
 
 > **Why HTTP-09 exists.** The "memory-bounded long-lived stream" criterion was a *derived* success
@@ -74,6 +76,7 @@ checkboxes a verifier can fail on.
 - **D-11 positioning.** Polling over the Tasks mechanism remains pmcp's RECOMMENDED enterprise
   mechanism, documented as a pmcp extension and explicitly **not** a conformant substitute for the
   `subscriptions/listen` stream. Verifiable only as a documentation claim; belongs to DOCS-05.
+
 - **Deployment limitation (plan 113-10).** The `ListenRegistry` is instance-local, so advertising a
   subscription capability behind a non-sticky load balancer under-delivers notifications. A
   build-time `tracing::warn!` names this but does not prevent it. This is a known limitation, not
@@ -142,7 +145,7 @@ checkboxes a verifier can fail on.
 
 - [ ] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
 - [ ] **SCHM-02**: On v2, `structuredContent` accepts any JSON value (scalar/array/null/object); v1-negotiated tools keep the existing object-shaped behavior
-- [ ] **SCHM-03**: The five list/read results carry `ttlMs`/`cacheScope` caching hints (additive fields)
+- [x] **SCHM-03**: The five list/read results carry `ttlMs`/`cacheScope` caching hints (additive fields)
 
 ### Auth Hardening (AUTH)
 
@@ -272,7 +275,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-06 | Phase 114 | Implemented — pending final schema |
 | SCHM-01 | Phase 115 | Pending |
 | SCHM-02 | Phase 115 | Pending |
-| SCHM-03 | Phase 115 | Pending |
+| SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |
 | AUTH-02 | Phase 116 | Pending |
 | AUTH-03 | Phase 116 | Pending |
