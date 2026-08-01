@@ -4742,9 +4742,14 @@ impl ServerBuilder {
     ///   support) in `initialize` — the mere presence of a store flips the
     ///   capability on, unless an explicit `tasks` capability was already
     ///   configured (additive-only; an explicit value is preserved verbatim).
-    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
-    ///   requests via the store
-    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    /// - Handles the `tasks/*` surface via the store. The method set is
+    ///   ERA-DEPENDENT (Phase 114): v1 (2025-11-25) serves `tasks/get`,
+    ///   `tasks/result`, `tasks/list` and `tasks/cancel`; v2 (2026-07-28)
+    ///   serves `tasks/get`, `tasks/update` and `tasks/cancel`, and answers
+    ///   `-32601` for the two retired methods
+    /// - Resolves task owner from auth context. **v1** falls back through OAuth
+    ///   subject → client ID → session ID; **v2** has no session to fall back
+    ///   to and binds fail-closed on an auth-configured server (TASK-05, D-07)
     ///
     /// A tool declaring
     /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)
@@ -4808,6 +4813,12 @@ impl ServerBuilder {
     ///
     /// Registering a router auto-configures the `experimental.tasks` capability
     /// from the router's `task_capabilities()`.
+    ///
+    /// **That advertisement is v1-only (Phase 114).** `experimental.tasks` is
+    /// the 2025-11-25 spelling; a v2 (2026-07-28) client never sees it, because
+    /// `project_capabilities_for_v2` strips both `experimental` and
+    /// `capabilities.tasks` and v2 declares tasks through the `extensions` map
+    /// key `io.modelcontextprotocol/tasks` instead (plan 114-05).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_task_store(mut self, router: Arc<dyn crate::server::tasks::TaskRouter>) -> Self {
         // Auto-configure experimental.tasks capability from the router.

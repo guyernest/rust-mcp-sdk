@@ -897,13 +897,19 @@ impl ServerCoreBuilder {
     /// [`TaskStore`](crate::server::task_store::TaskStore) via
     /// [`Self::task_store`] instead (see `examples/s45_tool_as_task_lifecycle.rs`).
     ///
-    /// The task router handles task lifecycle operations (`tasks/get`, `tasks/result`,
-    /// `tasks/list`, `tasks/cancel`) and task-augmented `tools/call` requests.
+    /// The task router handles task lifecycle operations and task-augmented
+    /// `tools/call` requests. The served method set is ERA-DEPENDENT (Phase
+    /// 114): v1 (2025-11-25) is `tasks/get`, `tasks/result`, `tasks/list`,
+    /// `tasks/cancel`; v2 (2026-07-28) is `tasks/get`, `tasks/update`,
+    /// `tasks/cancel`, with the other two retired to `-32601`.
     ///
     /// This method:
     /// - Stores the task router for use during request handling
     /// - Auto-configures `experimental.tasks` in server capabilities so clients
-    ///   know the server supports the tasks protocol extension
+    ///   know the server supports the tasks protocol extension. **v1-only:**
+    ///   `project_capabilities_for_v2` strips `experimental` on the 2026-07-28
+    ///   path, where tasks are declared through the `extensions` map key
+    ///   `io.modelcontextprotocol/tasks` instead (plan 114-05)
     ///
     /// The `router` parameter is typically created by the `pmcp-tasks` crate,
     /// which wraps a `TaskStore` with routing logic.
@@ -951,9 +957,14 @@ impl ServerCoreBuilder {
     ///   support) in `initialize` — the mere presence of a store flips the
     ///   capability on, unless an explicit `tasks` capability was already
     ///   configured (additive-only; an explicit value is preserved verbatim).
-    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
-    ///   requests via the store
-    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    /// - Handles the `tasks/*` surface via the store. The method set is
+    ///   ERA-DEPENDENT (Phase 114): v1 (2025-11-25) serves `tasks/get`,
+    ///   `tasks/result`, `tasks/list` and `tasks/cancel`; v2 (2026-07-28)
+    ///   serves `tasks/get`, `tasks/update` and `tasks/cancel`, and answers
+    ///   `-32601` for the two retired methods
+    /// - Resolves task owner from auth context. **v1** falls back through OAuth
+    ///   subject → client ID → session ID; **v2** has no session to fall back
+    ///   to and binds fail-closed on an auth-configured server (TASK-05, D-07)
     ///
     /// A tool declaring
     /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)

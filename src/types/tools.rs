@@ -155,10 +155,15 @@ impl ToolExecution {
     /// Marking a tool with [`TaskSupport::Required`] and registering a
     /// [`TaskStore`](crate::server::task_store::TaskStore) on the server (via
     /// [`ServerCoreBuilder::task_store`](crate::server::builder::ServerCoreBuilder::task_store))
-    /// is how you expose a tool as an async MCP Task: the SDK then serves
-    /// `tasks/get`, `tasks/result`, `tasks/list`, and `tasks/cancel` typed from
-    /// the store. See `examples/s45_tool_as_task_lifecycle.rs` for the full
-    /// pattern.
+    /// is how you expose a tool as an async MCP Task: the SDK then serves the
+    /// `tasks/*` surface typed from the store. Which methods that is depends on
+    /// the negotiated era (Phase 114) — v1 (2025-11-25) serves `tasks/get`,
+    /// `tasks/result`, `tasks/list` and `tasks/cancel`; v2 (2026-07-28) serves
+    /// `tasks/get`, `tasks/update` and `tasks/cancel`, with `tasks/list` and
+    /// `tasks/result` retired to `-32601`. See
+    /// `examples/s45_tool_as_task_lifecycle.rs` (v1) and
+    /// `examples/s50_v2_tasks_server.rs` + `examples/s51_v2_tasks_agent.rs`
+    /// (v2) for the full pattern.
     ///
     /// A `Required` tool with no task backend makes the server's `build()`
     /// return an error (never a hollow `tasks` capability).

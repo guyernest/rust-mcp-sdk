@@ -47,11 +47,25 @@ pub trait TaskRouter: Send + Sync {
     /// Handle `tasks/result` request.
     ///
     /// Returns the task result (content) for a completed task.
+    ///
+    /// **v1-only (Phase 114).** `tasks/result` is ABSENT from the
+    /// `io.modelcontextprotocol/tasks` extension, so dispatch answers `-32601`
+    /// on a v2-negotiated request and this method is never reached there. v2
+    /// inlines `result` / `error` on the terminal `tasks/get`. The method stays
+    /// on the trait, unchanged, because v1 still serves it.
     async fn handle_tasks_result(&self, params: Value, owner_id: &str) -> Result<Value>;
 
     /// Handle `tasks/list` request.
     ///
     /// Returns a list of tasks visible to the given owner.
+    ///
+    /// **v1-only (Phase 114).** `tasks/list` is ABSENT from the
+    /// `io.modelcontextprotocol/tasks` extension — removed as a SECURITY
+    /// improvement, since without an enumeration primitive a server cannot leak
+    /// the existence of one caller's tasks to another. Dispatch answers
+    /// `-32601` on a v2-negotiated request and this method is never reached
+    /// there. The method stays on the trait, unchanged, because v1 still serves
+    /// it.
     async fn handle_tasks_list(&self, params: Value, owner_id: &str) -> Result<Value>;
 
     /// Handle `tasks/cancel` request.
@@ -113,6 +127,12 @@ pub trait TaskRouter: Send + Sync {
     fn tool_requires_task(&self, tool_name: &str, tool_execution: Option<&Value>) -> bool;
 
     /// Get the server task capabilities as a `Value` for `experimental.tasks`.
+    ///
+    /// **v1 spelling only (Phase 114).** The returned value is advertised on
+    /// the 2025-11-25 path; a v2 (2026-07-28) client never receives it, because
+    /// `project_capabilities_for_v2` strips `experimental` and v2 declares
+    /// tasks through the `extensions` map key `io.modelcontextprotocol/tasks`,
+    /// whose value is an EMPTY object with no per-method sub-capabilities.
     ///
     /// This is inserted into the server's capabilities during initialization
     /// so clients know the server supports the tasks protocol extension.

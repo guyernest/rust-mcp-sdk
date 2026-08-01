@@ -29,9 +29,17 @@
 //! marked [`with_task_support(TaskSupport::Required)`](crate::types::ToolExecution::with_task_support))
 //! plus a [`TaskStore`](crate::server::task_store::TaskStore) on
 //! [`ServerCoreBuilder`](crate::server::builder::ServerCoreBuilder),
-//! then let the SDK serve `tasks/get`, `tasks/result`, `tasks/list`, and
-//! `tasks/cancel` typed. You never hand-write any `tasks/*` wire JSON — the SDK
-//! serializes from the typed structs — and the store mints the task id.
+//! then let the SDK serve the `tasks/*` surface typed. You never hand-write any
+//! `tasks/*` wire JSON — the SDK serializes from the typed structs — and the
+//! store mints the task id.
+//!
+//! **Which methods are served is ERA-DEPENDENT (Phase 114).** On v1
+//! (2025-11-25) the SDK serves `tasks/get`, `tasks/result`, `tasks/list` and
+//! `tasks/cancel`. On v2 (2026-07-28) the `io.modelcontextprotocol/tasks`
+//! extension declares only `tasks/get`, `tasks/update` and `tasks/cancel`:
+//! `tasks/list` and `tasks/result` are RETIRED and answer `-32601`. This trait
+//! and its backends are unchanged by that split — the migration is a wire-API
+//! reshape behind the dispatch boundary, not a storage rewrite (TASK-06).
 //!
 //! Registering a store via [`task_store`](crate::server::builder::ServerCoreBuilder::task_store)
 //! also auto-advertises the `tasks` capability in `initialize` (a
@@ -74,8 +82,11 @@
 //! [`ServerCore`](crate::server::core::ServerCore); the high-level
 //! `pmcp::Server` (and `StreamableHttpServer`) does not yet carry a
 //! [`TaskStore`](crate::server::task_store::TaskStore). See
-//! `examples/s45_tool_as_task_lifecycle.rs` for the full client round-trip
-//! (`initialize → call(task) → tasks/get poll → tasks/result`).
+//! `examples/s45_tool_as_task_lifecycle.rs` for the full **v1** client
+//! round-trip (`initialize → call(task) → tasks/get poll → tasks/result`). The
+//! **v2** equivalent is the paired `examples/s50_v2_tasks_server.rs` +
+//! `examples/s51_v2_tasks_agent.rs` (no `initialize`, no `tasks/result`:
+//! `tools/call → tasks/get poll → tasks/update → tasks/get`).
 //!
 //! Note: [`with_task_store(Arc<dyn TaskRouter>)`](crate::server::builder::ServerCoreBuilder::with_task_store)
 //! is the LEGACY experimental (`pmcp-tasks`) path — prefer
@@ -425,10 +436,13 @@ impl TaskInputSnapshot {
 /// [`TypedTool`](crate::server::typed_tool::TypedTool) plus an implementation
 /// of this trait (e.g. [`InMemoryTaskStore`]) on
 /// [`ServerCoreBuilder::task_store`](crate::server::builder::ServerCoreBuilder::task_store);
-/// the SDK then serves `tasks/get`, `tasks/result`, `tasks/list`, and
-/// `tasks/cancel` typed from the store — you never hand-write `tasks/*` wire
-/// JSON, and the store mints the task id. See the module-level docs and
-/// `examples/s45_tool_as_task_lifecycle.rs` for the full pattern.
+/// the SDK then serves the `tasks/*` surface typed from the store — you never
+/// hand-write `tasks/*` wire JSON, and the store mints the task id. The served
+/// method set is era-dependent (v1 `tasks/get|result|list|cancel`; v2
+/// `tasks/get|update|cancel`) — see the module-level docs. See also
+/// `examples/s45_tool_as_task_lifecycle.rs` (v1) and
+/// `examples/s50_v2_tasks_server.rs` + `examples/s51_v2_tasks_agent.rs` (v2)
+/// for the full pattern.
 ///
 /// # Owner Isolation
 ///

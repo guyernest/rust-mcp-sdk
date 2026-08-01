@@ -107,8 +107,13 @@ pub enum TaskPollDecision {
     /// The classifier carries the terminal [`TaskStatus`] by value (it is
     /// `Copy`) but deliberately does NOT carry the final
     /// [`CallToolResult`](crate::types::CallToolResult): to retrieve the
-    /// result the caller still issues a **separate `tasks/result`** call
-    /// (D-06/D-16). This keeps classification a pure, I/O-free decision.
+    /// result the caller issues a **second call** (D-06/D-16). This keeps
+    /// classification a pure, I/O-free decision.
+    ///
+    /// Which second call is ERA-DEPENDENT: on v1 (2025-11-25) it is
+    /// `tasks/result`; on v2 (2026-07-28) that method is retired and the
+    /// terminal `tasks/get` already inlines `result` / `error` on the
+    /// [`TaskDetailV2`] body, so the follow-up is another `tasks/get`.
     Terminal {
         /// The terminal status that ended the task.
         status: TaskStatus,
@@ -192,6 +197,18 @@ pub fn resolve_poll_interval(caller_override: Option<u64>, hint: Option<u64>) ->
 }
 
 /// A task resource representing an in-progress or completed operation.
+///
+/// # This is the **v1 (2025-11-25)** wire shape
+///
+/// `Task` is the storage-and-v1-wire type. The v2 (2026-07-28)
+/// `io.modelcontextprotocol/tasks` extension renames two of its fields
+/// (`ttl` → `ttlMs`, `pollInterval` → `pollIntervalMs`) and makes `ttlMs`
+/// required-and-nullable, so it has its own projection type: [`TaskV2`],
+/// produced by [`TaskV2::from_v1`] — the ONLY site where those renames happen.
+/// The richer per-status v2 variants live on [`TaskDetailV2`].
+///
+/// Serializing a `Task` onto a v2 response is a schema-invalid answer. Project
+/// it first.
 ///
 /// # Backward Compatibility
 ///
@@ -331,7 +348,9 @@ impl Task {
     ///   [`TaskStatus::Cancelled`] → [`TaskPollDecision::Terminal`] carrying the
     ///   terminal status. The final
     ///   [`CallToolResult`](crate::types::CallToolResult) is NOT fetched here —
-    ///   the caller issues a separate `tasks/result` call (D-06/D-16).
+    ///   the caller issues a separate call (D-06/D-16): `tasks/result` on v1,
+    ///   and on v2 a `tasks/get`, which inlines the result (`tasks/result` is
+    ///   retired there).
     ///
     /// # Examples
     ///
@@ -478,7 +497,14 @@ impl TaskMetadata {
     }
 }
 
-/// Result of creating a task.
+/// Result of creating a task — the **v1 (2025-11-25)** wire shape.
+///
+/// v1 NESTS the task under a `task` key. The v2 `CreateTaskResult` is FLAT
+/// (`Result & Task`) and carries the discriminator `resultType: "task"`;
+/// nothing constructs this struct on the v2 path. The v2 body is projected
+/// through [`TaskV2`] and emitted by
+/// `pmcp::server::task_dispatch`'s `v2_create_result_value` (inventory rows
+/// 16-17, plans 114-11 / 114-12).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
@@ -510,7 +536,14 @@ pub struct GetTaskRequest {
     pub task_id: String,
 }
 
-/// Get task result.
+/// Get task result — the **v1 (2025-11-25)** wire shape.
+///
+/// v1 NESTS the task under a `task` key and carries no result or error body.
+/// The v2 `GetTaskResult` is FLAT (`Result & DetailedTask`) with
+/// `resultType: "complete"`, and it INLINES the terminal `result` / `error` and
+/// the outstanding `inputRequests` — which is why v2 needs no `tasks/result`.
+/// That shape is [`TaskDetailV2`] over a [`TaskV2`] (inventory rows 18, 21-24,
+/// plan 114-11).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
@@ -543,7 +576,13 @@ pub struct ListTasksRequest {
     pub cursor: Option<String>,
 }
 
-/// List tasks result.
+/// List tasks result — **v1-only (2025-11-25)**.
+///
+/// There is no v2 counterpart and no projection type: `tasks/list` is ABSENT
+/// from the `io.modelcontextprotocol/tasks` extension and answers `-32601` on a
+/// v2-negotiated request (inventory row 37, plan 114-08). The removal is a
+/// SECURITY improvement — with no enumeration primitive a server cannot leak
+/// the existence of one caller's tasks to another. Kept unchanged for v1.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
@@ -589,7 +628,14 @@ pub struct CancelTaskRequest {
     pub result: Option<serde_json::Value>,
 }
 
-/// Cancel task result.
+/// Cancel task result — the **v1 (2025-11-25)** wire shape.
+///
+/// v1 echoes the cancelled task back under a `task` key. The v2
+/// `CancelTaskResult` is an **empty acknowledgement** — `Result` only, with
+/// `resultType: "complete"` and NO task body — because v2 cancellation is
+/// cooperative and eventually consistent, so echoing a status would assert a
+/// synchrony the server does not have. Poll [`TaskDetailV2`] via `tasks/get` to
+/// observe the transition (inventory row 20, plan 114-11).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]

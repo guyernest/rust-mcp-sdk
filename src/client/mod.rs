@@ -1432,7 +1432,8 @@ impl<T: Transport> Client<T> {
     /// - [`Error::InvalidState`] when the connection did not opt into
     ///   `2026-07-28` — NO request is sent.
     /// - The transport / JSON-RPC errors [`Self::tasks_get`] returns.
-    /// - [`Error::Parse`] when the payload's status and detail disagree.
+    /// - [`Error::Protocol`] carrying `ErrorCode::PARSE_ERROR` (built by
+    ///   [`Error::parse`]) when the payload's status and detail disagree.
     pub async fn tasks_get_detailed(&self, task_id: &str) -> Result<DetailedTaskV2> {
         self.require_v2("Client::tasks_get_detailed")?;
         let raw = self.tasks_get_raw_v2(task_id).await?;
@@ -2020,8 +2021,8 @@ impl<T: Transport> Client<T> {
     ///
     /// - [`Error::InvalidState`] on a v1 connection — `tasks/update` does not
     ///   exist there, and NO bytes are sent.
-    /// - [`Error::Capability`] when the tasks extension was not negotiated —
-    ///   again with no bytes sent.
+    /// - [`Error::UnsupportedCapability`] (built by [`Error::capability`]) when
+    ///   the tasks extension was not negotiated — again with no bytes sent.
     /// - The server's own JSON-RPC error otherwise (e.g. an unknown or
     ///   already-answered input key).
     pub async fn tasks_update(&self, task_id: &str, responses: InputResponses) -> Result<()> {
