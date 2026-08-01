@@ -307,3 +307,7 @@ No blockers. `LATEST_PROTOCOL_VERSION` remains `"2025-11-25"` and `PROTOCOL_VERS
 ---
 *Phase: 115-json-schema-2020-12-structured-output-caching-hints*
 *Completed: 2026-08-01*
+
+## Self-Check: PASSED
+
+All 9 claimed files exist on disk; all 3 task commits (`d3f593fd`, `5f968901`, `dfbd4f6c`) resolve in `git log`. Summary + deferred-items committed as `14ad048b`.
