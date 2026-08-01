@@ -46,9 +46,10 @@ decisions:
 metrics:
   duration: "~2h"
   completed: 2026-08-01
-  tasks_completed: 3
+  tasks_completed: 4
   tasks_total: 4
-  status: awaiting-checkpoint
+  status: complete
+  checkpoint: "Task 4 checkpoint:human-verify gate=blocking — APPROVED by Guy Ernest (owner) 2026-08-01; closes the sign-off ONLY, the D-18 publication hold is untouched"
 ---
 
 # Phase 114 Plan 18: Phase Gate, Requirement Booking & Ledger Close-Out Summary
@@ -58,8 +59,11 @@ base-commit manifest rather than a remembered total, all six TASK requirements a
 a hold whose 40 inventory rows now walk to real identifiers, and the deferred ledger has 25 unique
 IDs where three of them used to collide.
 
-**Status: Tasks 1-3 COMPLETE. Task 4 is a `checkpoint:human-verify gate="blocking"` and is NOT
-self-approved — it is returned to the orchestrator for human sign-off.**
+**Status: COMPLETE — 4/4 tasks.** Task 4's `checkpoint:human-verify gate="blocking"` was returned to
+the orchestrator unanswered rather than self-approved, and was **approved by Guy Ernest (owner) on
+2026-08-01** with no changes requested. **That approval closes the sign-off checkpoint and nothing
+else: TASK-01…06 remain `[~]`, `## Verdict` remains `PENDING`, and Phase 114 remains `[~]` because
+the D-18 publication hold is still engaged.** See § *Task 4*.
 
 ---
 
@@ -530,6 +534,82 @@ not.**
 
 ---
 
+## Task 4 — phase sign-off checkpoint: **APPROVED**
+
+**Type:** `checkpoint:human-verify gate="blocking"`
+
+| field | value |
+|---|---|
+| **Response** | **approved** — no changes requested |
+| **Approved by** | **Guy Ernest (owner)** |
+| **Date (UTC)** | **2026-08-01** |
+| **Mechanism** | Answered in reply to the structured checkpoint this plan returned to the orchestrator. **A genuine human answer to a blocking gate, NOT an auto-approval** — auto-advance was off (`workflow._auto_chain_active: false`, no `workflow.auto_advance` key), and the executor did not self-approve. |
+
+### The approval was INFORMED, and that is recorded rather than assumed
+
+**The checkpoint material was presented in full before the answer**, including the three things a
+nominal approval would have skipped past:
+
+1. **The gate figures**, both green and red — `make quality-gate` exit 0 at 4899/294, and **both red
+   gates**: `make test-feature-flags` (49 errors at the phase base → 62 at HEAD) with the **+13 delta
+   attributed symbol by symbol** in `D-114-U`, and `make doc-check` (26 errors, byte-identical at
+   both commits) in `D-114-V`.
+2. **The `[~]` bookkeeping with `## Verdict` still `PENDING`** — i.e. that this approval closes the
+   sign-off and **nothing else**.
+3. **`D-114-P`** — the measured conformance gap where three `TaskRouter` fall-through legs answer
+   `-32603` on a v2 `tasks/get` for which the extension makes `-32602` a **MUST**, leaving a
+   router-backed v2 deployment non-conformant. Booked to Phase 118, **not** closed here.
+
+### Both corrections to the checkpoint script were SURFACED and ACCEPTED
+
+The plan's own Task 4 text asked the reviewer to confirm two statements that measurement had already
+falsified. Both were relayed **before** the answer and accepted as restated:
+
+1. **DQ7's parenthetical is WRONG.** The plan asks for confirmation of *"no contract YAML —
+   `../provable-contracts/` is absent and `make comply` is repo-local and informational"*. The
+   accepted statement is: **an owner waiver (option-b, Guy Ernest, 2026-07-28) resting SOLELY on D-18
+   provisional values**, with `contracts/` **in-repo, git-tracked and graded** — re-measured this run
+   (`make comply` exit 0; CB-1200 finds 2 contract files, CB-1202 2/2 keywords, CB-1205 provability
+   invariant satisfied, CB-1305 2/2 classified). The *"nowhere to write it"* premise was falsified by
+   `114-CONTRACT-DECISION.md` §1.5 **before** the owner decided, and may not be cited as precedent.
+2. **DQ6's condition is now a ONE-repository check** on `modelcontextprotocol/ext-tasks` only. The
+   core spec published `schema/2026-07-28/`; the extension has not.
+
+### What this approval does NOT do
+
+**It closes the sign-off checkpoint and nothing else.** Stated explicitly because a phase whose plans
+have all shipped invites the assumption that it is finished:
+
+- **TASK-01…TASK-06 stay `[~]`.** No checkbox flips. They flip as a group, only on a
+  `PUBLISHED-CONFIRMED` landing.
+- **`114-SPEC-RECHECK.md` `## Verdict` stays `PENDING`.** The 2026-08-01 run landed `STILL-ABSENT`
+  (partial publication) and that is unchanged by a human answering a different question.
+- **The D-18 publication hold is UNTOUCHED.** `ext-tasks` still carries `draft/` only, 0 tags, 0
+  releases, unchanged since 2026-05-22.
+- **Phase 114 stays `[~]` in `ROADMAP.md` and `completed_phases` stays `59` in `STATE.md`.** All 20
+  plans have shipped, but **the phase is not complete while the hold is engaged** — the same marker
+  and the same reasoning Phase 113 carries for its own publication block.
+- **The carried contract-first waiver is NOT discharged.** Its condition is the same DQ6 condition,
+  which is unmet.
+
+> **A derived-view disagreement that is EXPECTED and must not be "fixed".**
+> `gsd-sdk query state.json` **recomputes** `completed_phases` from `ROADMAP.md` and reports **60**,
+> while `STATE.md` correctly **stores 59**. The stored value is the authoritative one. During this
+> plan the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter — because every plan
+> slot now has a SUMMARY — and both were reverted. **A future reader seeing the derived 60 should not
+> edit `STATE.md` to match it.**
+
+### Deferred and open items are NOT closed by this approval
+
+`D-114-P` (router `-32603` vs the `-32602` MUST), `D-114-M` and `D-114-T` (the sibling `TaskRouter`
+questions), `D-114-Q`, `D-114-S` (nothing watches `ext-tasks`), `D-114-U`, `D-114-V`, `D-114-W`,
+`D-114-X`, `D-114-Y`, and the seven inherited **D-113-Q/R/S/T/U/V/W** all remain open exactly as
+`deferred-items.md` records them. **`D-113-U` still needs an owner before this branch merges.**
+
+**Commit:** `Task 4 record — see § Self-Check`
+
+---
+
 ## Decisions made
 
 **1. `resultType:"task"` is CONFORMANT-BY-EXTENSION, not prospective DRIFT.** The amendment required
@@ -625,7 +705,11 @@ None. No new network endpoint, auth path, file-access pattern or schema change a
 
 ---
 
-## For the human reviewer at Task 4
+## For the human reviewer at Task 4 — **ANSWERED 2026-08-01: approved**
+
+> **This section is retained as written, unedited, because it is the material the reviewer was shown
+> before answering.** Rewriting it after the fact would erase the evidence that the approval was
+> informed. The outcome is recorded in § *Task 4*.
 
 The sign-off checkpoint is **NOT self-approved**. Everything it asks you to confirm is measured above:
 the gate numbers in § *Task 2*, the bookkeeping in § *Task 3*, and the delivered DQ1/DQ4 outcomes in
