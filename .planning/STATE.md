@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
-stopped_at: "Completed 114-18-PLAN.md (4/4) — Task 4 sign-off APPROVED by the owner 2026-08-01. All 20 Phase-114 plans shipped; the phase stays [~] because the D-18 publication hold is engaged (ext-tasks has not published)"
-last_updated: "2026-08-01T01:02:00.890Z"
-last_activity: 2026-08-01
+status: completed
+stopped_at: Phase 115 context gathered
+last_updated: "2026-08-01T02:38:08.255Z"
+last_activity: 2026-07-31
 progress:
   total_phases: 72
-  completed_phases: 59
+  completed_phases: 60
   total_plans: 339
   completed_plans: 339
   percent: 83
@@ -407,9 +407,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-01T01:02:00.859Z
-Stopped at: **Completed 114-18-PLAN.md, 4/4 tasks.** Task 4's `checkpoint:human-verify gate="blocking"` was returned unanswered rather than self-approved, and was **APPROVED by Guy Ernest (owner) on 2026-08-01** with no changes requested. Both executor corrections were surfaced before the answer and accepted: DQ7's *"nowhere to write it"* parenthetical was falsified BEFORE the owner decided (option-b rests solely on D-18 provisional values; `contracts/` is in-repo and graded), and DQ6's condition is now a ONE-repository check on `ext-tasks`. **The approval closes the sign-off ONLY — TASK-01..06 stay `[~]`, `## Verdict` stays PENDING, Phase 114 stays `[~]`, `completed_phases` stays 59.** All 20 Phase-114 plans have shipped and the whole-phase gate is green, but the phase is NOT complete while the D-18 publication hold is engaged.
-Resume file: .planning/phases/114-tasks-extension-migration/114-18-SUMMARY.md
+Last session: 2026-08-01T02:38:08.241Z
+Stopped at: Phase 115 context gathered
+Resume file: .planning/phases/115-json-schema-2020-12-structured-output-caching-hints/115-CONTEXT.md
 Next: **Phase 115 (JSON Schema 2020-12 + Structured Output + Caching Hints)** — `/gsd:plan-phase 115`. Two standing obligations carry forward: (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*.
 **A derived-view disagreement that is EXPECTED and must NOT be "fixed":** `gsd-sdk query state.json` RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60**, while this file correctly STORES **59**. The stored value is authoritative — the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during 114-18 (every plan slot now has a SUMMARY) and both were reverted. Do not edit STATE.md to match the derived view.
 
