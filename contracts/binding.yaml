@@ -439,6 +439,166 @@ bindings:
   status: implemented
   notes: TKIT-08 / D-10 / review R7 — fallible companion to `code_mode_from_config`. R9 enforcement fires here before `.build()` is reached.
 
+# === JSON Schema 2020-12 + Caching Hints (Phase 115) ===
+# Written in wave 1, BEFORE the implementation plans run (CLAUDE.md § Contract-First
+# Development). Every entry below carries the `planned` status EXCEPT
+# `CallToolResult::structured`, which exists today and whose binding records the D-06
+# freeze. A `planned` status means "this plan
+# has not landed yet", NOT "this binding is exempt": tests/phase115_contract_bindings.rs
+# scopes `planned` to exactly these three equations so it cannot become an escape hatch,
+# and 115-10 flips each entry to `implemented` as its owning plan lands.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: warn_on_schema_mismatch
+  module_path: pmcp::server::output_validation
+  signature: 'pub(crate) fn warn_on_schema_mismatch(tool: &str, schema: &Value, value: &Value, era: Option<Era>)'
+  status: planned
+  notes: >-
+    Written by 115-03 Task 2. Exists today with the same name but WITHOUT the trailing
+    `era` parameter; the plan threads the era through as the LAST parameter so the
+    no-feature arm stays a plain `let _ = (…);`. SCHM-01 / D-01.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: schema_mismatch
+  module_path: pmcp::server::output_validation
+  signature: 'pub(crate) fn schema_mismatch(schema: &Value, value: &Value, era: Option<Era>) -> Option<String>'
+  status: planned
+  notes: >-
+    Written by 115-03 Task 2. `#[cfg(feature = "validation")]`. Returns `Some` on mismatch
+    AND on a schema that fails to compile — the message names `outputSchema` in the latter
+    case. Warn-only on both eras. SCHM-01 / D-01.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: cached_validator
+  module_path: pmcp::server::output_validation
+  signature: 'fn cached_validator(era: Option<Era>, schema: &Value) -> Result<Arc<jsonschema::Validator>, Arc<str>>'
+  status: planned
+  notes: >-
+    Written by 115-03 Task 2. `#[cfg(feature = "validation")]`. The cache key becomes
+    `(Era, canonical schema text)` so one era's validator is never served to the other;
+    the Arc-cached, error-cached, poison-recovering shape is preserved. SCHM-01 / D-01.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: normalize_schema_dialect
+  module_path: pmcp::server::output_validation
+  signature: "fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value>"
+  status: planned
+  notes: >-
+    Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Pure and idempotent:
+    `Cow::Borrowed` when the root `$schema` is absent or already 2020-12, otherwise a clone
+    whose ROOT `$schema` is overwritten with `DRAFT_2020_12`. Touches no other key and no
+    nested `$schema`. SCHM-01 / D-02.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: compile_2020_12
+  module_path: pmcp::server::output_validation
+  signature: "fn compile_2020_12(schema: &Value) -> Result<jsonschema::Validator, jsonschema::ValidationError<'static>>"
+  status: planned
+  notes: >-
+    Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Calls
+    `normalize_schema_dialect` then `jsonschema::draft202012::new`, warning when the
+    normalization actually rewrote a legacy declaration. Remote-ref resolution stays
+    disabled — an external `$ref` must fail to COMPILE with zero I/O. SCHM-01 / D-02, D-03.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: structured_content_shape
+  function: CallToolResult::structured_value
+  module_path: pmcp::types::tools
+  signature: 'pub fn structured_value(value: Value) -> Self'
+  status: planned
+  notes: >-
+    Written by 115-04 Task 2. The ADDITIVE widening sibling for non-object payloads —
+    array, string, number, boolean and null. `Some(Value::Null)` must serialize as an
+    explicit `"structuredContent": null`. SCHM-02 / D-06.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: structured_content_shape
+  function: CallToolResult::structured
+  module_path: pmcp::types::tools
+  signature: 'pub fn structured(value: Value) -> Self'
+  status: implemented
+  notes: >-
+    EXISTS TODAY (src/types/tools.rs:647) and is bound here to record the D-06 FREEZE: the
+    contract obligation on this function is that its signature and behaviour do NOT change
+    in Phase 115. The widening lands on the sibling `structured_value`, so every existing
+    call site keeps its object-shaped compile-time signal. Fenced by 115-04.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: CacheScope
+  module_path: pmcp::types::caching
+  signature: 'pub enum CacheScope { Public, Private }'
+  status: planned
+  notes: >-
+    Written by 115-05 Task 1(a). The CLOSED union the published 2026-07-28 schema declares;
+    an unknown value must fail to deserialize. Its rustdoc carries the spec's security
+    semantics verbatim — `"public"` authorizes reuse across authorization contexts.
+    SCHM-03 / D-09.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: DEFAULT_TTL_MS
+  module_path: pmcp::types::caching
+  signature: 'pub const DEFAULT_TTL_MS: u64'
+  status: planned
+  notes: >-
+    Written by 115-05 Task 1(b). Value `0` — "immediately stale, the client MAY re-fetch
+    every time", i.e. the default asserts nothing about cacheability. `u64` (not `f64`)
+    because 115-01 measured the vendored schema's `ttlMs` as
+    `{"type":"integer","minimum":0}`. SCHM-03 / D-08.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: Cacheable
+  module_path: pmcp::types::caching
+  signature: 'pub(crate) enum Cacheable { Yes, No }'
+  status: planned
+  notes: >-
+    Written by 115-05 Task 1(c). The caller's classification, needed because the request is
+    already moved by the time the native chokepoint runs. Exactly six results extend
+    `CacheableResult` in the vendored schema (115-01 measured the set). SCHM-03 / D-07.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: project_caching_hints
+  module_path: pmcp::types::caching
+  signature: 'pub(crate) fn project_caching_hints(value: &mut Value, era: Option<Era>, cacheable: Cacheable)'
+  status: planned
+  notes: >-
+    Written by 115-05 Task 1(d). THE single projection point (D-12): `Cacheable::No` is the
+    identity, `Some(Era::V2)` ensures both keys without overwriting handler intent, and
+    every other input — v1 AND a `None` protocol context — STRIPS both. Deliberately
+    cfg-free so the wasm dispatcher can call it. SCHM-03 / D-11, D-12.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: inject_v2_result_envelope
+  module_path: pmcp::server::core
+  signature: 'pub(crate) fn inject_v2_result_envelope(response: &mut JSONRPCResponse, protocol_context: Option<&ProtocolContext>, server_info: &Implementation, disposition: ResponseDisposition, owner: ReservedFieldOwner, cacheable: Cacheable)'
+  status: planned
+  notes: >-
+    EXISTS TODAY (src/server/core.rs:1561) but WITHOUT the trailing `cacheable` parameter,
+    and it early-returns on v1 — so 115-06 Task 1 both extends the signature and
+    restructures it so the strip arm runs on BOTH eras. `cacheable` has no default and
+    every call site names it, extending the `owner` doctrine. SCHM-03 / D-12.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: result_caching_hints
+  function: request_is_cacheable
+  module_path: pmcp::server::core
+  signature: 'pub(crate) fn request_is_cacheable(request: &Request) -> Cacheable'
+  status: planned
+  notes: >-
+    Written by 115-06 Task 2. ONE shared classifier both native dispatchers call — never a
+    second copy in `src/server/mod.rs`. Returns `Yes` for exactly the five list/read client
+    requests and `No` for everything else, written so a NEW `ClientRequest` variant lands in
+    the fail-closed `No` arm. SCHM-03 / D-07.
+
 critical_path:
 - jsonrpc_framing
 - protocol_version_negotiation
