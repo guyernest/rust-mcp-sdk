@@ -129,6 +129,19 @@ pub enum CacheScope {
     Private,
 }
 
+/// Every [`CacheScope`] variant, for exhaustive table and property tests.
+///
+/// Declared BESIDE the enum on purpose: the union is closed by the published
+/// `2026-07-28` schema, and a single enumeration point sitting next to the
+/// variants is what makes "a variant was added without extending the tests"
+/// visible in one screenful rather than in a grep.
+///
+/// `#[cfg(test)]` rather than `pub`: the crate's own precedent for this is
+/// `types::tasks::ALL_STATUSES`, and exporting it would add a public item to a
+/// phase whose `cargo public-api diff` is expected to be empty.
+#[cfg(test)]
+const ALL_SCOPES: &[CacheScope] = &[CacheScope::Public, CacheScope::Private];
+
 /// The SDK-supplied default for `ttlMs` when a handler expresses no preference.
 ///
 /// The value is `0`, which the MCP `2026-07-28` schema documents as:
@@ -366,6 +379,77 @@ mod projection_tests {
         }
         // The scope enum is still the safe one; nothing above may mutate it.
         assert_eq!(CacheScope::default(), CacheScope::Private);
+    }
+}
+
+/// The CLOSED-union property, held over arbitrary input (115-09, SCHM-03).
+///
+/// `cacheable_result_serde_locks` below pins the two wire spellings and the one
+/// hand-picked rejection (`"shared"`). These two properties generalize that: the
+/// round trip must be the identity for EVERY variant, and an arbitrary string
+/// must deserialize if and ONLY if it is one of the two. A `#[serde(other)]`
+/// arm or a catch-all variant added later fails the second one immediately,
+/// whatever value the author happened to think of.
+///
+/// # ALWAYS Requirement
+///
+/// CLAUDE.md makes property tests mandatory for every new feature. Deliberately
+/// NOT `#[ignore]`d: `make test-property` (`Makefile:230-233`) selects only
+/// `--ignored property_` tests, so an `#[ignore]` here would move these OUT of
+/// the default `cargo test` run and INTO a target that no `property_*` function
+/// in this repo currently reaches — trading a silent gate for a silent test.
+/// The verification command is
+/// `cargo nextest run --lib --features full -E 'test(/types::caching/)'`.
+#[cfg(test)]
+mod caching_properties {
+    use super::{CacheScope, ALL_SCOPES};
+
+    proptest::proptest! {
+        /// Serializing then deserializing any variant is the identity, and the
+        /// serialized form is always one of exactly two byte strings.
+        #[test]
+        fn property_cache_scope_serde_round_trips_for_every_variant(
+            index in 0usize..ALL_SCOPES.len(),
+        ) {
+            let scope = ALL_SCOPES[index];
+            let raw = serde_json::to_string(&scope).expect("a unit enum always serializes");
+
+            proptest::prop_assert!(
+                raw == "\"public\"" || raw == "\"private\"",
+                "the schema declares a two-value enum; {:?} serialized to {}",
+                scope,
+                raw
+            );
+
+            let back: CacheScope =
+                serde_json::from_str(&raw).expect("the serialized form must deserialize");
+            proptest::prop_assert_eq!(
+                back,
+                scope,
+                "a CacheScope round trip must be the identity"
+            );
+        }
+
+        /// An arbitrary string deserializes as a `CacheScope` if and only if it
+        /// is exactly `public` or `private` — the closed union held over
+        /// arbitrary input rather than one hand-picked counterexample.
+        #[test]
+        fn property_an_arbitrary_string_is_accepted_as_a_cache_scope_iff_it_is_one_of_the_two(
+            candidate in "[a-zA-Z_-]{0,16}",
+        ) {
+            let json = serde_json::to_string(&candidate).expect("a string always serializes");
+            let parsed = serde_json::from_str::<CacheScope>(&json);
+            let is_declared = candidate == "public" || candidate == "private";
+
+            proptest::prop_assert_eq!(
+                parsed.is_ok(),
+                is_declared,
+                "CacheScope is a CLOSED union: {} must deserialize iff it is one of the two \
+                 declared values, but from_str returned {:?}",
+                json,
+                parsed.map(|scope| format!("{scope:?}"))
+            );
+        }
     }
 }
 

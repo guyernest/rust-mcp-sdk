@@ -662,7 +662,15 @@ mod structured_output_invariants {
 
     /// Arbitrary JSON value (no floats — NaN/precision break equality
     /// round-trips and the invariant under test is structural, not numeric).
-    fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+    ///
+    /// Visible to siblings since 115-09: the
+    /// `schema_dialect_normalization_properties` module below builds its schema
+    /// documents from this same strategy rather than growing a second,
+    /// subtly-different arbitrary-JSON generator. `pub` rather than
+    /// `pub(super)` because clippy's `redundant_pub_crate` rejects the latter
+    /// here; the enclosing module is private, so nothing escapes this test
+    /// binary either way.
+    pub fn arb_json() -> impl Strategy<Value = serde_json::Value> {
         let leaf = prop_oneof![
             Just(serde_json::Value::Null),
             any::<bool>().prop_map(serde_json::Value::Bool),
@@ -717,6 +725,244 @@ mod structured_output_invariants {
                 return Err(TestCaseError::fail("structured_with_text must emit a text voice"));
             };
             prop_assert_eq!(text, &human);
+        }
+
+        /// Property (115-09, SCHM-02): `CallToolResult::structured_value(v)`
+        /// preserves `v`'s SHAPE — object, array, string, number, boolean or
+        /// null — both in memory and across a full serde round trip.
+        ///
+        /// The strategy is the module's existing `arb_json()`, reused rather
+        /// than duplicated: a second arbitrary-JSON generator would drift from
+        /// this one and the two properties would then be held over different
+        /// input spaces.
+        ///
+        /// The `Value::Null` case is asserted EXPLICITLY on every iteration
+        /// rather than left to the generator, because it is the one shape whose
+        /// wire behaviour is easy to break by accident:
+        /// `skip_serializing_if = "Option::is_none"` must NOT elide it, since
+        /// the field is `Some(Value::Null)` and not `None`. That distinction is
+        /// exactly what SCHM-02 buys — v2 permits an explicit
+        /// `"structuredContent": null`, and an omitted key means something else.
+        ///
+        /// # A MEASURED asymmetry, recorded rather than fixed
+        ///
+        /// The EMIT half of that claim holds: `Some(Value::Null)` serializes to
+        /// an explicit `"structuredContent":null`. The PARSE half does not.
+        /// `Option<Value>`'s stock `Deserialize` maps a JSON `null` to `None`,
+        /// so reading that same wire back yields `None`, not `Some(Null)` —
+        /// a pmcp CLIENT cannot currently distinguish "explicitly null" from
+        /// "absent". Measured on 2026-08-01 while writing this property; the
+        /// minimal failing input was `value = Null`, wire
+        /// `{"content":[…],"isError":false,"structuredContent":null}`.
+        ///
+        /// It is NOT fixed here, and it is NOT news: 115-04 already measured
+        /// it, fenced it with the tripwire
+        /// `present_null_structured_content_does_not_survive_a_typed_reread`
+        /// in `tests/structured_tool_output.rs`, and booked it as **D-115-04-A**
+        /// in the phase's `deferred-items.md`. The fix is a `#[serde(default,
+        /// deserialize_with = …)]` double-`Option` on
+        /// `CallToolResult::structured_content` in `src/types/tools.rs` — a
+        /// shipped public type this plan does not touch, and a change to how
+        /// every existing client parses every tool result on BOTH eras. This
+        /// property therefore holds the round trip over the non-null shapes and
+        /// asserts what is MEASURED for null, so a future fix turns this
+        /// assertion red and gets read instead of landing silently.
+        #[test]
+        fn property_structured_content_preserves_shape_through_a_call_tool_result(
+            value in arb_json()
+        ) {
+            let result = CallToolResult::structured_value(value.clone());
+
+            prop_assert!(!result.is_error);
+            prop_assert_eq!(
+                result.structured_content.as_ref(),
+                Some(&value),
+                "structured_value must carry the payload verbatim, whatever its shape"
+            );
+
+            let raw = serde_json::to_string(&result)
+                .map_err(|e| TestCaseError::fail(format!("result must serialize: {e}")))?;
+            let wire: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| TestCaseError::fail(format!("the wire must be JSON: {e}")))?;
+
+            // The WIRE always carries the value verbatim, every shape included:
+            // object, array, string, number, boolean AND null.
+            prop_assert_eq!(
+                wire.get("structuredContent"),
+                Some(&value),
+                "the serialized wire must carry the payload verbatim; wire was {}",
+                &raw
+            );
+
+            let back: CallToolResult = serde_json::from_str(&raw)
+                .map_err(|e| TestCaseError::fail(format!("result must deserialize: {e}")))?;
+            let expected_after_round_trip = if value.is_null() {
+                // The measured asymmetry — see this test's docs (D-115-04-A).
+                None
+            } else {
+                Some(&value)
+            };
+            prop_assert_eq!(
+                back.structured_content.as_ref(),
+                expected_after_round_trip,
+                "a serialize -> deserialize round trip must preserve the shape for every \
+                 non-null value, and is MEASURED to collapse Some(Null) to None; if the null \
+                 case now round-trips, the D-115-04-A fix has landed and this branch should be \
+                 deleted. wire was {}",
+                &raw
+            );
+
+            // The explicit-null EMIT case, asserted every iteration.
+            let null_result = CallToolResult::structured_value(serde_json::Value::Null);
+            prop_assert_eq!(
+                null_result.structured_content.as_ref(),
+                Some(&serde_json::Value::Null)
+            );
+            let null_raw = serde_json::to_string(&null_result)
+                .map_err(|e| TestCaseError::fail(format!("null result must serialize: {e}")))?;
+            prop_assert!(
+                null_raw.contains(r#""structuredContent":null"#),
+                "Some(Value::Null) must emit an EXPLICIT null, not be elided by \
+                 skip_serializing_if; wire was {}",
+                null_raw
+            );
+        }
+    }
+}
+
+/// `$schema` normalization held over arbitrary generated schemas (115-09,
+/// SCHM-01).
+///
+/// `src/server/output_validation.rs` fences normalization with four FIXED
+/// documents (`normalize_schema_dialect_changes_only_the_root_dollar_schema`
+/// and `..._is_idempotent`). This is the correct generalization of those two:
+/// idempotence and surgical scope over arbitrary input.
+///
+/// # Why this module is `fuzzing`-gated, and why that is deliberate
+///
+/// The normalizer is a private function. Rather than widen a `pub(crate)` item
+/// for test convenience — which would put a shipped-API item on the surface for
+/// the sake of a test — this reaches it through the SAME `feature = "fuzzing"`
+/// seam `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` uses. `fuzzing` is in
+/// neither `default` nor `full`, so this block does NOT run under a plain
+/// `cargo test --features full`; its verification command is
+/// `cargo nextest run --features "full fuzzing" -E 'binary(property_tests)'`,
+/// which is an acceptance criterion of `115-09-PLAN.md`, and the same property
+/// is exercised continuously by the fuzz target itself. Its absence from the
+/// default run is a consequence of not widening the API, not an oversight.
+#[cfg(all(test, feature = "fuzzing"))]
+mod schema_dialect_normalization_properties {
+    use super::structured_output_invariants::arb_json;
+    use super::*;
+    use pmcp::server::output_validation::fuzz_support::normalize_bytes;
+
+    /// The Draft 2020-12 meta-schema URI the v2 pin rewrites to.
+    const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
+
+    /// An arbitrary JSON OBJECT usable as a schema document, sometimes carrying
+    /// a root `$schema` drawn from a spread of real and invented draft URIs.
+    ///
+    /// The body comes from the crate's existing `arb_json()` strategy; only the
+    /// dialect declaration is generated here, because that is the single key
+    /// the normalizer is allowed to touch.
+    fn arb_schema_document() -> impl Strategy<Value = serde_json::Value> {
+        let dialect = prop_oneof![
+            Just(None),
+            Just(Some("http://json-schema.org/draft-04/schema#".to_string())),
+            Just(Some("http://json-schema.org/draft-06/schema#".to_string())),
+            Just(Some("http://json-schema.org/draft-07/schema#".to_string())),
+            Just(Some("https://json-schema.org/draft/2019-09/schema".to_string())),
+            Just(Some(DRAFT_2020_12.to_string())),
+            "[a-z]{2,6}://[a-z.]{2,10}/[a-z]{2,8}".prop_map(Some),
+        ];
+        (arb_json(), dialect).prop_map(|(body, dialect)| {
+            let mut object = match body {
+                serde_json::Value::Object(map) => map,
+                // A non-object body still makes a usable document once wrapped:
+                // `const` takes an arbitrary value in every draft.
+                other => {
+                    let mut map = serde_json::Map::new();
+                    map.insert("const".to_string(), other);
+                    map
+                },
+            };
+            // `arb_json` never generates a `$schema` key, but removing it first
+            // keeps the injected declaration the ONLY one, whatever that
+            // strategy grows into later.
+            object.remove("$schema");
+            if let Some(uri) = dialect {
+                object.insert("$schema".to_string(), serde_json::Value::String(uri));
+            }
+            serde_json::Value::Object(object)
+        })
+    }
+
+    proptest! {
+        /// Property: normalizing twice equals normalizing once, and the
+        /// normalized document differs from the input ONLY at the root
+        /// `$schema` key.
+        ///
+        /// Both halves matter. A non-idempotent rewrite would make the same
+        /// declaration compile to two different validators, because the
+        /// validator cache is keyed by schema TEXT. A rewrite that touched any
+        /// other key would silently weaken every v2 validator while every
+        /// behavioural test kept passing.
+        #[test]
+        fn property_schema_normalization_is_idempotent_and_surgical(
+            schema in arb_schema_document()
+        ) {
+            let bytes = serde_json::to_vec(&schema)
+                .map_err(|e| TestCaseError::fail(format!("schema must serialize: {e}")))?;
+            let Some((input, once, twice)) = normalize_bytes(&bytes) else {
+                return Err(TestCaseError::fail(
+                    "a document produced by serde_json must parse back as JSON",
+                ));
+            };
+
+            prop_assert_eq!(
+                &once,
+                &twice,
+                "normalization must be idempotent, but a second pass changed {}",
+                &input
+            );
+
+            let mut stripped_input = input.clone();
+            let mut stripped_once = once.clone();
+            for document in [&mut stripped_input, &mut stripped_once] {
+                if let Some(object) = document.as_object_mut() {
+                    object.remove("$schema");
+                }
+            }
+            prop_assert_eq!(
+                stripped_input,
+                stripped_once,
+                "normalization touched a key other than the root $schema: {} became {}",
+                &input,
+                &once
+            );
+
+            // And the root key itself lands in exactly one of two states.
+            let declared = input.get("$schema").and_then(serde_json::Value::as_str);
+            let normalized = once.get("$schema").and_then(serde_json::Value::as_str);
+            match declared {
+                // Undeclared stays undeclared: `Draft::default()` is already
+                // 2020-12, so there is nothing to announce.
+                None => prop_assert_eq!(
+                    normalized,
+                    None,
+                    "an undeclared document must not GAIN a $schema key: {}",
+                    &once
+                ),
+                // Anything declared is OVERWRITTEN with the pinned URI, never
+                // deleted — the compiled document states the dialect it was
+                // evaluated under.
+                Some(_) => prop_assert_eq!(
+                    normalized,
+                    Some(DRAFT_2020_12),
+                    "a declared dialect must be rewritten to the 2020-12 URI: {}",
+                    &once
+                ),
+            }
         }
     }
 }
