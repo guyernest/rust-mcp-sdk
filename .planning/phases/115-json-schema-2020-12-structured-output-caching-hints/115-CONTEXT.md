@@ -71,24 +71,45 @@ resolving Phase 114's D-18 hold.
 
 ### Caching-hint surface and ownership (SCHM-03)
 
-- **D-07: `ttlMs` / `cacheScope` are TOP-LEVEL additive optional fields on the five result types**
-  (`ListToolsResult` `src/types/tools.rs:431`, `ListResourcesResult` `src/types/resources.rs:134`,
-  `ListResourceTemplatesResult` `src/types/resources.rs:300`, `ReadResourceResult`
-  `src/types/resources.rs:357`, `ListPromptsResult` `src/types/prompts.rs:247`) — NOT inside `_meta`.
-  `_meta` in this SDK carries server-reserved keys (`own_reserved_result_fields`,
-  `src/server/core.rs:1607`); caching hints are protocol data, not server identity. Serde-skipped when
-  `None`, with serde locks per the 114-03 pattern.
+- **D-07 (AMENDED 2026-08-01 — see § Measured Spec Evidence): `ttlMs` / `cacheScope` are TOP-LEVEL
+  fields on the five result types, and they are REQUIRED on the v2 projection — NOT optional.**
+  Target types: `ListToolsResult` `src/types/tools.rs:431`, `ListResourcesResult`
+  `src/types/resources.rs:134`, `ListResourceTemplatesResult` `src/types/resources.rs:300`,
+  `ReadResourceResult` `src/types/resources.rs:357`, `ListPromptsResult` `src/types/prompts.rs:247`.
+  The published schema declares `CacheableResult { ttlMs: number; cacheScope: "public" | "private" }`
+  with **no `?` on either field**, and all five of those results `extend CacheableResult`. So on v2
+  every list/read response carries both; on v1 both are absent entirely (D-11 unchanged).
+  Still NOT inside `_meta`: `_meta` carries server-reserved keys (`own_reserved_result_fields`,
+  `src/server/core.rs:1607`); caching hints are protocol data, not server identity. Serde locks per
+  the 114-03 pattern still apply.
+  *(Superseded: "additive optional fields, serde-skipped when None." The optionality was an assumption
+  made before the published schema was read.)*
 
-- **D-08: Handler-set per result, with NO server-level default policy.** The SDK never guesses a TTL
-  it cannot know; absent means no hint. A server-level default was rejected because it would have the
-  SDK assert cacheability on the author's behalf. (Builder methods mirroring `with_structured_content`
-  are compatible with this decision and are the planner's call on ergonomics.)
+- **D-08 (AMENDED 2026-08-01): The SDK MUST supply a conformant default, because D-07's fields are
+  required.** The original "handler-set, no default; absent means no hint" is not available on v2 — a
+  handler that sets nothing must still produce a spec-conformant response. **The default must be the
+  SAFE one, not the convenient one: `ttlMs: 0` and `cacheScope: "private"`.**
+  Justification from the schema's own text: `ttlMs` of 0 means "the response SHOULD be considered
+  immediately stale, the client MAY re-fetch every time", i.e. defaulting to 0 asserts nothing about
+  cacheability. `cacheScope: "private"` confines reuse to one authorization context. Defaulting to
+  `"public"` would be a **data-leak default** (see D-09). Handlers override per result to opt into
+  real caching.
+  This is a genuine cost of conformance and should be stated in rustdoc: the SDK now emits a cache
+  posture on every v2 list/read response whether or not the author thought about caching. The
+  chosen default makes that posture inert.
 
-- **D-09: `cacheScope` is a typed enum, `#[non_exhaustive]`.** ⚠ **Recorded risk, not a settled fact:**
-  the value set is currently a GUESS. If the published core schema's `cacheScope` set differs, the
-  variants need revision, and a strict enum can silently drop an unknown scope on re-serialization
-  where an open newtype would round-trip it. D-14 exists to retire this risk by measurement before the
-  enum is written. If D-14 finds the set is genuinely open, revisit D-09 rather than honoring it.
+- **D-09 (AMENDED 2026-08-01 — risk RETIRED by measurement): `cacheScope` is the CLOSED union
+  `"public" | "private"`.** The published schema declares exactly these two values. D-09's previously
+  recorded risk ("the value set is currently a GUESS") is discharged — a typed enum is correct and the
+  variants are known. `#[non_exhaustive]` is now a judgment call for forward-compatibility rather than
+  a hedge against an unknown set; the planner may keep or drop it.
+  **The semantics are security-relevant and MUST be carried into rustdoc verbatim, not paraphrased:**
+  `"public"` means the response contains no user-specific data and any client *or intermediary*
+  (shared gateway, caching proxy) MAY cache it and serve it **across authorization contexts**;
+  `"private"` means the response MAY be reused only within the same authorization context, and caches
+  MUST NOT be shared across them (a different access token requires a different cache entry).
+  Mislabelling a per-user response `"public"` is a cross-caller data leak — the same class of defect
+  TASK-05 exists to prevent on the tasks surface.
 
 - **D-10: The `ttlMs` name collision is ACCEPTED.** `ttl_ms` already exists as *task* TTL
   (`src/types/tasks.rs:733`); both names come from the spec and renaming either would break the wire.
@@ -124,13 +145,24 @@ resolving Phase 114's D-18 hold.
   a materially different and fixable reason from Phase 114's. Vendoring also settles D-09's real
   variant set before the enum is written.
 
-- **D-15: If the core schema turns out NOT to specify `ttlMs`/`cacheScope`, SPLIT the booking — ship
-  SCHM-01 and SCHM-02 as `[x]` on published evidence and hold SCHM-03 alone.**
-  This is deliberately the Phase 113 HTTP-04 split, which Phase 114 was offered and explicitly
-  DECLINED in favor of uniform D-18 bookkeeping. 114-18 recorded that decline together with the note
-  that the split is the remedy if a phase stalls in review for the reason HTTP-04's split was created
-  to fix. Phase 115 takes the remedy up front: one unpublished field must not hold two fully-specified
-  requirements hostage.
+- **D-15 (AMENDED 2026-08-01 — contingency now MOOT): all three SCHM requirements are specifiable
+  from the published core schema, so the phase targets `[x]` across the board.**
+  The contingency was: *if* the core schema does not specify `ttlMs`/`cacheScope`, split the booking
+  (ship SCHM-01/02 `[x]`, hold SCHM-03 alone) — the Phase 113 HTTP-04 split that Phase 114 was
+  offered and explicitly DECLINED, and that 114-18 recorded as the remedy for a stalling phase.
+  **It did not fire.** `CacheableResult` is IN the published core schema, so SCHM-03 has published
+  evidence exactly as SCHM-01 and SCHM-02 do. Phase 115 has NO publication hold and must not inherit
+  a `[~]` booking from Phase 114 by habit.
+  The split remains the named remedy if some *other* wire value in this phase turns out to be
+  unpublished — keep it available, do not invoke it speculatively.
+
+- **D-16 (NEW 2026-08-01): `LATEST_PROTOCOL_VERSION` stays pinned at `"2025-11-25"` in this phase.**
+  The published schema's own constant is `"2026-07-28"`, and this repo deliberately diverges:
+  `src/types/protocol/version.rs:4` pins `LATEST_PROTOCOL_VERSION = "2025-11-25"` while
+  `PROTOCOL_VERSION_2026_07_28` (line 33) is opt-in only and deliberately **absent** from
+  `SUPPORTED_PROTOCOL_VERSIONS`. Its rustdoc calls that pin "the single most important
+  backward-compat guard". Flipping it is a milestone-level decision, NOT Phase 115's — this phase
+  must not touch it, and the planner should treat any pressure to do so as out of scope.
 
 ### Claude's Discretion
 
@@ -141,10 +173,48 @@ resolving Phase 114's D-18 hold.
 
 </decisions>
 
+<spec_evidence>
+## Measured Spec Evidence (2026-08-01)
+
+**Provenance and its limit — read this before relying on anything below.** These values were read
+from the network (`modelcontextprotocol.io/specification/2026-07-28/schema` and
+`raw.githubusercontent.com/.../schema/2026-07-28/schema.ts` on `main`) and summarized. That is
+precisely the *"decaying network finding"* that `schema/vendored/ext-tasks/PROVENANCE.md` was written
+to eliminate: `main` is force-pushable and nothing here is pinned. **D-14's vendoring plan is what
+makes these authoritative — until it lands, every row below is a strong prior, not a verified fact,
+and the wave-1 vendoring MUST re-derive them from the pinned artifact rather than copying this table.**
+
+| Value | As published | Bearing |
+|---|---|---|
+| `CacheableResult` | `{ ttlMs: number; cacheScope: "public" \| "private" }`, both **required**, marked `@internal` | Drove the D-07/D-08/D-09 amendments |
+| Five list/read results | `ListToolsResult`, `ListResourcesResult`, `ListResourceTemplatesResult`, `ListPromptsResult` all `extend PaginatedResult, CacheableResult`; `ReadResourceResult extends CacheableResult` | Confirms SCHM-03's target list exactly |
+| `structuredContent` | `unknown` — "any JSON value (object, array, string, number, boolean, or null)" | Confirms SCHM-02's premise |
+| `outputSchema` | `{ $schema?: string; [key: string]: unknown }` | The spec ITSELF declares the optional `$schema` that D-02 chooses to ignore — D-02 is spec-aware, not a workaround |
+| `Result.resultType` | **required**; absent ⇒ `"complete"` when the server is an older version | Already implemented by Phase 114 |
+| `ResultType` | `"complete" \| "input_required" \| string` — **open** union | Do not model as a closed enum |
+| Capabilities | `extensions?: { [key: string]: JSONObject }` on **both** Client and Server | Matches `capabilities.rs:96` (ours is `Value`-valued, i.e. wider than `JSONObject`) |
+| Error codes | `-32020` HeaderMismatch, `-32021` MissingRequiredClientCapability (`data.requiredCapabilities`), `-32022` UnsupportedProtocolVersion | All three present in `error_codes.rs:160/190/215` |
+| `LATEST_PROTOCOL_VERSION` | `"2026-07-28"` | We deliberately pin `"2025-11-25"` — see D-16 |
+| **Tasks** | **ZERO task interfaces or `tasks/*` methods in the core schema** | Tasks are entirely an extension; Phase 114's D-18 hold is correctly reasoned |
+
+**Tasks vendoring is CURRENT (verified 2026-08-01):** our pin
+`2c1425d9a288b9b1f489430fe1e00bb392b47e48` is upstream `ext-tasks` HEAD. The three newest commits are
+`hono`/`qs` dependency bumps and a Vitepress deployment — **no schema change since the pin**, and
+still no tags or releases. Nothing to re-vendor for tasks; D-114-S's watch obligation is unchanged.
+
+</spec_evidence>
+
 <canonical_refs>
 ## Canonical References
 
 **Downstream agents MUST read these before planning or implementing.**
+
+### Published specification (to be vendored by D-14 — do not rely on the network)
+- `https://modelcontextprotocol.io/specification/2026-07-28/schema` — human-readable reference. Note
+  the page renders only its first sections (JSON-RPC, Common Types, Errors, Content); tasks,
+  tools and capabilities are NOT on it, so do not conclude from that page that they are unspecified.
+- `https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2026-07-28/schema.ts`
+  — the actual type source. **Fetch at a pinned SHA, never `main`**, per the 114-01 rationale.
 
 ### Phase scope and requirements
 - `.planning/ROADMAP.md` § "Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints" —
