@@ -1896,6 +1896,8 @@ impl Server {
         Ok(serde_json::to_value(ListToolsResult {
             tools,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -2261,6 +2263,8 @@ impl Server {
         Ok(serde_json::to_value(ListPromptsResult {
             prompts,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -2383,6 +2387,8 @@ impl Server {
             Ok(serde_json::to_value(ListResourcesResult {
                 resources: vec![],
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })?)
         }
     }
@@ -2474,6 +2480,8 @@ impl Server {
         Ok(serde_json::to_value(ListResourceTemplatesResult {
             resource_templates: vec![],
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -5294,6 +5302,8 @@ mod tests {
             Ok(crate::types::ListResourcesResult {
                 resources: self.resources.clone(),
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })
         }
     }
@@ -5863,6 +5873,8 @@ mod tests {
             Ok(crate::types::ListResourcesResult {
                 resources: vec![],
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })
         }
     }

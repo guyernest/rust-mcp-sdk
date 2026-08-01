@@ -574,6 +574,8 @@ impl ServerCore {
         Ok(ListToolsResult {
             tools,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })
     }
 
@@ -871,6 +873,8 @@ impl ServerCore {
         Ok(ListPromptsResult {
             prompts,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })
     }
 
@@ -930,6 +934,8 @@ impl ServerCore {
             None => ListResourcesResult {
                 resources: vec![],
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             },
         };
 
@@ -1004,6 +1010,8 @@ impl ServerCore {
         Ok(ListResourceTemplatesResult {
             resource_templates: vec![],
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })
     }
 
@@ -1284,6 +1292,8 @@ pub(crate) fn discover_result_from_capabilities(
         protocol_version: negotiated_version,
         capabilities: project_capabilities_for_v2(capabilities),
         server_info: info.clone(),
+        ttl_ms: None,
+        cache_scope: None,
     }
 }
 
@@ -5611,6 +5621,8 @@ mod tests {
                 Ok(ListResourcesResult {
                     resources: vec![],
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                 })
             }
         }

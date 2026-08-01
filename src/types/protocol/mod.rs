@@ -628,6 +628,64 @@ pub struct ServerDiscoverResult {
     ///
     /// SELF-REPORTED and unverified — never derive authorization from it.
     pub server_info: Implementation,
+
+    /// How long (in milliseconds) a client MAY cache this response — the
+    /// `2026-07-28` `CacheableResult.ttlMs` hint.
+    ///
+    /// `u64` is the MEASURED mapping: the vendored artifact declares
+    /// `$defs.CacheableResult.properties.ttlMs` as
+    /// `{"type": "integer", "minimum": 0}` (asserted by
+    /// `tests/v2_core_schema_facts.rs`), so integrality and non-negativity are
+    /// contract. The one residual is the absent upper bound — JSON Schema
+    /// `integer` is unbounded while `u64` is not — which at millisecond
+    /// resolution is roughly 584 million years and is an ACCEPTED risk.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`DEFAULT_TTL_MS`](crate::types::DEFAULT_TTL_MS)
+    /// (`0`, "immediately stale") — D-08.
+    ///
+    /// **v2 only.** `server/discover` is itself a v2-only method, but the
+    /// projection rule is the same: a value set here is emitted only on the
+    /// `2026-07-28` wire and actively STRIPPED otherwise (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07).** The field is
+    /// required on the `2026-07-28` projection, but modelling it as `Option`
+    /// plus inject-on-v2 fails CLOSED (a missed path merely omits a hint),
+    /// whereas a non-`Option` field plus strip-on-v1 fails OPEN (a missed path
+    /// leaks a v2 key onto the v1 wire).
+    ///
+    /// Not to be confused with
+    /// [`TaskV2::ttl_ms`](crate::types::tasks::TaskV2::ttl_ms), which is a task
+    /// LIFETIME rather than a cache-freshness hint (D-10).
+    ///
+    /// **No builder by design.** This struct's only producer is the server's
+    /// `discover_result_from_capabilities` conversion, with no handler seam, so
+    /// a builder method here would be public API no server author can reach
+    /// through normal configuration — unlike the three resource-side results,
+    /// which a `ResourceHandler` returns and which therefore do carry builders.
+    /// The field stays `pub`, so a caller constructing the struct directly can
+    /// still set it.
+    ///
+    /// Adding this field is additive rather than a major bump because this
+    /// struct is `#[non_exhaustive]`, so `cargo semver-checks`'
+    /// `constructible_struct_adds_field` does not fire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+
+    /// The intended sharing scope of the cached response — the `2026-07-28`
+    /// `CacheableResult.cacheScope` hint.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`CacheScope::Private`](crate::types::CacheScope)
+    /// (D-08). Read [`CacheScope`](crate::types::CacheScope)'s `# Security`
+    /// section before setting `Public`: a discover projection can be
+    /// authorization-filtered, in which case sharing it across authorization
+    /// contexts would disclose capabilities one caller may not hold.
+    ///
+    /// **v2 only** and **no builder by design** — see [`ttl_ms`](Self::ttl_ms).
+    /// Additive under semver for the same `#[non_exhaustive]` reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::types::caching::CacheScope>,
 }
 
 /// Crate-private internal dispatch representation for methods that must be

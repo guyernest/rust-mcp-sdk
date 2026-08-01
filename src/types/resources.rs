@@ -137,6 +137,60 @@ pub struct ListResourcesResult {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+
+    /// How long (in milliseconds) a client MAY cache this response — the
+    /// `2026-07-28` `CacheableResult.ttlMs` hint.
+    ///
+    /// `u64` is the MEASURED mapping: the vendored artifact declares
+    /// `$defs.CacheableResult.properties.ttlMs` as
+    /// `{"type": "integer", "minimum": 0}` (asserted by
+    /// `tests/v2_core_schema_facts.rs`), so integrality and non-negativity are
+    /// contract. The one residual is the absent upper bound — JSON Schema
+    /// `integer` is unbounded while `u64` is not — which at millisecond
+    /// resolution is roughly 584 million years and is an ACCEPTED risk.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`DEFAULT_TTL_MS`](crate::types::DEFAULT_TTL_MS)
+    /// (`0`, "immediately stale") — D-08. Set it with
+    /// [`with_ttl_ms`](Self::with_ttl_ms).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07).** The field is
+    /// required on the `2026-07-28` projection, but modelling it as `Option`
+    /// plus inject-on-v2 fails CLOSED (a missed path merely omits a hint),
+    /// whereas a non-`Option` field plus strip-on-v1 fails OPEN (a missed path
+    /// leaks a v2 key onto the v1 wire).
+    ///
+    /// Not to be confused with
+    /// [`TaskV2::ttl_ms`](crate::types::tasks::TaskV2::ttl_ms), which is a task
+    /// LIFETIME rather than a cache-freshness hint (D-10).
+    ///
+    /// Adding this field is additive rather than a major bump because this
+    /// struct is `#[non_exhaustive]`, so `cargo semver-checks`'
+    /// `constructible_struct_adds_field` does not fire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+
+    /// The intended sharing scope of the cached response — the `2026-07-28`
+    /// `CacheableResult.cacheScope` hint.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`CacheScope::Private`](crate::types::CacheScope)
+    /// (D-08). Read [`CacheScope`](crate::types::CacheScope)'s `# Security`
+    /// section before setting `Public`: it authorizes a shared gateway to serve
+    /// this body across authorization contexts. Set it with
+    /// [`with_cache_scope`](Self::with_cache_scope).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07):** see
+    /// [`ttl_ms`](Self::ttl_ms). Additive under semver for the same
+    /// `#[non_exhaustive]` reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::types::caching::CacheScope>,
 }
 
 impl ListResourcesResult {
@@ -145,12 +199,45 @@ impl ListResourcesResult {
         Self {
             resources,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         }
     }
 
     /// Set the pagination cursor for the next page.
     pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
         self.next_cursor = Some(cursor.into());
+        self
+    }
+
+    /// Set the client-side cache freshness hint, in milliseconds.
+    ///
+    /// Emitted only on the `2026-07-28` projection; stripped on v1 (D-11).
+    ///
+    /// ```rust
+    /// use pmcp::types::ListResourcesResult;
+    ///
+    /// let result = ListResourcesResult::new(vec![]).with_ttl_ms(60_000);
+    /// assert_eq!(result.ttl_ms, Some(60_000));
+    /// ```
+    pub fn with_ttl_ms(mut self, ms: u64) -> Self {
+        self.ttl_ms = Some(ms);
+        self
+    }
+
+    /// Set the intended sharing scope of the cached response.
+    ///
+    /// Only assert [`CacheScope::Public`](crate::types::CacheScope) for a body
+    /// that is identical for every caller regardless of identity or token.
+    ///
+    /// ```rust
+    /// use pmcp::types::{CacheScope, ListResourcesResult};
+    ///
+    /// let result = ListResourcesResult::new(vec![]).with_cache_scope(CacheScope::Public);
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Public));
+    /// ```
+    pub fn with_cache_scope(mut self, scope: crate::types::caching::CacheScope) -> Self {
+        self.cache_scope = Some(scope);
         self
     }
 }
@@ -303,6 +390,60 @@ pub struct ListResourceTemplatesResult {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+
+    /// How long (in milliseconds) a client MAY cache this response — the
+    /// `2026-07-28` `CacheableResult.ttlMs` hint.
+    ///
+    /// `u64` is the MEASURED mapping: the vendored artifact declares
+    /// `$defs.CacheableResult.properties.ttlMs` as
+    /// `{"type": "integer", "minimum": 0}` (asserted by
+    /// `tests/v2_core_schema_facts.rs`), so integrality and non-negativity are
+    /// contract. The one residual is the absent upper bound — JSON Schema
+    /// `integer` is unbounded while `u64` is not — which at millisecond
+    /// resolution is roughly 584 million years and is an ACCEPTED risk.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`DEFAULT_TTL_MS`](crate::types::DEFAULT_TTL_MS)
+    /// (`0`, "immediately stale") — D-08. Set it with
+    /// [`with_ttl_ms`](Self::with_ttl_ms).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07).** The field is
+    /// required on the `2026-07-28` projection, but modelling it as `Option`
+    /// plus inject-on-v2 fails CLOSED (a missed path merely omits a hint),
+    /// whereas a non-`Option` field plus strip-on-v1 fails OPEN (a missed path
+    /// leaks a v2 key onto the v1 wire).
+    ///
+    /// Not to be confused with
+    /// [`TaskV2::ttl_ms`](crate::types::tasks::TaskV2::ttl_ms), which is a task
+    /// LIFETIME rather than a cache-freshness hint (D-10).
+    ///
+    /// Adding this field is additive rather than a major bump because this
+    /// struct is `#[non_exhaustive]`, so `cargo semver-checks`'
+    /// `constructible_struct_adds_field` does not fire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+
+    /// The intended sharing scope of the cached response — the `2026-07-28`
+    /// `CacheableResult.cacheScope` hint.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`CacheScope::Private`](crate::types::CacheScope)
+    /// (D-08). Read [`CacheScope`](crate::types::CacheScope)'s `# Security`
+    /// section before setting `Public`: it authorizes a shared gateway to serve
+    /// this body across authorization contexts. Set it with
+    /// [`with_cache_scope`](Self::with_cache_scope).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07):** see
+    /// [`ttl_ms`](Self::ttl_ms). Additive under semver for the same
+    /// `#[non_exhaustive]` reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::types::caching::CacheScope>,
 }
 
 impl ListResourceTemplatesResult {
@@ -311,12 +452,46 @@ impl ListResourceTemplatesResult {
         Self {
             resource_templates,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         }
     }
 
     /// Set the pagination cursor for the next page.
     pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
         self.next_cursor = Some(cursor.into());
+        self
+    }
+
+    /// Set the client-side cache freshness hint, in milliseconds.
+    ///
+    /// Emitted only on the `2026-07-28` projection; stripped on v1 (D-11).
+    ///
+    /// ```rust
+    /// use pmcp::types::ListResourceTemplatesResult;
+    ///
+    /// let result = ListResourceTemplatesResult::new(vec![]).with_ttl_ms(60_000);
+    /// assert_eq!(result.ttl_ms, Some(60_000));
+    /// ```
+    pub fn with_ttl_ms(mut self, ms: u64) -> Self {
+        self.ttl_ms = Some(ms);
+        self
+    }
+
+    /// Set the intended sharing scope of the cached response.
+    ///
+    /// Only assert [`CacheScope::Public`](crate::types::CacheScope) for a body
+    /// that is identical for every caller regardless of identity or token.
+    ///
+    /// ```rust
+    /// use pmcp::types::{CacheScope, ListResourceTemplatesResult};
+    ///
+    /// let result =
+    ///     ListResourceTemplatesResult::new(vec![]).with_cache_scope(CacheScope::Private);
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
+    /// ```
+    pub fn with_cache_scope(mut self, scope: crate::types::caching::CacheScope) -> Self {
+        self.cache_scope = Some(scope);
         self
     }
 }
@@ -386,6 +561,60 @@ pub struct ReadResourceResult {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of the MCP protocol spec
     pub _meta: Option<serde_json::Value>,
+
+    /// How long (in milliseconds) a client MAY cache this response — the
+    /// `2026-07-28` `CacheableResult.ttlMs` hint.
+    ///
+    /// `u64` is the MEASURED mapping: the vendored artifact declares
+    /// `$defs.CacheableResult.properties.ttlMs` as
+    /// `{"type": "integer", "minimum": 0}` (asserted by
+    /// `tests/v2_core_schema_facts.rs`), so integrality and non-negativity are
+    /// contract. The one residual is the absent upper bound — JSON Schema
+    /// `integer` is unbounded while `u64` is not — which at millisecond
+    /// resolution is roughly 584 million years and is an ACCEPTED risk.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`DEFAULT_TTL_MS`](crate::types::DEFAULT_TTL_MS)
+    /// (`0`, "immediately stale") — D-08. Set it with
+    /// [`with_ttl_ms`](Self::with_ttl_ms).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07).** The field is
+    /// required on the `2026-07-28` projection, but modelling it as `Option`
+    /// plus inject-on-v2 fails CLOSED (a missed path merely omits a hint),
+    /// whereas a non-`Option` field plus strip-on-v1 fails OPEN (a missed path
+    /// leaks a v2 key onto the v1 wire).
+    ///
+    /// Not to be confused with
+    /// [`TaskV2::ttl_ms`](crate::types::tasks::TaskV2::ttl_ms), which is a task
+    /// LIFETIME rather than a cache-freshness hint (D-10).
+    ///
+    /// Additive rather than a major bump for the same `#[non_exhaustive]`
+    /// reason documented on [`_meta`](Self::_meta).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+
+    /// The intended sharing scope of the cached response — the `2026-07-28`
+    /// `CacheableResult.cacheScope` hint.
+    ///
+    /// `None` means the handler expressed no preference; the v2 projection then
+    /// emits the safe default [`CacheScope::Private`](crate::types::CacheScope)
+    /// (D-08). Read [`CacheScope`](crate::types::CacheScope)'s `# Security`
+    /// section before setting `Public`: a `resources/read` body is the most
+    /// likely of the six to be user-specific, and `Public` authorizes a shared
+    /// gateway to serve it across authorization contexts. Set it with
+    /// [`with_cache_scope`](Self::with_cache_scope).
+    ///
+    /// **v2 only.** On a `2025-11-25` wire the key is never emitted, and a
+    /// value set here is actively STRIPPED (D-11).
+    ///
+    /// **Why `Option` when the wire says REQUIRED (D-07):** see
+    /// [`ttl_ms`](Self::ttl_ms). Additive under semver for the same
+    /// `#[non_exhaustive]` reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::types::caching::CacheScope>,
 }
 
 impl ReadResourceResult {
@@ -394,7 +623,40 @@ impl ReadResourceResult {
         Self {
             contents,
             _meta: None,
+            ttl_ms: None,
+            cache_scope: None,
         }
+    }
+
+    /// Set the client-side cache freshness hint, in milliseconds.
+    ///
+    /// Emitted only on the `2026-07-28` projection; stripped on v1 (D-11).
+    ///
+    /// ```rust
+    /// use pmcp::types::ReadResourceResult;
+    ///
+    /// let result = ReadResourceResult::new(vec![]).with_ttl_ms(30_000);
+    /// assert_eq!(result.ttl_ms, Some(30_000));
+    /// ```
+    pub fn with_ttl_ms(mut self, ms: u64) -> Self {
+        self.ttl_ms = Some(ms);
+        self
+    }
+
+    /// Set the intended sharing scope of the cached response.
+    ///
+    /// Only assert [`CacheScope::Public`](crate::types::CacheScope) for a body
+    /// that is identical for every caller regardless of identity or token.
+    ///
+    /// ```rust
+    /// use pmcp::types::{CacheScope, ReadResourceResult};
+    ///
+    /// let result = ReadResourceResult::new(vec![]).with_cache_scope(CacheScope::Private);
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
+    /// ```
+    pub fn with_cache_scope(mut self, scope: crate::types::caching::CacheScope) -> Self {
+        self.cache_scope = Some(scope);
+        self
     }
 }
 

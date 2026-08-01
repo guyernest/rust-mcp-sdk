@@ -138,9 +138,15 @@ impl WasmMcpServer {
     fn handle_list_tools(&self, _params: ListToolsRequest) -> Result<Value> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
+        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
+        // into this file's serialization path: `WasmMcpServer` carries no
+        // `ProtocolContext`, so its era is always `None` and a handler-set hint
+        // is STRIPPED rather than leaked onto this dispatcher's v1 wire (D-11).
         let result = ListToolsResult {
             tools,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         };
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
@@ -234,9 +240,16 @@ impl WasmMcpServer {
             }
         }
 
+        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
+        // into this file's serialization path. This matters most here and in
+        // `handle_read_resource`: `WasmResource` returns handler-CONSTRUCTED
+        // results that are serialized directly, so without that strip a
+        // `with_cache_scope` call would reach this v1 wire (D-11).
         let result = ListResourcesResult {
             resources: all_resources,
             next_cursor,
+            ttl_ms: None,
+            cache_scope: None,
         };
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
@@ -257,9 +270,14 @@ impl WasmMcpServer {
     fn handle_list_prompts(&self, _params: ListPromptsRequest) -> Result<Value> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
+        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
+        // into this file's serialization path; the era-less `None` arm strips
+        // both keys so nothing leaks onto this dispatcher's v1 wire (D-11).
         let result = ListPromptsResult {
             prompts,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         };
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
