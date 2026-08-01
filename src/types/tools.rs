@@ -561,6 +561,41 @@ pub struct CallToolResult {
     /// - Game board state (chess position, game score)
     /// - Query results (database rows, search results)
     /// - Form data (user selections, validated input)
+    ///
+    /// # Era: what shape is allowed
+    ///
+    /// The 2026-07-28 schema declares this field as `structuredContent?: unknown`
+    /// — *"An optional JSON value that represents the structured result of the
+    /// tool call. This can be any JSON value (object, array, string, number, boolean, or null)
+    /// that conforms to the tool's `outputSchema` if one is defined."*
+    /// (`CallToolResult` in the vendored `schema/vendored/core-2026-07-28/schema.ts`.)
+    ///
+    /// The 2025-11-25 (v1) schema text was narrower on BOTH halves:
+    /// `structuredContent?: { [key: string]: unknown }`, and `outputSchema` was
+    /// *"Currently restricted to `type: "object"` at the root level"*. v2 lifts
+    /// both restrictions.
+    ///
+    /// [`CallToolResult::structured_value`](Self::structured_value) is the
+    /// constructor that names a non-object payload; use it rather than
+    /// [`structured`](Self::structured) so the choice is greppable at the call
+    /// site.
+    ///
+    /// # pmcp's v1 permissiveness is FROZEN here, not corrected
+    ///
+    /// This field has always been `Option<Value>`, and neither native dispatcher
+    /// (`ServerCore` in `src/server/core.rs`, the high-level `Server` in
+    /// `src/server/mod.rs`) shape-checks the handler's value on the way out — so
+    /// pmcp already emits non-object `structuredContent` on **v1** today, which is
+    /// more permissive than v1's own spec text allows. Phase 115 decision D-05
+    /// freezes v1 behaviour byte-identically, so that over-permissiveness is
+    /// FROZEN rather than fixed: tightening v1 to reject scalars would ITSELF be a
+    /// v1 wire change, and is forbidden. Do not add a shape guard here "for
+    /// correctness" — `tests/structured_tool_output.rs` fences the v1 half on both
+    /// dispatchers precisely so a later tightening fails loudly.
+    ///
+    /// `skip_serializing_if` distinguishes the two absences that matter:
+    /// `None` omits the key entirely, while `Some(Value::Null)` emits an explicit
+    /// `"structuredContent": null` — a value v2 permits.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
 
@@ -625,7 +660,10 @@ impl CallToolResult {
     /// from handlers that own their [`CallToolResult`] envelope.
     ///
     /// Use [`structured_with_text`](Self::structured_with_text) when the
-    /// human-readable voice should differ from the raw serialization.
+    /// human-readable voice should differ from the raw serialization, and
+    /// [`structured_value`](Self::structured_value) when the payload is NOT an
+    /// object (a scalar, an array or `null`) — this constructor keeps its
+    /// object-shaped intent so every existing call site reads the same way.
     ///
     /// # Example
     ///
@@ -669,6 +707,75 @@ impl CallToolResult {
     /// ```
     pub fn structured_with_text(value: Value, text: impl Into<String>) -> Self {
         Self::new(vec![Content::text(text.into())]).with_structured_content(value)
+    }
+
+    /// Create a structured success result whose payload is NOT a JSON object —
+    /// the widening sibling of [`structured`](Self::structured).
+    ///
+    /// The body is identical to [`structured`](Self::structured); the two differ
+    /// only in what they SAY. Reaching for this name is the deliberate, greppable
+    /// record at the call site that the payload is a scalar, an array or `null`
+    /// rather than the object shape most tools return. [`structured`](Self::structured)
+    /// keeps its exact signature and its object-shaped intent, so every existing
+    /// call site compiles and behaves identically (Phase 115 decision D-06).
+    ///
+    /// # Era
+    ///
+    /// The 2026-07-28 schema declares `structuredContent?: unknown` — *"An
+    /// optional JSON value that represents the structured result of the tool call.
+    /// This can be any JSON value (object, array, string, number, boolean, or null)
+    /// that conforms to the tool's `outputSchema` if one is defined."*
+    /// The 2025-11-25 schema text restricted it to
+    /// `{ [key: string]: unknown }`. pmcp's v1 wire behaviour is FROZEN as-is
+    /// rather than tightened — see the note on
+    /// [`structured_content`](Self::structured_content).
+    ///
+    /// # A declared `outputSchema` still applies (D-04)
+    ///
+    /// Widening the payload does not weaken the contract: if the tool declares an
+    /// `outputSchema`, that schema must DESCRIBE the scalar. `{"type":
+    /// "integer"}` accepts `42`; an object-shaped schema such as
+    /// `{"type": "object", "required": ["n"]}` does not.
+    ///
+    /// "Does not accept" here means a `tracing` **warning is logged at emit
+    /// time** — `src/server/output_validation.rs` is warn-only on BOTH eras, so a
+    /// mismatch never turns the call into an error result and never adds a
+    /// production failure mode. The tool call still succeeds and the value still
+    /// reaches the wire.
+    ///
+    /// # `Some(null)` is not `None`
+    ///
+    /// A `null` payload is a PRESENT value: it serializes as an explicit
+    /// `"structuredContent": null`, whereas a result that never set the field
+    /// omits the key entirely.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// // A tool whose declared outputSchema is `{"type": "integer"}`.
+    /// let result = CallToolResult::structured_value(json!(42));
+    ///
+    /// assert!(!result.is_error);
+    /// assert_eq!(result.structured_content, Some(json!(42)));
+    ///
+    /// // The text voice carries the same value, for text-only clients.
+    /// let pmcp::types::Content::Text { text } = &result.content[0] else {
+    ///     unreachable!()
+    /// };
+    /// assert_eq!(text, "42");
+    ///
+    /// // A null payload is present, not absent.
+    /// let null_result = CallToolResult::structured_value(json!(null));
+    /// assert_eq!(null_result.structured_content, Some(json!(null)));
+    /// let wire = serde_json::to_string(&null_result).unwrap();
+    /// assert!(wire.contains(r#""structuredContent":null"#));
+    /// ```
+    pub fn structured_value(value: Value) -> Self {
+        let text = value.to_string();
+        Self::new(vec![Content::text(text)]).with_structured_content(value)
     }
 
     /// Add structured content for both model and widget.
