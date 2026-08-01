@@ -308,4 +308,391 @@ mod tests {
     fn warn_never_panics_on_mismatch() {
         warn_on_schema_mismatch("demo_tool", &person_schema(), &json!({ "age": 1 }), None);
     }
+
+    // =======================================================================
+    // Phase 115 / SCHM-01 — the era branch and the bypass it exists to avoid
+    // =======================================================================
+
+    /// The draft-07 meta-schema URI, spelled out once so every fence below
+    /// uses the exact string the measured bypass was observed with.
+    const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
+
+    /// `{n: integer}`, required, declaring draft-07 — the exact document the
+    /// bypass was measured on.
+    fn draft_07_declared_schema() -> Value {
+        json!({
+            "$schema": DRAFT_07,
+            "type": "object",
+            "properties": { "n": { "type": "integer" } },
+            "required": ["n"]
+        })
+    }
+
+    /// THE fence for SCHM-01. A schema that declares draft-07 must still be
+    /// ENFORCED under the v2 Draft 2020-12 pin.
+    ///
+    /// Measured across `jsonschema` 0.46.10 / 0.47.0 / 0.48.0 / 0.48.5 /
+    /// 0.49.2: handing this document to `draft202012::new` AS-IS produces a
+    /// validator that accepts every instance. If this test ever goes green
+    /// only because the assertions were relaxed, output validation has become
+    /// a no-op for every legacy-declared schema in the wild.
+    #[test]
+    fn v2_pin_still_enforces_a_draft_07_declared_schema() {
+        let schema = draft_07_declared_schema();
+
+        assert!(
+            schema_mismatch(&schema, &json!({ "wrong": true }), Some(Era::V2)).is_some(),
+            "BYPASS: the v2 Draft 2020-12 pin accepted an instance missing the REQUIRED `n`. A \
+             `None` here means the pin compiled the draft-07 declaration into a VACUOUS validator \
+             (empty vocabulary set) and emit-time output validation has silently become a no-op \
+             for every schema that declares a legacy $schema. Restore the normalize-then-pin step \
+             in `compile_2020_12`."
+        );
+        assert!(
+            schema_mismatch(&schema, &json!({ "n": "not-an-int" }), Some(Era::V2)).is_some(),
+            "BYPASS: the v2 Draft 2020-12 pin accepted a STRING where the schema declares \
+             `integer`. See the message above — `type` is one of the seven keywords measured to \
+             be silently dropped when the $schema declaration is not normalized first."
+        );
+        assert_eq!(
+            schema_mismatch(&schema, &json!({ "n": 7 }), Some(Era::V2)),
+            None,
+            "a conforming instance must still pass under the pin — the fix restores enforcement, \
+             it does not make everything fail"
+        );
+    }
+
+    /// D-01's freeze, asserted rather than assumed: the same draft-07 document
+    /// behaves on v1 exactly as it did before the v2 pin existed, and an
+    /// absent protocol context (`None`) resolves to v1, never to v2.
+    #[test]
+    fn v1_validation_is_unchanged_by_the_v2_pin() {
+        let schema = draft_07_declared_schema();
+
+        for era in [Some(Era::V1), None] {
+            assert!(
+                schema_mismatch(&schema, &json!({ "wrong": true }), era).is_some(),
+                "v1 auto-detect must keep enforcing draft-07 `required` (era: {era:?})"
+            );
+            assert!(
+                schema_mismatch(&schema, &json!({ "n": "not-an-int" }), era).is_some(),
+                "v1 auto-detect must keep enforcing draft-07 `type` (era: {era:?})"
+            );
+            assert_eq!(
+                schema_mismatch(&schema, &json!({ "n": 7 }), era),
+                None,
+                "v1 must keep accepting a conforming instance (era: {era:?})"
+            );
+        }
+    }
+
+    /// A schema whose verdict genuinely DIFFERS between the two eras.
+    ///
+    /// `contentEncoding` is an ASSERTION in draft-07 but only an ANNOTATION
+    /// from 2019-09 onwards, so a non-base64 string is rejected under v1's
+    /// auto-detect and accepted under the v2 2020-12 pin. Measured on
+    /// `jsonschema` 0.49.2.
+    ///
+    /// The `description` carries `prefix` purely to make each caller's
+    /// document a DISTINCT cache key, so a test can start from a cold cache.
+    /// `description` is an annotation in every draft and changes no verdict.
+    fn era_divergent_schema(prefix: &str) -> Value {
+        serde_json::from_str(&format!(
+            r#"{{
+                "$schema": "{DRAFT_07}",
+                "type": "string",
+                "contentEncoding": "base64",
+                "description": "{prefix}"
+            }}"#
+        ))
+        .expect("the template above is valid JSON")
+    }
+
+    /// An instance the [`era_divergent_schema`] eras disagree about.
+    fn era_divergent_instance() -> Value {
+        json!("!!!not-base64!!!")
+    }
+
+    /// The cache fence: one process, one schema text, two eras — the second
+    /// era must NOT be served the first era's validator.
+    ///
+    /// Before the key was widened to `(Era, schema text)` this was
+    /// first-writer-wins for the whole process lifetime. CI runs with
+    /// `--test-threads=1`, so this must not depend on parallel execution; the
+    /// order is expressed by the call sequence inside the test, and the twin
+    /// test below runs the opposite order over a DISTINCT document so it too
+    /// starts from a cold cache.
+    ///
+    /// Note carefully what this schema demonstrates: here `Era::V2` is MORE
+    /// PERMISSIVE than `Era::V1`, deliberately, because `contentEncoding` is
+    /// an assertion in draft-07 and only an annotation under 2020-12. The
+    /// converse direction is ALSO reachable — `$ref` siblings are ignored in
+    /// draft-07 but apply under 2020-12, making v2 stricter there. Both
+    /// directions were measured on `jsonschema` 0.49.2, so any cross-era
+    /// monotonicity claim ("v2 rejects everything v1 rejects", or its
+    /// converse) is FALSE in BOTH directions. None is made anywhere in this
+    /// phase — 115-09's fuzz target must not assert one either.
+    #[test]
+    fn same_schema_text_yields_independent_verdicts_per_era_in_one_process() {
+        let schema = era_divergent_schema("v1first");
+        let instance = era_divergent_instance();
+
+        let v1 = schema_mismatch(&schema, &instance, Some(Era::V1));
+        let v2 = schema_mismatch(&schema, &instance, Some(Era::V2));
+
+        assert!(
+            v1.is_some(),
+            "v1 auto-detects draft-07, where `contentEncoding` is an ASSERTION: {v1:?}"
+        );
+        assert_eq!(
+            v2, None,
+            "v2 pins 2020-12, where `contentEncoding` is only an ANNOTATION and asserts \
+             nothing. A `Some` here means the V1 entry was served for the V2 lookup — the cache \
+             key lost its era half."
+        );
+    }
+
+    /// The twin of the test above with the call order REVERSED, over a
+    /// distinct document so the process-global cache is cold on entry. Both
+    /// orders must produce the same per-era answers; if either order can flip
+    /// a verdict, the cache is era-blind.
+    #[test]
+    fn same_schema_text_yields_independent_verdicts_in_the_opposite_order() {
+        let schema = era_divergent_schema("v2first");
+        let instance = era_divergent_instance();
+
+        let v2 = schema_mismatch(&schema, &instance, Some(Era::V2));
+        let v1 = schema_mismatch(&schema, &instance, Some(Era::V1));
+
+        assert_eq!(
+            v2, None,
+            "v2-first must give the same v2 answer as v2-second: {v2:?}"
+        );
+        assert!(
+            v1.is_some(),
+            "v1-second must give the same v1 answer as v1-first. A `None` here means the V2 \
+             entry was served for the V1 lookup — first-writer-wins across eras."
+        );
+    }
+
+    /// The LOUD half of D-02: draft-07 constructs that cannot be expressed
+    /// under 2020-12 fail to COMPILE, and the failure is reported through the
+    /// existing schema-invalid message rather than silently passing.
+    #[test]
+    fn structurally_incompatible_draft_07_constructs_report_a_schema_error_not_silence() {
+        // draft-04/07 boolean `exclusiveMinimum`; 2020-12 requires a number.
+        let boolean_exclusive_minimum = json!({
+            "$schema": DRAFT_07,
+            "exclusiveMinimum": true
+        });
+        // draft-07 array-form `items`; 2020-12 spells this `prefixItems` and
+        // requires `items` to be a single schema.
+        let tuple_items = json!({
+            "$schema": DRAFT_07,
+            "items": [{ "type": "string" }, { "type": "number" }]
+        });
+
+        for schema in [&boolean_exclusive_minimum, &tuple_items] {
+            let mismatch = schema_mismatch(schema, &json!({}), Some(Era::V2)).expect(
+                "a draft-07 construct that 2020-12 cannot express must be REPORTED under the v2 \
+                 pin, not silently accepted",
+            );
+            assert!(
+                mismatch.contains("outputSchema"),
+                "the message must say the schema itself is at fault: {mismatch}"
+            );
+        }
+    }
+
+    /// SEP-2106, behavioural half: an external `$ref` must fail to compile,
+    /// with no network or filesystem I/O, on BOTH eras.
+    ///
+    /// This is the *behavioural* half only. The *structural* fence — that
+    /// `jsonschema`'s `resolve-http` / `resolve-file` features never enter the
+    /// build graph through cargo feature unification — is 115-08's manifest
+    /// tripwire, because a behavioural test like this one would still pass
+    /// (merely louder, and after a live fetch) if `resolve-http` were enabled.
+    #[test]
+    fn external_ref_fails_to_compile_with_no_network_io() {
+        let remote = json!({ "$ref": "https://example.com/remote.json" });
+        let local_file = json!({ "$ref": "file:///etc/passwd" });
+        let relative_under_http_id = json!({
+            "$id": "https://example.com/root.json",
+            "$ref": "sibling.json"
+        });
+
+        let started = std::time::Instant::now();
+        for era in [Some(Era::V1), Some(Era::V2)] {
+            for schema in [&remote, &local_file, &relative_under_http_id] {
+                assert!(
+                    schema_mismatch(schema, &json!({}), era).is_some(),
+                    "an external $ref must be a hard compile error, never a fetch (era: \
+                     {era:?}, schema: {schema})"
+                );
+            }
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "six external-$ref refusals took {elapsed:?}. Refusal is measured at ~60 µs each; a \
+             wall-clock cost anywhere near a second means something is resolving the URI over \
+             the network or the filesystem."
+        );
+    }
+
+    /// D-04, which 115-RESEARCH § Finding 7 measured is ALREADY true today: an
+    /// object-typed schema does not conform to a scalar, an array or `null`,
+    /// on either era.
+    ///
+    /// "Reject" here means **a warning is logged** — not that the call fails.
+    /// [`warn_on_schema_mismatch`] returns normally for every one of these
+    /// inputs and produces no error result. Escalating v2 to a hard error is
+    /// deliberately OUT OF SCOPE for this phase: it is a new production
+    /// failure mode, and 115-10 books it as a deferred item.
+    #[test]
+    fn an_object_schema_rejects_a_scalar_on_both_eras_warn_only() {
+        let schema = person_schema();
+        let non_objects = [json!(42), json!(null), json!([1, 2]), json!("s")];
+
+        for era in [Some(Era::V1), Some(Era::V2)] {
+            for value in &non_objects {
+                assert!(
+                    schema_mismatch(&schema, value, era).is_some(),
+                    "an object schema must report a non-object value (era: {era:?}, value: \
+                     {value})"
+                );
+                // Warn-only: this returns, it does not fail the call.
+                warn_on_schema_mismatch("demo_tool", &schema, value, era);
+            }
+        }
+    }
+
+    /// The blast-radius fence for D-01. `Draft::default() == Draft202012`, so
+    /// an `outputSchema` that declares no `$schema` at all already compiles as
+    /// 2020-12 under today's auto-detect. The v2 pin therefore changes
+    /// behaviour ONLY for schemas that declare something — this test is what
+    /// keeps that claim honest.
+    #[test]
+    fn an_undeclared_schema_behaves_identically_on_both_eras() {
+        let schema = person_schema();
+        let values = [
+            json!({ "name": "Ada", "age": 36 }),
+            json!({ "age": "not-a-number" }),
+            json!({}),
+            json!(42),
+        ];
+
+        for value in &values {
+            assert_eq!(
+                schema_mismatch(&schema, value, Some(Era::V1)),
+                schema_mismatch(&schema, value, Some(Era::V2)),
+                "an undeclared schema must give the identical verdict on both eras (value: \
+                 {value})"
+            );
+        }
+    }
+
+    /// The four `normalize_schema_dialect` cases, as a set, so both the
+    /// structural test and the idempotence test cover the same ground.
+    ///
+    /// Each entry is `(schema, expected_owned)` — `true` means the normalizer
+    /// must have rewritten the document.
+    fn normalization_cases() -> Vec<(Value, bool)> {
+        vec![
+            // (a) no `$schema` at all
+            (person_schema(), false),
+            // (b) already 2020-12
+            (json!({ "$schema": DRAFT_2020_12, "type": "object" }), false),
+            // (c) a draft-07 root declaration, with siblings that must survive
+            (draft_07_declared_schema(), true),
+            // (d) a NESTED `$schema` and no root one
+            (
+                json!({
+                    "type": "object",
+                    "properties": { "a": { "$schema": DRAFT_07, "type": "string" } }
+                }),
+                false,
+            ),
+        ]
+    }
+
+    /// The PURE-function fence: `normalize_schema_dialect` alters the ROOT
+    /// `$schema` and NOTHING else.
+    ///
+    /// Behavioural equivalence through [`schema_mismatch`] cannot prove this —
+    /// a normalizer that also dropped a sibling key would still make
+    /// `v2_pin_still_enforces_a_draft_07_declared_schema` pass on the cases it
+    /// happens to check. This asserts the rewrite is surgical: the borrow/own
+    /// decision, the rewritten value, deep equality of every other key, and
+    /// that a nested `$schema` is left alone.
+    #[test]
+    fn normalize_schema_dialect_changes_only_the_root_dollar_schema() {
+        use std::borrow::Cow;
+
+        for (schema, expected_owned) in normalization_cases() {
+            let normalized = normalize_schema_dialect(&schema);
+
+            assert_eq!(
+                matches!(normalized, Cow::Owned(_)),
+                expected_owned,
+                "borrow/own decision is wrong for {schema} — the no-op cases must allocate \
+                 nothing"
+            );
+
+            if expected_owned {
+                assert_eq!(
+                    normalized.get("$schema").and_then(Value::as_str),
+                    Some(DRAFT_2020_12),
+                    "the root $schema must be OVERWRITTEN with the 2020-12 URI, not deleted"
+                );
+                // Everything except `$schema` must be deep-equal to the input.
+                let mut before = schema.clone();
+                let mut after = normalized.into_owned();
+                for document in [&mut before, &mut after] {
+                    if let Some(object) = document.as_object_mut() {
+                        object.remove("$schema");
+                    }
+                }
+                assert_eq!(
+                    before, after,
+                    "normalization touched a key other than the root $schema"
+                );
+            } else {
+                assert_eq!(
+                    *normalized, schema,
+                    "a document needing no rewrite must come back byte-identical: {schema}"
+                );
+            }
+        }
+
+        // (d) in detail: the NESTED declaration is left exactly as written.
+        let nested = json!({
+            "type": "object",
+            "properties": { "a": { "$schema": DRAFT_07, "type": "string" } }
+        });
+        let normalized = normalize_schema_dialect(&nested);
+        assert_eq!(
+            normalized
+                .pointer("/properties/a/$schema")
+                .and_then(Value::as_str),
+            Some(DRAFT_07),
+            "a nested $schema is not the dialect declaration and must never be rewritten"
+        );
+    }
+
+    /// Normalizing twice equals normalizing once, for all four cases — the
+    /// fixed-example half of the idempotence property 115-09 holds over
+    /// arbitrary generated input.
+    #[test]
+    fn normalize_schema_dialect_is_idempotent() {
+        for (schema, _) in normalization_cases() {
+            let once = normalize_schema_dialect(&schema).into_owned();
+            let twice = normalize_schema_dialect(&once).into_owned();
+            assert_eq!(
+                once, twice,
+                "normalization must be idempotent, but a second pass changed {schema}"
+            );
+        }
+    }
 }
