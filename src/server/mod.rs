@@ -1533,6 +1533,12 @@ impl Server {
             &self.info,
             crate::server::core::ResponseDisposition::Complete,
             crate::server::core::ReservedFieldOwner::None,
+            // The `tasks/update` acknowledgement is an `UpdateTaskResult`, which
+            // does NOT extend `CacheableResult` — the tasks surface carries no
+            // caching hint at all in the 2026-07-28 schema (D-07), and the
+            // `ttlMs` that DOES live on `TaskV2` is a task LIFETIME, a different
+            // concept in a different module (D-10). So this route gains neither
+            // key, on either era.
             crate::types::caching::Cacheable::No,
         );
         response
@@ -1606,6 +1612,14 @@ impl Server {
                 return crate::server::task_dispatch::error_response(id, code, message)
             },
         };
+
+        // Capture the cacheability claim BEFORE the `match` below: arm 1 binds
+        // `ref boxed_req` but arm 2 MOVES `boxed_req`, so `request` is gone by
+        // the time the injection at the bottom of this function runs. Twin of
+        // the `ServerCore` capture — and it CALLS the shared classifier in
+        // `core.rs` rather than defining a second table, which is the twin-site
+        // parity rule this file follows everywhere else.
+        let cacheable = crate::server::core::request_is_cacheable(&request);
 
         // The SECOND envelope claimant (Phase 114 plan 11), twin of the
         // `ServerCore` site: the `tasks/*` routes and the `tools/call` create
@@ -1696,12 +1710,15 @@ impl Server {
             )
         };
 
-        // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08): the ONE shared
-        // helper in `core.rs` — v2-only, object-results-only, collision-safe;
-        // v1 / non-opted-in responses stay byte-identical. The reserved-field
-        // owner comes from the egress that minted the fields, never from the
-        // disposition (Phase 114 plan 10) — folded with the dispatch's own claim
-        // through the SAME named rule `ServerCore` uses (Phase 114 plan 11).
+        // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08) plus the
+        // caching-hint projection (SCHM-03): the ONE shared helper in `core.rs`
+        // — the envelope half is v2-only, object-results-only, collision-safe,
+        // so v1 / non-opted-in responses stay byte-identical; the caching half
+        // runs on both eras, ensuring on v2 and STRIPPING on v1 (D-11). The
+        // reserved-field owner comes from the egress that minted the fields,
+        // never from the disposition (Phase 114 plan 10) — folded with the
+        // dispatch's own claim through the SAME named rule `ServerCore` uses
+        // (Phase 114 plan 11).
         let claim = dispatch_claim.or_egress(disposition, reserved_field_owner);
         crate::server::core::inject_v2_result_envelope(
             &mut response,
@@ -1709,7 +1726,7 @@ impl Server {
             &self.info,
             claim.disposition,
             claim.owner,
-            crate::types::caching::Cacheable::No,
+            cacheable,
         );
         response
     }

@@ -12,9 +12,54 @@ use crate::types::{
     Request, RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
 };
 use crate::{ErrorCode, SUPPORTED_PROTOCOL_VERSIONS};
+use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Serialize a result that extends `CacheableResult`, stripping the v2-only
+/// caching hints on the way out (115-06, SCHM-03 / D-11).
+///
+/// # Why this exists at all
+///
+/// `WasmMcpServer` is the THIRD dispatcher, and it is not on the native
+/// chokepoint. It carries no `ProtocolContext`, has no accept-list and performs
+/// no era resolution of any kind, so it can never legitimately serve a v2
+/// client — yet its `WasmResource` handlers construct `ReadResourceResult` /
+/// `ListResourcesResult` values that this file serializes DIRECTLY. Once
+/// 115-05 gave those types `with_ttl_ms` / `with_cache_scope` builders, a
+/// handler could put `ttlMs` / `cacheScope` straight onto this server's v1
+/// wire. D-11 forbids exactly that: a v1 wire never carries a v2 field.
+///
+/// `None` is therefore not a placeholder era — it is the CORRECT era for this
+/// dispatcher, and it selects `project_caching_hints`'s STRIP arm.
+/// `crate::types::caching` is deliberately `cfg`-free so this
+/// `cfg(target_arch = "wasm32")` file can reach the very same projector that
+/// `src/server/core.rs` (which is shaped for `not(wasm32)`) calls; a projector
+/// living in either server module would be unreachable from the other.
+///
+/// # How this is proven
+///
+/// Three ways, none of which alone is sufficient:
+///
+/// 1. `make wasm-build` — COMPILE-time only. It does not catch removal of the
+///    call: deleting it still builds clean (measured in 115-06 Task 2).
+/// 2. `crate::types::caching`'s native unit test
+///    `no_context_strips_both_keys_which_is_the_wasm_path` — the BEHAVIOUR of
+///    the `None` arm. No native build or test compiles THIS file
+///    (`src/server/mod.rs` gates it on `target_arch = "wasm32"`, and its
+///    `cfg(all(test, target_arch = "wasm32"))` test module does not compile at
+///    all), so that native test is the only runnable proof of the arm.
+/// 3. 115-08's SOURCE tripwire — that these call sites still EXIST.
+fn cacheable_result_to_value<T: Serialize>(result: T) -> Result<Value> {
+    let mut value = serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))?;
+    crate::types::caching::project_caching_hints(
+        &mut value,
+        None,
+        crate::types::caching::Cacheable::Yes,
+    );
+    Ok(value)
+}
 
 /// A tool that can be executed in WASM environments.
 pub trait WasmTool: Send + Sync {
@@ -138,17 +183,18 @@ impl WasmMcpServer {
     fn handle_list_tools(&self, _params: ListToolsRequest) -> Result<Value> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
-        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
-        // into this file's serialization path: `WasmMcpServer` carries no
-        // `ProtocolContext`, so its era is always `None` and a handler-set hint
-        // is STRIPPED rather than leaked onto this dispatcher's v1 wire (D-11).
+        // `ListToolsResult` extends `CacheableResult` — route it through the
+        // stripping serializer (D-11). Dispatcher-BUILT rather than
+        // handler-returned, so nothing can be set here today; it goes through
+        // the same helper anyway so the set of cacheable sites is uniform and
+        // a future `WasmTool`-driven list cannot quietly become a leak.
         let result = ListToolsResult {
             tools,
             next_cursor: None,
             ttl_ms: None,
             cache_scope: None,
         };
-        serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
+        cacheable_result_to_value(result)
     }
 
     fn handle_call_tool(&self, params: CallToolRequest) -> Result<Value> {
@@ -240,25 +286,32 @@ impl WasmMcpServer {
             }
         }
 
-        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
-        // into this file's serialization path. This matters most here and in
-        // `handle_read_resource`: `WasmResource` returns handler-CONSTRUCTED
-        // results that are serialized directly, so without that strip a
-        // `with_cache_scope` call would reach this v1 wire (D-11).
+        // `ListResourcesResult` extends `CacheableResult` — route it through the
+        // stripping serializer (D-11). This aggregation re-BUILDS the result
+        // from each provider's `resources` / `next_cursor`, so a hint a
+        // `WasmResource::list` implementation set is already dropped by the
+        // rebuild; the strip is the belt-and-braces that survives someone later
+        // deciding to forward the provider's result wholesale.
         let result = ListResourcesResult {
             resources: all_resources,
             next_cursor,
             ttl_ms: None,
             cache_scope: None,
         };
-        serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
+        cacheable_result_to_value(result)
     }
 
     fn handle_read_resource(&self, params: ReadResourceRequest) -> Result<Value> {
         // Find the first resource that can handle this URI
         for resource in self.resources.values() {
             if let Ok(result) = resource.read(&params.uri) {
-                return serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()));
+                // THE leak site: `ReadResourceResult` extends `CacheableResult`
+                // and this value is HANDLER-RETURNED, serialized verbatim with
+                // no rebuild in between. A `WasmResource::read` that called
+                // `with_cache_scope(CacheScope::Public)` would otherwise put a
+                // v2-only key on this era-less dispatcher's v1 wire (D-11,
+                // T-115-36). The stripping serializer is what closes it.
+                return cacheable_result_to_value(result);
             }
         }
         Err(Error::protocol(
@@ -270,16 +323,15 @@ impl WasmMcpServer {
     fn handle_list_prompts(&self, _params: ListPromptsRequest) -> Result<Value> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
-        // 115-06 wires `project_caching_hints(&mut value, None, Cacheable::Yes)`
-        // into this file's serialization path; the era-less `None` arm strips
-        // both keys so nothing leaks onto this dispatcher's v1 wire (D-11).
+        // `ListPromptsResult` extends `CacheableResult` — route it through the
+        // stripping serializer (D-11). Dispatcher-built, like `tools/list`.
         let result = ListPromptsResult {
             prompts,
             next_cursor: None,
             ttl_ms: None,
             cache_scope: None,
         };
-        serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
+        cacheable_result_to_value(result)
     }
 
     fn handle_get_prompt(&self, params: GetPromptRequest) -> Result<Value> {

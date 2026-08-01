@@ -1668,6 +1668,59 @@ pub(crate) fn inject_v2_result_envelope(
     }
 }
 
+/// Classify a request as producing a `CacheableResult` or not (115-06, SCHM-03).
+///
+/// ONE shared table, called from BOTH native dispatch sites — the Phase-109/112
+/// twin-site parity rule: `server/mod.rs` CALLS this, it never defines its own
+/// copy. Two tables would be two places for the classification to rot, and a
+/// drift between them would show up only as a missing hint on one transport.
+///
+/// The five `Cacheable::Yes` rows are exactly the `ClientRequest` variants whose
+/// results extend `CacheableResult` in the vendored `2026-07-28` schema:
+/// `tools/list`, `resources/list`, `resources/templates/list`, `resources/read`
+/// and `prompts/list`.
+///
+/// # `server/discover` is deliberately absent
+///
+/// `DiscoverResult` is the SIXTH `CacheableResult` extender, but it does not
+/// ride the `ClientRequest` route at all — `server/discover` is carried by the
+/// crate-private `InternalClientRequest` and answered by
+/// [`build_discover_response`], which names `Cacheable::Yes` at its own call
+/// site. Adding a row here for a variant that cannot occur would be a lie about
+/// where the claim is made.
+///
+/// # Fail-closed
+///
+/// The catch-all arm returns [`Cacheable::No`], so a NEW `ClientRequest` variant
+/// lands in the non-cacheable direction by default. That is the safe direction:
+/// a MISSING hint on a v2 response is a conformance gap a client tolerates
+/// (it simply caches nothing), whereas a SPURIOUS hint on an unexpected method
+/// — particularly one that defaulted to a shareable scope — would be a
+/// cross-authorization-context data-leak vector (T-115-17).
+pub(crate) fn request_is_cacheable(request: &Request) -> Cacheable {
+    let Request::Client(boxed) = request else {
+        // A `ServerRequest` is refused by both dispatchers with -32601; it has
+        // no result at all, let alone a cacheable one.
+        return Cacheable::No;
+    };
+    match boxed.as_ref() {
+        // `tools/list` → ListToolsResult extends CacheableResult.
+        ClientRequest::ListTools(_) => Cacheable::Yes,
+        // `resources/list` → ListResourcesResult extends CacheableResult.
+        ClientRequest::ListResources(_) => Cacheable::Yes,
+        // `resources/templates/list` → ListResourceTemplatesResult extends it.
+        ClientRequest::ListResourceTemplates(_) => Cacheable::Yes,
+        // `resources/read` → ReadResourceResult extends CacheableResult.
+        ClientRequest::ReadResource(_) => Cacheable::Yes,
+        // `prompts/list` → ListPromptsResult extends CacheableResult.
+        ClientRequest::ListPrompts(_) => Cacheable::Yes,
+        // Everything else — `initialize`, `tools/call`, `prompts/get`, every
+        // `tasks/*` route, the subscription and completion methods, `ping` —
+        // plus any variant added after this was written.
+        _ => Cacheable::No,
+    }
+}
+
 /// The `_meta` object of a result, creating it when absent.
 ///
 /// ONE helper for THREE result shapes. `CallToolResult._meta`,
@@ -3287,6 +3340,21 @@ impl ProtocolHandler for ServerCore {
             Err((code, message)) => return Self::error_response(id, code, message),
         };
 
+        // Capture the cacheability claim while `request` is still HERE.
+        //
+        // The same shape as the `CreateTrigger::resolve(...)` capture above: the
+        // fact is derivable only from the request, and the request is MOVED into
+        // `handle_request_internal` a few lines below, so the claim has to be
+        // taken now or not at all. By the time `inject_v2_result_envelope` runs,
+        // the response is an opaque `serde_json::Value` and the method is out of
+        // scope. This binding sits OUTSIDE the `#[cfg(feature =
+        // "streamable-http")]` MRTR block so it exists on builds with and
+        // without that feature.
+        //
+        // `request_is_cacheable` is the ONE shared table `server/mod.rs` calls
+        // too — this site never classifies on its own.
+        let cacheable = request_is_cacheable(&request);
+
         // Execute the actual request handling with auth_context.
         //
         // `dispatch_claim` is the SECOND envelope claimant (Phase 114 plan 11):
@@ -3323,10 +3391,12 @@ impl ProtocolHandler for ServerCore {
             (ResponseDisposition::Complete, ReservedFieldOwner::None)
         };
 
-        // Inject the v2-only response envelope (resultType + serverInfo) at the
-        // era-gated serialization boundary (VERS-07 / D-07 / D-08). This is a
-        // no-op for v1 / non-opted-in responses (byte-identical) and for
-        // error/notification/non-object results.
+        // Inject the v2-only response envelope (resultType + serverInfo) and
+        // project the caching hints at the era-gated serialization boundary
+        // (VERS-07 / D-07 / D-08, SCHM-03). The ENVELOPE half is a no-op for
+        // v1 / non-opted-in responses (byte-identical) and for
+        // error/notification/non-object results; the caching half runs on both
+        // eras — ensure on v2, STRIP on v1 (D-11).
         //
         // The two claimants are folded through ONE named rule so precedence is
         // stated rather than implied by argument order.
@@ -3337,7 +3407,7 @@ impl ProtocolHandler for ServerCore {
             &self.info,
             claim.disposition,
             claim.owner,
-            Cacheable::No,
+            cacheable,
         );
 
         // Process response through protocol middleware chain (read-only access)
