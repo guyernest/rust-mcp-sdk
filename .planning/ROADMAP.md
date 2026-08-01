@@ -2563,7 +2563,7 @@ Plans:
 **Wave 5**
 
 - [x] 115-07-PLAN.md — SCHM-03 on the wire: six methods, two eras, both native dispatchers with an in-band `resultType` era witness, the v1 strip proven against a handler that genuinely opted in, and the measured bound that four of the six methods cannot reach v2 in-process asserted at a named test
-- [ ] 115-08-PLAN.md — Tripwires: SEP-2106 fenced against cargo's DECLARED and RESOLVED dependency graphs via `cargo metadata` (catching renamed/table-style/unification cases a text scan misses), the D-12 single-projection fence, the wasm call-site fence (the only gate that catches its removal), and the projection/middleware ordering fence
+- [x] 115-08-PLAN.md — Tripwires: SEP-2106 fenced against cargo's DECLARED and RESOLVED dependency graphs via `cargo metadata` (catching renamed/table-style/unification cases a text scan misses), the D-12 single-projection fence, the wasm call-site fence (the only gate that catches its removal), and the projection/middleware ordering fence
 - [ ] 115-09-PLAN.md — ALWAYS requirements: a `fuzzing`-gated three-state `SchemaVerdict` seam on the UNCACHED compile path, `fuzz_schema_draft_pin` with three TRUE invariants (the pre-review monotonicity invariant was FALSE) and a committed seed corpus, property tests, and `examples/s52_v2_caching_hints.rs` — all verified by direct commands because `make test-fuzz`/`test-property`/`test-examples` are fail-open
 
 **Wave 6**
@@ -2633,7 +2633,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 8/11 | In Progress|  |
+| 115. JSON Schema 2020-12 + Caching Hints | 9/11 | In Progress|  |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |

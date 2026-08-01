@@ -306,3 +306,11 @@ None - no external service configuration required.
 ---
 *Phase: 115-json-schema-2020-12-structured-output-caching-hints*
 *Completed: 2026-08-01*
+
+## Self-Check: PASSED
+
+- `tests/v2_schema_tripwires.rs` — FOUND
+- `.planning/phases/115-json-schema-2020-12-structured-output-caching-hints/115-08-SUMMARY.md` — FOUND
+- Commit `aa3c562c` — FOUND
+- Commit `3c46215f` — FOUND
+- Commit `dfbc9b04` — FOUND
