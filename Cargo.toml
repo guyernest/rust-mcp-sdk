@@ -635,6 +635,20 @@ name = "s49_v2_subscriptions_client"
 path = "examples/s49_v2_subscriptions_client.rs"
 required-features = ["streamable-http", "http-client"]
 
+# Phase 115-09 (SCHM-02 + SCHM-03): the `2026-07-28` caching hints (`ttlMs` /
+# `cacheScope`), their SDK defaults, the v1 era gate that strips them, and
+# NON-OBJECT `structuredContent`. Self-contained: it starts its own v2-opted-in
+# server on an ephemeral loopback port, asserts all four behaviours and exits.
+#
+# `testing` joins the two transport features because the example reads the
+# reserved `_meta` key spellings from `pmcp::testing` (`META_PROTOCOL_VERSION`
+# and friends) rather than hand-copying wire strings that could drift. It is
+# folded into `full`, which is what the documented run command uses.
+[[example]]
+name = "s52_v2_caching_hints"
+path = "examples/s52_v2_caching_hints.rs"
+required-features = ["streamable-http", "http-client", "testing"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false

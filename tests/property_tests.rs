@@ -871,7 +871,9 @@ mod schema_dialect_normalization_properties {
             Just(Some("http://json-schema.org/draft-04/schema#".to_string())),
             Just(Some("http://json-schema.org/draft-06/schema#".to_string())),
             Just(Some("http://json-schema.org/draft-07/schema#".to_string())),
-            Just(Some("https://json-schema.org/draft/2019-09/schema".to_string())),
+            Just(Some(
+                "https://json-schema.org/draft/2019-09/schema".to_string()
+            )),
             Just(Some(DRAFT_2020_12.to_string())),
             "[a-z]{2,6}://[a-z.]{2,10}/[a-z]{2,8}".prop_map(Some),
         ];
