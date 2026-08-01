@@ -61,9 +61,23 @@ pub mod http_middleware;
 /// Middleware executor abstraction for consistent tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod middleware_executor;
+// Warn-only emit-time validation of `structuredContent` against a declared
+// `outputSchema` (no-op unless the `validation` feature is enabled).
+//
+// Deliberately NOT gated by target: the module compiles everywhere so dispatcher
+// call sites stay plain one-liners. The second `#[cfg]` widens the module's
+// visibility for the `fuzzing` feature ONLY, so
+// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` can reach
+// `output_validation::fuzz_support` without any item becoming part of the
+// shipped public API (`fuzzing` is in neither `default` nor `full`, so
+// `cargo public-api` never sees it). This is verbatim the shape
+// `server::request_state` and `server::task_dispatch` already use.
+#[cfg(not(feature = "fuzzing"))]
+pub(crate) mod output_validation;
 /// Warn-only emit-time validation of `structuredContent` against a declared
 /// `outputSchema` (no-op unless the `validation` feature is enabled).
-pub(crate) mod output_validation;
+#[cfg(feature = "fuzzing")]
+pub mod output_validation;
 /// Concrete `PeerHandle` implementation delegating to the
 /// `ServerRequestDispatcher`.
 #[cfg(not(target_arch = "wasm32"))]

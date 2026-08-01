@@ -34,7 +34,15 @@ default-features = false
 # to native + that feature); `fuzzing` widens the module and exposes the
 # `fuzz_support::verify_bytes` seam. `fuzzing` is in neither `default` nor `full`,
 # so enabling it here adds nothing to the shipped public API.
-features = ["oauth", "streamable-http", "fuzzing"]
+#
+# `validation` (Phase 115-09, SCHM-01) gates the `jsonschema` validator inside
+# `src/server/output_validation.rs`: without it `compile_for_era` does not exist
+# and `output_validation::fuzz_support` compiles to nothing, so
+# `fuzz_schema_draft_pin` would have no seam to reach. `fuzzing` widens the
+# MODULE, `validation` supplies its CONTENTS — both are required, which is why
+# the seam itself is gated `#[cfg(all(feature = "fuzzing", feature =
+# "validation"))]`.
+features = ["oauth", "streamable-http", "fuzzing", "validation"]
 
 [dependencies.pmcp-code-mode]
 path = "../crates/pmcp-code-mode"
@@ -174,6 +182,19 @@ bench = false
 [[bin]]
 name = "fuzz_tasks_update"
 path = "fuzz_targets/fuzz_tasks_update.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 115-09 (SCHM-01): the era-branched `outputSchema` validation path. A tool
+# author's declared schema and a handler's emitted value are both arbitrary JSON,
+# and emit-time validation runs on every structured result — a panic there is a
+# remotely reachable unwind. Registration only: this target adds NO dependency, it
+# reaches `output_validation::fuzz_support` through the `fuzzing` + `validation`
+# features already enabled on the `pmcp` dependency above.
+[[bin]]
+name = "fuzz_schema_draft_pin"
+path = "fuzz_targets/fuzz_schema_draft_pin.rs"
 test = false
 doc = false
 bench = false

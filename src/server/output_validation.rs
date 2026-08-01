@@ -249,6 +249,237 @@ fn cached_validator(
         .clone()
 }
 
+/// Minimal seam for `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`.
+///
+/// # ⚠️ Not stable API
+///
+/// This module exists only behind `feature = "fuzzing"`, which is in neither
+/// `default` nor `full` (`Cargo.toml:220`), so `cargo public-api` never sees it
+/// on the shipped surface. Do not depend on it. The second gate,
+/// `feature = "validation"`, is what compiles the validator this seam drives —
+/// without it there is nothing here to reach.
+///
+/// The shape is verbatim the one `crate::server::request_state::fuzz_support`
+/// established, so the crate has ONE convention for a fuzz seam rather than
+/// three.
+#[cfg(all(feature = "fuzzing", feature = "validation"))]
+pub mod fuzz_support {
+    use super::{compile_for_era, normalize_schema_dialect};
+    use crate::types::protocol::Era;
+    use serde_json::Value;
+
+    /// The three distinguishable outcomes of checking ONE instance against ONE
+    /// schema under ONE era.
+    ///
+    /// Three states, not two, and the third is load-bearing. A `(bool, bool)`
+    /// seam built from `schema_mismatch(..).is_none()` collapses *the schema
+    /// did not compile* and *the schema compiled and the instance violates it*
+    /// into the same `false`, so a caller cannot skip the compile-failure case
+    /// — and comparing eras across a compile failure compares COMPILATION, not
+    /// semantics. [`InvalidSchema`](Self::InvalidSchema) is what makes that
+    /// skip expressible.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SchemaVerdict {
+        /// The schema compiled under this era's dialect and the instance
+        /// conforms to it.
+        Conforms,
+        /// The schema compiled under this era's dialect and the instance does
+        /// NOT conform to it.
+        Violates,
+        /// The schema itself failed to compile under this era's dialect, so no
+        /// instance-level verdict exists. Under the v2 pin this is also how the
+        /// SEP-2106 external-`$ref` refusal surfaces.
+        InvalidSchema,
+    }
+
+    /// Drive emit-time validation with arbitrary schema and instance bytes,
+    /// returning the `(v1, v2)` verdict pair.
+    ///
+    /// Returns `None` when EITHER slice fails to parse as JSON — the caller
+    /// then has no schema/instance pair to hold any semantic invariant over,
+    /// only the totality one.
+    ///
+    /// # Why this uses the UNCACHED compile path
+    ///
+    /// Every verdict is built through [`compile_for_era`], never through
+    /// `cached_validator`. The cache is a process-global
+    /// `OnceLock<Mutex<HashMap<(Era, String), _>>>` that is unbounded by design
+    /// — bounded in practice only by the number of distinct DECLARED schemas.
+    /// A fuzzer generates a fresh schema text on nearly every iteration, so
+    /// routing this seam through the cache would grow that map without limit
+    /// for the whole process lifetime, turning a correctness fuzzer into a
+    /// memory-exhaustion one. Do NOT "optimize" this onto `cached_validator`;
+    /// `compile_for_era` was split out of it by 115-03 precisely so this path
+    /// exists.
+    #[must_use]
+    pub fn validate_bytes(
+        schema_bytes: &[u8],
+        instance_bytes: &[u8],
+    ) -> Option<(SchemaVerdict, SchemaVerdict)> {
+        let schema: Value = serde_json::from_slice(schema_bytes).ok()?;
+        let instance: Value = serde_json::from_slice(instance_bytes).ok()?;
+        Some((
+            verdict(Era::V1, &schema, &instance),
+            verdict(Era::V2, &schema, &instance),
+        ))
+    }
+
+    /// One era's verdict, with the compile failure kept distinct from the
+    /// instance-level failure.
+    fn verdict(era: Era, schema: &Value, instance: &Value) -> SchemaVerdict {
+        match compile_for_era(era, schema) {
+            Ok(validator) => {
+                if validator.is_valid(instance) {
+                    SchemaVerdict::Conforms
+                } else {
+                    SchemaVerdict::Violates
+                }
+            },
+            Err(_) => SchemaVerdict::InvalidSchema,
+        }
+    }
+
+    /// Parse `schema_bytes` and return `(input, normalized_once,
+    /// normalized_twice)`.
+    ///
+    /// Handing back all three documents lets a caller hold idempotence
+    /// (`once == twice`) and surgical scope (`once` and `input` differ only at
+    /// the root `$schema` key) DIRECTLY, rather than inferring them from
+    /// downstream validation behaviour — which cannot distinguish "the
+    /// normalizer dropped a sibling keyword" from "the instance happened to
+    /// conform anyway".
+    ///
+    /// Returns `None` when the bytes do not parse as JSON.
+    #[must_use]
+    pub fn normalize_bytes(schema_bytes: &[u8]) -> Option<(Value, Value, Value)> {
+        let input: Value = serde_json::from_slice(schema_bytes).ok()?;
+        let once = normalize_schema_dialect(&input).into_owned();
+        let twice = normalize_schema_dialect(&once).into_owned();
+        Some((input, once, twice))
+    }
+}
+
+/// The seam cannot rot silently: if `fuzz_support` is removed, its verdict
+/// discriminants shift, or its skip condition collapses back into a two-state
+/// boolean, these fail under `--features "full fuzzing"`.
+///
+/// Named `fuzz_support_tests` (not `tests`) so `cargo nextest run -E
+/// 'test(/output_validation::fuzz_support/)'` selects exactly these five and
+/// nothing else — `test(/fuzz_support/)` alone also matches
+/// `server::request_state::tests::fuzz_support_seam_rejects_garbage`, which
+/// predates this module.
+#[cfg(all(test, feature = "fuzzing", feature = "validation"))]
+mod fuzz_support_tests {
+    use super::fuzz_support::{normalize_bytes, validate_bytes, SchemaVerdict};
+
+    /// Unparseable bytes on EITHER side yield `None` — the target then has only
+    /// the totality invariant to hold, which is the whole point of the `Option`.
+    #[test]
+    fn fuzz_support_returns_none_for_unparseable_input() {
+        assert_eq!(
+            validate_bytes(b"{not json", b"{}"),
+            None,
+            "an unparseable SCHEMA must produce no verdict pair"
+        );
+        assert_eq!(
+            validate_bytes(b"{}", b"{not json"),
+            None,
+            "an unparseable INSTANCE must produce no verdict pair"
+        );
+        assert_eq!(
+            normalize_bytes(b"\xff\xfe\xfd"),
+            None,
+            "normalize_bytes must refuse non-JSON rather than panicking"
+        );
+    }
+
+    /// The ordinary two-state case, on both eras: an object schema and a scalar
+    /// instance.
+    #[test]
+    fn fuzz_support_reports_violates_for_a_scalar_against_an_object_schema() {
+        assert_eq!(
+            validate_bytes(br#"{"type":"object"}"#, b"42"),
+            Some((SchemaVerdict::Violates, SchemaVerdict::Violates)),
+            "an object schema must report a scalar instance on both eras"
+        );
+    }
+
+    /// SEP-2106's refusal expressed as the THIRD state. A `(bool, bool)` seam
+    /// could not tell this apart from a violating instance, which is why the
+    /// verdict is three-state.
+    #[test]
+    fn fuzz_support_reports_invalid_schema_for_an_external_ref() {
+        assert_eq!(
+            validate_bytes(br#"{"$ref":"https://example.com/x.json"}"#, b"{}"),
+            Some((SchemaVerdict::InvalidSchema, SchemaVerdict::InvalidSchema)),
+            "an external $ref must be a COMPILE failure — never a fetch, and never \
+             indistinguishable from a violating instance"
+        );
+    }
+
+    /// The CONCRETE case that makes a cross-dialect MONOTONICITY claim false.
+    ///
+    /// `contentEncoding` is an ASSERTION in draft-07 and only an ANNOTATION
+    /// from 2019-09 onwards, so a non-base64 string VIOLATES under v1's
+    /// auto-detect and CONFORMS under the v2 2020-12 pin — `v2 == Conforms &&
+    /// v1 == Violates`. Asserting it here documents, at the seam itself, why
+    /// `fuzz_schema_draft_pin` must not claim "v2 rejects everything v1
+    /// rejects".
+    ///
+    /// **This is `contentEncoding`, not `dependencies`.** 115-03 measured on
+    /// `jsonschema` 0.49.2 that the crate still honours `dependencies` under
+    /// the 2020-12 pin, so both eras return the SAME verdict for it and it is
+    /// not a divergence case at all (D-115-03-C). The converse direction is
+    /// reachable too — `$ref` siblings are ignored in draft-07 and honoured
+    /// under 2020-12 — so the era relation is non-monotonic in BOTH directions.
+    #[test]
+    fn fuzz_support_reports_the_divergent_content_encoding_case_asymmetrically() {
+        let schema = br#"{
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "fuzz-seam-divergence"
+        }"#;
+        assert_eq!(
+            validate_bytes(schema, br#""!!!not-base64!!!""#),
+            Some((SchemaVerdict::Violates, SchemaVerdict::Conforms)),
+            "the eras must genuinely disagree here; if they agree, either the v1 arm stopped \
+             auto-detecting draft-07 or the v2 pin stopped applying, and the fuzz target's \
+             dialect-NEUTRAL restriction has lost its reason to exist"
+        );
+    }
+
+    /// Normalizing twice equals normalizing once, and the rewrite is surgical —
+    /// the fixed-example half of what the fuzz target holds over arbitrary
+    /// generated schemas.
+    #[test]
+    fn fuzz_support_normalize_bytes_is_idempotent() {
+        let (input, once, twice) = normalize_bytes(
+            br#"{"$schema":"http://json-schema.org/draft-07/schema#","type":"object"}"#,
+        )
+        .expect("the literal above is valid JSON");
+
+        assert_eq!(once, twice, "normalization must be idempotent");
+        assert_eq!(
+            once.get("$schema").and_then(serde_json::Value::as_str),
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "the root $schema must be OVERWRITTEN with the 2020-12 URI, not deleted"
+        );
+
+        let mut before = input;
+        let mut after = once;
+        for document in [&mut before, &mut after] {
+            if let Some(object) = document.as_object_mut() {
+                object.remove("$schema");
+            }
+        }
+        assert_eq!(
+            before, after,
+            "normalization touched a key other than the root $schema"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "validation"))]
 mod tests {
     use super::*;

@@ -1,4 +1,22 @@
 target
-corpus
 artifacts
 coverage
+
+# Fuzz corpora are GENERATED data — libFuzzer writes every newly-discovered unit
+# into the corpus directory — so they stay out of the repo by default.
+corpus/*
+
+# EXCEPTION (Phase 115-09, SCHM-01): the hand-written SEED corpus for
+# `fuzz_schema_draft_pin`. Its input format is length-prefixed precisely so seeds
+# can be written by hand and committed; without them the target overwhelmingly
+# explores inputs where neither half parses as JSON and degenerates into a
+# JSON-parser fuzz that never reaches schema COMPILATION (threat T-115-41).
+# Replaying the committed seeds is an acceptance criterion of `115-09-PLAN.md`.
+#
+# Only the README and the numbered seed files are tracked; anything else in that
+# directory is a unit libFuzzer discovered at runtime and stays ignored, so a
+# local fuzzing session never dirties the working tree.
+!corpus/fuzz_schema_draft_pin/
+corpus/fuzz_schema_draft_pin/*
+!corpus/fuzz_schema_draft_pin/README.md
+!corpus/fuzz_schema_draft_pin/[0-9][0-9]_*
