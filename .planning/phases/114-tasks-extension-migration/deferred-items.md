@@ -785,3 +785,143 @@ a two-line change that the test itself demands.
 
 **Suggested owner:** any plan already editing `src/types/mrtr.rs` — most naturally the one that
 re-vendors the schema at the D-18 gate, since that is when every attribution gets walked anyway.
+
+---
+
+## D-114-U — Phase 114 grew `make test-feature-flags`'s dead-code count from 48 to 61 (114-18)
+
+**Discovered:** 2026-08-01, at the phase's whole-tree gate run (plan 114-18 Task 2).
+**Status:** open, unowned. **Extends D-114-E; does not duplicate it.**
+**Severity:** medium — D-114-E owns the *pre-existing* redness; this entry owns the *delta*, which is
+this phase's and which D-114-E's "pre-existing and PROVEN so" wording would otherwise absorb.
+
+D-114-E proved `make test-feature-flags` was already red at **114-07's** base. 114-18 measured it at
+the **phase's** base commit `27364eb1` in a detached worktree with its own `CARGO_TARGET_DIR`, and at
+HEAD:
+
+| | exit | `^error` lines | `src/types/mrtr.rs` | `subscriptions.rs` | `core.rs` | `task_dispatch.rs` | `protocol_helpers.rs` | `protocol/mod.rs` | `server/mod.rs` | `sse_parser.rs` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| base `27364eb1` | **2** | **49** | 36 | 7 | 2 | 0 | 0 | 0 | 1 | 2 |
+| HEAD | **2** | **62** | 39 | 7 | 4 | 6 | 1 | 1 | 1 | 2 |
+
+Same failing row as D-114-E — row 1/4, second sub-command,
+`cargo clippy -p pmcp-tasks --no-default-features -- -D warnings`, exit 101. **Zero** errors are in
+`crates/pmcp-tasks/`. **The compile claim the four rows exist to make is GREEN:** all five
+`cargo check -p pmcp-tasks` rows (`--no-default-features`, `--features dynamodb`, `--features redis`,
+`--features dynamodb,redis`, default) exit **0** at HEAD, exactly as D-114-E recorded.
+
+**The +13 is attributable by symbol**, and every one is a Phase-114 item with no caller under the
+reduced feature set `-p pmcp-tasks --no-default-features` selects:
+
+| symbol(s) | owning plan |
+|---|---|
+| `route_tasks_update`, `parse_tasks_update_params`, `decode_inputs_against_record`, `deliver_tasks_update`, `deliver_update_through_store`, `store_error_or_fall_through` | 114-13 |
+| `TasksUpdateParams`, `TASKS_UPDATE_MALFORMED_PARAMS`, `TASKS_UPDATE_MISSING_INPUT_RESPONSES`, `V1_TASKS_UPDATE_ABSENT`, `update_ack`, `InternalClientRequest::TasksUpdate::params` | 114-13 / 114-14 |
+| `check_input_responses_map_bounds` | 114-14 |
+| `TASK_NAME_BEARING_METHODS`, `name_bearing_key` | 114-06 |
+| `EXPERIMENTAL_TASKS_KEY`, `project_capabilities_for_v2` | 114-05 |
+
+**Why not fixed here:** identical to D-114-E's reasoning, and sharpened by it. The fix is `#[cfg]`
+gates or `#[allow(dead_code)]` across five root-`pmcp` files owned by four other plans. Adding
+`allow`s is not a neutral edit — it suppresses a lint that would also hide a *real* future dead item,
+so each of the 13 needs a decision about whether the item should be feature-gated instead. 114-18 is
+a bookkeeping-and-gate plan whose own threat register (T-114-96) requires its production diff to be
+doc-only; a 13-site lint-suppression pass is neither doc-only nor reviewable inside it.
+
+**The acceptance criterion this contradicts, stated plainly:** 114-18 Task 2 required
+"`make test-feature-flags` exits 0 for all four rows". That criterion was **unsatisfiable at the
+moment it was written** — the target was already red at the phase base. It is the second plan in this
+phase to carry it (114-07 was the first). A future plan must either fix the 61 sites or drop the
+criterion; restating it a third time will just produce a third recording of the same measurement.
+
+**Suggested owner:** a Phase 118 hygiene item, or whichever plan next touches `src/types/mrtr.rs`.
+Close D-114-E and this entry together — they are one problem measured at two commits.
+
+---
+
+## D-114-V — `make doc-check` is RED at the phase base and is NOT in `make quality-gate` (114-18)
+
+**Discovered:** 2026-08-01, at plan 114-18 Task 1 (the stale-doc sweep ran it as its verify step).
+**Status:** open, unowned, **pre-existing and PROVEN so**
+**Severity:** medium — it is the reason a broken-rustdoc-link class can land unnoticed, and this
+phase demonstrated exactly that.
+
+`make doc-check` exits **2** with **26** `^error` lines. Measured at the phase base commit `27364eb1`
+(detached worktree, own `CARGO_TARGET_DIR`) and at HEAD: the two error-header sets are **byte-identical**
+under `diff`. So it is pre-existing and Phase 114 neither caused nor worsened it. The population is
+`rustdoc::private_intra_doc_links` (public docs linking to private items — e.g. `mrtr` →
+`splice_mrtr_params`, `ProtocolContext` → `VerifiedContinuation::state`) plus six unresolved links
+and one ambiguous `Error` enum-vs-derive-macro link.
+
+**`make quality-gate` does NOT invoke `doc-check`.** Its recipe is `fmt-check`, `lint`, `build`,
+`test-all`, `pmcp-package-gate`, `audit`, `unused-deps`, `check-todos`, `check-unwraps`,
+`validate-always`. So a rustdoc regression is invisible to the gate that CLAUDE.md makes mandatory
+before every commit.
+
+**The demonstration, measured rather than argued.** 114-19 landed two broken intra-doc links —
+`[`Error::Parse`]` and `[`Error::Capability`]`, neither of which is a variant of `Error` — and the
+green `make quality-gate` on that plan could not see them. 114-18 Task 1 found them only because it
+ran `cargo doc` against a base-commit baseline: 30 warnings at HEAD versus **28** at base, the two
+extras both in `src/client/mod.rs`. They are fixed in commit `6be9f5fe` (`Error::Protocol` +
+`Error::UnsupportedCapability`), and the per-file warning distribution is now byte-identical to base.
+
+**Why not fixed here:** clearing 26 pre-existing rustdoc errors across ~12 files is its own plan, and
+most of them are a deliberate style question (whether a public doc may reference a private helper by
+link) rather than a typo. Adding `doc-check` to `quality-gate` before those 26 are cleared would
+block every commit in the repository.
+
+**Suggested owner:** a docs-hygiene plan. The valuable half is cheap and separable: add a
+`cargo doc`-warning-count tripwire (or `doc-check` restricted to `unresolved_link`, which is the
+class that indicates a genuinely wrong doc) to `quality-gate`, leaving the
+`private_intra_doc_links` population to be cleared on its own schedule.
+
+---
+
+## D-114-W — "223/223" means two different measurements, and the phase's plans conflated them (114-18)
+
+**Discovered:** 2026-08-01, at plan 114-18 Task 2.
+**Status:** open — a measurement-hygiene record, not a code defect. No owner needed; it needs to be
+KNOWN.
+**Severity:** low, but it will produce a false finding in every future plan that quotes the number.
+
+`114-18-PLAN.md` Task 2 item 3 requires "**223/223, no update required**" and calls any deviation a
+finding. Measured at both commits:
+
+| invocation | at base `27364eb1` | at HEAD |
+|---|---|---|
+| `cargo semver-checks check-release --package pmcp` (baseline = **published crates.io 2.17.0**) | exit **100** — 223 checks: **222 pass, 1 fail**, 30 skip | exit **100** — 223 checks: **222 pass, 1 fail**, 30 skip |
+| `cargo semver-checks check-release --package pmcp --baseline-rev 27364eb1` (baseline = **the phase base**) | — | exit **0** — 223 checks: **223 pass**, 30 skip, *no semver update required* |
+
+The single failure is identical at both commits: `type_marked_deprecated` — `#[deprecated]` added on
+`Struct OptimizedSseTransport` (`src/shared/sse_optimized.rs:95`). It predates Phase 114 entirely and
+is a *correct* report: the published 2.17.0 did not carry that attribute.
+
+**So both numbers are true and they answer different questions.** "223/223, no update required" is the
+`--baseline-rev` form — the form 114-14's SUMMARY actually ran (`--baseline-rev aa651f74^`) and the
+form that answers *"did THIS phase move the public API incompatibly?"* (answer: **no**). The bare
+`check-release` form answers *"is the working tree releasable as a patch of the last publish?"*
+(answer: **no, it needs a minor** — and it already did before this phase started).
+
+**What to do about it:** a plan asserting a semver ratio must name the BASELINE alongside the ratio.
+The bare form's 222/223 is not a regression and must not be reported as one; the phase-base form's
+223/223 is the phase's own result. Both are recorded in `114-18-SUMMARY.md` § *Phase base manifest*.
+
+**Related measurement corrections from the same run, recorded here so they are not rediscovered:**
+
+- **`pmat analyze complexity --max-cognitive 25` reports ZERO violations in `./src/` at BOTH commits.**
+  Base: **4** violations (all in `crates/*/tests/`). HEAD: **5** — the one addition is
+  `tests/v2_tasks_update_routing.rs:1081 no_source_site_routes_tasks_update_through_the_mrtr_ingress`
+  at cognitive **33**, which is 114-13's tripwire test and which 114-14's SUMMARY already attributed.
+  `STATE.md`'s "the gate at 3 pre-existing violations, including D-113-U (`write_canonical` cog 26)"
+  is **not reproducible** with the CLAUDE.md-pinned `pmat 3.15.0`: `write_canonical` does not appear
+  in either violation list. **D-113-U's ownership obligation stands regardless** — it is recorded
+  below as still unowned — but the cog-26 figure should not be re-quoted as a live gate reading.
+- **`make wasm-build` exits 0** at HEAD. Warnings **86 (base) → 91 (HEAD)**, all `dead_code` on the
+  wasm target, distributed `src/types/mrtr.rs` +3, `src/shared/protocol_helpers.rs` +1,
+  `src/types/protocol/mod.rs` +1 — the same class as the pre-existing 37-strong `types::mrtr` dead
+  block D-14 predicted, and the same symbols as D-114-U.
+- **A zsh trap that produced a fake failure and was caught.** `for f in "--features redis"; do cargo
+  check $f; done` passes `--features redis` as ONE argument, because zsh does not word-split unquoted
+  parameter expansions. It exits 1 and looks like a broken feature row. All five rows exit **0** when
+  invoked without the loop variable, or with `${=f}`. Verify a per-row failure by re-running the row
+  literally before recording it.
