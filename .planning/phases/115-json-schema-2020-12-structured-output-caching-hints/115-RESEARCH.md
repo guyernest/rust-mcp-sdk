@@ -2,7 +2,7 @@
 
 **Researched:** 2026-07-31
 **Domain:** JSON Schema validation (Rust `jsonschema` crate), MCP wire-type projection, era-gated serialization
-**Confidence:** HIGH for everything measured in-session (the majority); MEDIUM for the two open judgment calls in § Open Questions
+**Confidence:** HIGH for everything measured in-session (the majority); the judgment calls in § Open Questions were MEDIUM at research time and are now **all five RESOLVED** (2026-07-31, at planning) — each resolution is traceable to a specific plan
 
 ---
 
@@ -1416,7 +1416,11 @@ Directives the planner must satisfy; the planner should verify each plan against
 
 ---
 
-## Open Questions
+## Open Questions (ALL RESOLVED 2026-07-31)
+
+> Every question below was settled during planning and its resolution is traceable into a
+> named plan. The `Recommendation` was followed in all five cases; no question was silently
+> dropped and none reversed the researcher's advice. Resolutions recorded 2026-07-31.
 
 1. **Should v2 escalate `outputSchema` mismatch from `warn!` to an error result?**
    - *What we know:* `output_validation.rs` is deliberately warn-only ("never an error result … without
@@ -1427,6 +1431,12 @@ Directives the planner must satisfy; the planner should verify each plan against
    - *Recommendation:* keep warn-only; write it into rustdoc explicitly; book escalation as a
      deferred item. Escalation is a new production failure mode and deserves its own decision, not a
      plan-level judgment call.
+   - **RESOLVED (2026-07-31): recommendation followed — v2 stays warn-only.** No plan introduces a
+     new error result on the `outputSchema` path. `115-03` keeps `output_validation.rs` warn-only
+     while adding the era branch; `115-04` states the era rule in rustdoc; `115-09` fuzzes the path
+     for totality (it must never panic) rather than for rejection; `115-10` books the escalation as
+     an explicitly **unowned** entry in `deferred-items.md`, and the 115-10 Task 3 sign-off asks the
+     owner to accept exactly that. Escalation remains a separate decision, not this phase's.
 
 2. **Does SCHM-03 include `ServerDiscoverResult`?**
    - *What we know:* the pinned schema has `DiscoverResult extends CacheableResult`; pmcp's
@@ -1436,6 +1446,13 @@ Directives the planner must satisfy; the planner should verify each plan against
    - *Recommendation:* include it and record the deviation in the plan. This is the kind of
      one-sentence confirmation `/gsd:discuss-phase` exists for — surface it rather than silently
      widening scope.
+   - **RESOLVED (2026-07-31): recommendation followed — `ServerDiscoverResult` IS included, and the
+     five-versus-six deviation is surfaced rather than absorbed.** `115-01` Task 3 re-derives the
+     `extends CacheableResult` list from the pinned artifact (so "six" is asserted, not asserted-by-
+     memory); `115-05` adds the slots to all six types; `115-06` projects onto all six; `115-07`
+     proves all six on the wire; `115-10` books the deviation in `REQUIREMENTS.md` and puts it in
+     front of the owner as step 1(b) of the sign-off checkpoint. The owner can still say no — the
+     deviation is written where they must read it.
 
 3. **`0.49` or the literal `0.48` from SCHM-01?**
    - *What we know:* 0.49.2 is latest and non-breaking; 0.48.0–0.48.2 have packaging defects; neither
@@ -1444,6 +1461,12 @@ Directives the planner must satisfy; the planner should verify each plan against
      latest when it was written.
    - *Recommendation:* `"0.49"`, with the deviation stated in the plan. If "0.48" must be honored
      literally, pin `>=0.48.5`.
+   - **RESOLVED (2026-07-31): recommendation followed — `jsonschema` ships at 0.49.** `115-03` Task 1
+     performs the bump; `115-10` records "0.49, not the literal 0.48 in SCHM-01's text" as a named
+     deviation in the requirement booking and raises it as step 1(a) of the sign-off. The
+     `>=0.48.5` fallback stays available if the owner rejects the deviation, and nothing in the
+     phase depends on a 0.49-only API — § Finding 4 measured the 0.46→0.48 API delta as nil and the
+     Finding-1 behaviour as identical across all five versions probed.
 
 4. **Bump `jsonschema` in `pmcp-agent` and `pmcp-server-toolkit` too, or accept a split version?**
    - *What we know:* three crates declare it; only the root is in SCHM-01's scope; a root-only bump
@@ -1452,12 +1475,27 @@ Directives the planner must satisfy; the planner should verify each plan against
    - *Recommendation:* bump all three (it is three one-line edits and they are all
      `default-features = false` already), but **do not** pin the draft in `pmcp-agent` — that is a
      behavior change to a different surface.
+   - **RESOLVED (2026-07-31): recommendation followed in both halves.** `115-03` Task 1 bumps all
+     three manifests (root `Cargo.toml`, `crates/pmcp-agent/Cargo.toml`,
+     `crates/pmcp-server-toolkit/Cargo.toml`) and its `<automated>` verify asserts zero `reqwest` in
+     the `validation` graph, proving `default-features = false` survived the bump on every one.
+     `pmcp-agent`'s `decide.rs:218` `validator_for` is NOT pinned; per § Assumptions Log A4 it is
+     allowlisted with a written justification in `115-08`'s SEP-2106 fence and booked as an
+     **unowned** deferred item in `115-10` for the owner to accept at sign-off.
 
 5. **Does D-14's vendoring also want an automated upstream-publication watcher?**
    - *What we know:* D-114-S records that nothing currently watches; CONTEXT explicitly defers it
      while noting D-14 "may establish reusable machinery".
    - *Recommendation:* build the vendoring so a second tree is cheap (Pitfall 8's generalization does
      exactly this), but do **not** build a watcher. Deferred is deferred.
+   - **RESOLVED (2026-07-31): recommendation followed — machinery generalized, watcher NOT built.**
+     `115-01` Task 2 generalizes `tests/vendored_schema_provenance.rs` to scan *every* subdirectory
+     of `schema/vendored/` with a `MINIMUM_VENDORED_TREES` anti-vacuity floor, so a third tree is a
+     directory drop rather than a test rewrite — and cannot be added and left unverified. No
+     upstream-publication watcher is planned anywhere in the phase; `115-10`'s `deferred-items.md`
+     re-asserts D-114-S (nothing watches `ext-tasks` upstream) as **still unowned** rather than
+     quietly closing it on the strength of 115-01's generalization. CONTEXT.md listed the watcher
+     under Deferred Ideas, and it stays there.
 
 ---
 
@@ -1520,7 +1558,11 @@ Directives the planner must satisfy; the planner should verify each plan against
 - **Finding 8 (D-12 chokepoint):** HIGH — all four call sites read; the "request already moved" gap
   read at the exact line
 - **Pitfalls:** HIGH for 1-9 (all measured or read); MEDIUM for 10 (a process observation)
-- **Open Questions:** MEDIUM by construction — these are the judgment calls research cannot settle
+- **Open Questions:** MEDIUM by construction at research time — these are the judgment calls research
+  cannot settle. **All five were RESOLVED at planning on 2026-07-31**; each carries an inline
+  `RESOLVED` marker naming the plan that carries it. The two deviations from requirement text that
+  fell out of Q2 and Q3 are surfaced to the owner at the `115-10` Task 3 sign-off rather than being
+  absorbed by an agent.
 
 **Research date:** 2026-07-31
 **Valid until:** 2026-08-30 for the pmcp-source findings (stable branch).
