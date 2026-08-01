@@ -812,21 +812,33 @@ mod structured_output_invariants {
                 &raw
             );
 
-            // The explicit-null EMIT case, asserted every iteration.
-            let null_result = CallToolResult::structured_value(serde_json::Value::Null);
-            prop_assert_eq!(
-                null_result.structured_content.as_ref(),
-                Some(&serde_json::Value::Null)
-            );
-            let null_raw = serde_json::to_string(&null_result)
-                .map_err(|e| TestCaseError::fail(format!("null result must serialize: {e}")))?;
-            prop_assert!(
-                null_raw.contains(r#""structuredContent":null"#),
-                "Some(Value::Null) must emit an EXPLICIT null, not be elided by \
-                 skip_serializing_if; wire was {}",
-                null_raw
-            );
+            // The explicit-null EMIT case is NOT asserted here — it is a
+            // constant, so see `structured_value_null_emits_an_explicit_null`
+            // below. Running it inside the property re-serialized the same
+            // fixed value on all 256 generated cases for coverage identical to
+            // asserting it once.
         }
+    }
+
+    /// `Some(Value::Null)` must reach the wire as an EXPLICIT `null`.
+    ///
+    /// Constant input, so this is a plain `#[test]` rather than a property: the
+    /// assertion does not depend on anything the generator produces. It guards
+    /// the one shape `skip_serializing_if` could silently elide, which is why it
+    /// is stated separately rather than folded into the round-trip property.
+    #[test]
+    fn structured_value_null_emits_an_explicit_null() {
+        let null_result = CallToolResult::structured_value(serde_json::Value::Null);
+        assert_eq!(
+            null_result.structured_content.as_ref(),
+            Some(&serde_json::Value::Null)
+        );
+        let null_raw = serde_json::to_string(&null_result).expect("null result must serialize");
+        assert!(
+            null_raw.contains(r#""structuredContent":null"#),
+            "Some(Value::Null) must emit an EXPLICIT null, not be elided by \
+             skip_serializing_if; wire was {null_raw}"
+        );
     }
 }
 

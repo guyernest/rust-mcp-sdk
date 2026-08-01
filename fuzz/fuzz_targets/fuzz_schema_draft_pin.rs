@@ -317,21 +317,21 @@ fuzz_target!(|data: &[u8]| {
     let schema_len = declared_len.min(body.len());
     let (schema_bytes, instance_bytes) = body.split_at(schema_len);
 
-    // Invariant 1: totality. Both seam entry points must RETURN for any bytes;
-    // a panic inside either fails the target.
-    let _ = validate_bytes(schema_bytes, instance_bytes);
-    let _ = normalize_bytes(schema_bytes);
-
-    // Invariant 2.
+    // Invariants 1 + 2. Invariant 1 is totality: both seam entry points must
+    // RETURN for any bytes, and a panic inside either fails the target. It needs
+    // no separate discarding call — `assert_normalization_is_idempotent_and_surgical`
+    // calls `normalize_bytes` as its first statement, before any early return,
+    // and `assert_dialect_neutral_eras_agree` does the same with `validate_bytes`.
+    // Calling them here as well compiled the same schema twice per invariant,
+    // which halved exec/s on the deliberately UNCACHED fuzz seam.
     assert_normalization_is_idempotent_and_surgical(schema_bytes);
 
-    // Invariant 3.
+    // Invariants 1 + 3.
     assert_dialect_neutral_eras_agree(schema_bytes, instance_bytes);
 
     // The JSON family declares both halves to be JSON, so the schema document is
     // itself a usable instance — free extra semantic coverage from one input.
     if selector != SELECTOR_RAW {
-        let _ = validate_bytes(schema_bytes, schema_bytes);
         assert_dialect_neutral_eras_agree(schema_bytes, schema_bytes);
     }
 });

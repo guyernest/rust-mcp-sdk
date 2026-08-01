@@ -62,6 +62,7 @@ use pmcp::types::protocol::{
 };
 use pmcp::types::{
     CacheScope, CallToolResult, Content, ListResourcesResult, ReadResourceResult, ResourceInfo,
+    DEFAULT_TTL_MS,
 };
 use pmcp::RequestHandlerExtra;
 use serde_json::{json, Value};
@@ -77,11 +78,12 @@ use tokio::sync::Mutex;
 /// would make stale data look fresh.
 const CATALOGUE_TTL_MS: u64 = 300_000;
 
-/// The SDK-supplied `ttlMs` default: immediately stale, and therefore inert.
-const DEFAULT_TTL_MS: u64 = 0;
-
-/// The SDK-supplied `cacheScope` default: the value that cannot leak.
-const DEFAULT_CACHE_SCOPE: &str = "private";
+// The SDK-supplied defaults are IMPORTED, not restated: `DEFAULT_TTL_MS`
+// (immediately stale, therefore inert) comes from `pmcp::types`, and the
+// default `cacheScope` is `CacheScope::default()` — the value that cannot leak.
+// Typing `0` and `"private"` here would let this example keep asserting the old
+// defaults if the SDK ever changed them, which is the opposite of what a
+// reference example is for.
 
 /// The catalogue resource — no user-specific data, so it may be shared.
 const CATALOGUE_URI: &str = "docs://catalogue";
@@ -381,7 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         assert_eq!(
             result.get("cacheScope"),
-            Some(&json!(DEFAULT_CACHE_SCOPE)),
+            Some(&json!(CacheScope::default())),
             "{label} must carry the SDK default cacheScope on v2"
         );
     }

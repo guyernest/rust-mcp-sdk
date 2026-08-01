@@ -729,9 +729,15 @@ mod cacheable_result_serde_locks {
             schema.pointer("/$defs/CacheableResult").is_some(),
             "the CacheableResult definition must resolve at /$defs/CacheableResult — {REMEDY}"
         );
+        // Resolved from the `schema` already parsed above rather than through
+        // `cacheable_result_required()`, which would re-parse the same 177 KB
+        // artifact a second time within this one test.
         assert_eq!(
-            cacheable_result_required().len(),
-            3,
+            schema
+                .pointer("/$defs/CacheableResult/required")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3),
             "CacheableResult.required must have exactly three entries — {REMEDY}"
         );
         assert!(

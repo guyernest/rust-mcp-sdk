@@ -482,9 +482,16 @@ impl ListResourceTemplatesResult {
     ///
     /// The builder is kept rather than removed because the type is `pub` and
     /// constructible by anyone assembling the result themselves — a custom
-    /// transport, a proxy, or a test. Adding a templates seam to
-    /// `ResourceHandler` would be a breaking trait change and is deliberately
-    /// out of Phase 115's scope (recorded as a deferred item).
+    /// transport, a proxy, or a test.
+    ///
+    /// Adding a templates seam to `ResourceHandler` is deliberately out of
+    /// Phase 115's scope (recorded as a deferred item) — but note that it would
+    /// NOT be a breaking trait change, as an earlier version of this note
+    /// claimed. `ResourceHandler` is consumed as `Arc<dyn ResourceHandler>`, and
+    /// a defaulted method with a body is both object-safe and additive; the
+    /// precedent is `ToolHandler::handle_output`, added exactly that way with a
+    /// default that delegates so existing handlers keep their behaviour. The
+    /// blocker is scope, not semver.
     ///
     /// ```rust
     /// use pmcp::types::ListResourceTemplatesResult;

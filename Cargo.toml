@@ -43,6 +43,10 @@ exclude = [
     # above (crates.io size limit), so shipping this test would break a
     # downstream `cargo test` on the published crate — keep it out too.
     "tests/team_contracts_conformance.rs",
+    # Same reason: reads contracts/binding.yaml and
+    # contracts/mcp-protocol-sdk-v1.yaml at runtime and panics when they are
+    # absent, which is exactly what a published-crate `cargo test` would hit.
+    "tests/phase115_contract_bindings.rs",
     # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",

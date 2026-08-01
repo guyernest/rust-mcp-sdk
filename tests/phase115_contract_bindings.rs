@@ -101,8 +101,8 @@ const SOURCE_ROOTS: &[(&str, &str, usize)] = &[
 ];
 
 /// A floor on the parsed record count, so a silently-broken parser fails HERE
-/// rather than passing every other check over an empty set. 59 records exist
-/// today (46 pre-Phase-115 + 13 added by 115-11).
+/// rather than passing every other check over an empty set. 60 records exist
+/// today (47 pre-Phase-115 + 13 added by 115-11).
 const MINIMUM_BINDINGS: usize = 40;
 
 /// FROZEN ledger — `implemented` bindings that do not resolve, measured at
@@ -213,9 +213,23 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 /// that `pmcp-server-toolkit` deliberately re-exports rather than defines —
 /// its `module_path:` is the crate root, and a crate-root re-export is a real
 /// resolution, not drift.
-fn declares(text: &str, symbol: &str) -> bool {
-    for keyword in DECLARATION_KEYWORDS {
-        if contains_word(text, &format!("{keyword} {symbol}")) {
+/// The `"{keyword} {symbol}"` needles for one symbol, built once.
+///
+/// Split out from [`declares_with`] because the caller tests one symbol against
+/// every file in the corpus: building the needles per file made the count
+/// `bindings x files x keywords` (~42k allocations per run) when it is really
+/// `bindings x keywords` (~460).
+fn declaration_needles(symbol: &str) -> Vec<String> {
+    DECLARATION_KEYWORDS
+        .iter()
+        .map(|keyword| format!("{keyword} {symbol}"))
+        .collect()
+}
+
+/// [`declares`], but over needles the caller already built.
+fn declares_with(text: &str, needles: &[String], symbol: &str) -> bool {
+    for needle in needles {
+        if contains_word(text, needle) {
             return true;
         }
     }
@@ -414,7 +428,11 @@ fn phase115_contract_bindings_every_implemented_binding_resolves_to_real_source(
             .rsplit("::")
             .next()
             .unwrap_or(record.function.as_str());
-        if sources.iter().any(|text| declares(text, symbol)) {
+        let needles = declaration_needles(symbol);
+        if sources
+            .iter()
+            .any(|text| declares_with(text, &needles, symbol))
+        {
             continue;
         }
         let key = (record.equation.as_str(), record.function.as_str());

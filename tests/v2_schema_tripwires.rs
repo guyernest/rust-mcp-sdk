@@ -40,14 +40,29 @@
 //!
 //! This needs no new dependency: `std::process::Command` plus `serde_json`.
 //!
-//! # The scanner primitives are DELIBERATELY duplicated
+//! # The scanner primitives are duplicated — and this is a KNOWN DEBT, not a design
 //!
-//! A Rust integration test is its own crate, so this file cannot import
-//! `tests/v2_tasks_tripwires.rs`'s scanner and that file cannot import this one.
-//! The primitives below are therefore RESTATED rather than shared, and the idiom
-//! is kept identical on purpose so the repository has ONE source-scanning shape
-//! rather than three divergent ones. The cross-AI review flagged the duplication
-//! as surface cost; it is declined as a trim for exactly that reason.
+//! It is true that a Rust integration test is its own crate, so this file cannot
+//! import `tests/v2_tasks_tripwires.rs`'s scanner and that file cannot import
+//! this one. An earlier version of this note concluded from that premise that
+//! the primitives therefore had to be RESTATED. **That conclusion is wrong**:
+//! sharing between test binaries does not require one binary to import another,
+//! it requires a module under `tests/common/` pulled in per-crate with
+//! `#[path = "common/<name>.rs"] mod <name>;`. This repository already does
+//! exactly that — `tests/common/duplex.rs` is shared that way, by
+//! `tests/v2_caching_hints.rs` and `tests/structured_tool_output.rs` among
+//! others.
+//!
+//! Measured: ~386 lines of the block below are byte-identical with
+//! `tests/v2_tasks_tripwires.rs`, and the same primitives now exist in four test
+//! files. The intent behind the original note is still right — the repository
+//! should have ONE source-scanning shape rather than several divergent ones —
+//! but duplication is the wrong mechanism for it, because nothing keeps the
+//! copies identical and the doc comments have already begun to drift.
+//!
+//! The extraction to `tests/common/rust_source_scan.rs` is deferred rather than
+//! declined: it touches test files outside this phase's diff and wants its own
+//! change with its own green run.
 //!
 //! # Every test name carries the file stem
 //!

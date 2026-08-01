@@ -843,8 +843,10 @@ impl CallToolResult {
     /// assert!(wire.contains(r#""structuredContent":null"#));
     /// ```
     pub fn structured_value(value: Value) -> Self {
-        let text = value.to_string();
-        Self::new(vec![Content::text(text)]).with_structured_content(value)
+        // Delegates rather than restating `structured`'s body: the two are
+        // documented as behaviourally identical, and a copy would let that
+        // claim silently rot the first time one of them changed.
+        Self::structured(value)
     }
 
     /// Add structured content for both model and widget.
