@@ -20,7 +20,14 @@ pub use context::{ProtocolContext, TraceContext};
 // Types that were previously in this file are now in their own modules
 // and re-exported via types/mod.rs. These re-exports preserve the
 // `crate::types::protocol::X` import paths used throughout the codebase.
-pub use super::caching::*;
+// `super::caching` is deliberately NOT globbed here. The rest of this list
+// exists for BACKWARD compatibility — those types used to live in this file, so
+// the `crate::types::protocol::X` paths predate the split. `types::caching` is
+// new in Phase 115 and has no such history: `types/mod.rs` re-exports exactly
+// its two public items (`CacheScope`, `DEFAULT_TTL_MS`) and documents that
+// narrowness on purpose, so a glob here would mint a SECOND public path
+// (`pmcp::types::protocol::CacheScope`) that nothing imports, and would also
+// pull the module's `pub(crate)` projector plumbing into `types::protocol`.
 pub use super::content::*;
 pub use super::notifications::*;
 pub use super::prompts::*;

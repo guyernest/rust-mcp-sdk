@@ -153,12 +153,20 @@ fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value> {
         None | Some(DRAFT_2020_12) => Cow::Borrowed(schema),
         Some(_) => {
             let mut pinned = schema.clone();
-            if let Some(object) = pinned.as_object_mut() {
-                object.insert(
+            // `Value::get(&str)` only ever yields `Some` for an object, so the
+            // arm above proves `schema` — and therefore this clone — IS one.
+            // Stated as an `expect` rather than an `if let`: on the `if let`
+            // shape a non-object would silently return an UNREWRITTEN
+            // `Cow::Owned`, which `compile_2020_12` then reports as "the
+            // declaration is ignored and the schema is validated as 2020-12"
+            // while having ignored nothing.
+            pinned
+                .as_object_mut()
+                .expect("a document with a root $schema key is a JSON object")
+                .insert(
                     "$schema".to_string(),
                     Value::String(DRAFT_2020_12.to_string()),
                 );
-            }
             Cow::Owned(pinned)
         },
     }

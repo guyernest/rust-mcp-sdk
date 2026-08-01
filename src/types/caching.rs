@@ -246,8 +246,19 @@ pub(crate) fn project_caching_hints(
             serde_json::to_value(CacheScope::default()).expect("a unit enum always serializes")
         });
     } else {
-        object.remove("ttlMs");
-        object.remove("cacheScope");
+        // `shift_remove`, NOT `remove`. This crate enables serde_json's
+        // `preserve_order` feature (`Cargo.toml`), under which `Map::remove` is
+        // `swap_remove`: it back-fills the vacated slot with the map's LAST
+        // entry, REORDERING every key that followed. D-11's promise is a
+        // BYTE-IDENTICAL legacy response, and key order is part of the bytes —
+        // `tests/v1_lists_golden.rs` pins raw frames for exactly that reason,
+        // but its hinted fixture deliberately pins no bytes, so a reorder
+        // introduced here would not be caught. It is harmless only while
+        // `ttl_ms` / `cache_scope` happen to be the LAST two fields declared on
+        // all six `CacheableResult` extenders; `shift_remove` makes the strip
+        // order-preserving unconditionally instead.
+        object.shift_remove("ttlMs");
+        object.shift_remove("cacheScope");
     }
 }
 

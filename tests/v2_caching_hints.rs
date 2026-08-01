@@ -106,18 +106,26 @@ const CACHE_SCOPE_KEY: &str = "cacheScope";
 
 /// The SDK-supplied `ttlMs` default (D-08).
 ///
-/// `pmcp::types::caching::DEFAULT_TTL_MS` is the production constant, but it is
-/// `pub(crate)`-adjacent — not reachable at a path an integration-test crate can
-/// name — so the value is restated here. That restatement is deliberately NOT
-/// left unguarded: `src/types/caching.rs`'s
-/// `the_default_cache_scope_is_private_and_the_default_ttl_is_zero` pins the
-/// production side, and the six method tests below pin the WIRE side, so a
-/// change to either without the other fails in one of the two places.
-const DEFAULT_TTL_MS: u64 = 0;
+/// SOURCED from the crate, not restated: `DEFAULT_TTL_MS` is a `pub` item of
+/// `src/types/caching.rs` re-exported at `pmcp::types::DEFAULT_TTL_MS`, which is
+/// exactly the path `examples/s52_v2_caching_hints.rs` imports. Copying the
+/// literal `0` here would let this suite keep asserting the old default if the
+/// SDK ever changed it — the opposite of what a wire-conformance suite is for.
+const DEFAULT_TTL_MS: u64 = pmcp::types::DEFAULT_TTL_MS;
 
 /// The SDK-supplied `cacheScope` default (D-08): the value that cannot leak
 /// across authorization contexts.
-const DEFAULT_CACHE_SCOPE: &str = "private";
+///
+/// Derived by SERIALIZING [`CacheScope::default()`] rather than by typing the
+/// string, for the same reason `project_caching_hints` injects it that way: the
+/// assertion and the enum cannot drift apart.
+fn default_cache_scope() -> String {
+    serde_json::to_value(CacheScope::default())
+        .expect("a unit enum always serializes")
+        .as_str()
+        .expect("CacheScope serializes to a JSON string")
+        .to_string()
+}
 
 // ===========================================================================
 // Assertion helpers.
@@ -141,10 +149,12 @@ fn result_of<'a>(response: &'a Resp, ctx: &str) -> &'a Value {
 /// Assert the dispatcher actually resolved `Era::V2` for this request.
 ///
 /// **Call this FIRST in every v2 test.** Without it the test proves NOTHING
-/// about v2: `inject_v2_result_envelope` (`src/server/core.rs:1637`) early-returns
-/// on any non-v2 era, so the same request against a server that never opted in
-/// is served as v1 and the assertion that follows would be measuring the wrong
-/// era's behaviour.
+/// about v2: `inject_v2_result_envelope` (`src/server/core.rs`) writes the
+/// envelope — `resultType` included — ONLY inside its `Some(Era::V2)` branch, so
+/// the same request against a server that never opted in is served as v1 and the
+/// assertion that follows would be measuring the wrong era's behaviour. (The
+/// function does NOT early-return on a non-v2 era: the caching-hint projection
+/// above the gate runs on both. Only the envelope half is v2-gated.)
 fn assert_v2_era_witness(response: &Resp, ctx: &str) {
     let result = result_of(response, ctx);
     assert!(
@@ -182,12 +192,13 @@ fn assert_no_v2_era_witness(response: &Resp, ctx: &str) {
 /// camelCase names, because the lookup would simply return `None` and the
 /// message would blame the projection rather than the rename.
 fn assert_default_hints(response: &Resp, ctx: &str) {
-    assert_hints(response, ctx, DEFAULT_TTL_MS, DEFAULT_CACHE_SCOPE);
+    assert_hints(response, ctx, DEFAULT_TTL_MS, &default_cache_scope());
 }
 
 /// [`assert_default_hints`] for a handler-chosen pair of values.
 fn assert_hints(response: &Resp, ctx: &str, ttl_ms: u64, cache_scope: &str) {
     let result = result_of(response, ctx);
+    let sdk_default_scope = default_cache_scope();
 
     assert_eq!(
         result.get(TTL_MS_KEY),
@@ -201,7 +212,7 @@ fn assert_hints(response: &Resp, ctx: &str, ttl_ms: u64, cache_scope: &str) {
         result.get(CACHE_SCOPE_KEY),
         Some(&json!(cache_scope)),
         "{ctx}: D-07 makes `{CACHE_SCOPE_KEY}` REQUIRED on every v2 `CacheableResult`, and D-08 \
-         fixes the SDK default at `{DEFAULT_CACHE_SCOPE}` — marking an un-considered response \
+         fixes the SDK default at `{sdk_default_scope}` — marking an un-considered response \
          `public` authorizes a shared gateway to serve one caller's body to another caller \
          holding a different access token. Expected `{cache_scope}`. Raw response was: {}",
         response.raw
@@ -897,8 +908,8 @@ mod server_core {
         raw_via_core, read_resource_request, result_object, v2_accept_list,
     };
     use super::{
-        assert_no_hints_in, fixture_tool, HintFreeResources, HintedResources, CACHE_SCOPE_KEY,
-        DEFAULT_CACHE_SCOPE, DEFAULT_TTL_MS, HINTED_URI, HINT_FREE_URI, READ_TTL_MS, TOOL_ALPHA,
+        assert_no_hints_in, default_cache_scope, fixture_tool, HintFreeResources, HintedResources,
+        CACHE_SCOPE_KEY, DEFAULT_TTL_MS, HINTED_URI, HINT_FREE_URI, READ_TTL_MS, TOOL_ALPHA,
         TTL_MS_KEY, V2,
     };
     use pmcp::server::builder::ServerCoreBuilder;
@@ -1003,7 +1014,7 @@ mod server_core {
             &response,
             "ServerCore / v2 resources/read, hint-free",
             DEFAULT_TTL_MS,
-            DEFAULT_CACHE_SCOPE,
+            &default_cache_scope(),
         );
     }
 
@@ -1177,7 +1188,7 @@ mod server_core {
             &response,
             "the SAME `_meta` literal on `resources/read`",
             DEFAULT_TTL_MS,
-            DEFAULT_CACHE_SCOPE,
+            &default_cache_scope(),
         );
     }
 }

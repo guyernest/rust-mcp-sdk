@@ -240,6 +240,28 @@ pub fn call_tool_request(name: &str, args: Value, era: Era) -> Request {
     let mut params = serde_json::Map::new();
     params.insert("name".to_string(), Value::String(name.to_string()));
     params.insert("arguments".to_string(), args);
+    era_signalling_request("tools/call", params, era)
+}
+
+/// The shared body of [`call_tool_request`] and [`read_resource_request`].
+///
+/// Stamps the era signal onto `params` and deserializes the wire envelope. The
+/// two public builders differ ONLY in their method string and which params keys
+/// they seed, so everything after that point — the reserved `_meta` spelling,
+/// the `RequestMeta` serialization, the `from_value::<ClientRequest>` route —
+/// lives here once. A second copy is how the `_meta` key spelling drifts between
+/// two builders that are supposed to be testing the same ingress.
+///
+/// Deliberately PRIVATE. Making it public would hand callers an era-aware
+/// builder for ANY method string, including the four list methods whose typed
+/// requests silently DROP `_meta` — the exact misleading affordance
+/// [`read_resource_request`]'s docs explain must not exist.
+#[cfg(feature = "testing")]
+fn era_signalling_request(
+    method: &str,
+    mut params: serde_json::Map<String, Value>,
+    era: Era,
+) -> Request {
     if matches!(era, Era::V2) {
         let meta =
             RequestMeta::new().with_meta(META_PROTOCOL_VERSION, json!(PROTOCOL_VERSION_2026_07_28));
@@ -247,13 +269,10 @@ pub fn call_tool_request(name: &str, args: Value, era: Era) -> Request {
         params.insert(REQUEST_META_KEY.to_string(), meta);
     }
     let mut envelope = serde_json::Map::new();
-    envelope.insert(
-        "method".to_string(),
-        Value::String("tools/call".to_string()),
-    );
+    envelope.insert("method".to_string(), Value::String(method.to_string()));
     envelope.insert("params".to_string(), Value::Object(params));
     let client_request: ClientRequest = serde_json::from_value(Value::Object(envelope))
-        .expect("tools/call request deserializes into ClientRequest");
+        .unwrap_or_else(|e| panic!("`{method}` request deserializes into ClientRequest ({e})"));
     Request::Client(Box::new(client_request))
 }
 
@@ -300,21 +319,7 @@ pub fn call_tool_request(name: &str, args: Value, era: Era) -> Request {
 pub fn read_resource_request(uri: &str, era: Era) -> Request {
     let mut params = serde_json::Map::new();
     params.insert("uri".to_string(), Value::String(uri.to_string()));
-    if matches!(era, Era::V2) {
-        let meta =
-            RequestMeta::new().with_meta(META_PROTOCOL_VERSION, json!(PROTOCOL_VERSION_2026_07_28));
-        let meta = serde_json::to_value(&meta).expect("request meta serializes");
-        params.insert(REQUEST_META_KEY.to_string(), meta);
-    }
-    let mut envelope = serde_json::Map::new();
-    envelope.insert(
-        "method".to_string(),
-        Value::String("resources/read".to_string()),
-    );
-    envelope.insert("params".to_string(), Value::Object(params));
-    let client_request: ClientRequest = serde_json::from_value(Value::Object(envelope))
-        .expect("resources/read request deserializes into ClientRequest");
-    Request::Client(Box::new(client_request))
+    era_signalling_request("resources/read", params, era)
 }
 
 /// Send one already-built request straight at a `ServerCore` and return the RAW
@@ -412,12 +417,18 @@ pub fn result_object(response: &JSONRPCResponse) -> &serde_json::Map<String, Val
 
 /// Assert that the dispatcher actually resolved [`Era::V2`] for this request.
 ///
-/// `inject_v2_result_envelope` (`src/server/core.rs:1572`) early-returns on ANY
-/// non-`Era::V2` context (`:1580`), so the `resultType` key it adds is in-band,
-/// server-minted proof of the resolved era — not a restatement of what the test
-/// intended. A test that asserts v2 behaviour WITHOUT calling this is asserting
-/// nothing: the same request against a non-opted-in server is served as v1 and
-/// every downstream assertion still passes.
+/// `inject_v2_result_envelope` (`src/server/core.rs`) calls
+/// `own_reserved_result_fields` — the only writer of `resultType` — ONLY inside
+/// its `Some(Era::V2)` branch, so the key's presence is in-band, server-minted
+/// proof of the resolved era, not a restatement of what the test intended. A
+/// test that asserts v2 behaviour WITHOUT calling this is asserting nothing: the
+/// same request against a non-opted-in server is served as v1 and every
+/// downstream assertion still passes.
+///
+/// (Phase 115 moved the era gate DOWN: the function no longer early-returns on a
+/// non-v2 context, because the caching-hint projection above it runs on both
+/// eras. Only the ENVELOPE half is v2-gated now — which is still exactly what
+/// this witness reads.)
 ///
 /// `ctx` names the call site so a failure says which dispatcher and which
 /// payload shape lost its era.

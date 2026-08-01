@@ -862,7 +862,16 @@ mod structured_output_invariants {
 /// which is an acceptance criterion of `115-09-PLAN.md`, and the same property
 /// is exercised continuously by the fuzz target itself. Its absence from the
 /// default run is a consequence of not widening the API, not an oversight.
-#[cfg(all(test, feature = "fuzzing"))]
+///
+/// # BOTH features, not just `fuzzing`
+///
+/// `output_validation::fuzz_support` is gated `#[cfg(all(feature = "fuzzing",
+/// feature = "validation"))]` — `fuzzing` widens the MODULE, `validation`
+/// supplies its CONTENTS (`fuzz/Cargo.toml` enables both for the same reason).
+/// `fuzzing = []` implies nothing, so a `cargo test --features fuzzing` without
+/// `validation` would fail to compile this ENTIRE integration crate, not just
+/// this module.
+#[cfg(all(test, feature = "fuzzing", feature = "validation"))]
 mod schema_dialect_normalization_properties {
     use super::structured_output_invariants::arb_json;
     use super::*;

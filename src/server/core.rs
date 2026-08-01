@@ -1607,6 +1607,13 @@ pub(crate) const RESERVED_SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serve
 /// omission. See [`ReservedFieldOwner`] and
 /// [`Cacheable`](crate::types::caching::Cacheable).
 ///
+/// `cacheable` is a claim about the request's METHOD, so it is DOWNGRADED here
+/// whenever `disposition` is not [`ResponseDisposition::Complete`]: an
+/// `input_required` body is an `InputRequiredResult` and a task body is a task
+/// handle, and in the `2026-07-28` schema neither extends `CacheableResult`. See
+/// the inline comment at the downgrade for why `resources/read` makes that
+/// reachable rather than theoretical.
+///
 /// # Not the final mutation
 ///
 /// This function is NOT the last thing that touches the response.
@@ -1655,6 +1662,28 @@ pub(crate) fn inject_v2_result_envelope(
         return;
     }
 
+    // D-07 again, at the one place that knows BOTH facts. `cacheable` is derived
+    // from the REQUEST METHOD, so it describes the method's COMPLETE result type
+    // — but a non-`Complete` disposition means the body on the wire is NOT that
+    // type. `input_required` is an `InputRequiredResult` (Phase 113 MRTR) and a
+    // task response is a task handle (Phase 114); in the vendored `2026-07-28`
+    // schema BOTH `extends Result`, not `CacheableResult`. `resources/read` is
+    // the concrete case that makes this reachable: it is the only method that is
+    // simultaneously MRTR-eligible ([`client_request_mrtr_eligible`]) and
+    // `Cacheable::Yes` ([`request_is_cacheable`]), so without this downgrade a
+    // v2 `resources/read` answered with an MRTR signal emits `ttlMs` /
+    // `cacheScope` on an `InputRequiredResult`.
+    //
+    // Only the ENSURE half is affected in practice. Both suppressed dispositions
+    // are v2-only constructions — MRTR is `Era::V2`-gated at `mrtr_egress`, and
+    // `DispatchEnvelopeClaim::TASK_CREATED` is minted only on the v2 tasks create
+    // path — so on a non-v2 era `disposition` is always `Complete` and the D-11
+    // strip still sees the caller's claim verbatim.
+    let cacheable = match disposition {
+        ResponseDisposition::Complete => cacheable,
+        ResponseDisposition::InputRequired | ResponseDisposition::Task => Cacheable::No,
+    };
+
     // BOTH eras: ensure the hints on v2, strip them on v1 / no-context (D-11).
     // The wire keys themselves are written ONLY inside `types::caching` (D-12).
     project_caching_hints(value, protocol_context.map(|c| c.era), cacheable);
@@ -1689,14 +1718,18 @@ pub(crate) fn inject_v2_result_envelope(
 /// site. Adding a row here for a variant that cannot occur would be a lie about
 /// where the claim is made.
 ///
-/// # Fail-closed
+/// # No wildcard arm
 ///
-/// The catch-all arm returns [`Cacheable::No`], so a NEW `ClientRequest` variant
-/// lands in the non-cacheable direction by default. That is the safe direction:
-/// a MISSING hint on a v2 response is a conformance gap a client tolerates
-/// (it simply caches nothing), whereas a SPURIOUS hint on an unexpected method
-/// — particularly one that defaulted to a shareable scope — would be a
-/// cross-authorization-context data-leak vector (T-115-17).
+/// Every variant is enumerated, exactly as [`client_request_mrtr_eligible`] two
+/// screens down already does and for the same reason: a `_ =>` catch-all makes
+/// "fail-closed" silent, and the two failure directions are NOT symmetric here.
+/// A SPURIOUS hint on an unexpected method would be a
+/// cross-authorization-context data-leak vector (T-115-17), while a MISSING hint
+/// on a v2 method whose result DOES extend `CacheableResult` ships a knowingly
+/// non-conformant response — `ttlMs` and `cacheScope` are REQUIRED on the v2
+/// projection. Neither is a defect a reviewer should have to notice by absence,
+/// so adding a `ClientRequest` variant breaks this build until someone classifies
+/// it.
 pub(crate) fn request_is_cacheable(request: &Request) -> Cacheable {
     let Request::Client(boxed) = request else {
         // A `ServerRequest` is refused by both dispatchers with -32601; it has
@@ -1714,10 +1747,21 @@ pub(crate) fn request_is_cacheable(request: &Request) -> Cacheable {
         ClientRequest::ReadResource(_) => Cacheable::Yes,
         // `prompts/list` → ListPromptsResult extends CacheableResult.
         ClientRequest::ListPrompts(_) => Cacheable::Yes,
-        // Everything else — `initialize`, `tools/call`, `prompts/get`, every
-        // `tasks/*` route, the subscription and completion methods, `ping` —
-        // plus any variant added after this was written.
-        _ => Cacheable::No,
+        // NOT cacheable — enumerated explicitly, no wildcard arm, so a future
+        // variant forces a decision here rather than inheriting one by silence.
+        ClientRequest::Initialize(_)
+        | ClientRequest::CallTool(_)
+        | ClientRequest::GetPrompt(_)
+        | ClientRequest::Subscribe(_)
+        | ClientRequest::Unsubscribe(_)
+        | ClientRequest::Complete(_)
+        | ClientRequest::CreateMessage(_)
+        | ClientRequest::TasksGet(_)
+        | ClientRequest::TasksResult(_)
+        | ClientRequest::TasksList(_)
+        | ClientRequest::TasksCancel(_)
+        | ClientRequest::SetLoggingLevel { .. }
+        | ClientRequest::Ping => Cacheable::No,
     }
 }
 
@@ -5426,6 +5470,57 @@ mod tests {
                 );
                 // The v2 envelope itself still applies — the two are independent.
                 assert_eq!(v["resultType"], "complete");
+            }
+        }
+
+        /// A non-`Complete` disposition suppresses the hints even when the
+        /// REQUEST was one of the cacheable methods (D-07).
+        ///
+        /// `cacheable` is derived from the request METHOD, so it describes that
+        /// method's COMPLETE result type. A non-`Complete` disposition means the
+        /// body on the wire is a DIFFERENT type: an `InputRequiredResult`
+        /// (Phase 113 MRTR) or a task handle (Phase 114), and in the vendored
+        /// `2026-07-28` schema both `extends Result`, not `CacheableResult`.
+        ///
+        /// `resources/read` is what makes this reachable rather than theoretical:
+        /// it is the ONLY method that is simultaneously MRTR-eligible
+        /// (`client_request_mrtr_eligible`) and `Cacheable::Yes`
+        /// (`request_is_cacheable`), and `MRTR_SIGNAL_META_KEY` is `pub`, so any
+        /// `ResourceHandler` can put its v2 `resources/read` on this path.
+        #[test]
+        fn a_non_complete_disposition_suppresses_the_hints_even_when_cacheable() {
+            let info = Implementation::new("srv", "2.0.0");
+            let ctx = v2_ctx();
+            for (disposition, owner, wire) in [
+                (
+                    ResponseDisposition::InputRequired,
+                    ReservedFieldOwner::Mrtr,
+                    "input_required",
+                ),
+                (ResponseDisposition::Task, ReservedFieldOwner::None, "task"),
+            ] {
+                let mut resp = result_response(1, serde_json::json!({ "contents": [] }));
+                inject_v2_result_envelope(
+                    &mut resp,
+                    Some(&ctx),
+                    &info,
+                    disposition,
+                    owner,
+                    // The claim `request_is_cacheable(resources/read)` produces.
+                    Cacheable::Yes,
+                );
+                let ResponsePayload::Result(v) = resp.payload else {
+                    panic!("expected result");
+                };
+                assert_eq!(
+                    v["resultType"], wire,
+                    "the disposition must still reach the wire, got {v}"
+                );
+                assert!(
+                    v.get("ttlMs").is_none() && v.get("cacheScope").is_none(),
+                    "a `{wire}` body is NOT a CacheableResult extender, so it must carry \
+                     neither hint however the REQUEST was classified. Got {v}"
+                );
             }
         }
 
