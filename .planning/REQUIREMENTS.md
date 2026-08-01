@@ -143,7 +143,23 @@ checkboxes a verifier can fail on.
 
 ### JSON Schema 2020-12 & Caching Hints (SCHM)
 
-- [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.48, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
+- [~] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.49, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
+
+> **REOPENED 2026-08-01 — booking downgraded `[x]` → `[~]` after verification.** The `[x]`
+> below was written by `115-10` Task 3 immediately after owner sign-off, which predates
+> `115-REVIEW.md`. `115-VERIFICATION.md` (status `gaps_found`, 3/4) then measured that the
+> "no `$schema` auto-detect" clause **does not hold**: `normalize_schema_dialect`
+> (`src/server/output_validation.rs:146-165`) rewrites only the ROOT `$schema`, so a legacy
+> dialect declaration on an embedded schema resource (a subschema carrying `$id`) survives
+> the pin and yields the vacuous accept-everything validator the pin exists to prevent.
+> Reproduced independently twice via `output_validation::fuzz_support::validate_bytes`,
+> including `root-draft07 + embedded (v1,v2) = (Violates, Conforms)` — v2 validating
+> **weaker** than v1. All three defensive layers structurally exclude the shape
+> (`normalization_cases()`, `arb_schema_document()`, `is_dialect_neutral`), which is why a
+> green gate and 660k fuzz runs did not reach it. The version text is also corrected here:
+> 0.49 shipped, not the 0.48 originally named. SCHM-02 and SCHM-03 are unaffected and remain
+> `[x]` — both were re-measured against the codebase during verification. Gap closure is
+> tracked in `115-VERIFICATION.md`.
 
 > **Booked `[x]`, NOT `[~]`, and the distinction is deliberate.** Phase 114's D-18 hold exists
 > because its wire values come from an unpublished `draft/` directory in an Experimental
@@ -409,7 +425,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-04 | Phase 114 | Implemented — pending final schema |
 | TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
 | TASK-06 | Phase 114 | Implemented — pending final schema |
-| SCHM-01 | Phase 115 | Complete |
+| SCHM-01 | Phase 115 | Gap — pin incomplete (nested `$schema` bypass; see 115-VERIFICATION.md) |
 | SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |
