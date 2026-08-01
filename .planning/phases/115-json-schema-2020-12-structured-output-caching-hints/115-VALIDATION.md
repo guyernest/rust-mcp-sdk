@@ -1,18 +1,62 @@
 ---
 phase: 115
 slug: json-schema-2020-12-structured-output-caching-hints
-status: ready
+status: superseded-in-part
 nyquist_compliant: true
 wave_0_complete: true
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
+supersedes_note: "Per-Task Verification Map below predates the --reviews replan (10 plans/26 tasks -> 11 plans/34 tasks). The PLAN.md files are authoritative."
 ---
 
 # Phase 115 — Validation Strategy
 
 > Per-phase validation contract for feedback sampling during execution.
-> Populated 2026-07-31 (plan-check revision) from the values already carried by the ten
+> Populated 2026-07-31 (plan-check revision) from the values already carried by the then-ten
 > `115-*-PLAN.md` files — this document restates them, it does not introduce new commands.
+
+---
+
+## ⚠ PARTIALLY SUPERSEDED — read this before using the table below (2026-08-01)
+
+This document was written against the **original 10-plan / 26-task** set. A `--reviews` replan
+(driven by `115-REVIEWS.md`, seven verified blocking findings) produced **11 plans / 34 tasks**.
+**The `115-*-PLAN.md` files are authoritative; where this document disagrees with them, they win.**
+
+Known-stale content below, and why each matters:
+
+1. **Counts.** "26 tasks across the 10 plans" (§ Per-Task Verification Map) and "every one of the
+   26 tasks" (§ after the table) are both wrong. Actual: **34 tasks across 11 plans**. The extra
+   tasks are new `115-11` (contract-first, Wave 1) plus five "full quality gate before commit"
+   tasks added to `115-03/04/05/06/09`.
+
+2. **Row `115-09-T2` documents an invariant that was DELETED as false.** It describes "the v2 pin
+   is never MORE permissive than v1's auto-detect for the same schema" — the cross-dialect
+   monotonicity property. That property is **not true**: `115-03` Task 3 deliberately exercises the
+   `dependencies` keyword, which 2020-12 split into `dependentRequired`/`dependentSchemas`, making
+   it inert under the pin — i.e. a legitimate `v2_conforms && !v1_conforms` on a draft-07-declared
+   schema. The replan replaced it with totality, normalization idempotence, and era *agreement*
+   over a dialect-neutral keyword allowlist. **Do not restore the monotonicity assertion from this
+   document.** Threat `T-115-01`'s mitigation text was rewritten to match.
+
+3. **Three rows cite fail-open `make` targets as proof.** `115-09-T2` cites `make test-property`,
+   `115-09-T3` cites `make test-examples`, and the fuzz row's posture depends on `make test-fuzz`.
+   Per `Makefile:234-244` all three swallow failure: `test-fuzz` ends each target with
+   `|| echo "... completed"`; `test-property` selects only `-- --ignored property_` (the planned
+   properties are not `#[ignore]`d, so **zero tests are selected today**); `test-examples` reports
+   an unbuildable example as "⚠ … (skipped)". The revised plans replaced these with direct
+   commands plus count/artifact assertions.
+
+4. **Feedback-latency budget conflates two different clocks.** "Max feedback latency: 120 seconds"
+   is the *per-task iteration* budget and is honored (~30–90s). It is **not** the per-plan commit
+   gate: `115-03/04/05/06/09` each end with `make quality-gate`, which this document's own
+   "Full suite command" row estimates at ~10–20 minutes. That is deliberate and CLAUDE.md-mandated,
+   not a violation.
+
+The per-task table is retained for its threat-reference and secure-behavior columns, which remain
+broadly accurate. It has **not** been regenerated row-by-row — doing so by hand risks inventing
+commands that no plan contains. Regenerate it from the 11 plans if an accurate operational
+reference is needed during execution.
 
 ---
 
