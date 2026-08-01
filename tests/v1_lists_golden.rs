@@ -247,8 +247,9 @@ struct V1Golden<'a> {
 ///    `serde_json::Map` is an `IndexMap`, whose `PartialEq` is
 ///    order-INDEPENDENT, so step 3 is genuinely structural — it exists for the
 ///    readable message, and step 2 is what carries ordering.
-/// 4. **v2 leak guards**: `resultType` and `serverInfo` may not appear on a v1
-///    wire, plus the `_meta` rule.
+/// 4. **v2 leak guards** ([`v1_leak_guard`]): none of `resultType`,
+///    `serverInfo`, `ttlMs` or `cacheScope` may appear on a v1 wire, plus the
+///    `_meta` rule.
 fn assert_v1_bytes(raw: &str, golden: &V1Golden<'_>) {
     let same_width = substitute(raw, golden.dynamics, true);
     assert_eq!(
@@ -277,15 +278,57 @@ fn assert_v1_bytes(raw: &str, golden: &V1Golden<'_>) {
         "the full JSON-RPC frame (jsonrpc + id + result) must match the golden"
     );
 
-    assert!(
-        !raw.contains("resultType"),
-        "v1 raw must not contain resultType: {raw}"
-    );
-    assert!(
-        !raw.contains("serverInfo"),
-        "v1 raw must not contain serverInfo: {raw}"
-    );
+    v1_leak_guard(raw).unwrap_or_else(|leak| panic!("{leak}"));
     assert_meta(raw, &golden.meta);
+}
+
+/// The Phase-112 v2 response-envelope keys. `inject_v2_result_envelope`
+/// (`src/server/core.rs:1561`) returns early on any era that is not `V2`, so
+/// either of these on a v1 wire means that early return was bypassed.
+const V2_ENVELOPE_KEYS: [&str; 2] = ["resultType", "serverInfo"];
+
+/// The Phase-115 SCHM-03 caching-hint keys, added to this guard in plan 115-02 —
+/// deliberately BEFORE the fields that would emit them exist.
+const V2_CACHING_HINT_KEYS: [&str; 2] = ["ttlMs", "cacheScope"];
+
+/// Reject any v2-only key found on a v1 wire, returning a message naming it.
+///
+/// # Why this is a function returning `Result`, not an inline `assert!`
+///
+/// Two of the four keys it checks — [`V2_CACHING_HINT_KEYS`] — cannot appear on
+/// ANY wire today, because 115-05 has not yet added them to the six
+/// `CacheableResult` extenders. Asserting their absence is therefore vacuous in
+/// this plan and stays vacuous until wave 4 lands 115-06's era-gated projection.
+/// A vacuous assertion that is never itself exercised is indistinguishable from a
+/// mis-wired one, and the moment anybody would find out is the moment it was
+/// supposed to catch a real leak. Returning a `Result` lets
+/// [`v1_lists_golden_leak_guard_is_load_bearing`] call the guard directly on
+/// synthetic leaking frames — no `catch_unwind`, no test-only duplicate of the
+/// predicate — so the guard is proven to FIRE on each key and to ACCEPT a clean
+/// frame, today, before it has any real work to do.
+fn v1_leak_guard(raw: &str) -> Result<(), String> {
+    for key in V2_ENVELOPE_KEYS {
+        if raw.contains(key) {
+            return Err(format!(
+                "v1 raw carries the v2 response-envelope key `{key}`. The envelope is \
+                 injected only for `Era::V2` (`src/server/core.rs:1561`), so a v1 wire \
+                 carrying it means the era gate was bypassed. Raw response was: {raw}"
+            ));
+        }
+    }
+    for key in V2_CACHING_HINT_KEYS {
+        if raw.contains(key) {
+            return Err(format!(
+                "v1 raw carries the SCHM-03 caching hint `{key}`. D-11 era-gates the \
+                 caching hints OFF on v1, and a v1 response carrying a v2 field breaks \
+                 this milestone's severability story: Phases 116-119 all rest on v1 \
+                 responses staying byte-identical, so a leak here is not a cosmetic \
+                 diff. Emit the hint from the v2 egress projection only — do NOT relax \
+                 this guard to make a v1 response accept it. Raw response was: {raw}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn assert_meta(raw: &str, expectation: &MetaExpectation) {
@@ -623,4 +666,77 @@ async fn v1_lists_golden_resources_read() {
             meta: MetaExpectation::Absent,
         },
     );
+}
+
+// ===========================================================================
+// Anti-vacuity — the leak guard itself.
+// ===========================================================================
+
+/// [`v1_leak_guard`] fires on each of its four keys AND accepts a clean frame.
+///
+/// The five fixtures above pass their leak guard today for a reason that has
+/// nothing to do with the guard being correct: `ttlMs` and `cacheScope` do not
+/// exist on any result type yet, so "the key is absent" is true of a guard that
+/// works and equally true of a guard that was wired to the wrong string, or that
+/// returns `Ok(())` unconditionally. This test removes that ambiguity by driving
+/// synthetic leaking frames through the guard directly.
+///
+/// The clean-frame case is the other half and is not decoration: a guard that
+/// rejected EVERYTHING would satisfy the four leak cases perfectly while failing
+/// every real fixture for the wrong reason. Discrimination is the property under
+/// test, not rejection.
+#[test]
+fn v1_lists_golden_leak_guard_is_load_bearing() {
+    const CLEAN: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[],"nextCursor":"c"}}"#;
+
+    v1_leak_guard(CLEAN).expect(
+        "a clean v1 frame must PASS the guard — a guard that rejects everything \
+         would satisfy the leak cases below while proving nothing",
+    );
+
+    // (key, a synthetic raw frame carrying it, whether its branch must cite D-11)
+    let leaks: [(&str, &str, bool); 4] = [
+        (
+            "ttlMs",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[],"ttlMs":0}}"#,
+            true,
+        ),
+        (
+            "cacheScope",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[],"cacheScope":"private"}}"#,
+            true,
+        ),
+        (
+            "resultType",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[],"resultType":"complete"}}"#,
+            false,
+        ),
+        (
+            "serverInfo",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[],"serverInfo":{"name":"x"}}}"#,
+            false,
+        ),
+    ];
+
+    for (key, frame, cites_d11) in leaks {
+        let message = v1_leak_guard(frame).expect_err(&format!(
+            "the guard must REJECT a v1 frame carrying `{key}`; it returned Ok for {frame}"
+        ));
+        assert!(
+            message.contains(key),
+            "the rejection message must NAME the offending key `{key}` so a future \
+             reader knows which field leaked, got: {message}"
+        );
+        assert_eq!(
+            message.contains("D-11"),
+            cites_d11,
+            "`{key}` must be reported by the {} branch, whose message {} cite D-11; got: {message}",
+            if cites_d11 {
+                "caching-hint"
+            } else {
+                "v2-envelope"
+            },
+            if cites_d11 { "must" } else { "must not" }
+        );
+    }
 }
