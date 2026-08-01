@@ -390,6 +390,17 @@ fn strip(source: &str) -> Stripped {
     strip_with(source, false)
 }
 
+/// Comments removed, literal contents KEPT — the mode for wire-string scans.
+///
+/// The caching-hint checks are about the WIRE strings `"ttlMs"` and
+/// `"cacheScope"` and about serde attribute VALUES such as
+/// `skip_serializing_if = "Option::is_none"`. All of those live inside string
+/// literals, which [`strip`] deletes, so a second mode is required rather than
+/// merely convenient.
+fn strip_keeping_literals(source: &str) -> Stripped {
+    strip_with(source, true)
+}
+
 // --- `cfg(test)` region exclusion ---
 
 fn balanced_end(text: &str, open: usize) -> Option<usize> {
@@ -561,6 +572,73 @@ fn enclosing_fn(spans: &[(String, Range<usize>)], index: usize) -> Option<&str> 
         .filter(|(_, span)| span.contains(&index))
         .min_by_key(|(_, span)| span.end - span.start)
         .map(|(name, _)| name.as_str())
+}
+
+/// The body of `name` in `stripped`, or `None` when there is no such function.
+fn fn_body<'a>(stripped: &'a Stripped, name: &str) -> Option<&'a str> {
+    fn_spans(stripped)
+        .into_iter()
+        .find(|(found, _)| found == name)
+        .map(|(_, span)| &stripped.text[span])
+}
+
+/// The index of the `[` that matches the `]` at `close`.
+fn matching_open_bracket(text: &str, close: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth: usize = 0;
+    let mut i = close + 1;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+/// The `#[…]` attributes attached to the item starting at `at`, innermost first.
+///
+/// Walks backwards from the item, accepting only whitespace between one
+/// attribute's `]` and the next construct, so an attribute belonging to an
+/// EARLIER item is never mis-attributed to this one.
+fn attrs_before(text: &str, at: usize) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut j = at;
+    loop {
+        while j > 0 && bytes[j - 1] == b' ' {
+            j -= 1;
+        }
+        if j == 0 || bytes[j - 1] != b']' {
+            break;
+        }
+        let close = j - 1;
+        let Some(open) = matching_open_bracket(text, close) else {
+            break;
+        };
+        if open == 0 || bytes[open - 1] != b'#' {
+            break;
+        }
+        out.push(text[open + 1..close].to_string());
+        j = open - 1;
+    }
+    out
+}
+
+/// The first quoted value assigned to `key` inside an attribute body.
+fn attr_value(attr: &str, key: &str) -> Option<String> {
+    let at = attr.find(key)?;
+    let rest = &attr[at + key.len()..];
+    let open = rest.find('"')?;
+    let close = rest[open + 1..].find('"')? + open + 1;
+    Some(rest[open + 1..close].to_string())
 }
 
 // ===========================================================================
@@ -1146,4 +1224,852 @@ fn v2_schema_tripwires_the_source_scan_is_not_vacuous() {
         "the retriever and resolver-feature needle lists must be non-empty or their scans are \
          no-ops"
     );
+}
+
+// ===========================================================================
+// 5. TASK 2 — D-12: the caching hints have exactly ONE writer.
+// ===========================================================================
+
+/// The `cfg`-free module that owns the single projection point.
+const CACHING: &str = "src/types/caching.rs";
+
+/// The task wire types, which carry a DIFFERENT `ttlMs` (D-10).
+const TASKS_TYPES: &str = "src/types/tasks.rs";
+
+/// The one function allowed to write the caching-hint wire keys.
+const PROJECTOR: &str = "project_caching_hints";
+
+/// The native chokepoint module.
+const CORE: &str = "src/server/core.rs";
+
+/// The `wasm32`-only dispatcher no native gate compiles.
+const WASM_SERVER: &str = "src/server/wasm_server.rs";
+
+/// The local helper `wasm_server.rs` routes every cacheable result through.
+const WASM_HELPER: &str = "cacheable_result_to_value";
+
+/// The shared v2 result-envelope helper.
+const ENVELOPE: &str = "inject_v2_result_envelope";
+
+/// The response-middleware entry point that runs AFTER the projection.
+const MIDDLEWARE: &str = "process_response_with_context";
+
+/// The two caching-hint WIRE keys.
+const HINT_KEYS: &[&str] = &["ttlMs", "cacheScope"];
+
+/// The two caching-hint RUST field declarations.
+const HINT_FIELDS: &[&str] = &["pub ttl_ms:", "pub cache_scope:"];
+
+/// The modules declaring the six `CacheableResult` extenders.
+const RESULT_MODULES: &[&str] = &[
+    "src/types/tools.rs",
+    "src/types/resources.rs",
+    "src/types/prompts.rs",
+    "src/types/protocol/mod.rs",
+];
+
+/// The six results that extend `CacheableResult` in the `2026-07-28` schema.
+const CACHEABLE_RESULT_TYPES: &[&str] = &[
+    "ListToolsResult",
+    "ListResourcesResult",
+    "ListResourceTemplatesResult",
+    "ReadResourceResult",
+    "ListPromptsResult",
+    "ServerDiscoverResult",
+];
+
+/// Method names that WRITE a key into a `serde_json` object.
+///
+/// Reads (`get`, `contains_key`) are deliberately absent: a test asserting the
+/// key's ABSENCE is not a projection, and folding reads in would make the check
+/// fire on every assertion in the tree.
+const WRITE_CALLS: &[&str] = &[
+    "insert",
+    "entry",
+    "or_insert",
+    "or_insert_with",
+    "remove",
+    "swap_remove",
+    "shift_remove",
+    "append",
+];
+
+/// The D-12 rationale every single-projection failure message points at.
+const D_12_WHY: &str = "\
+D-12: the era projection happens at ONE shared point, so there is one place to test and one place \
+to rot. A per-result-type or per-dispatcher projection is exactly what this test exists to \
+prevent: it multiplies the number of sites that must agree about a v1 wire carrying no v2 key \
+(D-11), and every one of them is a place the agreement can quietly lapse.\n  \
+That one place is `src/types/caching.rs` and NOT `src/server/core.rs` for a structural reason: \
+`core.rs` is `#[cfg(not(target_arch = \"wasm32\"))]` while `wasm_server.rs` is \
+`#[cfg(target_arch = \"wasm32\")]`, so those two cfg sets are DISJOINT and a projector living in \
+either server module would be unreachable from the other — leaving the wasm dispatcher with no \
+strip at all. Do not \"simplify\" the projector back into a server module.";
+
+/// One site that writes a caching-hint wire key.
+struct HintWrite {
+    file: String,
+    line: u32,
+    key: String,
+    function: String,
+}
+
+/// Is the literal at `at` in a position that WRITES the key into a JSON object?
+///
+/// Two shapes count: a write METHOD call (`obj.insert("ttlMs", …)`,
+/// `obj.entry("ttlMs")`, `obj.remove("ttlMs")`) and an index ASSIGNMENT
+/// (`value["ttlMs"] = …`). A read (`value.get("ttlMs")`, `value["ttlMs"]` in a
+/// comparison) is not a projection and does not count.
+fn is_write_position(text: &str, at: usize, needle_len: usize) -> bool {
+    let prefix = text[..at].trim_end();
+    if let Some(head) = prefix.strip_suffix('(') {
+        let reversed: String = head
+            .chars()
+            .rev()
+            .take_while(|c| is_ident_char(*c))
+            .collect();
+        let name: String = reversed.chars().rev().collect();
+        if WRITE_CALLS.contains(&name.as_str()) {
+            return true;
+        }
+    }
+    if prefix.ends_with('[') {
+        let rest = text[at + needle_len..].trim_start();
+        if let Some(after) = rest.strip_prefix(']') {
+            let after = after.trim_start();
+            return after.starts_with('=') && !after.starts_with("==");
+        }
+    }
+    false
+}
+
+/// Every site in `src/` that WRITES a caching-hint wire key, `cfg(test)` aside.
+fn hint_write_sites() -> Vec<HintWrite> {
+    let mut out = Vec::new();
+    for path in src_files() {
+        let raw = fs::read_to_string(&path).expect("readable source");
+        if !HINT_KEYS.iter().any(|key| raw.contains(key)) {
+            continue;
+        }
+        let stripped = strip_keeping_literals(&raw);
+        let spans = fn_spans(&stripped);
+        let excluded = cfg_test_spans(&stripped);
+        for key in HINT_KEYS {
+            let quoted = format!("\"{key}\"");
+            for at in occurrences(&stripped.text, &quoted) {
+                if is_excluded(&excluded, at)
+                    || !is_write_position(&stripped.text, at, quoted.len())
+                {
+                    continue;
+                }
+                out.push(HintWrite {
+                    file: rel(&path),
+                    line: line_of(&stripped, at),
+                    key: (*key).to_string(),
+                    function: enclosing_fn(&spans, at)
+                        .unwrap_or("<file scope>")
+                        .to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The caching-hint wire keys are written in exactly one function.
+#[test]
+fn v2_schema_tripwires_caching_hints_are_written_in_exactly_one_place() {
+    let sites = hint_write_sites();
+    let mut failures = String::new();
+
+    for site in &sites {
+        if site.file != CACHING || site.function != PROJECTOR {
+            let _ = writeln!(
+                failures,
+                "\n  OUT-OF-PLACE hint write: `\"{}\"` written by `{}` at {}:{}",
+                site.key, site.function, site.file, site.line
+            );
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{D_12_WHY}\n  The only permitted writer is `{PROJECTOR}` in {CACHING}.{failures}"
+    );
+}
+
+/// One `ttl_ms` / `cache_scope` field declaration with its serde attributes.
+struct HintField {
+    module: &'static str,
+    line: u32,
+    field: &'static str,
+    attrs: Vec<String>,
+}
+
+/// Every caching-hint FIELD declaration in the six result types' modules.
+fn hint_field_attributes() -> Vec<HintField> {
+    let mut out = Vec::new();
+    for module in RESULT_MODULES {
+        let source = read(module);
+        let stripped = strip_keeping_literals(&source);
+        for field in HINT_FIELDS {
+            for at in occurrences(&stripped.text, field) {
+                out.push(HintField {
+                    module,
+                    line: line_of(&stripped, at),
+                    field,
+                    attrs: attrs_before(&stripped.text, at),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// No result type may perform the era projection as a serde change.
+///
+/// The anti-pattern is named in `project_capabilities_for_v1`'s rustdoc in
+/// `src/server/core.rs`: doing an era projection in the TYPES module — a
+/// `serialize_with`, a bespoke `skip_serializing_if`, a hand-written `Serialize`
+/// impl — changes the wire of every existing server on EVERY era, because a
+/// serde attribute has no idea which era it is serializing for. The projection
+/// has to happen where the era is known, which is the dispatcher chokepoint.
+#[test]
+fn v2_schema_tripwires_no_result_type_projects_independently() {
+    let fields = hint_field_attributes();
+    let mut failures = String::new();
+
+    for field in &fields {
+        if field.attrs.is_empty() {
+            let _ = writeln!(
+                failures,
+                "\n  NO ATTRIBUTE: `{}` at {}:{} carries no serde attribute at all; it can no \
+                 longer be omitted when unset, so a v1 wire would gain a `null`-valued v2 key",
+                field.field, field.module, field.line
+            );
+        }
+        for attr in &field.attrs {
+            if attr.contains("serialize_with") || attr.contains("deserialize_with") {
+                let _ = writeln!(
+                    failures,
+                    "\n  CUSTOM SERDE: `{}` at {}:{} carries `{attr}`",
+                    field.field, field.module, field.line
+                );
+            }
+            if let Some(value) = attr_value(attr, "skip_serializing_if") {
+                if value != "Option::is_none" {
+                    let _ = writeln!(
+                        failures,
+                        "\n  BESPOKE SKIP: `{}` at {}:{} skips on `{value}`, not \
+                         `Option::is_none`",
+                        field.field, field.module, field.line
+                    );
+                }
+            }
+        }
+    }
+
+    for module in RESULT_MODULES {
+        let stripped = strip(&read(module));
+        for ty in CACHEABLE_RESULT_TYPES {
+            for trait_name in ["Serialize", "Deserialize"] {
+                let needle = format!("{trait_name} for {ty}");
+                if stripped.text.contains(&needle) {
+                    let _ = writeln!(
+                        failures,
+                        "\n  HAND-WRITTEN IMPL: `impl {needle}` in {module}; the six \
+                         `CacheableResult` extenders must serialize BY DERIVE so the only thing \
+                         deciding the wire is the projection"
+                    );
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{D_12_WHY}\n  A per-type serde projection alters the wire of every existing server on \
+         EVERY era, because a serde attribute cannot see the negotiated era. See \
+         `project_capabilities_for_v1`'s rustdoc in {CORE}, which names this anti-pattern \
+         directly.{failures}"
+    );
+}
+
+/// Why a `serde_json::to_value(` site in the wasm dispatcher is accounted for.
+enum WasmDisposition {
+    /// The site that serializes a `CacheableResult` and strips the hints.
+    RoutesThroughProjector,
+    /// The site serializes a result that does not extend `CacheableResult`.
+    NotCacheable,
+}
+
+/// One allowlisted serialization site in [`WASM_SERVER`].
+struct WasmSite {
+    function: &'static str,
+    hits: usize,
+    disposition: WasmDisposition,
+    why: &'static str,
+}
+
+/// Every `serde_json::to_value(` site in the wasm dispatcher, by function.
+const WASM_SERIALIZATION_SITES: &[WasmSite] = &[
+    WasmSite {
+        function: "cacheable_result_to_value",
+        hits: 1,
+        disposition: WasmDisposition::RoutesThroughProjector,
+        why: "The single stripping serializer. Every cacheable result in this era-less dispatcher \
+              is funnelled through here so the strip is applied once rather than per handler, and \
+              it passes `None` as the era, which selects the projector's STRIP arm.",
+    },
+    WasmSite {
+        function: "handle_initialize",
+        hits: 1,
+        disposition: WasmDisposition::NotCacheable,
+        why: "`InitializeResult` does not extend `CacheableResult` in the 2026-07-28 schema — the \
+              sixth cacheable result is `DiscoverResult`, which this dispatcher does not serve at \
+              all — so there is no hint to strip and the projection would be a no-op.",
+    },
+    WasmSite {
+        function: "handle_call_tool",
+        hits: 2,
+        disposition: WasmDisposition::NotCacheable,
+        why: "Both arms serialize a `CallToolResult`, which carries no caching hints: a tool call \
+              is not a list or read. Hit 1 is the success arm, hit 2 the rejection/error arm, and \
+              neither can acquire a hint because the type has no slot for one.",
+    },
+    WasmSite {
+        function: "handle_get_prompt",
+        hits: 1,
+        disposition: WasmDisposition::NotCacheable,
+        why: "`GetPromptResult` is not a `CacheableResult` extender; only `ListPromptsResult` is, \
+              and that handler routes through the stripping serializer. Rendering one prompt is \
+              not an enumeration, so it carries no freshness hint.",
+    },
+];
+
+/// The wasm handlers that MUST route through the stripping serializer.
+const WASM_CACHEABLE_HANDLERS: &[&str] = &[
+    "handle_list_tools",
+    "handle_list_resources",
+    "handle_read_resource",
+    "handle_list_prompts",
+];
+
+/// The reason the wasm source assertion is load-bearing rather than redundant.
+const WASM_WHY: &str = "\
+`src/server/wasm_server.rs` is `#[cfg(target_arch = \"wasm32\")]` (`src/server/mod.rs`), so NO \
+native build and NO native test compiles it, and its own \
+`#[cfg(all(test, target_arch = \"wasm32\"))]` module does not compile at all. `make wasm-build` \
+compiles it — but 115-06 MEASURED that deleting the `project_caching_hints` call still leaves \
+`make wasm-build` at exit 0, because the call is a statement whose removal breaks nothing.\n  \
+This SOURCE assertion is therefore the ONLY automated gate in the repository that catches the \
+removal. Deleting this test silently re-opens a D-11 v1 leak: `WasmResource::read` returns a \
+handler-constructed `ReadResourceResult` that this file serializes verbatim, so a handler calling \
+`with_cache_scope(CacheScope::Public)` would put a v2-only key straight onto an era-less v1 wire \
+(T-115-36).";
+
+/// Every `serde_json::to_value(` site in [`WASM_SERVER`], by enclosing function.
+fn wasm_serialization_sites() -> BTreeMap<String, Vec<u32>> {
+    let source = read(WASM_SERVER);
+    let stripped = strip(&source);
+    let spans = fn_spans(&stripped);
+    let excluded = cfg_test_spans(&stripped);
+    let mut out: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for at in occurrences(&stripped.text, "serde_json::to_value(") {
+        if is_excluded(&excluded, at) {
+            continue;
+        }
+        let owner = enclosing_fn(&spans, at)
+            .unwrap_or("<file scope>")
+            .to_string();
+        out.entry(owner).or_default().push(line_of(&stripped, at));
+    }
+    out
+}
+
+/// Compare the observed wasm serialization sites against the allowlist.
+fn wasm_site_population_failures(observed: &BTreeMap<String, Vec<u32>>) -> String {
+    let mut failures = String::new();
+    for (function, lines) in observed {
+        let Some(entry) = WASM_SERIALIZATION_SITES
+            .iter()
+            .find(|site| site.function == function)
+        else {
+            let _ = writeln!(
+                failures,
+                "\n  UNLISTED serialization site: `{function}` at line(s) {lines:?}.\n    Either \
+                 the result it serializes extends `CacheableResult` — in which case it MUST route \
+                 through `{WASM_HELPER}` — or it does not, in which case say which type it is and \
+                 why."
+            );
+            continue;
+        };
+        if entry.hits != lines.len() {
+            let _ = writeln!(
+                failures,
+                "\n  COUNT CHANGED: `{function}` was recorded with {} serialization site(s) and \
+                 now has {} at line(s) {lines:?}.\n    A second serialization inside an \
+                 already-allowlisted function is exactly the shape this regression takes.",
+                entry.hits,
+                lines.len()
+            );
+        }
+    }
+    for site in WASM_SERIALIZATION_SITES {
+        if !observed.contains_key(site.function) {
+            let _ = writeln!(
+                failures,
+                "\n  STALE entry: `{}` no longer serializes anything. Delete the entry.",
+                site.function
+            );
+        }
+    }
+    failures
+}
+
+/// Every cacheable serialization in the wasm dispatcher routes through the
+/// projector — the only gate that can catch the strip call's removal.
+#[test]
+fn v2_schema_tripwires_every_cacheable_serialization_site_routes_through_the_projector() {
+    let source = read(WASM_SERVER);
+    let stripped = strip(&source);
+    let excluded = cfg_test_spans(&stripped);
+
+    let references_projector = token_hits(&stripped.text, PROJECTOR)
+        .into_iter()
+        .any(|at| !is_excluded(&excluded, at));
+    assert!(
+        references_projector,
+        "{WASM_WHY}\n  {WASM_SERVER} no longer references `{PROJECTOR}` at all."
+    );
+
+    let observed = wasm_serialization_sites();
+    let mut failures = wasm_site_population_failures(&observed);
+
+    for site in WASM_SERIALIZATION_SITES {
+        if !matches!(site.disposition, WasmDisposition::RoutesThroughProjector) {
+            continue;
+        }
+        let routes = fn_body(&stripped, site.function)
+            .is_some_and(|body| !token_hits(body, PROJECTOR).is_empty());
+        if !routes {
+            let _ = writeln!(
+                failures,
+                "\n  STRIP GONE: `{}` no longer calls `{PROJECTOR}`.",
+                site.function
+            );
+        }
+    }
+
+    for handler in WASM_CACHEABLE_HANDLERS {
+        let Some(body) = fn_body(&stripped, handler) else {
+            let _ = writeln!(
+                failures,
+                "\n  HANDLER GONE: `{handler}` is no longer in {WASM_SERVER}; if it moved, the \
+                 new site has to be fenced deliberately."
+            );
+            continue;
+        };
+        if token_hits(body, WASM_HELPER).is_empty() {
+            let _ = writeln!(
+                failures,
+                "\n  BYPASS: `{handler}` serves a `CacheableResult` and no longer routes through \
+                 `{WASM_HELPER}`."
+            );
+        }
+        if body.contains("serde_json::to_value(") {
+            let _ = writeln!(
+                failures,
+                "\n  DIRECT SERIALIZATION: `{handler}` calls `serde_json::to_value` itself \
+                 instead of routing through `{WASM_HELPER}`."
+            );
+        }
+    }
+
+    // A NEW handler that constructs one of the six cacheable results and
+    // serializes it directly is the same defect arrived at from a fresh site.
+    for (name, span) in fn_spans(&stripped) {
+        let body = &stripped.text[span];
+        let names_cacheable = CACHEABLE_RESULT_TYPES
+            .iter()
+            .any(|ty| !token_hits(body, ty).is_empty());
+        if names_cacheable
+            && body.contains("serde_json::to_value(")
+            && token_hits(body, WASM_HELPER).is_empty()
+            && token_hits(body, PROJECTOR).is_empty()
+        {
+            let _ = writeln!(
+                failures,
+                "\n  UNROUTED CACHEABLE: `{name}` constructs a `CacheableResult` extender and \
+                 serializes it without the projector."
+            );
+        }
+    }
+
+    assert!(failures.is_empty(), "{WASM_WHY}{failures}");
+
+    assert_justifications(
+        "WASM_SERIALIZATION_SITES",
+        &WASM_SERIALIZATION_SITES
+            .iter()
+            .map(|site| (site.function, site.why))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// One allowlisted production call of [`ENVELOPE`].
+struct EnvelopeSite {
+    file: &'static str,
+    function: &'static str,
+    hits: usize,
+    why: &'static str,
+}
+
+/// Every PRODUCTION call site of the shared v2 result envelope.
+///
+/// The plan's text said four; the MEASURED population on 2026-08-01 is SIX —
+/// 115-06 already recorded that the original map missed
+/// `streamable_http_server.rs` and `testing/mod.rs`. The list below is the
+/// measurement, not the prediction.
+const ENVELOPE_SITES: &[EnvelopeSite] = &[
+    EnvelopeSite {
+        file: "src/server/core.rs",
+        function: "build_discover_response",
+        hits: 1,
+        why: "`server/discover` is the MEASURED sixth `CacheableResult` extender and the FIRST \
+              call a v2 client makes, so it names itself cacheable; it mints no reserved MRTR or \
+              tasks field, so it owns none of them.",
+    },
+    EnvelopeSite {
+        file: "src/server/core.rs",
+        function: "handle_request",
+        hits: 1,
+        why: "The native chokepoint. Every dispatched result passes through here exactly once, \
+              which is why the cacheability decision is taken by the shared `request_is_cacheable` \
+              classifier before the request is moved rather than re-derived per method.",
+    },
+    EnvelopeSite {
+        file: "src/server/mod.rs",
+        function: "handle_tasks_update",
+        hits: 1,
+        why: "The `tasks/update` egress path, which mints a reserved tasks field and therefore \
+              names an owner other than `None`. A task update is not a list or read, so it names \
+              itself NOT cacheable.",
+    },
+    EnvelopeSite {
+        file: "src/server/mod.rs",
+        function: "handle_request_with_context",
+        hits: 1,
+        why:
+            "The `Server` twin of the `ServerCore` chokepoint. It exists because `Server` has its \
+              own dispatch loop; routing it through the SAME shared helper is what stops the two \
+              native dispatchers from drifting apart on the envelope.",
+    },
+    EnvelopeSite {
+        file: "src/server/streamable_http_server.rs",
+        function: "listen_terminal_result_frame",
+        hits: 1,
+        why: "The SSE terminal-result frame, which is a second egress for an already-dispatched \
+              result and would otherwise reach the wire without the envelope the same result \
+              carries over a plain POST.",
+    },
+    EnvelopeSite {
+        file: "src/testing/mod.rs",
+        function: "run_envelope",
+        hits: 1,
+        why:
+            "The `testing` feature's harness seam, shipped rather than `cfg(test)`, so integration \
+              tests exercise the REAL helper instead of a re-implementation that could agree with \
+              a bug. Feature-gated behind `testing`, folded into `full`.",
+    },
+];
+
+/// Every production call of [`ENVELOPE`], grouped by file and function.
+fn envelope_call_sites() -> BTreeMap<(String, String), Vec<u32>> {
+    let mut out: BTreeMap<(String, String), Vec<u32>> = BTreeMap::new();
+    for path in src_files() {
+        let raw = fs::read_to_string(&path).expect("readable source");
+        if !raw.contains(ENVELOPE) {
+            continue;
+        }
+        let stripped = strip(&raw);
+        let spans = fn_spans(&stripped);
+        let excluded = cfg_test_spans(&stripped);
+        for at in token_hits(&stripped.text, ENVELOPE) {
+            if is_excluded(&excluded, at) || !is_call_of(&stripped.text, at, ENVELOPE) {
+                continue;
+            }
+            let owner = enclosing_fn(&spans, at)
+                .unwrap_or("<file scope>")
+                .to_string();
+            out.entry((rel(&path), owner))
+                .or_default()
+                .push(line_of(&stripped, at));
+        }
+    }
+    out
+}
+
+/// Is the token at `at` a CALL of `name` rather than its definition?
+fn is_call_of(text: &str, at: usize, name: &str) -> bool {
+    if !text[at + name.len()..].starts_with('(') {
+        return false;
+    }
+    let prefix = text[..at].trim_end();
+    let reversed: String = prefix
+        .chars()
+        .rev()
+        .take_while(|c| is_ident_char(*c))
+        .collect();
+    let last: String = reversed.chars().rev().collect();
+    last != "fn"
+}
+
+/// Every envelope call site names its cacheability deliberately.
+#[test]
+fn v2_schema_tripwires_every_envelope_call_site_names_its_cacheability() {
+    let observed = envelope_call_sites();
+    let mut failures = String::new();
+
+    for ((file, function), lines) in &observed {
+        let Some(entry) = ENVELOPE_SITES
+            .iter()
+            .find(|site| site.file == file && site.function == function)
+        else {
+            let _ = writeln!(
+                failures,
+                "\n  UNLISTED envelope call site: `{function}` in {file} at line(s) {lines:?}.\n  \
+                   `{ENVELOPE}` takes `owner` and `cacheable` with NO default precisely so a new \
+                 egress has to DECIDE both rather than inherit them by omission. Add the entry \
+                 and say what it decided."
+            );
+            continue;
+        };
+        if entry.hits != lines.len() {
+            let _ = writeln!(
+                failures,
+                "\n  COUNT CHANGED: `{function}` in {file} was recorded with {} envelope call(s) \
+                 and now has {} at line(s) {lines:?}.",
+                entry.hits,
+                lines.len()
+            );
+        }
+    }
+
+    for site in ENVELOPE_SITES {
+        let key = (site.file.to_string(), site.function.to_string());
+        if !observed.contains_key(&key) {
+            let _ = writeln!(
+                failures,
+                "\n  STALE entry: `{}` in {} no longer calls `{ENVELOPE}`. Delete the entry.",
+                site.function, site.file
+            );
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the production `{ENVELOPE}` population changed:{failures}"
+    );
+
+    let total: usize = observed.values().map(Vec::len).sum();
+    assert_eq!(
+        total,
+        ENVELOPE_SITES.iter().map(|site| site.hits).sum::<usize>(),
+        "the total production envelope call count moved; observed {observed:#?}"
+    );
+
+    assert_justifications(
+        "ENVELOPE_SITES",
+        &ENVELOPE_SITES
+            .iter()
+            .map(|site| (site.function, site.why))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// The projection currently runs BEFORE response middleware — a MEASUREMENT of
+/// a KNOWN LIMITATION, not an assertion that the ordering is desirable.
+///
+/// `src/shared/middleware.rs`'s `process_response_with_context` takes
+/// `response: &mut JSONRPCResponse`, so a registered response middleware CAN
+/// add, alter or remove `ttlMs`, `cacheScope`, `resultType` or `serverInfo`
+/// AFTER the projection has run. Three artifacts already state that:
+///
+/// * `inject_v2_result_envelope`'s rustdoc carries the imperative prohibition
+///   ("Response middleware MUST NOT mutate …");
+/// * 115-06's
+///   `response_middleware_still_runs_after_the_projection_and_this_is_a_known_limitation`
+///   MEASURES the behaviour;
+/// * 115-10 books it as a deferred item.
+///
+/// Reordering was CONSIDERED and deliberately NOT done, because moving the
+/// injection after the middleware chain would change what middleware observes
+/// about Phase 114's `resultType` / `serverInfo` — a v2 behaviour change outside
+/// SCHM-03's scope. If a future phase DOES reorder, this test failing is the
+/// intended signal that the deferred item was addressed; the remedy is then to
+/// update this test, the rustdoc prohibition and the limitation test together,
+/// deliberately, rather than to discover the change from a conformance report.
+#[test]
+fn v2_schema_tripwires_the_projection_precedes_response_middleware_by_measurement() {
+    let source = read(CORE);
+    let stripped = strip(&source);
+    let excluded = cfg_test_spans(&stripped);
+
+    let candidates: Vec<Range<usize>> = fn_spans(&stripped)
+        .into_iter()
+        .filter(|(name, span)| {
+            name == "handle_request"
+                && !is_excluded(&excluded, span.start)
+                && stripped.text[span.clone()].contains(MIDDLEWARE)
+        })
+        .map(|(_, span)| span)
+        .collect();
+    assert_eq!(
+        candidates.len(),
+        1,
+        "expected EXACTLY ONE production `handle_request` in {CORE} running the response \
+         middleware chain and found {}; the ordering measurement has no unambiguous subject",
+        candidates.len()
+    );
+
+    let span = candidates.into_iter().next().expect("checked above");
+    let body = &stripped.text[span.clone()];
+    let inject = token_hits(body, ENVELOPE)
+        .first()
+        .copied()
+        .unwrap_or_else(|| {
+            panic!(
+                "`{ENVELOPE}` is no longer called in {CORE}'s `handle_request`; the v2 envelope \
+                and the caching projection have left the native chokepoint entirely"
+            )
+        });
+    let middleware = occurrences(body, MIDDLEWARE)
+        .first()
+        .copied()
+        .expect("filtered on its presence above");
+
+    assert!(
+        inject < middleware,
+        "the caching projection at {CORE}:{} now runs AFTER `{MIDDLEWARE}` at {CORE}:{}.\n  This \
+         test pins a KNOWN LIMITATION by measurement: middleware takes `&mut JSONRPCResponse` and \
+         can therefore forge or strip `ttlMs` / `cacheScope` / `resultType` / `serverInfo` after \
+         the projection. The reorder was CONSIDERED and declined because it changes what \
+         middleware observes about Phase 114's `resultType` / `serverInfo`, and it is booked as a \
+         DEFERRED ITEM by 115-10.\n  If this reorder is the deferred item finally being \
+         addressed, update this test, `{ENVELOPE}`'s rustdoc prohibition and 115-06's \
+         `response_middleware_still_runs_after_the_projection_and_this_is_a_known_limitation` \
+         TOGETHER. If it is not, put the call back.",
+        line_of(&stripped, span.start + inject),
+        line_of(&stripped, span.start + middleware)
+    );
+}
+
+/// ANTI-VACUITY for every projection-side scan — green must mean "checked".
+#[test]
+fn v2_schema_tripwires_the_projection_scan_is_not_vacuous() {
+    let writes = hint_write_sites();
+    assert!(
+        writes.len() >= 2,
+        "the caching-hint write scan found {} site(s); `{PROJECTOR}` ensures BOTH keys on v2 and \
+         removes BOTH on every other era, so at least two writes must exist or the location \
+         assertion is passing over nothing",
+        writes.len()
+    );
+    for key in HINT_KEYS {
+        assert!(
+            writes.iter().any(|site| site.key == *key),
+            "no write of `\"{key}\"` was found at all; the scan is looking for the wrong string"
+        );
+    }
+
+    let wasm = wasm_serialization_sites();
+    let wasm_total: usize = wasm.values().map(Vec::len).sum();
+    assert!(
+        wasm_total >= 4,
+        "the {WASM_SERVER} serialization scan found {wasm_total} `serde_json::to_value(` site(s); \
+         the dispatcher serializes far more than that, so the scan is broken"
+    );
+
+    let envelopes = envelope_call_sites();
+    for site in ENVELOPE_SITES {
+        let key = (site.file.to_string(), site.function.to_string());
+        assert!(
+            envelopes.contains_key(&key),
+            "`{}` in {} was not located by the envelope scan; every entry in the allowlist must \
+             correspond to a site the scan actually finds, or the population check is vacuous",
+            site.function,
+            site.file
+        );
+    }
+
+    let fields = hint_field_attributes();
+    assert_eq!(
+        fields.len(),
+        12,
+        "expected 12 caching-hint field declarations (six `CacheableResult` extenders times two \
+         fields) and found {}: {:?}",
+        fields.len(),
+        fields
+            .iter()
+            .map(|field| format!("{}:{}", field.module, field.line))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        fields.iter().all(|field| !field.attrs.is_empty()),
+        "at least one caching-hint field parsed with NO attributes; the attribute walk is broken \
+         and the serde checks would pass over nothing"
+    );
+}
+
+/// D-10, structurally: the two `ttlMs` definitions stay in separate modules.
+///
+/// The `ttlMs` in `types::caching` is a cache-FRESHNESS hint (how long a client
+/// may reuse a body); the `ttlMs` in `types::tasks` is a task LIFETIME (how long
+/// the server retains a record). Copying a long task lifetime into a cache hint
+/// would make stale data look fresh, and copying a short cache hint into a task
+/// lifetime would expire live work.
+///
+/// 115-CONTEXT.md leaves the tripwire to the planner's discretion under D-10 and
+/// 115-05 exercised that discretion by DECLINING it at the types layer, in
+/// favour of reciprocal rustdoc. This is the cheap STRUCTURAL half, added here
+/// at the tripwire layer instead: it asserts only that neither module reaches
+/// into the other, which is what makes an accidental cross-import impossible
+/// rather than merely discouraged.
+#[test]
+fn v2_schema_tripwires_ttl_ms_definitions_stay_in_separate_modules() {
+    let caching = strip(&read(CACHING));
+    let tasks = strip(&read(TASKS_TYPES));
+
+    assert!(
+        caching.text.len() > 1_000 && tasks.text.len() > 1_000,
+        "one of {CACHING} / {TASKS_TYPES} stripped down to almost nothing ({} / {} bytes); this \
+         check would then pass over an empty file",
+        caching.text.len(),
+        tasks.text.len()
+    );
+
+    if let Some(at) = occurrences(&caching.text, "crate::types::tasks")
+        .first()
+        .copied()
+    {
+        panic!(
+            "{CACHING}:{} reaches into `crate::types::tasks`.\n  D-10: the cache-freshness \
+             `ttlMs` and the task-lifetime `ttlMs` are deliberately separate. Sharing a constant \
+             or a type between them is how a task LIFETIME ends up presented to a client as a \
+             cache FRESHNESS window, which makes stale data look fresh.",
+            line_of(&caching, at)
+        );
+    }
+    if let Some(at) = occurrences(&tasks.text, "crate::types::caching")
+        .first()
+        .copied()
+    {
+        panic!(
+            "{TASKS_TYPES}:{} reaches into `crate::types::caching`.\n  D-10: see above — the \
+             dependency is forbidden in BOTH directions, because either import is enough to let \
+             one meaning of `ttlMs` be substituted for the other.",
+            line_of(&tasks, at)
+        );
+    }
 }
