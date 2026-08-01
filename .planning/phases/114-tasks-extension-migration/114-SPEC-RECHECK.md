@@ -298,6 +298,54 @@ Unless a row says otherwise, the source is the vendored
 `schema/vendored/ext-tasks/schema.ts` / `schema.json` @ `2c1425d9a288b9b1f489430fe1e00bb392b47e48`
 (digests in `schema/vendored/ext-tasks/PROVENANCE.md`).
 
+### Landing sites — filled by `114-18` (2026-08-01)
+
+**The inventory above was written before implementation, so its "Lives in" column names FILES.**
+`114-18` walked every row and resolved each to the **identifier** that actually carries the value, so
+`## Procedure` step 3 is a mechanical walk rather than a search. **No row was blank and no row was
+stale** — every one of the 39 has a landing site. The table below is the walk; read it alongside the
+per-section tables, not instead of them.
+
+| # | Value | Landing identifier | File |
+|---|---|---|---|
+| 1 | extension key | `TASKS_EXTENSION_KEY` (`= "io.modelcontextprotocol/tasks"`) | `src/types/capabilities.rs:346` |
+| 2 | capability value `{}` | `TasksExtensionCapability` (unit-shaped, serializes `{}`) | `src/types/capabilities.rs` |
+| 3 | client declaration site | `ClientCapabilities::extensions` + `ClientBuilder::with_tasks_extension`; read server-side by `TaskDispatch::declares_tasks_extension` | `src/types/capabilities.rs:96`, `src/client/mod.rs`, `src/server/task_dispatch.rs:2497` |
+| 4-10 | the seven `Task` fields | `TaskV2` (`task_id`/`status`/`created_at`/`last_updated_at`/`ttl_ms`/`poll_interval_ms`/`status_message`), projected ONLY by `TaskV2::from_v1` | `src/types/tasks.rs` |
+| 11-15 | the five status strings | `TaskStatus` (`#[serde(rename_all = "snake_case")]`), set-equality-locked against the vendored schema at runtime | `src/types/tasks.rs`; lock in `tests/v2_tasks_tripwires.rs` |
+| 16-17 | flat `CreateTaskResult` + `resultType:"task"` | `v2_create_result_value` + `DispatchEnvelopeClaim::TASK_CREATED` → `inject_v2_result_envelope` | `src/server/task_dispatch.rs:729`, `src/server/core.rs:1459/1561` |
+| 18 | flat `GetTaskResult` | `v2_detailed_task_value` over `TaskDetailV2` | `src/server/task_dispatch.rs:798`, `src/types/tasks.rs` |
+| 19 | empty `UpdateTaskResult` ack | `update_ack` + the direct `inject_v2_result_envelope` call in `Server::handle_tasks_update` | `src/server/task_dispatch.rs`, `src/server/mod.rs` |
+| 20 | empty `CancelTaskResult` ack | `route_tasks_cancel` (`{}` on v2) | `src/server/task_dispatch.rs:1906` |
+| 21-24 | per-variant required fields | `TaskDetailV2::{Working, InputRequired{..}, Completed{..}, Failed{..}, Cancelled}` + `DETAIL_KEY_RESULT` / `DETAIL_KEY_ERROR` / `DETAIL_KEY_INPUT_REQUESTS`; egress grant via `ReservedFieldOwner::TasksDispatch` | `src/types/tasks.rs`, `src/server/core.rs:1372/1671` |
+| 25 | method name `tasks/update` | `TASKS_UPDATE_METHOD` (`= "tasks/update"`); routed via `InternalClientRequest::TasksUpdate` | `src/types/mrtr.rs:207`, `src/types/protocol/mod.rs:690` |
+| 26 | param name `inputResponses` | `INPUT_RESPONSES_KEY` (`= "inputResponses"`) | `src/types/mrtr.rs:69` |
+| 27 | `params.taskId` | `TASK_ID_KEY` (`= "taskId"`) | `src/types/mrtr.rs:216` |
+| 28 | outstanding-key rule | `TaskStore::task_input_snapshot` + `InputResponse::decode_for`, bounded first by `check_input_responses_map_bounds` | `src/server/task_store.rs`, `src/types/mrtr.rs` |
+| 29 | `-32602` v2 not-found | `INVALID_PARAMS` + the single `V2_TASK_NOT_FOUND_MESSAGE` (`= "task not found"`) in `store_error_response` | `src/types/protocol/error_codes.rs:71`, `src/server/task_dispatch.rs:202/678` |
+| 30 | `-32021` non-declaring client | `MISSING_REQUIRED_CLIENT_CAPABILITY` emitted by `missing_tasks_declaration_refusal` | `src/types/protocol/error_codes.rs:213`, `src/server/task_dispatch.rs:607` |
+| 31 | `-32003` auth refusal | `AUTHENTICATION_REQUIRED` | `src/types/protocol/error_codes.rs:147` |
+| 32 | `-32601` wrong-era method | `V2_TASKS_METHOD_RETIRED` emitted by `retired_on_v2` | `src/server/task_dispatch.rs:143/274` |
+| 33 | `-32002` FROZEN v1-only | `V1_TASK_PENDING`, era-gated by `is_v1_task_era` | `src/types/protocol/error_codes.rs:144`, `src/server/task_dispatch.rs` |
+| 34 | client `Mcp-Name: <taskId>` | `TASK_NAME_BEARING_METHODS` + `name_bearing_key` — a table SEPARATE from `MRTR_METHODS` | `src/types/mrtr.rs:249` |
+| 35 | server-side `Mcp-Name` enforcement OFF | `is_name_bearing_method` still reads `logical_name_key`, unchanged | `src/server/streamable_http_server.rs` |
+| 36 | `notifications/tasks` declined | *(intentionally no identifier — nothing implements it)* | — |
+| 37-38 | `tasks/list` / `tasks/result` retired | `tasks_list_serves_on_era` / `tasks_result_serves_on_era`, both delegating to `is_v1_task_era`; the `tasks/list` gate fires one frame up in `retired_method` | `src/server/task_dispatch.rs` |
+| 39 | no client `task` field on v2 | `CreateTrigger` (era-aware) reached through the single `TaskDispatch::create_gate` | `src/server/task_dispatch.rs:1023/1521` |
+
+Three cross-cutting notes a re-runner needs and would otherwise reconstruct:
+
+- **Row 36 is the only row with no identifier, and that is the correct state**, not a gap: the spec
+  marks the push surface `MAY` and this phase declines it (DQ4-adjacent). A future implementation
+  fills this cell; an EMPTY cell here means "declined", never "forgotten".
+- **Rows 34 and 25-27 must not be merged.** `logical_name_key` and `mrtr_eligible` both derive from
+  `MRTR_METHODS`, so adding a `tasks/*` row THERE would make `tasks/update` MRTR-eligible and
+  `splice_mrtr_params` would delete its entire payload. The separate `TASK_NAME_BEARING_METHODS`
+  table exists for exactly that reason.
+- **`TASKS_UPDATE_METHOD`'s own attribution is PROSE-ONLY** — see **D-114-Q**. It is the one wire
+  constant this phase introduced whose rustdoc does not name a walkable artifact. Closing that
+  deferral is a two-line rustdoc change that `tests/v2_tasks_tripwires.rs` itself demands.
+
 ### Negotiation
 
 | # | Value | Recorded as | Lives in (once implemented) | Owning plan | Source |
@@ -601,13 +649,44 @@ original CONTEXT.md deferral intended.
 Rows 37/38 are the reason TASK-03 and TASK-05 are *"the same improvement viewed from two
 angles"*: removing enumeration and binding the owner are one security posture.
 
+### The `resultType` / `TaskStatus` axis overlap — ADDED by `114-18` (2026-08-01)
+
+**This row exists because the 2026-07-29 run's advance observation 5 asked for it by name**
+(*"the overlap is currently undocumented in this inventory and should get its own row"*). It is
+sourced from the **published** core `schema/2026-07-28/schema.ts`, not from the vendored draft, and
+it is the only row in this table whose source is a published artifact.
+
+| # | Value | Recorded as | Lives in | Owning plan | Source |
+|---|-------|-------------|----------|-------------|--------|
+| 40 | `"input_required"` on TWO different axes | A **`ResultType`** upstream (a per-REQUEST disposition: *"the request requires additional input"*) **and** a **`TaskStatus`** here (a per-TASK lifecycle state, row 12). **Both are correct simultaneously; they are different axes.** | `src/types/tasks.rs` (`TaskStatus::InputRequired`), `src/server/core.rs` (`ResponseDisposition` / `inject_v2_result_envelope`) | 114-10, 114-11 | published core `schema.ts:216` (`ResultType`), vendored `schema.ts:36` (`TaskStatus`) |
+
+**Why the two must not be collapsed, stated so a re-runner does not "fix" it.** Row 18 is the case
+that proves they are independent: a v2 `tasks/get` on an `input_required` task answers with
+`resultType: "complete"` **and** a body whose `status` is `"input_required"`. The REQUEST completed;
+it is the TASK that is waiting. Anything that derived one from the other would emit
+`resultType:"input_required"` there and tell the client to look for an `InputRequiredResult` at the
+top level — which is a different shape and a different retry protocol (MRTR's, not the tasks
+extension's).
+
+**Measured 2026-08-01, `gh api` + `raw.githubusercontent.com` on the published core:**
+`export type ResultType = "complete" | "input_required" | string;` (`schema.ts:216`) and
+`resultType: ResultType;` on `Result` (`:234`), with the docblock *"Servers implementing this
+protocol version MUST include this field."*
+
+**THE OBLIGATION at the gate:** re-read this row when `ext-tasks` publishes. If the published
+extension ever names `resultType: "input_required"` for a task awaiting input, this row becomes
+**DRIFT** and reopens the phase — because pmcp answers `"complete"` there today, deliberately.
+
+**Row numbering now stops at 40.**
+
 ### ⚠ Carried obligation — the Phase-114 contract-first waiver
 
 **This is its own row, and it is deliberately NOT numbered, because it is not a wire value.** It
 is an obligation created by an **owner decision** and carried to *this* gate because the same
-condition releases it. Row numbering stops at 39; nothing below is an inventory value. A
-re-runner walking `## Procedure` step 3 must still read this row — a carried obligation that was
-not checked is not discharged, exactly as a wire value that was not checked is not confirmed.
+condition releases it. Row numbering stops at **40** (`114-18` added row 40); nothing below is an
+inventory value. A re-runner walking `## Procedure` step 3 must still read this row — a carried
+obligation that was not checked is not discharged, exactly as a wire value that was not checked is
+not confirmed.
 
 | Field | Value |
 |-------|-------|
@@ -766,3 +845,146 @@ per that row a plan may not choose outcome (b) on its own authority regardless.
   cheaper, and a watch on that one repository is what triggers it.
 - Observations 5 (the `resultType` narrowing/overlap) and 4 (the persisting code disagreement) are
   the two items `114-18` must carry into its booking.
+
+#### 2026-08-01 — `STILL-ABSENT` (partial publication, RE-MEASURED with the prescribed `gh api` form)
+
+**Trigger for the run:** the phase's closing gate, plan `114-18` Task 3. This run exists to do two
+things the 2026-07-29 run could not: **take both listings with the form `## Procedure` step 1
+prescribes**, and **execute `114-01`'s provenance tripwire** instead of asserting the vendored bytes
+unchanged by inference.
+
+**Landing: `STILL-ABSENT`**, per `## Procedure` step 4 row 3 and `## Third Outcome Policy` rule 5.
+`## Verdict` stays **`PENDING`**. TASK-01…TASK-06 are booked **`[~]`** in `.planning/REQUIREMENTS.md`
+by this run — booked, **not flipped**. The obligation is **NOT discharged** and rolls forward.
+
+##### Step 1 — both listings, taken with `gh api … --jq` as prescribed
+
+**Run timestamp (UTC): `2026-08-01T00:09:19Z`.** `gh` version 2.64.0, authenticated; both
+invocations exited **0**. **The 2026-07-29 METHOD CAVEAT is hereby DISCHARGED** — those listings were
+taken over plain HTTP because no shell was available, and both are now confirmed by the prescribed
+form.
+
+```
+$ gh api repos/modelcontextprotocol/modelcontextprotocol/contents/schema --jq '.[].name'
+2024-11-05
+2025-03-26
+2025-06-18
+2025-11-25
+2026-07-28
+draft
+```
+
+```
+$ gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'
+draft
+```
+
+| Repository | Versioned directories | `2026-07-28` present? | Condition met? |
+|---|---|---|---|
+| `modelcontextprotocol/modelcontextprotocol` | `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, **`2026-07-28`** (plus `draft`) | **YES** | yes |
+| `modelcontextprotocol/ext-tasks` | *(none — only `draft`)* | **NO** | **no** |
+
+Corroborating measurements on `ext-tasks`, all via `gh api`:
+
+- `…/tags` → **0**. `…/releases` → **0**.
+- `…/contents/specification` → `draft` only.
+- last commit touching `schema/draft` → **`29f83d5`, 2026-05-22T19:06:55Z**, *"Write updated docs and
+  port SEP-2663 content (#2)"* — **unchanged since the 2026-07-29 run**.
+
+##### Steps 2–3 — NOT executed, deliberately
+
+`## Procedure` step 1 makes them *"not executable"* when either repository lacks a versioned
+directory, and rule 5 forbids running them against a half-published pair. **No inventory row is
+marked CONFIRMED by this run.** The vendored artifact remains the source for rows 1-39; row 40 is
+sourced from the published core and is likewise **not** a confirmation of any extension-graded row.
+
+##### `114-01`'s provenance tripwire — EXECUTED (the 2026-07-29 gap, closed)
+
+```
+$ cargo nextest run --features full -E 'binary_id(pmcp::vendored_schema_provenance)'
+     Summary  5 tests run: 5 passed, 0 skipped
+```
+
+```
+$ shasum -a 256 schema/vendored/ext-tasks/schema.ts schema/vendored/ext-tasks/schema.json
+2203cc75469e32a92a60f4b7b4de949577e25f18fafff69aa92ec06773ab70f6  …/schema.ts
+b17cb4a2534379c214b17770bd5d3d54f69fde16a953bfb542c58235a61274bb  …/schema.json
+```
+
+Both digests equal the values recorded in `schema/vendored/ext-tasks/PROVENANCE.md`. **The vendored
+bytes are unchanged BY TEST, not by inference.**
+
+> **SELECTOR CORRECTION, measured.** The amendment warned that `-E 'test(/vendored_schema/)'` would
+> *"select 0 or pass vacuously"*. That is **not** what happens for this pattern, and the accurate
+> statement matters: `test(...)` matches test NAMES, and every one of the five provenance tests
+> happens to be named `vendored_schema_*`, so it selects **6** — all five, **plus**
+> `pmcp::v2_tasks_tripwires::the_task_status_wire_strings_are_set_equal_to_the_vendored_schema` from
+> a **different binary**. So it over-selects rather than under-selects here. Use
+> `binary_id(pmcp::vendored_schema_provenance)`, which selects exactly the five. The general trap
+> (a name matcher is not a binary matcher) stands; the specific prediction did not.
+
+##### Advance observations — RE-MEASURED against the published core, with one CORRECTION
+
+Read from `schema/2026-07-28/schema.ts` (98 426 bytes) fetched via
+`gh api …/contents/schema/2026-07-28/schema.ts`. Still **observations, not row confirmations**.
+
+1. **`LATEST_PROTOCOL_VERSION = "2026-07-28"`** (`:30`). Confirmed.
+2. **`extensions?: { [key: string]: JSONObject };` on BOTH `ClientCapabilities` (`:785`) and
+   `ServerCapabilities` (`:882`).** Consistent with rows 1-3.
+3. **`MISSING_REQUIRED_CLIENT_CAPABILITY = -32021`** (`:442`), beside `HEADER_MISMATCH = -32020`
+   (`:434`) and `UNSUPPORTED_PROTOCOL_VERSION = -32022` (`:450`). Consistent with row 30.
+4. **`-32003` is absent from the published core codes** — the EXPECTED result, and it **confirms**
+   DQ3's split. Row 31 sources it to pmcp's own `AUTHENTICATION_REQUIRED`, never to core.
+5. **§ ⚠ Known upstream disagreement (`-32003` vs `-32021`) — the disagreement PERSISTS.** The
+   published core says `-32021`; the ext-tasks prose saying `-32003` is still
+   `specification/draft/tasks.md`, unpublished and unchanged since 2026-05-22. There is still no
+   *published* extension prose to have been corrected. **Keep both codes, two meanings. DQ3's split
+   stands.** Re-check when `ext-tasks` publishes.
+6. **`resultType` — the two consequences the 2026-07-29 run left open are now DECIDED, and one of
+   them is a CORRECTION of that run.**
+   - `resultType: ResultType` on `Result` (`:234`) is **required**: *"Servers implementing this
+     protocol version MUST include this field."* `ResultType = "complete" | "input_required" | string`
+     (`:216`).
+   - **pmcp's `"task"` is CONFORMANT-BY-EXTENSION, not prospective DRIFT.** The judgement is made
+     explicitly, as the amendment required. `"task"` is admissible through the published union's open
+     `| string` tail, and the `io.modelcontextprotocol/tasks` extension is precisely what names it
+     (vendored `schema.ts:228-229`, *"The resultType field MUST be set to `"task"`"*). An extension
+     supplying a value through a deliberately open union is the mechanism working as designed. Rows
+     16-17 nevertheless stay held, because the mandating sentence is still in the unpublished draft.
+   - **CORRECTION.** The 2026-07-29 run recorded Phase 112's absent-means-`complete` decoding as
+     *"a tolerance, not the contract, if upstream requires the field."* **The published core states
+     the opposite:** *"For backward compatibility, when a client receives a result from a server
+     implementing an earlier protocol version (which does not include `resultType`), the client MUST
+     treat the absent field as `"complete"`."* pmcp's decoding — and `114-19`'s named client arm —
+     **are** the contract. That observation is withdrawn.
+   - **The `"input_required"` axis overlap now has its own row: row 40.**
+7. **`initialize` removal** — unchanged from the 2026-07-29 record; still vindicates `114-05`'s
+   split. No action.
+
+##### Carried obligation — the Phase-114 contract-first waiver
+
+**`STILL-ABSENT`. Not discharged.** Its THE CONDITION is the same DQ6 both-repositories condition,
+which is unmet. `114-18` **cites** the waiver and does not re-decide it (T-114-106): the owner's
+decision is `Chosen: option-b`, Guy Ernest, 2026-07-28, recorded at `114-CONTRACT-DECISION.md` § 4.
+
+`114-18` additionally **confirmed the waiver's residual costs by measurement rather than assuming
+them unchanged**: `make comply` exits **0**, and `pmat comply check --path .` reads the in-repo
+`contracts/` tree exactly as `114-CONTRACT-DECISION.md` §1.5 measured — CB-1200 finds 2 contract
+files, CB-1202 reports 2/2 critical keywords covered, CB-1205 reports the provability invariant
+satisfied, CB-1305 reports 2/2 classified, and **CB-1207 still reports 1/2 contracts stale (>90
+days)**. That last one is the accepted residual cost, present and unchanged, as the row predicted.
+**A re-runner should expect to find it and must not read it as drift.**
+
+##### Consequence of this run
+
+- `## Verdict` stays **`PENDING`**.
+- TASK-01…TASK-06 are **booked `[~]`** — *implemented; pending final schema* — in
+  `.planning/REQUIREMENTS.md`. **No checkbox is flipped to `[x]`.**
+- The obligation rolls forward. **The sole remaining condition is `modelcontextprotocol/ext-tasks`
+  publishing a versioned (non-`draft`) schema directory.** The core half is satisfied and stays
+  satisfied, so the next re-run is a **one-repository** check:
+  `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'` — when that returns
+  anything other than `draft` alone, this record becomes runnable end to end.
+- **Nothing watches that repository.** Recorded as `deferred-items.md` **D-114-S**.
+- Row **40** was added by this run. Rows 1-39 are unchanged in substance and now carry landing
+  identifiers (see § *Landing sites*).

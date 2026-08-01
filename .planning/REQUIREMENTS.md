@@ -81,12 +81,62 @@ checkboxes a verifier can fail on.
 
 ### Tasks Extension Migration (TASK)
 
-- [ ] **TASK-01**: Tasks are negotiated on v2 via the extensions map (`io.modelcontextprotocol/tasks`); v1 `experimental.tasks` negotiation continues to work
-- [ ] **TASK-02**: A client can feed input into a running task via `tasks/update`
-- [ ] **TASK-03**: `tasks/list` (and blocking `tasks/result` semantics per final spec) are era-gated off on v2 while remaining fully functional for v1 consumers
-- [ ] **TASK-04**: v2 task-augmented results use `resultType:"task"` with `CreateTaskResult{taskId,status,ttlMs,pollIntervalMs}`, and the v1 5-state machine maps deterministically to the v2 status enum (`working|input_required|completed|failed|cancelled`)
-- [ ] **TASK-05**: On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility
-- [ ] **TASK-06**: The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends survive unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, not a storage rewrite
+> **Status marker `[~]` — implemented, gated on the final schema. Booked by Phase 114 plan 114-18
+> (2026-08-01) under **D-18**.** All six TASK requirements are implemented and green at Phase-114
+> HEAD, and none is marked complete. The completion gate is
+> [`114-SPEC-RECHECK.md`](phases/114-tasks-extension-migration/114-SPEC-RECHECK.md) — read it before
+> flipping anything here. Its `## Verdict` is **`PENDING`**.
+>
+> **All six flip together, never individually**, and only on a `PUBLISHED-CONFIRMED` landing of that
+> record's `## Procedure` step 4. Splitting the wire-exact TASK-02/04 from the schema-independent
+> TASK-01/03/05/06 was considered during discussion and **not** chosen.
+>
+> **The remaining trigger is now a ONE-repository check.** Re-measured with the prescribed `gh api`
+> form on **2026-08-01T00:09:19Z**: `modelcontextprotocol/modelcontextprotocol` has published
+> `schema/2026-07-28/` (condition **met**), while `modelcontextprotocol/ext-tasks` still carries
+> `schema/draft/` and `specification/draft/` only, with **0 tags and 0 releases** (condition **NOT
+> met**). Under the DQ6 both-repositories trigger that is a **partial publication**, which the
+> record's `## Third Outcome Policy` rule 5 defines as **`STILL-ABSENT`** — so the hold stays
+> engaged. **Watch `ext-tasks`; nothing else is outstanding.**
+
+- [~] **TASK-01**: Tasks are negotiated on v2 via the extensions map (`io.modelcontextprotocol/tasks`); v1 `experimental.tasks` negotiation continues to work — *implemented; pending final schema*
+- [~] **TASK-02**: A client can feed input into a running task via `tasks/update` — *implemented; pending final schema*
+- [~] **TASK-03**: `tasks/list` (and blocking `tasks/result` semantics per final spec) are era-gated off on v2 while remaining fully functional for v1 consumers — *implemented; pending final schema*
+- [~] **TASK-04**: v2 task-augmented results use `resultType:"task"` with `CreateTaskResult{taskId,status,ttlMs,pollIntervalMs}`, and the v1 5-state machine maps deterministically to the v2 status enum (`working|input_required|completed|failed|cancelled`) — *implemented; pending final schema*
+- [~] **TASK-05**: On v2, task owner binding requires OAuth `sub` or a stable per-request identity and fails closed when absent (no session-id fallback); a security test proves no cross-caller task visibility — *implemented; pending final schema*
+- [~] **TASK-06**: The `TaskStore` trait, state machine, and DynamoDB/Redis/in-memory backends survive unchanged — the migration is a wire-API reshape behind the `TaskRouter` boundary, not a storage rewrite — *implemented; pending final schema*
+
+> **⚠ TASK-05's "fails closed" is narrower than it reads, and the booking carries the
+> qualification rather than absorbing it.** `114-SPEC-RECHECK.md` § *⚠ Known INTERNAL wording gap —
+> TASK-05 "fails closed" vs D-07 row 3* obliges this booking to say so. **"Fails closed" applies to
+> **auth-configured deployments**** — a server that has an auth provider and receives a caller with
+> no subject is refused `-32003`. On a server with **no auth provider at all**, D-07 row 3
+> deliberately maps every anonymous caller onto one `ANONYMOUS_PRINCIPAL` (`""`) bucket, so v2 tasks
+> there run in a **single shared bucket by design**: a development / stdio affordance, **not**
+> per-caller isolation. D-07 is a **LOCKED** decision, implemented verbatim by 114-09, and this row
+> does not reopen it. It is independently bounded on the production backends —
+> `TaskSecurityConfig::default()` sets `allow_anonymous: false`, so `GenericTaskStore` refuses that
+> bucket unless an operator opts in. **The no-cross-caller-visibility half is proven, not asserted:**
+> `tests/v2_tasks_security.rs` (114-15) closes all three v2 `tasks/*` methods to a cross-caller over
+> a real socket, with the refusals indistinguishable from an absent id on both code and message, and
+> `114-15-SUMMARY.md` § *BLOCKING: TASK-05 security defect* records **NONE FOUND**. The named future
+> closure is the configurable proxy-header / claim-based identity source, which is **deferred, not
+> scheduled**.
+
+> **⚠ TASK-04's `resultType:"task"` is conformant-by-extension, and that is a judgement this booking
+> makes explicitly rather than absorbing.** Measured 2026-08-01 against the **published** core
+> `schema/2026-07-28/schema.ts`: `Result.resultType` is **required** (`resultType: ResultType`, with
+> *"Servers implementing this protocol version MUST include this field"*) and
+> `ResultType = "complete" | "input_required" | string`. `"task"` is **not** a named upstream value;
+> it is admissible only through the open `| string` tail — and the `io.modelcontextprotocol/tasks`
+> extension is precisely what names it (`schema.ts:228-229`, *"The resultType field MUST be set to
+> `\"task\"`"*). **Verdict: conformant-by-extension, NOT prospective drift** — an extension supplying
+> a value through a deliberately open union is the mechanism working as designed. It nevertheless
+> stays under the D-18 hold, because the sentence that mandates `"task"` lives in the unpublished
+> `ext-tasks` draft. **One correction to the 2026-07-29 advance observation:** that run recorded
+> Phase 112's absent-`resultType`-means-`complete` decoding as *"a tolerance, not the contract"*. The
+> published core states the opposite — a client **MUST** treat an absent field as `"complete"` when
+> the server implements an earlier protocol version — so pmcp's decoding **is** the contract.
 
 ### JSON Schema 2020-12 & Caching Hints (SCHM)
 
@@ -214,12 +264,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLNT-01 | Phase 113 | Implemented — pending final schema |
 | CLNT-02 | Phase 113 | Implemented — pending final schema |
 | CLNT-05 | Phase 113 | Implemented — pending final schema |
-| TASK-01 | Phase 114 | Pending |
-| TASK-02 | Phase 114 | Pending |
-| TASK-03 | Phase 114 | Pending |
-| TASK-04 | Phase 114 | Pending |
-| TASK-05 | Phase 114 | Pending |
-| TASK-06 | Phase 114 | Pending |
+| TASK-01 | Phase 114 | Implemented — pending final schema |
+| TASK-02 | Phase 114 | Implemented — pending final schema |
+| TASK-03 | Phase 114 | Implemented — pending final schema |
+| TASK-04 | Phase 114 | Implemented — pending final schema |
+| TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
+| TASK-06 | Phase 114 | Implemented — pending final schema |
 | SCHM-01 | Phase 115 | Pending |
 | SCHM-02 | Phase 115 | Pending |
 | SCHM-03 | Phase 115 | Pending |
@@ -251,7 +301,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Marker | Meaning |
 |--------|---------|
 | `[x]` / Complete | Shipped and verified |
-| `[~]` / Implemented — pending final schema | Code shipped and green, but the completion gate (`113-SPEC-RECHECK.md` `## Verdict` == `PUBLISHED-*`) has not passed. Re-run on or after 2026-07-28. |
+| `[~]` / Implemented — pending final schema | Code shipped and green, but the requirement's own SPEC-RECHECK gate has not landed `PUBLISHED-CONFIRMED`. **Two different gates are in play — check which one owns the row before flipping it.** HTTP-0x / CLNT-0x are gated by `113-SPEC-RECHECK.md`; **TASK-01..06 are gated by `114-SPEC-RECHECK.md`, whose DQ6 trigger requires a versioned schema directory in BOTH `modelcontextprotocol/modelcontextprotocol` AND `modelcontextprotocol/ext-tasks`.** As of 2026-08-01 only the core half has published, so the TASK rows stay held. |
 | `[ ]` / Pending | Not started |
 
 **Phase map (8 phases, 112-119):**

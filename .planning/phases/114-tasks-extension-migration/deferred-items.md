@@ -4,6 +4,56 @@ Out-of-scope discoveries logged during execution. These were **measured, attribu
 NOT fixed** — each is either pre-existing and unrelated to the plan that found it, or owned
 by a later plan.
 
+**Closed out by `114-18` on 2026-08-01.** Every item below now names an owner or says explicitly that
+it is **unowned**. An unowned item is acceptable; an undocumented one is not.
+
+---
+
+## ID collisions, resolved (`114-18`, 2026-08-01)
+
+**MEASURED, not suspected:** `grep -n "^## " deferred-items.md` showed **`D-114-M` used three times**
+and **`D-114-N` twice**. Three plans appended entries without checking the file for the next free
+letter, so `D-114-P`'s *"Related: D-114-M (114-14)"* pointed at an ambiguity rather than an entry —
+which defeats the point of an ID.
+
+Resolved by keeping the ID for whichever entry existing documents already cite, and renumbering the
+rest into free letters (`R` was free: `114-16-SUMMARY.md` § *Deviations* records `D-114-R` only as a
+**corrected commit-message typo**, never as an assigned ID).
+
+| Old ID | Filed by | Subject | **New ID** | Cited elsewhere by the old ID? |
+|---|---|---|---|---|
+| `D-114-M` | 114-13 | `handle_tasks_update` default answers `-32603` | **`D-114-M`** (kept) | yes — `114-13-SUMMARY.md:240,366` |
+| `D-114-M` | 2026-07-29 spec run | published core schema not vendored | **`D-114-R`** | **no** |
+| `D-114-M` | 114-14 | a `TaskRouter` decodes `tasks/update` unaided | **`D-114-T`** | **yes** — `114-14-SUMMARY.md:49,418`, `D-114-P` *Related*, `STATE.md` |
+| `D-114-N` | 2026-07-29 spec run | nothing watches `ext-tasks` | **`D-114-S`** | **no** |
+| `D-114-N` | 114-14 | a store without inputs answers `TASKS_NOT_ENABLED` | **`D-114-N`** (kept) | yes — `114-14-SUMMARY.md:50,419`, `STATE.md` |
+
+**Landed SUMMARY files are NOT being rewritten.** Rewriting a landed artifact to hide an
+inconsistency is worse than a redirect: a reader arriving from `114-14-SUMMARY.md` should read
+`D-114-M` as **`D-114-T`**, and the renamed entries each carry that note at their own heading.
+
+**For the next plan that appends here:** the next free letter is **`D-114-X`**. Run
+`grep -c "^## D-114-<letter>" deferred-items.md` before choosing one.
+
+---
+
+## Ledger completeness sweep (`114-18` Task 3, 2026-08-01)
+
+The plan required this ledger to account for four classes of item beyond what execution discovered.
+Each is resolved below, with the entry that owns it.
+
+| Class the plan named | Where it lives now |
+|---|---|
+| Every finding or defect-not-fixed recorded in any `114-*-SUMMARY.md` | `D-114-A` … `D-114-W`, individually below |
+| Server-side `Mcp-Name` enforcement for `tasks/*`, left OFF by DQ4 | **`D-114-C`** — already filed, owner **Phase 118** |
+| The `notifications/tasks` push surface (spec **MAY**, declined this phase) | **`D-114-X`**, added below |
+| The four still-deferred `114-CONTEXT.md` items | **`D-114-Y`**, added below |
+| The inherited unowned Phase-113 items | **§ Inherited from Phase 113**, at the foot of this file |
+
+**Two items are DELIBERATELY not in this ledger, and the reason is worth stating.** `D-114-B` and
+`D-114-H` are recorded as **FIXED / CLOSED** in place rather than deleted, so a reader who follows a
+citation to them finds the closure rather than a missing entry.
+
 ---
 
 ## D-114-A — `native root certificates` keychain flake in `shared::streamable_http::tests`
@@ -490,8 +540,16 @@ the message that says it did.**
 
 ## D-114-M — `TaskRouter::handle_tasks_update`'s default returns `-32603` where `-32601` is arguably right
 
+> **KEEPS its ID (`114-18`, 2026-08-01).** Two later entries were also filed as `D-114-M`; they are
+> renumbered **D-114-R** and **D-114-T**. `114-13-SUMMARY.md` lines 240 and 366 cite *this* entry.
+
 **Found by:** 114-13 (decide-now item carried in from the phase brief)
-**Status:** open, owned by **114-14**
+**Status:** **STILL OPEN.** It was owned by 114-14, and 114-14 added the router branch — but it did
+**not** change the default, which `114-18` re-measured at
+`src/server/tasks.rs`: `handle_tasks_update`'s default still returns
+`Error::internal("tasks/update not supported by this router")`, i.e. `-32603`. Reassigned to
+**Phase 118**, alongside **D-114-P** and **D-114-T**, which are the same question about what a
+`TaskRouter` owes a v2 caller.
 **Severity:** low today (unreachable), medium once a caller exists
 
 `src/server/tasks.rs:91-95` — the defaulted `TaskRouter::handle_tasks_update` returns
@@ -549,7 +607,11 @@ tests) is still unowned.
 
 ---
 
-## D-114-M — the PUBLISHED core `2026-07-28` schema is not vendored and has no provenance tripwire
+## D-114-R — the PUBLISHED core `2026-07-28` schema is not vendored and has no provenance tripwire
+
+> **RENUMBERED by `114-18` (2026-08-01). This entry was filed as `D-114-M`, which collided with two
+> other entries.** No document anywhere cites it by that ID, so this rename breaks nothing. See
+> § *ID collisions, resolved* at the top of this file.
 
 **Found by:** the 2026-07-29 spec re-verification run (`114-SPEC-RECHECK.md` § `### Verdict
 re-verification` → `#### 2026-07-29`)
@@ -588,7 +650,17 @@ repository has not published and `## Recorded Exception` forbids promoting draft
 
 ---
 
-## D-114-N — `ext-tasks` publishing is now the SOLE remaining D-18 trigger, and nothing watches it
+## D-114-S — `ext-tasks` publishing is now the SOLE remaining D-18 trigger, and nothing watches it
+
+> **RENUMBERED by `114-18` (2026-08-01). This entry was filed as `D-114-N`, which collided with
+> 114-14's entry of the same name.** No document cites it by that ID, so this rename breaks nothing.
+> `114-SPEC-RECHECK.md` § *Verdict re-verification* → `#### 2026-08-01` now cites it as **D-114-S**.
+> See § *ID collisions, resolved* at the top of this file.
+
+**RE-MEASURED 2026-08-01** (plan `114-18`, prescribed `gh api` form): still true, and now
+**strictly cheaper to check and correspondingly easier to forget**. `ext-tasks` has **0 tags**, **0
+releases**, `schema/` = `draft` only, `specification/` = `draft` only, and its `schema/draft` is
+still at `29f83d5` (2026-05-22) — unchanged in the ten weeks since. Nothing in CI or the repo polls it.
 
 **Found by:** the 2026-07-29 spec re-verification run
 **Status:** open, unowned
@@ -622,7 +694,13 @@ by hand.
 
 ---
 
-## D-114-M — a `TaskRouter` serving `tasks/update` performs its OWN decode, unaided (114-14)
+## D-114-T — a `TaskRouter` serving `tasks/update` performs its OWN decode, unaided (114-14)
+
+> **RENUMBERED by `114-18` (2026-08-01). Filed as `D-114-M`, which collided with the 114-13 entry
+> above.** **This one IS cited elsewhere by the old ID** — `114-14-SUMMARY.md` lines 49 and 418,
+> `D-114-P`'s *Related* line, and `STATE.md`'s 114-14 paragraph all say `D-114-M`. **Those documents
+> are not being rewritten; this ledger is authoritative.** A reader arriving from any of them should
+> read `D-114-M (114-14)` as **`D-114-T`**. See § *ID collisions, resolved* at the top of this file.
 
 **Discovered:** 2026-07-31, while landing `tasks/update` delivery (plan 114-14).
 
@@ -925,3 +1003,113 @@ The bare form's 222/223 is not a regression and must not be reported as one; the
   parameter expansions. It exits 1 and looks like a broken feature row. All five rows exit **0** when
   invoked without the loop variable, or with `${=f}`. Verify a per-row failure by re-running the row
   literally before recording it.
+
+---
+
+## D-114-X — the `notifications/tasks` push surface is DECLINED, not missing (114-18)
+
+**Recorded:** 2026-08-01 by plan `114-18`'s ledger sweep. **This is a scope decision, not a
+discovery** — it is written down because an undocumented decline is indistinguishable from an
+oversight.
+**Status:** open, **unowned**
+**Severity:** low today; re-check whenever `ext-tasks` publishes
+
+Inventory row 36. The tasks extension lets servers **MAY** push `notifications/tasks`, with clients
+subscribing through `subscriptions/listen` carrying `taskIds`. **pmcp implements none of it**, and
+that is the correct state for this phase: a v2 client polls `tasks/get`, which is the mechanism the
+extension is built around (SEP-2663 replaced blocking `tasks/result` with polling precisely so a
+stateless server need hold nothing).
+
+**Exposure assessed, not assumed** (`114-RESEARCH.md` **A7**, risk **MEDIUM**): a conformance suite
+sometimes grades an optional feature *when it is advertised*. pmcp advertises no `taskIds` in any
+acknowledgement, so a suite has nothing to grade. The residual risk is that the published extension
+upgrades the `MAY` — which is why row 36 carries a re-check obligation.
+
+**What implementing it would cost, so a future plan can size it:** the notification type, a
+per-task-id fan-out on the existing `ListenRegistry`, and the `taskIds` field on the
+`subscriptions/listen` acknowledgement. It also inherits Phase 113's recorded deployment limitation
+— `ListenRegistry` is **instance-local**, so a push surface behind a non-sticky load balancer
+under-delivers. That limitation is the reason to keep polling as the recommended enterprise
+mechanism regardless.
+
+**Suggested owner:** Phase 118 (conformance), but only if the published extension upgrades the
+`MAY`. Otherwise this stays declined.
+
+---
+
+## D-114-Y — the four `114-CONTEXT.md` deferrals that DQ1–DQ4 did not absorb (114-18)
+
+**Recorded:** 2026-08-01 by plan `114-18`'s ledger sweep. Restated here so a reader knows these were
+**considered and declined**, not missed. Three of the four are design questions; the fourth is a
+milestone-level requirement gap.
+**Status:** open. Owners named per item below.
+
+**(1) The broader server-directed-handle client-compatibility question — the part DQ1 did NOT
+absorb.** *Unowned; suggested owner a post-114 client-experience plan or the v2.6 AI-Package
+milestone.* DQ1 (user-approved 2026-07-27) settled only the **create trigger**: a declaring v2 client
+gets a server-directed handle. What it did not settle is already filed in full as **`D-114-K`** — a
+declaring client gets a handle from **every** task-capable tool, with no per-call opt-out, because
+the v2 wire has no equivalent of v1's per-request `task` field. The ergonomics (auto-poll? surface
+the handle? opt out?) are unspecified. **Cross-reference rather than duplicate: read `D-114-K`.**
+
+**(2) A configurable proxy-header / claim-based identity source for v2 owner binding.** *Unowned.*
+This is the **named future closure** for the TASK-05 scope gap that `114-SPEC-RECHECK.md`
+§ *⚠ Known INTERNAL wording gap* records and that `.planning/REQUIREMENTS.md`'s TASK-05 booking now
+carries: on a server with **no auth provider at all**, D-07 row 3 maps every anonymous caller onto
+one `ANONYMOUS_PRINCIPAL` (`""`) bucket, so "fails closed" applies to auth-configured deployments
+only. A configurable identity source is what would let that row fail closed too. **Deferred, not
+scheduled** — and D-07 is LOCKED, so this is an ADDITION to the identity table, never a change to
+row 3. Independently bounded today by `TaskSecurityConfig::default()`'s `allow_anonymous: false`.
+
+**(3) Per-tool configurability of the `tasks/update` transition.** *Unowned; suggested owner
+whichever plan next revisits the task state machine.* There is no knob for "this tool accepts input
+mid-flight, that one does not" and no per-tool policy for what a delivered `inputResponses` does to
+the task's status. **Closely related to a trap `114-17` measured and every future tasks plan
+inherits:** `tasks/update` leaves a fully-answered task at `working`, and **nothing in the SDK
+promotes it to `completed`** — `InMemoryTaskStore::deliver_task_inputs` stops at the
+`delivery.complete && !delivery.accepted.is_empty()` arm, and the tool handler returned long before
+the input arrived. **Every task-serving deployment needs an application-side worker**;
+`examples/s50_v2_tasks_server.rs`'s `run_worker` (40 lines, owner-scoped `task_input_snapshot`,
+tolerant of every store error) is the reference shape. A plan that assumes `tasks/update` completes
+a task will produce a demo that hangs.
+
+**(4) UNAS-01 — SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`.** ***UNASSIGNED milestone-wide, and
+explicitly NOT folded into Phase 114.*** It is carried in `.planning/REQUIREMENTS.md`
+§ *Unassigned — Awaiting Phase Assignment* with a standing instruction not to absorb it into a phase
+without an explicit scoping decision. Phase 113 declined it (A8, Open Question 4) and Phase 114
+declines it again: it is a **transport header-mirroring** requirement closest to CLNT-01's outbound
+header work and to Phase 112's `classify_v2_request` matrix, and it has nothing to do with tasks.
+Recorded here only so that "Phase 114 touched `Mcp-Name`, did it quietly take UNAS-01 too?" has a
+written answer. **It did not.**
+
+---
+
+## Inherited from Phase 113 — unowned, and Phase 114 must not silently adopt them
+
+`114-18`'s sweep restates these so that "Phase 114 ran and said nothing about them" cannot be read as
+"Phase 114 closed them". **Phase 114 changed none of them.** They belong to Phase 113's ledger,
+`.planning/phases/113-stateless-http-multi-round-trip-elicitation/deferred-items.md`, which remains
+the authoritative record for each.
+
+| Item | Status entering Phase 114 | Status leaving it |
+|---|---|---|
+| **D-113-U** — `write_canonical` cognitive complexity, recorded at 26 | **unowned**, and `STATE.md` says it **needs an owner before this branch merges** | **STILL UNOWNED. Still needs an owner before merge.** See the measurement note below. |
+| **D-113-Q** | unowned | unowned, untouched |
+| **D-113-R** | unowned | unowned, untouched |
+| **D-113-S** | unowned | unowned, untouched |
+| **D-113-T** | unowned | unowned, untouched |
+| **D-113-V** | unowned | unowned, untouched |
+| **D-113-W** | unowned | unowned, untouched |
+
+**A measurement about D-113-U that must not be mistaken for a closure.** `114-18` ran
+`pmat analyze complexity --format json --max-cognitive 25` (pmat **3.15.0**, the version CLAUDE.md
+pins for CI) at the phase base commit `27364eb1` and at HEAD. **Neither run lists `write_canonical`,
+and neither run reports ANY violation in `./src/`** — base **4**, HEAD **5**, all in
+`crates/*/tests/` and `tests/`, with the one addition being 114-13's own tripwire test at cognitive
+33 (already attributed by `114-14-SUMMARY.md`).
+
+**That is a fact about the instrument, not about the obligation.** The cog-26 figure is not
+reproducible with the pinned pmat, so it should not be re-quoted as a live gate reading — but
+**D-113-U's ownership requirement stands exactly as `STATE.md` states it**, and this ledger does not
+discharge it. A plan that wants to close D-113-U must do so on Phase 113's terms, not by citing this
+measurement.
