@@ -19,6 +19,7 @@ provides:
   - ".planning/phases/115-.../deferred-items.md — 36 entries, each owned or explicitly unowned, plus D-114-R/S, D-113-U and D-114-U"
   - "contracts/binding.yaml with ZERO `status: planned` and a fourteenth binding for `compile_for_era`"
   - "A measured correction: only TWO of the six cacheable results are handler-settable, and `resources/templates/list` has no `ResourceHandler` hook at all"
+  - "An OWNER-ANSWERED sign-off (Guy Ernest, 2026-08-01, no corrections) and — only after it — the ROADMAP/STATE completion markers that close Phase 115"
 affects: [116, 117, 118, 119, any phase running gates in this repository]
 
 # Tech tracking
@@ -34,6 +35,8 @@ key-files:
     - .planning/phases/115-json-schema-2020-12-structured-output-caching-hints/deferred-items.md
     - .planning/phases/115-json-schema-2020-12-structured-output-caching-hints/115-10-SUMMARY.md
   modified:
+    - .planning/ROADMAP.md
+    - .planning/STATE.md
     - contracts/binding.yaml
     - tests/phase115_contract_bindings.rs
     - src/types/tools.rs
@@ -56,20 +59,22 @@ patterns-established:
   - "An anti-vacuity assertion must pin an invariant, never a transient state: `planned > 0` inverted the moment the work it guarded was completed"
 
 metrics:
-  duration: ~3h
+  duration: ~3h10m
   completed: 2026-08-01
-  tasks_completed: 2 of 3
-  commits: 2
+  tasks_completed: 3 of 3
+  commits: 3
 ---
 
 # Phase 115 Plan 10: Phase Gate, Requirement Bookings and Sign-off Summary
 
 **Swept the tree BEFORE gating it, made the contract bindings assert what actually shipped, booked
-SCHM-01/02/03 on measured evidence with their deviations inside the booking, and left ROADMAP and
-STATE untouched pending an owner sign-off that has NOT been given.**
+SCHM-01/02/03 on measured evidence with their deviations inside the booking, held ROADMAP and STATE
+untouched until the owner answered the sign-off — and then, and only then, applied the completion
+markers that close Phase 115.**
 
-**STATUS: Tasks 1 and 2 complete. Task 3 is a `checkpoint:human-verify gate="blocking"` and is
-UNANSWERED. Phase 115 is NOT closed.**
+**STATUS: 3 of 3 tasks complete. Task 3's `checkpoint:human-verify gate="blocking"` was returned
+UNANSWERED rather than self-approved and was APPROVED by Guy Ernest (owner) on 2026-08-01 with no
+corrections. Phase 115 is CLOSED — 11/11 plans, SCHM-01/02/03 `[x]`.**
 
 ---
 
@@ -82,7 +87,11 @@ sign-off would have left the repository recording a complete phase. The cross-AI
 
 This version sweeps first (Task 1), gates the swept tree second (Task 2), and applies completion
 markers only after approval (Task 3). **`git diff --stat 2955d28e..HEAD -- .planning/ROADMAP.md
-.planning/STATE.md` is EMPTY** — verified after both commits.
+.planning/STATE.md` was EMPTY** — verified after both commits, verified again by the orchestrator
+immediately before the checkpoint was answered, and *re-verified as the first act of the continuation
+agent that applied the markers*. The ordering held end to end: while the decision was open, the
+repository recorded an OPEN phase. The markers in § *Task 3* below are the first bytes either file
+received in this plan.
 
 ---
 
@@ -361,6 +370,103 @@ deviations; and the judgement the booking makes rather than absorbs.
 
 ---
 
+## Task 3 — Sign-off, ANSWERED, and the completion markers (commit `496da96b`)
+
+### The sign-off
+
+- **Approved by:** **Guy Ernest (owner)** — answered the `checkpoint:human-verify gate="blocking"`
+  with the resume signal `approved`
+- **Date:** **2026-08-01**
+- **Corrections requested:** **NONE**
+
+**The checkpoint was returned UNANSWERED rather than self-approved**, and a fresh continuation agent
+applied the markers only after the answer. Phase 114's own record shows that this is the correct
+handling; the same posture was taken here and it held. `workflow.auto_advance` is `false` on this
+project, so no auto-approval path was even available — but note that the plan additionally marks this
+gate `blocking`, and GSD's auto-mode rules would still have STOPPED for a package-legitimacy gate
+only. **A future phase running under auto-advance must not let a `gate="blocking"` sign-off be
+auto-selected: the value of this checkpoint is precisely that an agent cannot answer it.**
+
+The owner accepted, explicitly, all three items the executing agent had refused to self-approve:
+
+| # | Item accepted | Where it is recorded |
+|---|---|---|
+| 1 | The three requirement-text deviations: `jsonschema` at **0.49** (not the literal `0.48`), with an exact `=0.49.2` pin **declined** on library-semver grounds; **six** result types carry hints, not five, because `DiscoverResult extends CacheableResult`; contracts live **in-repo** at `contracts/`, not at CLAUDE.md's `../provable-contracts/` path | inside the SCHM bookings (`.planning/REQUIREMENTS.md`), ledger `A` and `2`, and the ROADMAP deviation notes |
+| 2 | The `deferred-items.md` ledger **as it stands**, including every **unowned** item — the unpinned `pmcp-agent` `validator_for` (`7`), no builder-level override, the wasm strip being compile- and tripwire-checked but never behaviourally EXECUTED (`N`), warn-only `outputSchema` mismatch (`3`), middleware still able to mutate the projected keys (`R`), and the three fail-open ALWAYS `make` targets (`U`/`V`/`W`) | the 36-entry ledger |
+| 3 | Booking the three SCHM requirements **`[x]` rather than `[~]`** — D-15's contingency did not fire and Phase 114's publication hold is not inherited | `.planning/REQUIREMENTS.md` lines 146 / 206 / 241 |
+
+The owner-facing checks in `<how-to-verify>` were independently re-run before the answer:
+`make quality-gate` **exit 0** (0 truncation markers, 0 failure lines);
+`cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"`
+**exit 0**; `cargo run --example s52_v2_caching_hints --features full` **exit 0** with all four
+demonstrations asserted — v2 responses carrying `ttlMs`/`cacheScope`, the v1 response carrying
+neither, and **the v1 path observed ACTIVELY STRIPPING a hint the handler had set** rather than
+merely failing to add one, which is the distinction that makes demonstration 3 evidence.
+
+### The completion markers, applied AFTER the answer
+
+**`git diff --stat 2955d28e..HEAD -- .planning/ROADMAP.md .planning/STATE.md` was re-verified EMPTY
+as the first act of this task** — the ordering invariant T-115-43 exists to protect held from
+plan start to owner answer.
+
+`.planning/ROADMAP.md`:
+
+| Marker | Change |
+|---|---|
+| `115-10-PLAN.md` | `[ ]` → `[x]`, with the sign-off outcome appended. The other ten were already ticked — **eleven** total (ten original + `115-11` from the `--reviews` replan) |
+| Phase 115 entry (phase list) | `[ ]` → `[x]`, and its one-line description **corrected to what shipped**: it still said *"jsonschema 0.48"* and *"the five list/read results"*, both falsified by this phase |
+| Milestone progress table | `10/11 · In Progress` → **`11/11 · Complete · 2026-08-01`** |
+| Planning-deviation note | **Verified, not assumed.** Both existing paragraphs hold as written, and the contract-location deviation was already present in the replan paragraph. A third **Execution deviation** paragraph was added for the four divergences the phase acquired *during* execution: fourteen bindings not thirteen; the declined `=0.49.2` pin plus the gitignored `Cargo.lock`; the `ResourceHandler` reach correction; and `make test-feature-flags`'s unsatisfiable criterion with its measured ZERO delta |
+| New note under the progress table | States that Phase 115's `Complete` counts plans **and** requirements — unlike the Phase 113 note directly above it — and, in the same breath, that it closes **neither** `D-114-S` nor `D-113-U` |
+
+`.planning/STATE.md`:
+
+| Marker | Change |
+|---|---|
+| frontmatter | `stopped_at` → `Completed 115-10-PLAN.md — Phase 115 CLOSED by owner sign-off`; `completed_plans` 349 → **350**; `completed_phases` 60 → **61**; `percent` 83 → **85** (the file's own convention is phases/total, measured across four historical revisions, not the SDK's plan-based percent) |
+| `## Current Position` | Phase 115 **COMPLETE in both senses**; the 114-18 prose that still occupied `Next action:` was demoted to `Prior-phase context (Phase 114, 114-18)` rather than discarded |
+| `## Session Continuity` | `Stopped at:` → this plan; `Next:` → **Phase 116**, carrying forward `D-114-S`, `D-113-U` and `UNAS-01` |
+| Decisions / Blockers | six decisions and one blocker appended (the blocker re-asserts that `D-114-S` is still unowned) |
+| Performance Metrics | `Phase 115 P10 · 3h10m · 3 tasks · 12 files` |
+
+**A stale-record correction made while applying the counters, worth its own line.** `114-18` wrote a
+note into `## Session Continuity` reading *"the SDK RECOMPUTES `completed_phases` and reports 60
+while this file correctly STORES 59 … Do not edit STATE.md to match the derived view."* **Measured
+here: the stored value moved 59 → 60 in `1d1493b8` — the very next STATE-touching commit — via an SDK
+helper's recompute.** The forbidden edit was made by the tool, silently, and eight Phase-115 plans
+then incremented `completed_plans` off that base. It was **not** reverted (that would falsify eight
+landed records); the note was **rewritten to say what the number now means**: `61` = 60 (which
+already counts Phase 114, still `[~]` and HELD) + Phase 115. The counter is a plan-shipped tally, not
+a requirements tally, and **Phase 114's `[~]` marker remains the authoritative statement of its
+status.**
+
+**Two independent corroborations of the markers, both run after the hand edits and both writing
+zero bytes:**
+
+| Check | Result |
+|---|---|
+| `gsd-sdk roadmap update-plan-progress 115` | `plan_count: 11, summary_count: 11, status: "Complete", complete: true` — **file byte-identical**, so the SDK derived the same row from disk that was written by hand |
+| `gsd-sdk requirements mark-complete SCHM-01 SCHM-02 SCHM-03` | `updated: false, already_complete: [SCHM-01, SCHM-02, SCHM-03]` — **file byte-identical**; Task 2's bookings already satisfied it |
+| `gsd-sdk state update-progress` | reports 350/350; **file byte-identical** (its percent is plan-based, the file's is phase-based) |
+
+### What this approval does NOT do
+
+Recorded here because *"the owner approved"* is exactly when an unrelated hold gets released by
+accident — `114-18`'s own summary makes the same warning about its own sign-off:
+
+- **Phase 114's D-18 hold stays ENGAGED.** TASK-01..06 stay `[~]`, `114-SPEC-RECHECK.md`
+  `## Verdict` stays `PENDING`, and Phase 114 stays `[~]` in the ROADMAP. `115-01` closed only the
+  **core half** of D-18's two-repository trigger (and `D-114-R` with it) by vendoring the published
+  core schema; `modelcontextprotocol/ext-tasks` still carries `draft/` only.
+- **`D-114-S` is still unowned** — nothing watches `ext-tasks` for publication.
+- **`D-113-U` still needs an owner** before this branch merges.
+- **`D-114-U`** — the `make test-feature-flags` redness — is inherited, not closed; Phase 115's delta
+  is zero.
+- **`UNAS-01`** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5
+  requirement with no phase.
+
+---
+
 ## Deviations from plan
 
 ### 1. `[Rule 1 — Bug] tests/phase115_contract_bindings.rs edited, outside `files_modified``
@@ -411,6 +517,33 @@ pmat writes progress lines to **stderr**. Merging streams (`2>&1`) makes the out
 `.violations[]` does not exist; the working path is `.summary.violations[]`, and the field is
 `file`, not `path`).
 
+
+### 7. `[Rule 2 — Missing critical correctness] A stale STATE.md note rewritten, not silently obeyed`
+
+- **Found during:** Task 3, applying the counters.
+- **Issue:** `114-18` recorded *"the SDK reports 60 while this file correctly STORES 59 … Do not edit
+  STATE.md to match the derived view."* The stored value was **60** on arrival. Measured across the
+  intervening commits: it moved 59 → 60 in `1d1493b8`, the very next STATE-touching commit, via an
+  SDK helper's recompute — **the tool made the edit the note forbade, silently.**
+- **Fix:** the counter was **not** reverted (eight Phase-115 plans have since incremented
+  `completed_plans` off that base, and rewriting it would falsify eight landed records). The note was
+  rewritten to state what the number now means and to re-assert, in the same paragraph, that Phase
+  114's `[~]` marker — not the counter — is the authoritative statement of its status.
+- **Why this is Rule 2 and not a plan violation:** a record that instructs a reader to trust a value
+  the file no longer holds is worse than no record. Task 3's mandate covers exactly these lines.
+- **Files:** `.planning/STATE.md`. **Commit:** `496da96b`.
+
+### 8. Instrument finding — `gsd-sdk state add-decision "text"` fails SILENTLY with exit 0
+
+The executor workflow documents positional arguments (`state add-decision "…"`,
+`state record-metric "$PHASE" "$PLAN" …`). **This build requires flags** (`--summary`, `--text`,
+`--phase/--plan/--duration/--tasks/--files`) and, given the positional form, prints
+`{"error": "summary required"}` **and exits 0**. Six decisions and one blocker were lost on the first
+attempt and only noticed because the follow-up `grep` for them came back empty — a caller using
+`set -e` with `>/dev/null` would have recorded nothing and reported success. **Verify a state write
+by grepping the file, never by the exit code.** `roadmap update-plan-progress` is positional
+(`--phase 115` errors with *"Phase --phase not found"*), so the two conventions coexist.
+
 ---
 
 ## Self-Check
@@ -433,39 +566,19 @@ FOUND: .planning/REQUIREMENTS.md                         (3 × `[x] **SCHM-0`, 0
 ```
 FOUND: ab49c132  docs(115-10): sweep stale docs and write the phase deferred-items ledger
 FOUND: 9c72ff88  docs(115-10): book SCHM-01/02/03 on measured, re-derivable evidence
+FOUND: 496da96b  docs(115-10): apply Phase 115 completion markers after owner sign-off
+```
+
+**Task 3's markers — re-measured on disk after the commit, not asserted:**
+
+```
+FOUND: .planning/ROADMAP.md   grep -c '^- \[x\] 115-'  -> 11   (and '^- \[ \] 115-' -> 0)
+FOUND: .planning/ROADMAP.md   "| 115. JSON Schema 2020-12 + Caching Hints | 11/11 | Complete   | 2026-08-01 |"
+FOUND: .planning/ROADMAP.md   line 2222 "- [x] **Phase 115: …**"
+FOUND: .planning/STATE.md     completed_plans: 350 · completed_phases: 61 · percent: 85
+FOUND: .planning/STATE.md     "Stopped at: Completed 115-10-PLAN.md — Phase 115 CLOSED by owner sign-off"
+FOUND: .planning/STATE.md     "| Phase 115 P10 | 3h10m | 3 tasks | 12 files |"
+CLEAN: git diff --diff-filter=D HEAD~1 HEAD -> empty (no file deleted by the marker commit)
 ```
 
 ## Self-Check: PASSED
-
----
-
-## Sign-off — Task 3
-
-**STATUS: UNANSWERED. Returned to the owner rather than self-approved.**
-
-Phase 114's own record shows the correct handling: its sign-off was returned unanswered and was then
-answered by the owner. The same posture is taken here.
-
-**No completion marker exists on disk.** `git diff --stat 2955d28e..HEAD -- .planning/ROADMAP.md
-.planning/STATE.md` is **EMPTY**: Task 2 wrote the three `[x]` bookings — which are the evidence
-under review — but deliberately did not tick the roadmap, advance the plan counter or update the
-progress table. A rejection leaves the repository correctly recording an **open** phase.
-
-- **Approved by:** *(pending)*
-- **Date:** *(pending)*
-- **Corrections requested:** *(pending)*
-
-### If APPROVED, and only then
-
-- `.planning/ROADMAP.md` — tick `115-10-PLAN.md` (the other ten are already ticked), mark the Phase
-  115 entry complete, update the milestone progress table row to `11/11` with the date, and verify
-  the existing planning-deviation note against what shipped, adding the contract-location deviation.
-- `.planning/STATE.md` — frontmatter counters, `## Current Position`, and the trailing
-  `Stopped at:` / `Next:` lines, carrying forward `D-114-S`'s watch and `D-113-U`'s owner.
-- Record here who approved, when, and any corrections.
-
-### If REJECTED
-
-Record the objection verbatim, apply **no** completion marker, and leave Phase 115 open. If a `[x]`
-booking is rejected specifically, revert that line to `[ ]` or `[~]` per instruction and record
-which.
