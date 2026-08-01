@@ -2543,7 +2543,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 115-01-PLAN.md — Vendor the published 2026-07-28 core schema at a pinned commit with `PROVENANCE.md`, generalize the provenance tripwire to every tree under `schema/vendored/`, and re-derive the `CacheableResult` contract from the pinned artifact (D-14)
+- [x] 115-01-PLAN.md — Vendor the published 2026-07-28 core schema at a pinned commit with `PROVENANCE.md`, generalize the provenance tripwire to every tree under `schema/vendored/`, and re-derive the `CacheableResult` contract from the pinned artifact (D-14)
 - [ ] 115-02-PLAN.md — Pre-change raw-byte golden fixtures for the five v1 list/read responses, with a `ttlMs`/`cacheScope` leak guard proven to fire (D-13; MUST land before any field addition)
 - [ ] 115-11-PLAN.md — Contract-first (CLAUDE.md): three provable-contract equations for SCHM-01/02/03 in the IN-REPO `contracts/` tree, thirteen bindings landed as `status: planned`, and `tests/phase115_contract_bindings.rs` — the ghost-binding resolver `make comply` never had for `contracts/binding.yaml`
 
@@ -2633,7 +2633,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 0/11 | Planned | - |
+| 115. JSON Schema 2020-12 + Caching Hints | 1/11 | In Progress|  |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |

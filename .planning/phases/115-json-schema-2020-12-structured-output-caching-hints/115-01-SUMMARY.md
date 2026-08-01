@@ -47,7 +47,11 @@ patterns-established:
   - "Whitespace-collapsed TypeScript scanning: a declaration whose `extends` clause wraps to the next line is invisible to a line-oriented scan, and undercounting six as five is exactly the defect the file exists to prevent"
   - "Every failure message ends in one shared REMEDY constant naming the change protocol, because the wrong remedy (edit the assertion) is always faster"
 
-requirements-completed: [SCHM-01, SCHM-02, SCHM-03]
+# DELIBERATELY EMPTY. This plan lands the EVIDENCE BASE for SCHM-01/02/03, not their
+# implementation — which is 115-03…115-09's work. Booking them complete here would be a
+# false claim. See "## Requirement Bookkeeping" below. 115-10/115-11 own the flip.
+requirements-completed: []
+requirements-evidenced: [SCHM-01, SCHM-02, SCHM-03]
 
 # Metrics
 duration: 38min
@@ -273,6 +277,20 @@ Per the plan's `commit_policy`, the scoped gate was run rather than the full `ma
 - **`.planning/STATE.md` arrived already modified** by the orchestrator (phase-115-executing marker) before this executor's first commit. Left untouched by the task commits and folded into the plan metadata commit, which is where STATE.md belongs.
 - Nothing else. Both fetches, both digest checks and all four blob cross-checks succeeded on the first attempt.
 
+## Requirement Bookkeeping
+
+**`requirements mark-complete` was deliberately NOT run, and `.planning/REQUIREMENTS.md` is untouched (0-byte diff).**
+
+This plan's frontmatter carries `requirements: [SCHM-01, SCHM-02, SCHM-03]`, but so do seven other plans in this phase — including 115-10 and 115-11, the last to execute. What 115-01 lands is the **evidence base** those requirements will be booked on (D-15), not their implementation:
+
+| Req | What 115-01 provides | Who implements it |
+|-----|----------------------|-------------------|
+| SCHM-01 | `Tool.outputSchema` declares an optional `$schema` — asserted, so pinning 2020-12 is a spec-aware choice | 115-03, 115-04, 115-08, 115-09 |
+| SCHM-02 | `structuredContent` is an unconstrained JSON value and the v1 "Currently restricted to" sentence is gone — asserted | 115-03, 115-04, 115-09 |
+| SCHM-03 | The SIX extenders, their per-type `required` arrays, `cacheScope`'s closed union and `ttlMs`'s integer/minimum — all asserted | 115-02, 115-06, 115-07, 115-08, 115-09 |
+
+Marking a requirement `[x]` because the schema proving what it must do is now in-tree is the exact failure Phase 114 spent a sign-off preventing. The flip belongs to whoever lands the last implementing plan and can cite runnable behaviour, not to this one. `REQUIREMENTS.md` rows stay `[ ]` / `Pending`.
+
 ## Known Stubs
 
 None. This plan ships no production code and no placeholder values; every constant in both test files is a measured value with a named source.
@@ -299,6 +317,10 @@ None — no external service configuration required.
 1. Use `binary(<file_stem>)` in nextest selectors, or prefix every test with the file stem. Both new suites do the latter, so `test(/v2_core_schema_facts/)` also selects correctly.
 2. A line-oriented scan of `schema.ts` undercounts the extenders five-to-six. Collapse whitespace first.
 3. Adding a third vendored tree now requires a `PROVENANCE.md` immediately — the suite fails by tree name until it exists. That is the intended behaviour.
+
+## Self-Check: PASSED
+
+All six claimed files exist on disk; all four claimed commit hashes (`e67c69e7`, `32ed7cab`, `bff83725`, `484ca732`) resolve in `git log`.
 
 ---
 *Phase: 115-json-schema-2020-12-structured-output-caching-hints*
