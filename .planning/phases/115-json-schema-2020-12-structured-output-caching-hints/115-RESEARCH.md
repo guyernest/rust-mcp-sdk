@@ -585,8 +585,24 @@ that accepts **every** instance:
 Corroborating details, all measured:
 
 - **Not a regression.** Identical on 0.46.10, 0.47.0, 0.48.0, 0.48.5, 0.49.2. Upstream stable behavior.
-- **Root-level only.** A *nested* `$schema` (inside `properties.a`) does **not** trigger it — that
-  subschema still enforces correctly.
+- **Root-level only — for the shape that was measured, which is NOT all nested shapes.**
+  ⚠️ **AMENDED 2026-08-01 by 115-12.** What was measured: a *nested* `$schema` inside
+  `properties.a`, with **no `$id`** on that subschema, does **not** trigger it — that subschema
+  still enforces correctly. That measurement stands and is fenced by `normalization_cases()`
+  case (d). What was **NOT** measured, and what the "root-level only" headline wrongly
+  generalizes to: a `$schema` on an **embedded schema resource** — any subschema that also
+  carries its own **`$id`**, which is exactly how JSON Schema 2020-12 sanctions a `$schema`
+  below the root. `jsonschema` 0.49.2 **does** honour that one, so it **does** trigger the
+  bypass. Reproduced twice independently (`115-REVIEW.md` CR-01 and `115-VERIFICATION.md`) with
+  `$defs.Inner` carrying `$id` + draft-07 `$schema` + `type: integer`, `$ref`'d from
+  `properties.n`, against `{"n": "NOT-AN-INTEGER"}`: `root-draft07 + embedded (v1, v2) =
+  (Violates, Conforms)` — v2 measurably **weaker** than v1. The measurement now lives in
+  `115-VERIFICATION.md` and in the shipped test
+  `output_validation::tests::v2_pin_still_enforces_an_embedded_legacy_resource`; the normalizer
+  walks the whole document as of 115-12. This bullet is amended rather than deleted because
+  generalizing from it — into the module rustdoc and into the contract invariant — is what let
+  the bypass ship (ledger entry `D-115-I`: correct the SOURCE document, or the error ships
+  again).
 - **Meta-validation does not catch it.** `jsonschema::draft202012::meta::is_valid(&draft07_doc)`
   returns `true`. There is no library-side detector; we must inspect `$schema` ourselves.
 - **Today's behavior is CORRECT.** `validator_for` auto-detects draft-07 and enforces it fully. A

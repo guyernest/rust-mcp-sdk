@@ -449,8 +449,13 @@ bindings:
 # landed, verified each `signature:` against the shipped source, and added a
 # fourteenth binding for `compile_for_era`, which 115-03 delivered without a
 # contract entry (deferred item, ledger entry J). From that point the ghost-binding
-# check in tests/phase115_contract_bindings.rs is LOAD-BEARING over all fourteen:
+# check in tests/phase115_contract_bindings.rs is LOAD-BEARING over every entry:
 # a binding naming a symbol nobody wrote now fails the gate.
+#
+# 115-12 added a fifteenth and sixteenth — `first_legacy_dialect` and
+# `pin_dialect_in_place` — for the same reason `compile_for_era` was added: they ARE
+# the mechanism `normalize_schema_dialect` delegates to, and the safety property the
+# `output_schema_draft_pin` invariants assert is a property of their agreement.
 #
 # `planned` was never an exemption — tests/phase115_contract_bindings.rs scopes it to
 # exactly these three equations so it cannot become an escape hatch elsewhere. There
@@ -501,9 +506,53 @@ bindings:
   status: implemented
   notes: >-
     Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Pure and idempotent:
-    `Cow::Borrowed` when the root `$schema` is absent or already 2020-12, otherwise a clone
-    whose ROOT `$schema` is overwritten with `DRAFT_2020_12`. Touches no other key and no
-    nested `$schema`. SCHM-01 / D-02.
+    `Cow::Borrowed` when NO string-valued `$schema` anywhere in the document names a dialect
+    other than `DRAFT_2020_12`, otherwise a clone in which EVERY such `$schema` — at the root
+    and at any depth — is overwritten with `DRAFT_2020_12`. Touches no other key, and never a
+    `$schema` that is instance DATA (a `properties` entry named `$schema`, or a `const` /
+    `enum` / `default` / `examples` payload). SCHM-01 / D-02.
+    115-12 SCOPE CORRECTION: this note previously read "`Cow::Borrowed` when the ROOT `$schema`
+    is absent or already 2020-12 … Touches no other key and no nested `$schema`", describing a
+    root-only rewrite. `115-VERIFICATION.md` measured that scope as a validation BYPASS — a
+    legacy declaration on an embedded schema resource (a subschema carrying its own `$id`,
+    which 2020-12 sanctions and `jsonschema` 0.49.2 honours) survived the pin and resolved an
+    empty vocabulary set there, yielding `(v1, v2) = (Violates, Conforms)`, i.e. v2 validating
+    WEAKER than v1. 115-12 made the walk recursive; the `signature:` above is unchanged and
+    stays byte-identical to the source. See also `first_legacy_dialect` and
+    `pin_dialect_in_place` below.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: first_legacy_dialect
+  module_path: pmcp::server::output_validation
+  signature: "fn first_legacy_dialect(node: &Value) -> Option<&str>"
+  status: implemented
+  notes: >-
+    ADDED BY 115-12. `#[cfg(feature = "validation")]`. The DETECTOR half of the normalization:
+    returns the first `$schema` string, searched root-first at any depth, that is not already
+    `DRAFT_2020_12`, or `None`. It is what makes `normalize_schema_dialect`'s `Cow::Borrowed`
+    zero-allocation path decidable over the whole document rather than just the root, and it is
+    also the source of the `declared` value `compile_2020_12` names in its warning — reading the
+    root key there would report `<unknown>` for exactly the embedded-resource case the warning
+    exists to explain. Bound because it IS the mechanism, the same reason `compile_for_era` was
+    bound by 115-10 (ledger entry J). SCHM-01 / D-02.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: pin_dialect_in_place
+  module_path: pmcp::server::output_validation
+  signature: "fn pin_dialect_in_place(node: &mut Value)"
+  status: implemented
+  notes: >-
+    ADDED BY 115-12. `#[cfg(feature = "validation")]`. The REWRITER half: overwrites EVERY
+    string-valued `$schema` with `DRAFT_2020_12`, in place, on the clone
+    `normalize_schema_dialect` already had to make. It implements the SAME traversal rule as
+    `first_legacy_dialect` — a string-valued `$schema` is a declaration, `const` / `enum` /
+    `default` / `examples` payloads are instance data and are never descended into — and a
+    disagreement between the two is a defect, because it produces a `Cow::Owned` that still
+    carries a legacy declaration while `compile_2020_12` announces the declaration as ignored.
+    The postcondition `first_legacy_dialect(&owned) == None` is what fences that, and it
+    replaces the `expect` the root-only body carried. SCHM-01 / D-02.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin

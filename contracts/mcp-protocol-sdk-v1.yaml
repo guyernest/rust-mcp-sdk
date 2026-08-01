@@ -246,8 +246,13 @@ equations:
         Era::V1 => jsonschema::validator_for(schema)                  (auto-detect; unchanged)
         Era::V2 => draft202012::new(normalize_schema_dialect(schema)) (pinned)
       normalize_schema_dialect(s)
-        = s                                    when root $schema is absent or already 2020-12
-        = s with root $schema := DRAFT_2020_12 otherwise
+        = s                     when NO string-valued $schema anywhere in s names a dialect
+                                other than DRAFT_2020_12 (root or any depth; the absent and
+                                the already-2020-12 documents are both this case)
+        = clone(s) with EVERY such $schema := DRAFT_2020_12, otherwise
+        walk: a $schema key is a dialect declaration only when its value is a JSON string;
+              descend into every member value EXCEPT const / enum / default / examples,
+              which carry INSTANCE DATA rather than subschemas
       cache_key = (Era, canonical_json_text(schema))
       external $ref (http:// | https:// | file:// | relative under an http-scheme $id)
         => compile error on BOTH eras, zero network and zero filesystem I/O
@@ -256,8 +261,11 @@ equations:
     invariants:
     - >-
       On Era::V2 the compiled validator enforces the schema's keywords even when the document
-      declares a legacy `$schema` (draft-04/06/07); a legacy declaration is normalized to the
-      2020-12 URI before compilation, never honoured and never used as a vocabulary source
+      declares a legacy `$schema` (draft-04/06/07) — at the document root, OR on any
+      embedded schema resource below it. An embedded schema resource is a subschema carrying
+      its own `$id`; JSON Schema 2020-12 sanctions a `$schema` there and `jsonschema` 0.49.2
+      honours it. EVERY such declaration is normalized to the 2020-12 URI before compilation,
+      never honoured and never used as a vocabulary source
     - >-
       On Era::V1 the verdict for any (schema, instance) pair is byte-identical to the
       pre-Phase-115 verdict
@@ -268,7 +276,20 @@ equations:
       An external `$ref` (`http://`, `https://`, `file://`, or a relative ref under an
       http-scheme `$id`) fails to COMPILE on both eras and performs zero network or filesystem I/O
     - >-
-      `normalize_schema_dialect` is idempotent and alters only the root `$schema` key
+      `normalize_schema_dialect` is idempotent, and alters only `$schema` keys whose value is a
+      JSON string — at the root and at every depth. It never alters a `$schema` that is instance
+      DATA: a `properties` entry for an instance property literally named `$schema` (whose value
+      is a subschema, not a string), nor a `$schema` inside a `const` / `enum` / `default` /
+      `examples` payload
+    - >-
+      POSTCONDITION: after normalization no `$schema` string anywhere in the document — root or
+      any depth — is anything other than the Draft 2020-12 URI. This is the checkable form of
+      "on v2 the pin wins unconditionally"; the prose form was untestable, and the root-only
+      normalizer satisfied the prose while measurably failing this. Measured failure, before
+      115-12: with a legacy declaration on an embedded schema resource, `(v1, v2)` was
+      `(Violates, Conforms)` — v2 validating WEAKER than v1 (115-VERIFICATION.md). Asserted by
+      `output_validation::tests::normalize_schema_dialect_changes_only_dollar_schema_keys` over
+      every fixed case, and re-stated independently in `fuzz_schema_draft_pin` by 115-13
     - >-
       Validation is warn-only on both eras: a mismatch never produces an error result and never
       panics
