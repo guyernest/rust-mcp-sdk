@@ -71,8 +71,8 @@ use common::v2::{post, spawn_stateless_config, v1_body, Resp};
 use pmcp::server::typed_tool::TypedTool;
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
 use pmcp::types::{
-    Content, GetPromptResult, ListResourcesResult, PromptArgument, PromptInfo, ReadResourceResult,
-    ResourceInfo,
+    CacheScope, Content, GetPromptResult, ListResourcesResult, PromptArgument, PromptInfo,
+    ReadResourceResult, ResourceInfo,
 };
 use pmcp::RequestHandlerExtra;
 use serde_json::{json, Value};
@@ -666,6 +666,97 @@ async fn v1_lists_golden_resources_read() {
             meta: MetaExpectation::Absent,
         },
     );
+}
+
+// ===========================================================================
+// Fixture 6 — the leak guard against a handler that GENUINELY opted in.
+// ===========================================================================
+
+/// A resource handler that SETS both SCHM-03 caching hints on both results.
+///
+/// Deliberately separate from [`PinnedResources`], which must stay hint-free so
+/// the five golden literals above keep pinning the bytes they were captured
+/// from.
+struct HintedResources;
+
+#[async_trait]
+impl ResourceHandler for HintedResources {
+    async fn read(
+        &self,
+        uri: &str,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ReadResourceResult> {
+        Ok(ReadResourceResult::new(vec![Content::resource_with_text(
+            uri,
+            "a hinted resource body",
+            "text/plain",
+        )])
+        .with_ttl_ms(60_000)
+        .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ListResourcesResult> {
+        Ok(ListResourcesResult::new(vec![
+            ResourceInfo::new(PINNED_URI, "one").with_mime_type("text/plain")
+        ])
+        .with_ttl_ms(300_000)
+        .with_cache_scope(CacheScope::Public))
+    }
+}
+
+/// The v1 fixture server whose resource handler SETS both caching hints.
+///
+/// Like [`pinned_server`] it is deliberately NOT v2-opted-in — the builder's
+/// supported-protocol-versions extender is never called, and its name is absent
+/// from this whole file so a plain `grep` for it stays a working detector.
+fn hinted_v1_server() -> Server {
+    Server::builder()
+        .name("v1-lists-golden-hinted")
+        .version("1.0.0")
+        .resources(HintedResources)
+        .build()
+        .expect("the hinted v1 fixture server builds")
+}
+
+/// **This is the fixture that makes [`v1_leak_guard`] load-bearing on the wire.**
+///
+/// Until plan 115-05 the `ttlMs` / `cacheScope` half of that guard was VACUOUS:
+/// the fields did not exist on any result type, so "the key is absent" was true
+/// of a guard that works and equally true of one wired to the wrong string.
+/// [`v1_lists_golden_leak_guard_is_load_bearing`] closed half of that gap by
+/// driving synthetic frames through the predicate directly. This closes the
+/// other half — a REAL v1 round trip against a handler that genuinely called
+/// `with_ttl_ms` and `with_cache_scope`, where the only thing standing between
+/// those values and the v1 wire is the era-gated projection itself.
+///
+/// No golden literal is pinned here on purpose. The five above pin the bytes of
+/// the hint-FREE fixture, which is what D-13 required captured before the
+/// fields landed; this sixth fixture uses a different server, so pinning its
+/// bytes would be pinning something that was never captured pre-change. What it
+/// asserts is the guard, which is the property D-11 actually needs.
+#[tokio::test]
+async fn v1_lists_golden_handler_set_hints_never_reach_the_v1_wire() {
+    for (id, method, params) in [
+        (6_i64, "resources/list", json!({})),
+        (7, "resources/read", json!({ "uri": PINNED_URI })),
+    ] {
+        let (addr, handle) = spawn(hinted_v1_server()).await;
+        let got = post(addr, &[], &lists_body(id, method, params)).await;
+        shutdown(handle).await;
+
+        assert_eq!(got.status, 200, "v1 {method} must still be served");
+        v1_leak_guard(&got.raw).unwrap_or_else(|leak| {
+            panic!(
+                "the handler SET both hints and this is a v1 wire, so the era-gated \
+                 projection must have stripped them: {leak}"
+            )
+        });
+        assert_meta(&got.raw, &MetaExpectation::Absent);
+    }
 }
 
 // ===========================================================================

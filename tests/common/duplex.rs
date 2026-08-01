@@ -257,6 +257,66 @@ pub fn call_tool_request(name: &str, args: Value, era: Era) -> Request {
     Request::Client(Box::new(client_request))
 }
 
+/// Build a `resources/read` [`Request`] carrying (or deliberately omitting) the
+/// per-request era signal.
+///
+/// The `resources/read` sibling of [`call_tool_request`], in the same shape and
+/// for the same reasons: [`Era::V2`] gets a `params._meta` built through pmcp's
+/// OWN [`RequestMeta`] serialization, [`Era::V1`] gets no `_meta` key at all,
+/// and the request is DESERIALIZED from the wire shape rather than built by
+/// struct literal because `ReadResourceRequest` is `#[non_exhaustive]` with no
+/// `_meta` seam on its constructor.
+///
+/// # Why `resources/read`, and why it has no list-method sibling
+///
+/// MEASURED, not assumed: `extract_request_meta_value`
+/// (`src/server/core.rs:3960-4026`) matches EXHAUSTIVELY and returns the `_meta`
+/// object for exactly three [`ClientRequest`] variants — `CallTool`,
+/// `GetPrompt` and `ReadResource`. Every other variant, INCLUDING `ListTools`,
+/// `ListPrompts`, `ListResources` and `ListResourceTemplates`, yields `None`.
+/// Of the six `2026-07-28` `CacheableResult` extenders, `resources/read` is
+/// therefore the ONLY one whose typed request can carry an era signal into the
+/// in-process `ServerCore` route at all.
+///
+/// **An era-aware builder for any of those four list methods would be actively
+/// MISLEADING, and must not be added here.** Their request structs have no
+/// `_meta` field, serde drops the key on deserialization (none of them sets
+/// `deny_unknown_fields`), the request resolves as v1, and a caller would get a
+/// silently-v1 response under a v2-shaped call. The obvious names for such
+/// builders are deliberately NOT written anywhere in this file, so that a plain
+/// `grep` for them is a working detector rather than a hit on this warning —
+/// the same device `tests/v1_lists_golden.rs:432-439` uses to keep its
+/// not-opted-in invariant greppable. The rustdoc at
+/// `src/server/core.rs:3971-3991` records why the structs are not widened
+/// instead: adding a `pub` field to a constructible `pub` struct is a MAJOR
+/// semver break (`cargo semver-checks` `constructible_struct_adds_field`) and
+/// the v2.5 milestone is scoped additive. The four list methods reach v2 over
+/// the streamable-HTTP transport instead, through
+/// `Server::resolve_raw_meta_protocol_context`, which reads the RAW body and has
+/// FULL method coverage — that is where `tests/v2_caching_hints.rs` covers them,
+/// and the bound itself is asserted at
+/// `v2_caching_hints_list_methods_cannot_reach_v2_through_the_typed_dispatch_route`.
+#[cfg(feature = "testing")]
+pub fn read_resource_request(uri: &str, era: Era) -> Request {
+    let mut params = serde_json::Map::new();
+    params.insert("uri".to_string(), Value::String(uri.to_string()));
+    if matches!(era, Era::V2) {
+        let meta =
+            RequestMeta::new().with_meta(META_PROTOCOL_VERSION, json!(PROTOCOL_VERSION_2026_07_28));
+        let meta = serde_json::to_value(&meta).expect("request meta serializes");
+        params.insert(REQUEST_META_KEY.to_string(), meta);
+    }
+    let mut envelope = serde_json::Map::new();
+    envelope.insert(
+        "method".to_string(),
+        Value::String("resources/read".to_string()),
+    );
+    envelope.insert("params".to_string(), Value::Object(params));
+    let client_request: ClientRequest = serde_json::from_value(Value::Object(envelope))
+        .expect("resources/read request deserializes into ClientRequest");
+    Request::Client(Box::new(client_request))
+}
+
 /// Send one already-built request straight at a `ServerCore` and return the RAW
 /// [`JSONRPCResponse`].
 ///

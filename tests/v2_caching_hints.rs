@@ -63,6 +63,14 @@
 
 mod common;
 
+// The era-aware in-process duplex seam, included per-crate exactly as its own
+// module docs prescribe. Declared at the top level (not inside the `server_core`
+// module that consumes it) because `#[path]` on a nested module resolves
+// relative to the ENCLOSING module's directory, which for an inline module here
+// would be `tests/v2_caching_hints/`.
+#[path = "common/duplex.rs"]
+mod duplex;
+
 use async_trait::async_trait;
 use common::v2::{
     post, spawn_stateless_config, teardown, v1_body, v2_body, v2_headers, Resp, V1, V2,
@@ -71,6 +79,7 @@ use pmcp::server::typed_tool::TypedTool;
 use pmcp::server::{PromptHandler, ResourceHandler, Server};
 use pmcp::types::protocol::error_codes::{INVALID_REQUEST, METHOD_NOT_FOUND};
 use pmcp::types::protocol::ProtocolVersion;
+use pmcp::types::CacheScope;
 use pmcp::types::{
     Content, GetPromptResult, ListResourcesResult, PromptInfo, ReadResourceResult, ResourceInfo,
 };
@@ -214,18 +223,85 @@ fn assert_hints(response: &Resp, ctx: &str, ttl_ms: u64, cache_scope: &str) {
     );
 }
 
-/// Assert NEITHER hint key appears anywhere in the raw response.
+/// The name of the first caching hint found on `wire`, if any.
+///
+/// # Why this is a function returning `Option`, not an inline `assert!`
+///
+/// The same reason `tests/v1_lists_golden.rs:309` factors its `v1_leak_guard`
+/// out: an absence assertion that is never itself exercised is
+/// indistinguishable from one wired to the wrong string or one that can never
+/// fire, and the moment anybody would find out is the moment it was supposed to
+/// catch a real leak. Returning the key lets
+/// [`v2_caching_hints_the_no_hints_guard_is_load_bearing`] drive synthetic
+/// leaking wires through the SAME predicate the real assertions use — no
+/// `catch_unwind`, no test-only duplicate.
 ///
 /// The check is on the RAW text rather than on the parsed `result`, because a
 /// hint that leaked into a nested object (`result._meta`, a `contents` element)
 /// is still a hint on a wire that must not carry one.
+fn leaked_hint_key(wire: &str) -> Option<&'static str> {
+    [TTL_MS_KEY, CACHE_SCOPE_KEY]
+        .into_iter()
+        .find(|key| wire.contains(key))
+}
+
+/// Assert NEITHER hint key appears anywhere in `wire`.
+///
+/// Shared by the HTTP half ([`assert_no_hints`]) and the in-process
+/// `ServerCore` half, so the two dispatchers are held to one predicate rather
+/// than two that could drift.
+fn assert_no_hints_in(wire: &str, ctx: &str) {
+    assert!(
+        leaked_hint_key(wire).is_none(),
+        "{ctx}: the response carries the SCHM-03 caching hint \
+         `{}` where it must carry neither. D-11 era-gates the hints OFF on v1, and a v1 \
+         response carrying a v2 field breaks this milestone's severability story: Phases \
+         116-119 all rest on v1 responses staying byte-identical. Fix the projection — never \
+         relax this assertion. Wire was: {wire}",
+        leaked_hint_key(wire).unwrap_or("<none>")
+    );
+}
+
+/// [`assert_no_hints_in`] over an HTTP response's raw text.
 fn assert_no_hints(response: &Resp, ctx: &str) {
-    for key in [TTL_MS_KEY, CACHE_SCOPE_KEY] {
-        assert!(
-            !response.raw.contains(key),
-            "{ctx}: the response carries the SCHM-03 caching hint `{key}` where it must carry \
-             neither. Raw response was: {}",
-            response.raw
+    assert_no_hints_in(&response.raw, ctx);
+}
+
+/// Anti-vacuity for [`leaked_hint_key`]: it must DISCRIMINATE, not reject
+/// everything.
+///
+/// Every `assert_no_hints` call in this file passes on a response that
+/// genuinely carries no hint, so all of them are equally satisfied by a guard
+/// that works and by one that returns `None` unconditionally. This drives
+/// synthetic wires that DO carry each key, and a clean one that carries neither
+/// — because a guard that rejected EVERYTHING would satisfy the leak cases
+/// perfectly while failing every real fixture for the wrong reason.
+/// Discrimination is the property under test, not rejection.
+#[test]
+fn v2_caching_hints_the_no_hints_guard_is_load_bearing() {
+    const CLEAN: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"contents":[],"nextCursor":"c"}}"#;
+    assert_eq!(
+        leaked_hint_key(CLEAN),
+        None,
+        "a clean wire must PASS the guard — one that rejects everything would satisfy the leak \
+         cases below while proving nothing"
+    );
+
+    for (key, wire) in [
+        (
+            TTL_MS_KEY,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"contents":[],"ttlMs":0}}"#,
+        ),
+        (
+            CACHE_SCOPE_KEY,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"contents":[],"cacheScope":"private"}}"#,
+        ),
+    ] {
+        assert_eq!(
+            leaked_hint_key(wire),
+            Some(key),
+            "the guard must REJECT a wire carrying `{key}` and must NAME it, so a future reader \
+             knows which field leaked"
         );
     }
 }
@@ -348,6 +424,74 @@ fn hint_free_builder(opt_in_v2: bool) -> Server {
         .resources(HintFreeResources)
         .build()
         .expect("the hint-free caching fixture server builds")
+}
+
+// ===========================================================================
+// Fixture: a server whose handlers DO set caching hints.
+// ===========================================================================
+
+/// The one URI [`HintedResources::read`] serves.
+const HINTED_URI: &str = "hints://set/one.txt";
+
+/// The `ttlMs` the handler sets on its `ListResourcesResult`.
+const LIST_TTL_MS: u64 = 300_000;
+
+/// The `ttlMs` the handler sets on its `ReadResourceResult`.
+///
+/// Deliberately DIFFERENT from [`LIST_TTL_MS`], and paired with a different
+/// scope, so a projection bug that carried one result's hints onto the other
+/// cannot pass by coincidence.
+const READ_TTL_MS: u64 = 60_000;
+
+/// A resource handler that expresses a REAL caching preference on both of its
+/// results, through the 115-05 builders.
+///
+/// This is what makes those builders meaningful: without a fixture that
+/// genuinely opts in, "the projection preserves a handler-set value" and "the
+/// projection strips a handler-set value on v1" are both unfalsifiable.
+struct HintedResources;
+
+#[async_trait]
+impl ResourceHandler for HintedResources {
+    async fn read(
+        &self,
+        uri: &str,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ReadResourceResult> {
+        Ok(ReadResourceResult::new(vec![Content::resource_with_text(
+            uri,
+            "a hinted resource body",
+            "text/plain",
+        )])
+        .with_ttl_ms(READ_TTL_MS)
+        .with_cache_scope(CacheScope::Private))
+    }
+
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> pmcp::Result<ListResourcesResult> {
+        Ok(ListResourcesResult::new(vec![
+            ResourceInfo::new(HINTED_URI, "one").with_mime_type("text/plain")
+        ])
+        .with_ttl_ms(LIST_TTL_MS)
+        .with_cache_scope(CacheScope::Public))
+    }
+}
+
+/// The v2-OPTED-IN server whose `ResourceHandler` sets real hints.
+fn hinted_server() -> Server {
+    Server::builder()
+        .name("v2-caching-hints-set")
+        .version("1.0.0")
+        .with_supported_protocol_versions([
+            ProtocolVersion(V1.to_string()),
+            ProtocolVersion(V2.to_string()),
+        ])
+        .resources(HintedResources)
+        .build()
+        .expect("the handler-set caching fixture server builds")
 }
 
 // ===========================================================================
@@ -622,4 +766,418 @@ async fn v2_caching_hints_a_non_opted_in_server_refuses_a_v2_request_over_http()
         refused.raw
     );
     assert_no_hints(&refused, "a refused v2 request");
+}
+
+// ===========================================================================
+// Handler-set hints: preserved on v2, STRIPPED on v1.
+// ===========================================================================
+
+/// A handler-set hint reaches the v2 wire UNMODIFIED.
+///
+/// This is what makes the 115-05 builders meaningful, and it is the direct
+/// on-the-wire proof that the projection uses `or_insert` semantics rather than
+/// overwriting: an SDK that stamped its defaults over every result would pass
+/// every default test above and fail here.
+///
+/// The two results carry deliberately DIFFERENT pairs — `resources/list` gets
+/// 300000/`public`, `resources/read` gets 60000/`private` — so a bug that
+/// carried one result's hints onto the other cannot pass by coincidence.
+#[tokio::test]
+async fn v2_caching_hints_handler_set_values_reach_the_wire_unmodified() {
+    let list = round_trip(
+        hinted_server(),
+        &v2_headers("resources/list", ""),
+        &v2_body("resources/list", json!(31), json!({})),
+    )
+    .await;
+    assert_v2_era_witness(&list, "v2 resources/list, handler-set");
+    assert_hints(
+        &list,
+        "v2 resources/list, handler-set",
+        LIST_TTL_MS,
+        "public",
+    );
+
+    let read = round_trip(
+        hinted_server(),
+        &v2_headers("resources/read", HINTED_URI),
+        &v2_body("resources/read", json!(32), json!({ "uri": HINTED_URI })),
+    )
+    .await;
+    assert_v2_era_witness(&read, "v2 resources/read, handler-set");
+    assert_hints(
+        &read,
+        "v2 resources/read, handler-set",
+        READ_TTL_MS,
+        "private",
+    );
+
+    // The RAW pairs, spelled exactly as they must appear on the wire.
+    //
+    // Rust source cannot write the bare integers `300000` / `60000` — separators
+    // are mandatory under `clippy::unreadable_literal`, which is pedantic and
+    // NOT allow-listed by `make lint` — so these string literals are where the
+    // un-separated wire form is pinned. They are not redundant with the parsed
+    // assertions above: they prove each value reaches the wire as a JSON
+    // INTEGER, not as `3e5`, `300000.0` or `"300000"`, which a `serde_json`
+    // number-representation change could alter while `json!(300_000)` equality
+    // still held.
+    assert!(
+        list.raw.contains(r#""ttlMs":300000"#) && list.raw.contains(r#""cacheScope":"public""#),
+        "the handler-set list pair must reach the v2 wire verbatim, raw: {}",
+        list.raw
+    );
+    assert!(
+        read.raw.contains(r#""ttlMs":60000"#) && read.raw.contains(r#""cacheScope":"private""#),
+        "the handler-set read pair must reach the v2 wire verbatim, raw: {}",
+        read.raw
+    );
+}
+
+/// **The single most important test in this plan.**
+///
+/// It is the only HTTP-level place where the STRIP half of the projection is
+/// exercised end to end against a handler that genuinely opted in. Every other
+/// v1 assertion in this file is over a handler that set nothing, where "no key
+/// on the wire" is equally consistent with a projection that strips and one
+/// that merely never adds. Here the handler DID set both hints, on both
+/// results, and the v1 wire must still carry neither.
+///
+/// A v1 response carrying a v2 field breaks D-11 and this milestone's
+/// severability story: Phases 116-119 all rest on the v1 layer staying cleanly
+/// removable, which means v1 bytes staying v1 bytes. **The remedy for a failure
+/// here is to fix the projection — never to relax this assertion.**
+#[tokio::test]
+async fn v2_caching_hints_v1_strips_handler_set_values() {
+    for (id, method, params) in [
+        (33_i64, "resources/list", json!({})),
+        (34, "resources/read", json!({ "uri": HINTED_URI })),
+    ] {
+        let response = round_trip(hinted_server(), &[], &v1_body(method, json!(id), params)).await;
+        let ctx = format!("v1 {method} against a handler that SET both hints");
+
+        assert_no_v2_era_witness(&response, &ctx);
+        assert_no_hints(&response, &ctx);
+    }
+}
+
+// ===========================================================================
+// Twin-dispatcher parity: the in-process `ServerCore` half.
+// ===========================================================================
+
+/// `ServerCore` in-process, driven through the era-aware duplex seam.
+///
+/// # Why only `resources/read`
+///
+/// MEASURED during the 2026-08-01 replan and re-verified here.
+/// `ServerCore::handle_request` resolves the era via
+/// `resolve_ingress_protocol_context` (`src/server/core.rs:4038`), which needs
+/// BOTH the server's accept-list to be v2-opted-in AND a per-request signal read
+/// by `extract_request_meta_value` (`src/server/core.rs:3997`). That extractor
+/// matches EXHAUSTIVELY and returns the `_meta` object for exactly three
+/// [`ClientRequest`](pmcp::types::ClientRequest) variants — `CallTool`,
+/// `GetPrompt` and `ReadResource` — and `None` for every other variant,
+/// INCLUDING `ListTools`, `ListPrompts`, `ListResources` and
+/// `ListResourceTemplates`.
+///
+/// So of the six `CacheableResult` methods, only `resources/read` can reach
+/// `Era::V2` through the in-process typed route at all. `server/discover` is a
+/// seventh problem: it rides the crate-private internal-request path, not the
+/// `ClientRequest` dispatch, so it has no in-process entry point here either.
+///
+/// This is a documented semver decision, not a defect — see
+/// [`v2_caching_hints_list_methods_cannot_reach_v2_through_the_typed_dispatch_route`],
+/// which asserts the bound so a future reader does not "fix" it. The four list
+/// methods get their v2 coverage over HTTP, above, via
+/// `Server::resolve_raw_meta_protocol_context`, which reads the RAW body and has
+/// FULL method coverage.
+mod server_core {
+    use super::duplex::{
+        assert_no_v2_witness, assert_v2_witness, call_tool_request, initialize_via_core,
+        raw_via_core, read_resource_request, result_object, v2_accept_list,
+    };
+    use super::{
+        assert_no_hints_in, fixture_tool, HintFreeResources, HintedResources, CACHE_SCOPE_KEY,
+        DEFAULT_CACHE_SCOPE, DEFAULT_TTL_MS, HINTED_URI, HINT_FREE_URI, READ_TTL_MS, TOOL_ALPHA,
+        TTL_MS_KEY, V2,
+    };
+    use pmcp::server::builder::ServerCoreBuilder;
+    use pmcp::server::core::ProtocolHandler;
+    use pmcp::types::jsonrpc::JSONRPCResponse;
+    use pmcp::types::protocol::error_codes::V1_TASK_PENDING;
+    use pmcp::types::protocol::Era;
+    use pmcp::types::{ClientRequest, Request};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// A v2-OPTED-IN core carrying the hint-free resource handler and one tool.
+    fn hint_free_core() -> Arc<dyn ProtocolHandler> {
+        Arc::new(
+            ServerCoreBuilder::new()
+                .name("v2-caching-hints-core")
+                .version("1.0.0")
+                .with_supported_protocol_versions(v2_accept_list())
+                .tool(TOOL_ALPHA, fixture_tool(TOOL_ALPHA))
+                .resources(HintFreeResources)
+                .build()
+                .expect("the hint-free caching fixture core builds"),
+        )
+    }
+
+    /// A v2-OPTED-IN core whose resource handler SETS both hints.
+    fn hinted_core() -> Arc<dyn ProtocolHandler> {
+        hinted_core_builder(true)
+    }
+
+    /// The NOT-opted-in twin of [`hinted_core`], for the v1 strip half.
+    fn v1_hinted_core() -> Arc<dyn ProtocolHandler> {
+        hinted_core_builder(false)
+    }
+
+    fn hinted_core_builder(opt_in_v2: bool) -> Arc<dyn ProtocolHandler> {
+        let mut builder = ServerCoreBuilder::new()
+            .name("v2-caching-hints-set-core")
+            .version("1.0.0");
+        if opt_in_v2 {
+            builder = builder.with_supported_protocol_versions(v2_accept_list());
+        }
+        Arc::new(
+            builder
+                .resources(HintedResources)
+                .build()
+                .expect("the handler-set caching fixture core builds"),
+        )
+    }
+
+    /// Assert a raw in-process response carries both hints with `ttl_ms` /
+    /// `cache_scope`.
+    ///
+    /// The `ServerCore` twin of the HTTP `assert_hints`. It asserts on the
+    /// SERIALIZED response as well as the parsed result for the same reason:
+    /// a `rename_all` regression emitting `ttl_ms` is invisible to a lookup by
+    /// camelCase name.
+    fn assert_hints(response: &JSONRPCResponse, ctx: &str, ttl_ms: u64, cache_scope: &str) {
+        let result = result_object(response);
+        assert_eq!(
+            result.get(TTL_MS_KEY),
+            Some(&json!(ttl_ms)),
+            "{ctx}: D-07 makes `{TTL_MS_KEY}` REQUIRED on a v2 `CacheableResult`; expected \
+             {ttl_ms}, result was: {result:?}"
+        );
+        assert_eq!(
+            result.get(CACHE_SCOPE_KEY),
+            Some(&json!(cache_scope)),
+            "{ctx}: D-07 makes `{CACHE_SCOPE_KEY}` REQUIRED on a v2 `CacheableResult`; expected \
+             `{cache_scope}`, result was: {result:?}"
+        );
+
+        let wire = serde_json::to_string(response).expect("response serializes");
+        assert!(
+            wire.contains(r#""ttlMs""#) && wire.contains(r#""cacheScope""#),
+            "{ctx}: both keys must reach the wire in camelCase, got: {wire}"
+        );
+    }
+
+    /// Assert NEITHER hint key appears anywhere in the serialized response.
+    ///
+    /// Delegates to the SAME `leaked_hint_key` predicate the HTTP half uses
+    /// (via [`assert_no_hints_in`]), so the two dispatchers cannot be held to
+    /// two subtly different definitions of "carries no hint". Its anti-vacuity
+    /// proof is `v2_caching_hints_the_no_hints_guard_is_load_bearing`, at the
+    /// top level of this file.
+    fn assert_no_hints(response: &JSONRPCResponse, ctx: &str) {
+        let wire = serde_json::to_string(response).expect("response serializes");
+        assert_no_hints_in(&wire, ctx);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_server_core_resources_read_v2_carries_the_defaults() {
+        let response = raw_via_core(
+            hint_free_core(),
+            read_resource_request(HINT_FREE_URI, Era::V2),
+        )
+        .await;
+
+        assert_v2_witness(&response, "ServerCore / v2 resources/read, hint-free");
+        assert_hints(
+            &response,
+            "ServerCore / v2 resources/read, hint-free",
+            DEFAULT_TTL_MS,
+            DEFAULT_CACHE_SCOPE,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_server_core_resources_read_v2_preserves_handler_set_values() {
+        let response =
+            raw_via_core(hinted_core(), read_resource_request(HINTED_URI, Era::V2)).await;
+
+        assert_v2_witness(&response, "ServerCore / v2 resources/read, handler-set");
+        assert_hints(
+            &response,
+            "ServerCore / v2 resources/read, handler-set",
+            READ_TTL_MS,
+            "private",
+        );
+    }
+
+    /// The `ServerCore` twin of `v2_caching_hints_v1_strips_handler_set_values`.
+    ///
+    /// A NON-opted-in core plus an `Era::V1` request, against the handler that
+    /// genuinely set both hints. `ServerCore` gates a v1 request behind the
+    /// `initialize` handshake (`v1_initialize_gate_applies`,
+    /// `src/server/core.rs:4089`) — unlike a v2 request, which needs none — so
+    /// the handshake runs first. That asymmetry is itself further evidence the
+    /// era reached the dispatcher.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_server_core_resources_read_v1_strips_handler_set_values() {
+        let core = v1_hinted_core();
+        initialize_via_core(&core).await;
+        let response = raw_via_core(core, read_resource_request(HINTED_URI, Era::V1)).await;
+
+        assert_no_v2_witness(&response, "ServerCore / v1 resources/read, handler-set");
+        assert_no_hints(&response, "ServerCore / v1 resources/read, handler-set");
+    }
+
+    /// The `ServerCore` twin of the fail-closed `request_is_cacheable` control.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_server_core_tools_call_gains_neither_key() {
+        let response = raw_via_core(
+            hint_free_core(),
+            call_tool_request(TOOL_ALPHA, json!({}), Era::V2),
+        )
+        .await;
+
+        assert_v2_witness(&response, "ServerCore / v2 tools/call");
+        assert_no_hints(
+            &response,
+            "ServerCore / v2 tools/call is not a CacheableResult (D-07)",
+        );
+    }
+
+    /// **The structural bound, asserted at the code rather than only in a plan.**
+    ///
+    /// An OPTED-IN core is sent a typed `ClientRequest::ListResources` whose
+    /// `params` carry a `_meta` object with the v2 protocol-version key — the
+    /// exact signal that makes `resources/read` resolve v2 two tests above — and
+    /// the era signal is DROPPED. `ListResourcesRequest` has no `_meta` field
+    /// and does not set `deny_unknown_fields`, so serde discards the key
+    /// silently, and `extract_request_meta_value`'s exhaustive match
+    /// (`src/server/core.rs:3997-4026`) returns `None` for the variant anyway.
+    ///
+    /// **This is a documented semver decision, not a bug.** The rustdoc at
+    /// `src/server/core.rs:3971-3991` records the reason: adding a `pub` field
+    /// to a constructible `pub` struct is a MAJOR semver break
+    /// (`cargo semver-checks` `constructible_struct_adds_field`), which the
+    /// additive-scoped v2.5 milestone will not take. The four list methods
+    /// therefore get their v2 caching-hint coverage over HTTP, through
+    /// `Server::resolve_raw_meta_protocol_context`, which reads the RAW body and
+    /// has FULL method coverage — see the six per-method tests at the top of
+    /// this file.
+    ///
+    /// Without this test a future reader would find an unexplained in-process
+    /// gap and try to close it by widening a public request struct, taking a
+    /// MAJOR break to fix something that is already covered on the transport
+    /// that actually matters for v2.
+    ///
+    /// The pre-handshake half is the extra evidence: a request that had resolved
+    /// v2 would be served immediately, because
+    /// [`v1_initialize_gate_applies`](pmcp::server::core) returns `false` for
+    /// `Some(Era::V2)`. Getting `-32002` instead proves the era resolution came
+    /// out non-v2 BEFORE anything about caching was decided.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_list_methods_cannot_reach_v2_through_the_typed_dispatch_route() {
+        let core = hint_free_core();
+
+        // First evidence: without a v1 handshake the request is refused, which a
+        // genuinely-v2-resolved request would not be.
+        let refused = raw_via_core(core.clone(), list_resources_signalling_v2()).await;
+        let refusal = serde_json::to_string(&refused).expect("response serializes");
+        assert!(
+            refusal.contains(&V1_TASK_PENDING.to_string()),
+            "an opted-in core must still demand the v1 handshake for a `resources/list` \
+             carrying the v2 `_meta` signal — proof the signal was dropped. Got: {refusal}"
+        );
+
+        // Second evidence: after the handshake it is served, as v1, hints stripped.
+        initialize_via_core(&core).await;
+        let response = raw_via_core(core, list_resources_signalling_v2()).await;
+
+        assert_no_v2_witness(
+            &response,
+            "opted-in ServerCore, `resources/list` carrying the v2 `_meta` signal",
+        );
+        assert_no_hints(
+            &response,
+            "a `resources/list` that resolved v1 despite signalling v2",
+        );
+    }
+
+    /// A typed `resources/list` request whose `params._meta` carries the v2
+    /// protocol-version key.
+    ///
+    /// Built INLINE here rather than added to `tests/common/duplex.rs`
+    /// deliberately: a shared era-aware builder for a list method would look
+    /// usable and is not one, so the shared seam carries only
+    /// `read_resource_request` and this lives in the one test whose whole
+    /// subject is that the signal does NOT survive. The name here is
+    /// deliberately NOT the obvious `<method>_request` shape, so the `grep`
+    /// detector guarding that seam keeps working.
+    fn list_resources_signalling_v2() -> Request {
+        signalling_v2("resources/list", json!({}))
+    }
+
+    /// Build a typed request for `method` whose `params._meta` carries the
+    /// reserved v2 protocol-version key.
+    ///
+    /// The `_meta` block is spelled as a JSON literal — the ONE place in this
+    /// file that does so — because the whole subject here is what happens to a
+    /// wire-shaped signal at the typed boundary, and
+    /// [`v2_caching_hints_server_core_the_dropped_signal_is_a_real_one`] proves
+    /// this exact literal DOES resolve v2 on a `_meta`-bearing variant.
+    fn signalling_v2(method: &str, params: serde_json::Value) -> Request {
+        let mut params = params;
+        params.as_object_mut().expect("params is an object").insert(
+            "_meta".to_string(),
+            json!({ "io.modelcontextprotocol/protocolVersion": V2 }),
+        );
+        let mut envelope = serde_json::Map::new();
+        envelope.insert("method".to_string(), json!(method));
+        envelope.insert("params".to_string(), params);
+        let request: ClientRequest = serde_json::from_value(serde_json::Value::Object(envelope))
+            .unwrap_or_else(|e| panic!("`{method}` deserializes into ClientRequest ({e})"));
+        Request::Client(Box::new(request))
+    }
+
+    /// **Anti-vacuity for the bound test: the dropped signal is a REAL one.**
+    ///
+    /// The bound test above asserts a `resources/list` carrying this `_meta`
+    /// block resolves v1. That would be equally true of a mis-spelled,
+    /// mis-nested or empty signal — in which case the test would prove nothing
+    /// about `extract_request_meta_value` and everything about a typo.
+    ///
+    /// Here the IDENTICAL [`signalling_v2`] literal is applied to
+    /// `resources/read` — a `_meta`-BEARING variant — against the SAME opted-in
+    /// core, and it resolves v2. Signal, server and route held constant; only
+    /// the `ClientRequest` variant differs. That isolates the variant as the
+    /// cause, which is exactly the claim the bound test makes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v2_caching_hints_server_core_the_dropped_signal_is_a_real_one() {
+        let response = raw_via_core(
+            hint_free_core(),
+            signalling_v2("resources/read", json!({ "uri": HINT_FREE_URI })),
+        )
+        .await;
+
+        assert_v2_witness(
+            &response,
+            "the SAME `_meta` literal on `resources/read`, a `_meta`-bearing variant",
+        );
+        assert_hints(
+            &response,
+            "the SAME `_meta` literal on `resources/read`",
+            DEFAULT_TTL_MS,
+            DEFAULT_CACHE_SCOPE,
+        );
+    }
 }
