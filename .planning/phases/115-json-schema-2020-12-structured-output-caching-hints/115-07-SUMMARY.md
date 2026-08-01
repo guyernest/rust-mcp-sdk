@@ -291,3 +291,7 @@ None. This plan adds no network endpoint, no auth path, no file access and no sc
 ---
 *Phase: 115-json-schema-2020-12-structured-output-caching-hints*
 *Completed: 2026-08-01*
+
+## Self-Check: PASSED
+
+All four claimed files exist on disk; all three claimed commits (`8aced935`, `078a3661`, `841c57ad`) exist in the repository.
