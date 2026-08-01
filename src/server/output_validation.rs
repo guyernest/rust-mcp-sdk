@@ -714,6 +714,147 @@ mod tests {
         );
     }
 
+    /// An EMBEDDED SCHEMA RESOURCE — a subschema carrying its own `$id` — with
+    /// its dialect declaration on it. Under 2020-12 this is the sanctioned way
+    /// to put a `$schema` below the root, and `jsonschema` 0.49.2 honours it.
+    ///
+    /// The `$id` host is `example.test` and is deliberately NOT dereferenceable:
+    /// SEP-2106 requires zero network and filesystem I/O, and an `$id` alone
+    /// establishes a base URI without any fetch. The only `$ref` here is the
+    /// LOCAL JSON pointer `#/$defs/Inner`.
+    fn embedded_legacy_resource_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": { "n": { "$ref": "#/$defs/Inner" } },
+            "$defs": {
+                "Inner": {
+                    "$id": "https://example.test/inner",
+                    "$schema": DRAFT_07,
+                    "type": "integer"
+                }
+            }
+        })
+    }
+
+    /// The control: identical, minus the embedded declaration. Enforcement is
+    /// known to work here on both eras, which is what makes the other two rows
+    /// a statement about the DECLARATION rather than about `$ref` resolution.
+    fn embedded_resource_control_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": { "n": { "$ref": "#/$defs/Inner" } },
+            "$defs": {
+                "Inner": {
+                    "$id": "https://example.test/inner",
+                    "type": "integer"
+                }
+            }
+        })
+    }
+
+    /// The regression row: a legacy declaration at the root AND on the embedded
+    /// resource. Before 115-12 this measured `(v1, v2) = (Violates, Conforms)`.
+    fn root_and_embedded_legacy_schema() -> Value {
+        let mut schema = embedded_legacy_resource_schema();
+        schema
+            .as_object_mut()
+            .expect("the literal above is an object")
+            .insert("$schema".to_string(), Value::String(DRAFT_07.to_string()));
+        schema
+    }
+
+    /// THE fence for the `115-VERIFICATION.md` BLOCKER. A legacy dialect
+    /// declaration on an EMBEDDED SCHEMA RESOURCE must not survive the v2 pin.
+    ///
+    /// Measured twice independently on this tree (`115-REVIEW.md` CR-01 and
+    /// `115-VERIFICATION.md`) against `jsonschema` 0.49.2, through
+    /// `fuzz_support::validate_bytes`, with the instance `{"n":
+    /// "NOT-AN-INTEGER"}`:
+    ///
+    /// | Case | `(v1, v2)` BEFORE 115-12 |
+    /// |---|---|
+    /// | embedded legacy resource | `(Conforms, Conforms)` — `type` silently dropped |
+    /// | control, no embedded declaration | `(Violates, Violates)` |
+    /// | root draft-07 + embedded | `(Violates, Conforms)` — **v2 weaker than v1** |
+    ///
+    /// This test lives in `mod tests`, NOT in `fuzz_support_tests`: `fuzzing` is
+    /// in neither `default` nor `full`, so a fence written there does not run
+    /// under `make quality-gate`. All three of the would-be fences for this
+    /// defect (`normalization_cases()`, `arb_schema_document()`,
+    /// `is_dialect_neutral`) either excluded the shape structurally or sat
+    /// behind a feature the gate does not enable, which is exactly why it
+    /// shipped.
+    #[test]
+    fn v2_pin_still_enforces_an_embedded_legacy_resource() {
+        let violating = json!({ "n": "NOT-AN-INTEGER" });
+        let conforming = json!({ "n": 7 });
+
+        let rows = [
+            (
+                "embedded-legacy-resource",
+                embedded_legacy_resource_schema(),
+            ),
+            (
+                "control-no-nested-schema",
+                embedded_resource_control_schema(),
+            ),
+            ("root-draft07 + embedded", root_and_embedded_legacy_schema()),
+        ];
+
+        for (label, schema) in &rows {
+            assert!(
+                schema_mismatch(schema, &violating, Some(Era::V2)).is_some(),
+                "BYPASS ({label}): the v2 Draft 2020-12 pin accepted a STRING where the embedded \
+                 schema resource declares `integer`. A `None` here means the legacy `$schema` on \
+                 the `$id`-bearing `$defs.Inner` survived normalization, resolved an EMPTY \
+                 vocabulary set there and produced a sub-validator that accepts everything — the \
+                 vacuous-validator bypass the pin exists to close, moved one level down. \
+                 `normalize_schema_dialect` must rewrite EVERY dialect declaration, not just the \
+                 root one."
+            );
+            assert_eq!(
+                schema_mismatch(schema, &conforming, Some(Era::V2)),
+                None,
+                "({label}) a conforming instance must still pass under the pin — the fix restores \
+                 enforcement, it does not make everything fail"
+            );
+        }
+
+        // The regression DIRECTION, stated as its own assertion: row 3's v1
+        // column was `Violates` all along, so a `None` on v2 here means v2 is
+        // measurably WEAKER than v1 — the one direction SCHM-01 forbids.
+        let row3 = root_and_embedded_legacy_schema();
+        assert!(
+            schema_mismatch(&row3, &violating, Some(Era::V1)).is_some(),
+            "v1 must keep rejecting this instance — D-01 freezes the v1 arm, so if this became a \
+             `None` the v1 auto-detect wire moved, which this phase declined to do"
+        );
+        assert!(
+            schema_mismatch(&row3, &violating, Some(Era::V2)).is_some(),
+            "REGRESSION DIRECTION: `(v1, v2) = (Violates, Conforms)` — v2 accepting an instance \
+             v1 correctly rejects is the exact regression SCHM-01 was written to forbid. \
+             Measured as (Violates, Conforms) before 115-12; it must now be (Violates, Violates)."
+        );
+
+        // Row 1's v1 column is NOT this phase's to move. D-01 freezes the v1
+        // arm at `jsonschema::validator_for`, whose auto-detect honours the
+        // embedded draft-07 declaration and therefore also drops `type` — it
+        // measured `(Conforms, Conforms)`. Changing that is a v1 BEHAVIOUR
+        // change this phase explicitly declined; assert it stayed put.
+        assert_eq!(
+            schema_mismatch(
+                &embedded_legacy_resource_schema(),
+                &violating,
+                Some(Era::V1)
+            ),
+            None,
+            "v1 is frozen by D-01: its auto-detect honours the embedded draft-07 declaration and \
+             drops `type` there, measured `(Conforms, Conforms)`. A `Some` here means the v1 arm \
+             changed behaviour, which is a breaking change for every 2025-11-25 server and is not \
+             what 115-12 was allowed to do"
+        );
+    }
+
     /// D-01's freeze, asserted rather than assumed: the same draft-07 document
     /// behaves on v1 exactly as it did before the v2 pin existed, and an
     /// absent protocol context (`None`) resolves to v1, never to v2.
@@ -945,7 +1086,7 @@ mod tests {
         }
     }
 
-    /// The four `normalize_schema_dialect` cases, as a set, so both the
+    /// The five `normalize_schema_dialect` cases, as a set, so both the
     /// structural test and the idempotence test cover the same ground.
     ///
     /// Each entry is `(schema, expected_owned)` — `true` means the normalizer
@@ -971,6 +1112,14 @@ mod tests {
                 }),
                 true,
             ),
+            // (e) an EMBEDDED SCHEMA RESOURCE: `$id` + `$schema` on a `$defs`
+            // entry, and no root declaration. THIS is the shape 2020-12
+            // sanctions and `jsonschema` honours, and it is the one the
+            // root-only normalizer left unrewritten — the measured BLOCKER in
+            // `115-VERIFICATION.md`. It lives in the case list rather than in a
+            // standalone test so it flows through BOTH the structural fence and
+            // the idempotence fence automatically.
+            (embedded_legacy_resource_schema(), true),
         ]
     }
 
@@ -1076,7 +1225,85 @@ mod tests {
         );
     }
 
-    /// Normalizing twice equals normalizing once, for all four cases — the
+    /// The DATA guard. A `$schema` that is instance data — not a dialect
+    /// declaration — must come back byte-identical.
+    ///
+    /// This is the fence against the corruption the CR-01 fix sketch would have
+    /// introduced: that sketch rewrote every `$schema` KEY unconditionally,
+    /// which turns a `properties` entry for an instance property literally
+    /// named `$schema` into an uncompilable schema (its subschema value is
+    /// replaced by a string), and silently changes which instances match a
+    /// `const`, an `enum` alternative, a `default` or an `examples` entry.
+    ///
+    /// The two rules that prevent it, both of which this test pins:
+    /// a declaration is a STRING-valued `$schema`, and the walk never descends
+    /// into a `const` / `enum` / `default` / `examples` payload
+    /// (`DATA_ONLY_KEYWORDS`).
+    #[test]
+    fn normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone() {
+        use std::borrow::Cow;
+
+        // An instance property literally named `$schema`. Its value is a
+        // SUBSCHEMA (an object), never a string, so it is not a declaration.
+        let property_named_dollar_schema = json!({
+            "type": "object",
+            "properties": { "$schema": { "type": "string" } }
+        });
+        // A `$schema` string sitting inside a `const` payload: pure instance
+        // DATA. Rewriting it would change which instances conform.
+        let dollar_schema_inside_const = json!({
+            "const": { "$schema": DRAFT_07, "note": "this is data, not a dialect" }
+        });
+
+        for document in [&property_named_dollar_schema, &dollar_schema_inside_const] {
+            let normalized = normalize_schema_dialect(document);
+            assert!(
+                matches!(normalized, Cow::Borrowed(_)),
+                "a $schema that is DATA is not a dialect declaration, so nothing must be cloned \
+                 for {document}. If this allocated, either the string-valued rule or the \
+                 DATA_ONLY_KEYWORDS skip (`const`, `enum`, `default`, `examples`) was dropped \
+                 from first_legacy_dialect"
+            );
+            assert_eq!(
+                *normalized, *document,
+                "a $schema that is DATA must come back byte-identical: {document}"
+            );
+        }
+
+        // The mixed document: a REAL root declaration alongside both data
+        // shapes. The root is rewritten; the data is not.
+        let mixed = json!({
+            "$schema": DRAFT_07,
+            "type": "object",
+            "properties": { "$schema": { "type": "string" } },
+            "const": { "$schema": DRAFT_07, "note": "this is data, not a dialect" }
+        });
+        let normalized = normalize_schema_dialect(&mixed);
+        assert!(
+            matches!(normalized, Cow::Owned(_)),
+            "the mixed document DOES carry a real root declaration and must be rewritten"
+        );
+        assert_eq!(
+            normalized.get("$schema").and_then(Value::as_str),
+            Some(DRAFT_2020_12),
+            "the real root declaration must be overwritten with the 2020-12 URI"
+        );
+        assert_eq!(
+            normalized.pointer("/properties/$schema"),
+            mixed.pointer("/properties/$schema"),
+            "the `properties` entry for an instance property named `$schema` is a SUBSCHEMA, not \
+             a dialect declaration — rewriting it to a string makes the document uncompilable"
+        );
+        assert_eq!(
+            normalized.pointer("/const"),
+            mixed.pointer("/const"),
+            "a `const` payload is instance DATA. The walk must skip DATA_ONLY_KEYWORDS \
+             (`const`, `enum`, `default`, `examples`); rewriting inside one changes which \
+             instances conform, which is a semantic corruption, not a normalization"
+        );
+    }
+
+    /// Normalizing twice equals normalizing once, for all five cases — the
     /// fixed-example half of the idempotence property 115-09 holds over
     /// arbitrary generated input.
     #[test]
