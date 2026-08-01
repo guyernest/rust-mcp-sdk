@@ -20,6 +20,7 @@ pub use context::{ProtocolContext, TraceContext};
 // Types that were previously in this file are now in their own modules
 // and re-exported via types/mod.rs. These re-exports preserve the
 // `crate::types::protocol::X` import paths used throughout the codebase.
+pub use super::caching::*;
 pub use super::content::*;
 pub use super::notifications::*;
 pub use super::prompts::*;

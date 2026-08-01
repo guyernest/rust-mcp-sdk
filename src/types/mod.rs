@@ -4,6 +4,7 @@
 //! including requests, responses, notifications, and capability definitions.
 
 pub mod auth;
+pub mod caching;
 pub mod capabilities;
 pub mod completable;
 pub mod content;
@@ -39,6 +40,10 @@ pub use crate::{DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION, SUPPORTED_PRO
 pub use protocol::*;
 
 pub use auth::{AuthInfo, AuthScheme};
+// The 2026-07-28 client-side caching vocabulary. NARROW re-export: only the two
+// PUBLIC items. The projector and its classification enum are `pub(crate)`
+// dispatcher plumbing and deliberately stay off the public surface.
+pub use caching::{CacheScope, DEFAULT_TTL_MS};
 pub use capabilities::{
     ClientCapabilities, ClientTasksCapability, CompletionCapabilities, ElicitationCapabilities,
     FormElicitationCapability, LoggingCapabilities, PromptCapabilities, ResourceCapabilities,

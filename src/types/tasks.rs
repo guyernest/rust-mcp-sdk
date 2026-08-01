@@ -730,6 +730,13 @@ pub struct TaskV2 {
     /// deliberately modelled WITHOUT `skip_serializing_if`: `None` must
     /// serialize as `"ttlMs":null` (present), never be omitted. This is the same
     /// treatment [`Task::ttl`] already documents, for the same reason.
+    ///
+    /// **Not a cache hint (D-10).** This `ttlMs` is a task LIFETIME — how long
+    /// the server retains this task record. It shares its spec name with the
+    /// `ttlMs` of [`crate::types::caching`], which is a cache-FRESHNESS hint on
+    /// the six `CacheableResult` list/read responses. The two are unrelated and
+    /// the modules deliberately never import each other; copying a long task
+    /// lifetime into a cache hint would tell clients that stale data is fresh.
     pub ttl_ms: Option<u64>,
     /// Suggested polling interval in integer milliseconds.
     ///
