@@ -27,7 +27,9 @@
 //!   POSITION — the root, plus every node reachable without descending into a
 //!   `const` / `enum` / `default` / `examples` payload, where the VALUES of a
 //!   `properties` / `patternProperties` / `$defs` / `definitions` /
-//!   `dependentSchemas` map are schema positions REGARDLESS OF THE NAME they
+//!   `dependentSchemas` / `dependencies` map — the SIX keywords the JSON Schema
+//!   meta-schemas themselves define as maps from author-chosen names to
+//!   subschemas — are schema positions REGARDLESS OF THE NAME they
 //!   are filed under. Every dialect declaration in such a position is
 //!   rewritten: the root one, and the one on every embedded schema resource
 //!   below it. A declared legacy `$schema` there is ignored — neither honoured
@@ -40,10 +42,15 @@
 //!   so no whole-document total can ever hold) AND the name-position rule (a
 //!   `$defs` entry an author named `default` was visited by neither walker, so
 //!   its legacy declaration survived the pin — `115-VERIFICATION.md`, closed by
-//!   115-14). See [`normalize_schema_dialect`] for why "ignored" has to mean
+//!   115-14). The list of containers was then found INCOMPLETE — it omitted
+//!   `dependencies`, so the same collision was reachable one keyword over
+//!   (`115-REVIEW.md` CR-01, closed by 115-16). See
+//!   [`normalize_schema_dialect`] for why "ignored" has to mean
 //!   "rewritten" rather than "compiled as-is", for the measured bypass that
-//!   rewriting only the root left open (closed by 115-12), and for the measured
-//!   bypass that a position-blind walk left open (closed by 115-14).
+//!   rewriting only the root left open (closed by 115-12), for the measured
+//!   bypass that a position-blind walk left open (closed by 115-14), and for
+//!   the ONE residual that remains open by decision: an author-invented
+//!   container is still name-dependent.
 //!
 //! A consequence worth stating: some draft-07 constructs cannot be expressed
 //! under 2020-12 at all — `exclusiveMinimum: true` and array-form `items` are
@@ -179,6 +186,45 @@ const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 /// the one case a reviewer found. See
 /// [`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`]
 /// for the fence, and 115-16's SUMMARY for the derivation table.
+///
+/// # The derivation, so the next reader can re-run it instead of guessing
+///
+/// This list is the UNION, over the draft-04 / draft-06 / draft-07 / 2019-09 /
+/// 2020-12 meta-schema documents `jsonschema` 0.49.2 ships offline, of the
+/// keywords each meta-schema's own `.properties` map binds to an OBJECT-typed
+/// schema carrying an `additionalProperties` that REFERENCES THE META-SCHEMA
+/// ITSELF — `{"$ref":"#"}` (draft-04/06/07), `{"$recursiveRef":"#"}` (2019-09),
+/// `{"$dynamicRef":"#meta"}` (2020-12), or an `anyOf` with such a branch
+/// (`dependencies`). That shape is precisely "a map whose keys are author-chosen
+/// and whose values are subschemas".
+///
+/// Two keywords match the object-with-`additionalProperties` shape and are
+/// REJECTED by the self-reference criterion, and naming them is what makes the
+/// enumeration checkable rather than asserted:
+///
+/// - `$vocabulary` — `additionalProperties` is `{"type": "boolean"}`; its values
+///   are enablement flags, not subschemas;
+/// - `dependentRequired` — `additionalProperties` is a `stringArray` `$ref`; its
+///   values are lists of property names, not subschemas.
+///
+/// The union is exactly these six. Re-derive with (guard the `object` type test
+/// FIRST — `draft7.json` binds `default` and `const` to booleans, and an
+/// unguarded `.value.type` makes `jq` exit 5 with the error on stderr and
+/// nothing on stdout, which is that criterion's own pass condition):
+///
+/// ```text
+/// jq -r '(.properties // {}) | to_entries[]
+///        | select((.value|type)=="object")
+///        | select(.value|has("additionalProperties"))
+///        | "\(.key)\t\(.value.additionalProperties|tojson)"' <metaschema.json>
+/// ```
+///
+/// Note the SCOPE BOUNDARY this list does not cross: an author-invented
+/// container (`components`, a vendor extension) appears in no meta-schema and is
+/// therefore not in the derived set, so a resource filed there under a colliding
+/// name stays name-dependent — measured `components.default -> rewritten=false`.
+/// That residual is stated on [`normalize_schema_dialect`] and booked in
+/// `D-115-AD`; it is accepted, not overlooked.
 ///
 /// The entry is ordered LAST deliberately: the restated mirrors in
 /// `tests/property_tests.rs` and `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`,
@@ -329,13 +375,16 @@ fn pin_dialect_in_member(member_key: &str, member_value: &mut Value) {
 ///    that is how a real declaration is told apart from a `properties` map entry
 ///    for an instance property literally named `$schema`, whose value is a
 ///    subschema (an object or a boolean) and never a string.
-/// 2. A member whose key is one of the [`SUBSCHEMA_MAP_KEYWORDS`] —
+/// 2. A member whose key is one of the six [`SUBSCHEMA_MAP_KEYWORDS`] —
 ///    `properties`, `patternProperties`, `$defs`, `definitions`,
-///    `dependentSchemas` — has a VALUE that is a map from AUTHOR-CHOSEN NAMES to
-///    subschemas. Recurse into every one of those values, and NEVER test that
-///    map's own keys against rule 3: they are names, not keywords. (A member
-///    with one of these keys whose value is not an object is a malformed
-///    document and takes rule 3's ordinary path, so nothing is skipped.)
+///    `dependentSchemas`, `dependencies` — has a VALUE that is a map from
+///    AUTHOR-CHOSEN NAMES to subschemas. Recurse into every one of those values,
+///    and NEVER test that map's own keys against rule 3: they are names, not
+///    keywords. (A member with one of these keys whose value is not an object is
+///    a malformed document and takes rule 3's ordinary path, so nothing is
+///    skipped.) The six are DERIVED from the pinned meta-schemas, not assumed —
+///    see [`SUBSCHEMA_MAP_KEYWORDS`], where the criterion and the two rejected
+///    keywords are recorded.
 /// 3. Otherwise, recurse into every member value EXCEPT the values of the
 ///    [`DATA_ONLY_KEYWORDS`] — `const`, `enum`, `default` and `examples` — which
 ///    carry instance data rather than subschemas.
@@ -409,10 +458,36 @@ fn pin_dialect_in_member(member_key: &str, member_value: &mut Value) {
 /// not narrow this walk back to the root. `v2_pin_still_enforces_an_embedded_legacy_resource`
 /// is the fence, and it has been observed to fail against the root-only body.
 ///
-/// Rewriting every declaration is deliberately a SUPERSET of what `jsonschema`
-/// honours — a nested declaration on a subschema with no `$id` is inert, and is
-/// rewritten anyway. That is strictly safer, and it is what makes the
-/// postcondition above statable without a per-node `$id` analysis.
+/// # What the walk is a SUPERSET of, and what it is NOT
+///
+/// This paragraph has now been WRONG TWICE, and the reason it is spelled out
+/// this narrowly is that both wider forms shipped and were both falsified. It
+/// first read "on v2 the pin wins UNCONDITIONALLY … across the whole DOCUMENT"
+/// (false: the data-only exception, and the name-position rule — closed by
+/// 115-14). It then read "Rewriting every declaration is deliberately a SUPERSET
+/// of what `jsonschema` honours", unqualified — also false, because the walk was
+/// name-dependent at `dependencies` positions (`115-REVIEW.md` CR-01, closed by
+/// 115-16) and REMAINS name-dependent at author-invented containers. The scope
+/// the code actually has is:
+///
+/// - **Within the six SPEC-DEFINED subschema-map containers** — the
+///   [`SUBSCHEMA_MAP_KEYWORDS`] — **and every ordinary member position**, the
+///   walk IS a superset of what `jsonschema` honours: a nested declaration on a
+///   subschema with no `$id` is inert, and is rewritten anyway. That is strictly
+///   safer, and it is what makes the postcondition above statable without a
+///   per-node `$id` analysis.
+/// - **It is NOT a superset over an author-invented container.** A resource
+///   filed under a key that no JSON Schema vocabulary defines as a subschema map
+///   — `components`, or any vendor extension — under a NAME colliding with a
+///   [`DATA_ONLY_KEYWORDS`] entry is still SKIPPED. Measured on this tree:
+///   `components.default` -> `rewritten=false` (`115-VERIFICATION.md`,
+///   `115-REVIEW.md` CR-01).
+/// - **Why that residual is accepted rather than closed.** Closing it needs the
+///   INVERSE walk — descend only into positions the core/applicator vocabularies
+///   DEFINE as subschemas, treating everything else as opaque — which 115-14
+///   deliberately declined because it would REDUCE what is normalized, including
+///   under vendor containers that really do hold subschemas. Ledger `D-115-AD`
+///   carries that decision; 115-19 re-books the residual.
 ///
 /// # Why the walk is position-aware
 ///
@@ -440,6 +515,19 @@ fn pin_dialect_in_member(member_key: &str, member_value: &mut Value) {
 /// asserted. `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`
 /// is the fence, and it was observed to fail against the position-blind body
 /// before this rule landed.
+///
+/// The maps whose VALUES are schema positions are the SIX
+/// [`SUBSCHEMA_MAP_KEYWORDS`]: `properties`, `patternProperties`, `$defs`,
+/// `definitions`, `dependentSchemas` and `dependencies`. The sixth was MISSING
+/// until 115-16, which made the identical collision reachable one keyword over
+/// (`115-REVIEW.md` CR-01) — measured `dependencies.Inner -> rewritten=true`
+/// against `dependencies.default -> rewritten=false`, with BOTH names giving the
+/// same `(Violates, Violates)` verdict pair on `jsonschema` 0.49.2, which is why
+/// that gap could only be fenced STRUCTURALLY.
+/// `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map` is
+/// that fence; it carries its OWN container literal, because a fence
+/// parameterised by the list whose incompleteness is the defect cannot fire on
+/// that defect.
 ///
 /// The rule changes behaviour on exactly ONE other, malformed shape, and it is
 /// worth naming:
@@ -579,6 +667,43 @@ pub mod fuzz_support {
     use super::{compile_for_era, normalize_schema_dialect};
     use crate::types::protocol::Era;
     use serde_json::Value;
+
+    /// The shipped [`super::DATA_ONLY_KEYWORDS`], readable from `tests/` and
+    /// `fuzz/`.
+    ///
+    /// # Why this exists
+    ///
+    /// This rule is RESTATED, by hand, in three places: here in `src/`, in
+    /// `tests/property_tests.rs` and in
+    /// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`. Nothing kept the three in
+    /// sync (`115-REVIEW.md` WR-01), and BOTH drift directions are silent:
+    ///
+    /// - the crate list gains an entry and the mirrors do not — the property and
+    ///   fuzz fences then hold the OLD rule against the NEW behaviour and become
+    ///   FALSE-POSITIVE generators, crashing on correct code. That is not
+    ///   hypothetical: it is the window 115-14 opened and 115-16 re-opened for
+    ///   `dependencies`, closed by 115-17 / 115-18;
+    /// - an entry is removed from all three in lockstep — coverage vanishes with
+    ///   ZERO test failures. `patternProperties` and `dependentSchemas` sat in
+    ///   that state from 115-14 to 115-16.
+    ///
+    /// Published here so the mirrors can be GATED against the shipped values
+    /// instead of hand-maintained a fourth time. The module is `fuzzing`-gated
+    /// and `fuzzing` is in neither `default` nor `full`, so this adds NOTHING to
+    /// the shipped public API — `cargo public-api` never sees it.
+    ///
+    /// The private originals are deliberately left private and the walkers keep
+    /// reading them, so this re-export cannot drift from what ships.
+    pub const DATA_ONLY_KEYWORDS: &[&str] = super::DATA_ONLY_KEYWORDS;
+
+    /// The shipped [`super::SUBSCHEMA_MAP_KEYWORDS`], readable from `tests/` and
+    /// `fuzz/`.
+    ///
+    /// See [`DATA_ONLY_KEYWORDS`] for why both lists are published here rather
+    /// than restated a fourth time. This is the list whose incompleteness was
+    /// `115-REVIEW.md` CR-01, so a mirror that can drift from it is exactly the
+    /// hazard worth gating.
+    pub const SUBSCHEMA_MAP_KEYWORDS: &[&str] = super::SUBSCHEMA_MAP_KEYWORDS;
 
     /// The three distinguishable outcomes of checking ONE instance against ONE
     /// schema under ONE era.
@@ -744,6 +869,15 @@ mod fuzz_support_tests {
     /// not a divergence case at all (D-115-03-C). The converse direction is
     /// reachable too — `$ref` siblings are ignored in draft-07 and honoured
     /// under 2020-12 — so the era relation is non-monotonic in BOTH directions.
+    ///
+    /// **That same measurement is why `dependencies` belongs in
+    /// [`super::SUBSCHEMA_MAP_KEYWORDS`].** A keyword the pinned library still
+    /// HONOURS is a keyword whose values are live schema positions, so a legacy
+    /// declaration on an `$id`-bearing resource filed there is a real hazard and
+    /// must be normalized. For two plans this comment recorded the measurement
+    /// while the list omitted the keyword — the two statements contradicted each
+    /// other, which is `115-REVIEW.md` CR-01 and `115-VERIFICATION.md`'s
+    /// key-link warning. 115-16 closed it; they now reinforce each other.
     #[test]
     fn fuzz_support_reports_the_divergent_content_encoding_case_asymmetrically() {
         let schema = br#"{
@@ -1316,6 +1450,50 @@ mod tests {
              `jsonschema` 0.49.2 still honours it under the 2020-12 pin (D-115-03-C, measured by \
              this module's own fuzz_support_tests), which is what makes its VALUES live schema \
              positions."
+        );
+    }
+
+    /// The two keyword lists must be DISJOINT — a silent precondition of both
+    /// member dispatches (`115-REVIEW.md` WR-05).
+    ///
+    /// The two halves are written in different SHAPES, and that is what makes
+    /// this a fence rather than a tautology. [`first_legacy_dialect_in_member`]
+    /// is a `match` whose first arm guards on the VALUE kind and the key class
+    /// TOGETHER; [`pin_dialect_in_member`] is an `if` chain testing the KEY class
+    /// FIRST. For a key present in BOTH lists whose value is NOT an object, the
+    /// two therefore disagree: the detector falls to the `DATA_ONLY_KEYWORDS` arm
+    /// and returns `None`, while the rewriter takes the `SUBSCHEMA_MAP_KEYWORDS`
+    /// branch and DESCENDS. That is a detector/rewriter divergence — which
+    /// [`first_legacy_dialect`]'s own doc states "is a defect" — and it produces
+    /// a `Cow::Owned` document still carrying a legacy declaration, which
+    /// [`compile_2020_12`] then announces as "the declaration is ignored" having
+    /// ignored nothing.
+    ///
+    /// The lists ARE disjoint today. 115-16 narrowed the margin by adding
+    /// `dependencies`, which is a subschema map in draft-07 and pure data in some
+    /// vendor dialects — precisely the kind of keyword a future edit might
+    /// reasonably want in both places.
+    ///
+    /// Rewriting the two dispatches into a common shape is WR-05's other half; it
+    /// touches both walkers' bodies and is deliberately NOT done here.
+    #[test]
+    fn keyword_lists_are_disjoint() {
+        let overlap: Vec<&&str> = SUBSCHEMA_MAP_KEYWORDS
+            .iter()
+            .filter(|keyword| DATA_ONLY_KEYWORDS.contains(keyword))
+            .collect();
+
+        assert!(
+            overlap.is_empty(),
+            "{overlap:?} appear in BOTH SUBSCHEMA_MAP_KEYWORDS and DATA_ONLY_KEYWORDS. The two \
+             member dispatches silently depend on these lists being disjoint: the DETECTOR \
+             (first_legacy_dialect_in_member) is a `match` guarding on the VALUE kind and the key \
+             class together, while the REWRITER (pin_dialect_in_member) is an `if` chain testing \
+             the KEY class first. For such a key with a NON-OBJECT value the detector returns None \
+             while the rewriter DESCENDS — a detector/rewriter divergence, which this module's own \
+             docs state is a defect, yielding a Cow::Owned that still carries a legacy declaration \
+             while compile_2020_12 announces that declaration as ignored. Either keep the lists \
+             disjoint or rewrite BOTH dispatches into one shape (115-REVIEW.md WR-05)."
         );
     }
 
