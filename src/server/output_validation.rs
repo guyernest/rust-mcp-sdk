@@ -23,15 +23,27 @@
 //!   `jsonschema` auto-detect entry point in this module lives on that arm and
 //!   nowhere else.
 //! - **v2** (`Era::V2`) compiles every `outputSchema` as JSON Schema Draft
-//!   2020-12, which MCP 2026-07-28 pins. On v2 the pin wins UNCONDITIONALLY —
-//!   and "unconditionally" is meant across the whole DOCUMENT, not just its
-//!   root: EVERY dialect declaration is rewritten, the root one and the one on
-//!   every embedded schema resource below it, so a declared legacy `$schema` at
-//!   any depth is ignored — neither honoured nor rejected — and the ignoring is
-//!   announced through a `tracing::warn!` (D-02). See
-//!   [`normalize_schema_dialect`] for why "ignored" has to mean "rewritten"
-//!   rather than "compiled as-is", and for the measured bypass that rewriting
-//!   only the root left open (`115-VERIFICATION.md`, closed by 115-12).
+//!   2020-12, which MCP 2026-07-28 pins. On v2 the pin wins in every SCHEMA
+//!   POSITION — the root, plus every node reachable without descending into a
+//!   `const` / `enum` / `default` / `examples` payload, where the VALUES of a
+//!   `properties` / `patternProperties` / `$defs` / `definitions` /
+//!   `dependentSchemas` map are schema positions REGARDLESS OF THE NAME they
+//!   are filed under. Every dialect declaration in such a position is
+//!   rewritten: the root one, and the one on every embedded schema resource
+//!   below it. A declared legacy `$schema` there is ignored — neither honoured
+//!   nor rejected — and the ignoring is announced through a `tracing::warn!`
+//!   (D-02). The scope is stated this narrowly because two WIDER statements of
+//!   it shipped here and were both false: this bullet previously read "on v2
+//!   the pin wins UNCONDITIONALLY … across the whole DOCUMENT", which ignored
+//!   the data-only exception (a `$schema` inside a `const` / `enum` / `default`
+//!   / `examples` payload is instance DATA and is deliberately never rewritten,
+//!   so no whole-document total can ever hold) AND the name-position rule (a
+//!   `$defs` entry an author named `default` was visited by neither walker, so
+//!   its legacy declaration survived the pin — `115-VERIFICATION.md`, closed by
+//!   115-14). See [`normalize_schema_dialect`] for why "ignored" has to mean
+//!   "rewritten" rather than "compiled as-is", for the measured bypass that
+//!   rewriting only the root left open (closed by 115-12), and for the measured
+//!   bypass that a position-blind walk left open (closed by 115-14).
 //!
 //! A consequence worth stating: some draft-07 constructs cannot be expressed
 //! under 2020-12 at all — `exclusiveMinimum: true` and array-form `items` are
@@ -127,6 +139,32 @@ pub(crate) fn schema_mismatch(schema: &Value, value: &Value, era: Option<Era>) -
 #[cfg(feature = "validation")]
 const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 
+/// Keywords whose VALUE is a MAP from AUTHOR-CHOSEN NAMES to subschemas.
+///
+/// The keys of these maps are NAMES, never keywords: an author may call a
+/// `$defs` entry `default`, or declare an instance property named `examples`.
+/// [`DATA_ONLY_KEYWORDS`] must therefore never be tested against them — doing so
+/// is a category error, and it is the bypass `115-VERIFICATION.md` measured:
+/// `$defs.default` carrying an `$id` plus a legacy `$schema` was visited by
+/// neither [`first_legacy_dialect`] nor [`pin_dialect_in_place`], so the
+/// declaration survived the v2 pin, resolved an EMPTY vocabulary set on that
+/// embedded resource and produced the accept-everything sub-validator the pin
+/// exists to prevent — `verdicts=(Conforms, Conforms)`, `rewritten=false`,
+/// against the control `$defs.Inner` -> `(Conforms, Violates)`, `rewritten=true`.
+///
+/// The same distinction already existed two hundred lines away, in
+/// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`'s `is_neutral_subschema`, which
+/// does descend into `$defs` / `properties` values BY NAME. It was simply never
+/// applied on this side.
+#[cfg(feature = "validation")]
+const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+];
+
 /// The first dialect declaration in `node` that is not already
 /// [`DRAFT_2020_12`], searched root-first, or `None` when the document declares
 /// no legacy dialect anywhere.
@@ -146,12 +184,45 @@ fn first_legacy_dialect(node: &Value) -> Option<&str> {
                     return Some(declared);
                 }
             }
-            map.iter()
-                .filter(|(key, _)| !DATA_ONLY_KEYWORDS.contains(&key.as_str()))
-                .find_map(|(_, value)| first_legacy_dialect(value))
+            map.iter().find_map(|(member_key, member_value)| {
+                first_legacy_dialect_in_member(member_key, member_value)
+            })
         },
         Value::Array(items) => items.iter().find_map(first_legacy_dialect),
         _ => None,
+    }
+}
+
+/// The MEMBER-level dispatch of the detector's walk: the three-way decision on
+/// one object member's key, mutually recursive with [`first_legacy_dialect`].
+///
+/// Split out rather than inlined, for the same reason [`compile_for_era`] is
+/// split out of [`cached_validator`]: CI's `pmat quality-gate --checks
+/// complexity` is PR-blocking, and measured with pmat 3.15.0 the inline form put
+/// the REWRITER at cognitive 24 against a threshold of 23. Both halves are split
+/// so the two remain visibly mirror-image; a reader comparing them should be
+/// comparing like with like. Do not inline either back.
+///
+/// The plan for 115-14 specified this signature without lifetimes; it does not
+/// compile that way (two input references, one borrowed output — elision is
+/// ambiguous), so the output lifetime is tied explicitly to `member_value`.
+#[cfg(feature = "validation")]
+fn first_legacy_dialect_in_member<'a>(
+    member_key: &str,
+    member_value: &'a Value,
+) -> Option<&'a str> {
+    match member_value {
+        // NAME position: the keys of THIS map are author-chosen names, so they
+        // are never keyword-filtered. Descend into every value.
+        Value::Object(named_subschemas) if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) => {
+            named_subschemas.values().find_map(first_legacy_dialect)
+        },
+        // KEYWORD position: a data-only payload is not descended into. A
+        // `$defs` / `properties` / … member whose value is NOT an object is a
+        // malformed document and falls through to the ordinary walk below, so no
+        // coverage is lost relative to the position-blind version.
+        _ if DATA_ONLY_KEYWORDS.contains(&member_key) => None,
+        _ => first_legacy_dialect(member_value),
     }
 }
 
@@ -173,14 +244,38 @@ fn pin_dialect_in_place(node: &mut Value) {
                     Value::String(DRAFT_2020_12.to_string()),
                 );
             }
-            for (key, value) in map.iter_mut() {
-                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
-                    pin_dialect_in_place(value);
-                }
+            for (member_key, member_value) in map.iter_mut() {
+                pin_dialect_in_member(member_key, member_value);
             }
         },
         Value::Array(items) => items.iter_mut().for_each(pin_dialect_in_place),
         _ => {},
+    }
+}
+
+/// The MEMBER-level dispatch of the rewriter's walk — the mirror image of
+/// [`first_legacy_dialect_in_member`], mutually recursive with
+/// [`pin_dialect_in_place`].
+///
+/// Split out for the measured reason recorded on its detector twin: inline, this
+/// dispatch put `pin_dialect_in_place` at cognitive 24 against
+/// `pmat quality-gate`'s threshold of 23 (measured with pmat 3.15.0; the same
+/// gate reported 0 violations at the commit before 115-14, so the extraction is
+/// this change's own cost and not an inherited one). Do not inline it back.
+#[cfg(feature = "validation")]
+fn pin_dialect_in_member(member_key: &str, member_value: &mut Value) {
+    if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+        // NAME position: descend into every value of the map, and never
+        // keyword-filter the map's own keys. A non-object value here is a
+        // malformed document and gets the ordinary walk.
+        match member_value {
+            Value::Object(named_subschemas) => {
+                named_subschemas.values_mut().for_each(pin_dialect_in_place);
+            },
+            malformed => pin_dialect_in_place(malformed),
+        }
+    } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+        pin_dialect_in_place(member_value);
     }
 }
 
@@ -206,20 +301,43 @@ fn pin_dialect_in_place(node: &mut Value) {
 ///    that is how a real declaration is told apart from a `properties` map entry
 ///    for an instance property literally named `$schema`, whose value is a
 ///    subschema (an object or a boolean) and never a string.
-/// 2. Recurse into every member value EXCEPT the values of the
+/// 2. A member whose key is one of the [`SUBSCHEMA_MAP_KEYWORDS`] —
+///    `properties`, `patternProperties`, `$defs`, `definitions`,
+///    `dependentSchemas` — has a VALUE that is a map from AUTHOR-CHOSEN NAMES to
+///    subschemas. Recurse into every one of those values, and NEVER test that
+///    map's own keys against rule 3: they are names, not keywords. (A member
+///    with one of these keys whose value is not an object is a malformed
+///    document and takes rule 3's ordinary path, so nothing is skipped.)
+/// 3. Otherwise, recurse into every member value EXCEPT the values of the
 ///    [`DATA_ONLY_KEYWORDS`] — `const`, `enum`, `default` and `examples` — which
 ///    carry instance data rather than subschemas.
-/// 3. At an array node, recurse into every element. Scalars terminate.
+/// 4. At an array node, recurse into every element. Scalars terminate.
+///
+/// Rules 2 and 3 are a POSITION distinction, and the whole of 115-14 is that
+/// distinction: the same four words are a data-only KEYWORD in rule 3 and an
+/// ordinary NAME in rule 2, and applying rule 3 to a rule-2 map is a category
+/// error that produced a measured validation bypass.
 ///
 /// The postcondition is therefore checkable, and is what replaces the `expect`
 /// this function used to carry: after an `Owned` return,
 /// `first_legacy_dialect(&owned)` is `None`. That is what guarantees an `Owned`
 /// really was rewritten rather than silently handed back unchanged — a
 /// non-object root now falls out of the walk naturally instead of needing a
-/// panic to fence it. `normalize_schema_dialect_changes_only_dollar_schema_keys`
-/// asserts the postcondition over every fixed case, and 115-13 re-states it
-/// independently in the fuzz target so the two are not the same code checking
-/// itself.
+/// panic to fence it.
+///
+/// **Read that postcondition for exactly what it is: a detector/rewriter
+/// AGREEMENT check, not an independence check.** Both halves implement the rule
+/// above, so a defect IN the rule satisfies it VACUOUSLY — measured, not
+/// argued: against the position-blind body, `$defs.default` came back
+/// `Cow::Borrowed` with nothing rewritten and
+/// `first_legacy_dialect(&normalized) == None` PASSED, because the blind
+/// detector agreed with the blind rewriter that there was nothing there.
+/// `normalize_schema_dialect_changes_only_dollar_schema_keys` asserts the
+/// postcondition over every fixed case and 115-13 re-states it in the fuzz
+/// target, but a differently-TYPED walk restating the same RULE catches only a
+/// disagreement. The independent instrument for the rule itself is the
+/// rename-invariance fence 115-15 adds: renaming a `$defs` key must not change
+/// the normalized document apart from that key.
 ///
 /// # Why the rewrite is NOT cosmetic
 ///
@@ -267,6 +385,45 @@ fn pin_dialect_in_place(node: &mut Value) {
 /// honours — a nested declaration on a subschema with no `$id` is inert, and is
 /// rewritten anyway. That is strictly safer, and it is what makes the
 /// postcondition above statable without a per-node `$id` analysis.
+///
+/// # Why the walk is position-aware
+///
+/// 115-12 made the walk recursive but POSITION-BLIND: it tested
+/// [`DATA_ONLY_KEYWORDS`] against every object key uniformly. A `$defs` key is
+/// an AUTHOR-CHOSEN NAME, so filtering it against a keyword list is a category
+/// error — and a reachable one. Measured on this tree through
+/// `fuzz_support::{validate_bytes, normalize_bytes}` with two documents
+/// differing ONLY in the NAME of the `$defs` entry, each holding an
+/// `$id`-bearing embedded resource with `$schema: draft-07` + `type: integer`,
+/// against the instance `{"n": "NOT-AN-INTEGER"}`:
+///
+/// | Document | normalization | `(v1, v2)` |
+/// |---|---|---|
+/// | `$defs.Inner` (control) | rewritten (`Cow::Owned`) | `(Conforms, Violates)` |
+/// | `$defs.default` (renamed) | byte-identical, nothing rewritten | `(Conforms, Conforms)` |
+///
+/// The second row is the vacuous sub-validator this module exists to prevent,
+/// reached by renaming a definition. The sentence that shipped alongside it —
+/// "on v2 the pin wins UNCONDITIONALLY … across the whole DOCUMENT" — was
+/// FALSE as shipped, in two independent ways at once: the data-only exception
+/// (a `$schema` inside a `const` / `enum` / `default` / `examples` payload is
+/// instance DATA and is never rewritten) and the name-position rule this
+/// section states. That is why the scope is now spelled out rather than
+/// asserted. `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`
+/// is the fence, and it was observed to fail against the position-blind body
+/// before this rule landed.
+///
+/// The rule changes behaviour on exactly ONE other, malformed shape, and it is
+/// worth naming:
+/// `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}`.
+/// The old walk descended into the `properties` MAP as though the map were
+/// itself a schema, saw a string-valued `$schema` there and rewrote it. Under
+/// the position rule that key is an instance-property NAME bound to a
+/// non-schema value, and it is left alone — which is correct, and is precisely
+/// why the two RESTATED copies of this rule (`tests/property_tests.rs` and
+/// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) MUST be updated by 115-15:
+/// until they are, such an input makes their surviving-declaration scan report
+/// a FALSE positive.
 #[cfg(feature = "validation")]
 fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value> {
     use std::borrow::Cow;
@@ -715,19 +872,53 @@ mod tests {
     }
 
     /// An EMBEDDED SCHEMA RESOURCE — a subschema carrying its own `$id` — with
-    /// its dialect declaration on it. Under 2020-12 this is the sanctioned way
-    /// to put a `$schema` below the root, and `jsonschema` 0.49.2 honours it.
+    /// its dialect declaration on it, filed under a `$defs` entry the CALLER
+    /// names. Under 2020-12 this is the sanctioned way to put a `$schema` below
+    /// the root, and `jsonschema` 0.49.2 honours it.
+    ///
+    /// The NAME is a parameter because it is the whole variable of the 115-14
+    /// closure: a `$defs` key is an AUTHOR-CHOSEN NAME, never a keyword, so the
+    /// document's meaning must not change when it is spelled `default` instead
+    /// of `Inner`. See
+    /// [`v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`].
     ///
     /// The `$id` host is `example.test` and is deliberately NOT dereferenceable:
     /// SEP-2106 requires zero network and filesystem I/O, and an `$id` alone
-    /// establishes a base URI without any fetch. The only `$ref` here is the
-    /// LOCAL JSON pointer `#/$defs/Inner`.
-    fn embedded_legacy_resource_schema() -> Value {
+    /// establishes a base URI without any fetch. The only `$ref` here is a
+    /// LOCAL JSON pointer.
+    fn embedded_legacy_resource_named(definition_name: &str) -> Value {
         json!({
             "type": "object",
-            "properties": { "n": { "$ref": "#/$defs/Inner" } },
+            "properties": { "n": { "$ref": format!("#/$defs/{definition_name}") } },
             "$defs": {
-                "Inner": {
+                definition_name: {
+                    "$id": "https://example.test/inner",
+                    "$schema": DRAFT_07,
+                    "type": "integer"
+                }
+            }
+        })
+    }
+
+    /// The historical spelling of the fixture above, kept as the one name the
+    /// existing fences and the module rustdoc already refer to. One source of
+    /// truth for the shape; only the definition NAME varies.
+    fn embedded_legacy_resource_schema() -> Value {
+        embedded_legacy_resource_named("Inner")
+    }
+
+    /// The same collision one keyword over: an `$id`-bearing embedded resource
+    /// carrying a legacy `$schema`, filed under a `properties` entry the CALLER
+    /// names rather than under a `$defs` entry.
+    ///
+    /// `properties` keys are instance-property names — author-chosen, exactly
+    /// like `$defs` keys — so the position rule has to hold here too. This half
+    /// is fenced STRUCTURALLY rather than behaviourally; see the test for why.
+    fn properties_embedded_legacy_resource_named(property_name: &str) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                property_name: {
                     "$id": "https://example.test/inner",
                     "$schema": DRAFT_07,
                     "type": "integer"
@@ -853,6 +1044,115 @@ mod tests {
              changed behaviour, which is a breaking change for every 2025-11-25 server and is not \
              what 115-12 was allowed to do"
         );
+    }
+
+    /// THE fence for `115-VERIFICATION.md`'s POSITION blocker: an `$id`-bearing
+    /// EMBEDDED SCHEMA RESOURCE filed under a `$defs` or `properties` entry
+    /// whose AUTHOR-CHOSEN NAME collides with one of the
+    /// [`DATA_ONLY_KEYWORDS`] is still a SCHEMA POSITION, and a legacy dialect
+    /// declaration on it must not survive the v2 pin.
+    ///
+    /// Measured on this tree before 115-14, through
+    /// `fuzz_support::{validate_bytes, normalize_bytes}` against `jsonschema`
+    /// 0.49.2, with two documents differing ONLY in the NAME of the `$defs`
+    /// entry, and the instance `{"n": "NOT-AN-INTEGER"}`:
+    ///
+    /// | Document | `normalize_schema_dialect` | `(v1, v2)` |
+    /// |---|---|---|
+    /// | `$defs.Inner` (control) | rewritten (`Cow::Owned`) | `(Conforms, Violates)` |
+    /// | `$defs.default` (renamed) | byte-identical — nothing rewritten | `(Conforms, Conforms)` |
+    ///
+    /// The assertions run in BOTH directions, which is what makes this a fence
+    /// for the RULE rather than for one document. Without the KEYWORD-position
+    /// half, the cheapest way to make the NAME-position half pass is to delete
+    /// [`DATA_ONLY_KEYWORDS`] — which silently corrupts every author's `const`,
+    /// `enum`, `default` and `examples` payload.
+    #[test]
+    fn v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword() {
+        use std::borrow::Cow;
+
+        let violating = json!({ "n": "NOT-AN-INTEGER" });
+        let conforming = json!({ "n": 7 });
+
+        // (a) NAME position, `$defs`, BEHAVIOURAL. `Inner` is the control: it
+        // was already enforced before this closure, so a failure confined to
+        // the other four names is a statement about the NAME and nothing else.
+        for definition_name in ["const", "enum", "default", "examples", "Inner"] {
+            let schema = embedded_legacy_resource_named(definition_name);
+            assert!(
+                schema_mismatch(&schema, &violating, Some(Era::V2)).is_some(),
+                "BYPASS ($defs.{definition_name}): the v2 Draft 2020-12 pin accepted a STRING \
+                 where the embedded schema resource declares `integer`. Measured before 115-14: \
+                 `$defs.default` -> verdicts=(Conforms, Conforms), rewritten=false, against the \
+                 control `$defs.Inner` -> (Conforms, Violates), rewritten=true. A `$defs` key is \
+                 an AUTHOR-CHOSEN NAME, never a keyword, so DATA_ONLY_KEYWORDS must NOT be \
+                 applied to it — the values of a $defs / properties / patternProperties / \
+                 definitions / dependentSchemas map are schema positions REGARDLESS of the name \
+                 they are filed under. See SUBSCHEMA_MAP_KEYWORDS."
+            );
+            assert_eq!(
+                schema_mismatch(&schema, &conforming, Some(Era::V2)),
+                None,
+                "($defs.{definition_name}) a conforming instance must still pass under the pin — \
+                 the position rule restores enforcement, it does not make everything fail"
+            );
+        }
+
+        // (b) NAME position, `properties`, STRUCTURAL — deliberately not
+        // behavioural. `jsonschema` 0.49.2 still enforces `type` under a
+        // `properties` entry carrying a surviving legacy declaration, so a
+        // behavioural assertion here would pass against the position-BLIND
+        // walkers: a fence that cannot fire. The module's own doc states the
+        // walk is deliberately a SUPERSET of what the library honours precisely
+        // so correctness cannot depend on that library detail, so the property
+        // asserted here is the rewrite itself.
+        for &property_name in DATA_ONLY_KEYWORDS {
+            let schema = properties_embedded_legacy_resource_named(property_name);
+            let normalized = normalize_schema_dialect(&schema);
+            assert!(
+                matches!(normalized, Cow::Owned(_)),
+                "properties.{property_name} carries an $id-bearing embedded resource with a \
+                 legacy $schema and was NOT rewritten (Cow::Borrowed). `properties` keys are \
+                 instance-property NAMES, author-chosen exactly like $defs keys, so the \
+                 DATA_ONLY_KEYWORDS filter must not reach them. This half is structural because \
+                 jsonschema 0.49.2 happens to still enforce `type` here today — a behavioural \
+                 assertion would pass against the defective code."
+            );
+            assert_eq!(
+                normalized
+                    .pointer(&format!("/properties/{property_name}/$schema"))
+                    .and_then(Value::as_str),
+                Some(DRAFT_2020_12),
+                "properties.{property_name}/$schema must be OVERWRITTEN with the 2020-12 URI. A \
+                 surviving legacy declaration on an $id-bearing resource resolves an EMPTY \
+                 vocabulary set the moment the library's current behaviour changes."
+            );
+        }
+
+        // (c) KEYWORD position, the twin. The SAME four words used as REAL
+        // keywords carry instance DATA, and a `$schema` inside one of them must
+        // still come back byte-identical. This is what makes the fix a POSITION
+        // distinction rather than a deleted data guard.
+        for &keyword in DATA_ONLY_KEYWORDS {
+            let document = json!({
+                "type": "object",
+                keyword: { "$schema": DRAFT_07, "note": "data" }
+            });
+            let normalized = normalize_schema_dialect(&document);
+            assert!(
+                matches!(normalized, Cow::Borrowed(_)),
+                "a $schema inside a REAL `{keyword}` payload is instance DATA, not a dialect \
+                 declaration, so nothing must be cloned for {document}. If this allocated, the \
+                 position-aware fix was implemented by DELETING the data guard instead of by \
+                 distinguishing NAME position from KEYWORD position."
+            );
+            assert_eq!(
+                *normalized, document,
+                "a $schema inside a REAL `{keyword}` payload must come back byte-identical — \
+                 rewriting it changes which instances conform, which is a semantic corruption of \
+                 the author's schema and not a normalization"
+            );
+        }
     }
 
     /// D-01's freeze, asserted rather than assumed: the same draft-07 document
@@ -1086,7 +1386,7 @@ mod tests {
         }
     }
 
-    /// The five `normalize_schema_dialect` cases, as a set, so both the
+    /// The seven `normalize_schema_dialect` cases, as a set, so both the
     /// structural test and the idempotence test cover the same ground.
     ///
     /// Each entry is `(schema, expected_owned)` — `true` means the normalizer
@@ -1120,6 +1420,17 @@ mod tests {
             // standalone test so it flows through BOTH the structural fence and
             // the idempotence fence automatically.
             (embedded_legacy_resource_schema(), true),
+            // (f) NAME POSITION, `$defs`: the identical embedded resource, filed
+            // under an entry an author NAMED `default`. The position-blind walk
+            // never visited it — measured `verdicts=(Conforms, Conforms)`,
+            // `rewritten=false` — which is `115-VERIFICATION.md`'s BLOCKER.
+            (embedded_legacy_resource_named("default"), true),
+            // (g) NAME POSITION, `properties`: the same collision one keyword
+            // over, in `properties` rather than `$defs`. Its behavioural half
+            // cannot fence anything (jsonschema 0.49.2 still enforces `type`
+            // there today), so it is fenced STRUCTURALLY, here and in
+            // `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`.
+            (properties_embedded_legacy_resource_named("examples"), true),
         ]
     }
 
@@ -1254,8 +1565,28 @@ mod tests {
         let dollar_schema_inside_const = json!({
             "const": { "$schema": DRAFT_07, "note": "this is data, not a dialect" }
         });
+        // The same, in a `default` payload — a value a client may substitute
+        // for an absent instance. Added by 115-14: it passes both before and
+        // after the position-aware fix, and exists so that a future edit which
+        // "fixes" the NAME-position bypass by DELETING the data guard reports
+        // exactly why it broke.
+        let dollar_schema_inside_default = json!({
+            "type": "object",
+            "default": { "$schema": DRAFT_07, "note": "this is data, not a dialect" }
+        });
+        // And in an `examples` payload, which is an ARRAY of instance data —
+        // the walk must not reach into it through the array either.
+        let dollar_schema_inside_examples = json!({
+            "type": "object",
+            "examples": [{ "$schema": DRAFT_07, "note": "this is data, not a dialect" }]
+        });
 
-        for document in [&property_named_dollar_schema, &dollar_schema_inside_const] {
+        for document in [
+            &property_named_dollar_schema,
+            &dollar_schema_inside_const,
+            &dollar_schema_inside_default,
+            &dollar_schema_inside_examples,
+        ] {
             let normalized = normalize_schema_dialect(document);
             assert!(
                 matches!(normalized, Cow::Borrowed(_)),
@@ -1303,7 +1634,7 @@ mod tests {
         );
     }
 
-    /// Normalizing twice equals normalizing once, for all five cases — the
+    /// Normalizing twice equals normalizing once, for all seven cases — the
     /// fixed-example half of the idempotence property 115-09 holds over
     /// arbitrary generated input.
     #[test]
