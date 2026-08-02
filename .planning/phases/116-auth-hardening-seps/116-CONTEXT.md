@@ -386,6 +386,15 @@ house ALWAYS requirements.
   the planner may settle it, but a deliberate answer belongs with the vending-core extraction.
 - **Typed accessors for the other RFC 7591 fields `DcrResponse` currently drops into `extra`.**
   Same mechanism as D-09, but out of scope here.
+- **RFC 9728 Protected Resource Metadata discovery (MCP-spec client MUST).** Deferred by owner
+  decision 2026-08-02 (plan-phase research escalation). pmcp derives the AS from the MCP base URL
+  directly (`src/client/oauth.rs:366-390`) instead of PRM discovery. **Named dependency:** D-18's
+  SEP-2352 AS-change detection is specified in the spec as "detected via updated protected
+  resource metadata" — until RFC 9728 lands, AS-change detection uses whatever provenance signal
+  is available today, not the spec's stated mechanism. Needs a roadmap slot; owner: Guy.
+- **RFC 8707 `resource` parameter on authorization + token requests (MCP-spec client MUST).**
+  Deferred by owner decision 2026-08-02 (same escalation). pmcp sends no `resource` parameter
+  (`src/client/oauth.rs:664-672`). Ships together with the RFC 9728 item above; owner: Guy.
 
 </deferred>
 
