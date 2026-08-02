@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 115-12-PLAN.md — SCHM-01 BLOCKER closed in code, tests and contract; 115-13 remains
-last_updated: "2026-08-02T03:41:15.030Z"
+stopped_at: Completed 115-15-PLAN.md — SCHM-01 re-booked [x] AFTER the whole-phase gate ran; Phase 115 ready for /gsd:verify-phase re-run
+last_updated: "2026-08-02T04:37:29.734Z"
 last_activity: 2026-08-02
 progress:
   total_phases: 72
-  completed_phases: 60
+  completed_phases: 61
   total_plans: 354
-  completed_plans: 353
-  percent: 83
+  completed_plans: 354
+  percent: 85
 ---
 
 # Project State
@@ -26,8 +26,26 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
-Plan: 14 of 15 complete — next is 115-15
-Status: Executing Phase 115 (gap-closure round 2)
+Plan: 15 of 15 complete — gap-closure round 2 DONE
+Status: Phase 115 awaiting re-verification (`/gsd:verify-phase 115`)
+
+**115-15 HAS LANDED — the STRUCTURAL half is closed and SCHM-01 is re-booked `[x]`, written AFTER the gate ran.** `115-14` fixed the traversal; `115-15` fixed the reason nothing caught it. All three fences `115-12`/`115-13` built RESTATE the code's own rule, so a defect in that RULE was invisible to every one of them. Commits `43246c19` (property generator + rename property), `fb97b23d` (fuzz walkers + invariant 6 + seed 14), `d666fffa` (booking), `e53e3665` (SUMMARY).
+
+**The instrument, and why it is not a fourth restatement: RENAME INVARIANCE.** A metamorphic relation DERIVED from a JSON Schema 2020-12 vocabulary fact — the keys of `properties`/`patternProperties`/`$defs`/`definitions`/`dependentSchemas` are AUTHOR-CHOSEN NAMES with no keyword semantics — therefore normalizing an entry cannot depend on the name it is filed under, and two documents differing only in that name must produce equal normalized SUBTREES (subtrees, not whole documents: the `$ref` strings legitimately differ and normalization never resolves refs). It consults **no `DATA_ONLY_KEYWORDS` list at all**. Landed as `property_normalization_does_not_depend_on_a_subschema_map_key_name` and fuzz **invariant 6** `assert_normalization_is_invariant_under_rename`.
+
+**⚠ THE DECISIVE MEASUREMENT, and the one a future plan should copy: the BOTH-BLIND negative control.** Making only `src/` position-blind is NOT enough to judge a derived fence — invariant 5 fires first and MASKS it. With `src/` **and** the fuzz target's own scan made blind (reproducing the pre-`115-14` world, where invariants 2 and 5 pass vacuously), seed `14_defs_named_default` still exits **1**, naming **invariant 6** (`RENAME INVARIANCE VIOLATED`). That is the direct proof. Three controls observed in total: the property test (`RENAME INVARIANCE VIOLATED at /$defs/const vs /$defs/__rename_probe__`, shrunk to a colliding literal), seed 14 naming invariant 5 with `src/` blind only, and the both-blind run naming invariant 6. All restored from `shasum -a 256 -c`-verified snapshots; `src/` is a **0-byte diff** in this plan.
+
+**⚠ NEW ledger entry `D-115-AF` — a fence specified to probe only the FIRST entry was MEASURED blind to this phase's own reproduction seed.** The plan specified invariant 6 take "the FIRST subschema-map container and its FIRST entry". In seed 14 that is `properties.n` — a plain `$ref` holder with no `$schema` — so `$defs.default` was never probed and the both-blind run exited **0**. Widened to every root-level subschema-map entry; cost **3 814 764 → 3 697 874** runs over the 300 s campaign (≈3%). **Standing lesson: when a negative control fires, check WHICH fence fired.** `D-115-AG` records this round's process outcome, the standing marker rule, and why the plan's requested ID `D-115-AE` was already taken by `115-14`.
+
+**Coverage proof (the widened generator really draws the new shape): 58 of 256** cases drew a colliding name TOGETHER with an embedded non-2020-12 dialect, hitting all **12** container×name combinations; instrumentation removed and proven gone by grep. `arb_definition_name` draws `Inner` (control) + the four colliding literals + a regex; `arb_container` draws `$defs`/`definitions`/`properties`; the hard-coded pointer `/$defs/Inner/$schema` is gone (WR-06).
+
+**Both restated copies are now on the shipped position rule**, closing the FALSE-POSITIVE window `115-14-SUMMARY` named (`{"properties": {"$schema": "…draft-07…"}}` would otherwise crash the fuzzer on CORRECT behaviour). `is_neutral_subschema` was deliberately left ALONE — already position-aware — with a `DO NOT "FIX" THIS` comment. Invariant 5's two false doc claims (`"TOTAL — no skip condition"`, `"INDEPENDENT"`) are corrected in place, amend-not-delete.
+
+**Gates (Task 3, run BEFORE any booking was touched):** `/usr/bin/make quality-gate` exit **0** — **5054 passed / 0 failed / 81 ignored across 309 `test result:` lines**; `pmat quality-gate --fail-on-violation --checks complexity` exit **0**, **0 violations**; the seven SCHM-02/03 binaries **78/78** matching `115-VERIFICATION.md` exactly (20/19/7/13/8/6/5); `binary(property_tests)` **20** under `"full fuzzing"` vs **18** under `full` (the pair proving the gated module RAN); `cargo fmt --check` exit 0 both at root and from INSIDE `fuzz/` (`D-115-AB`); **14** committed seeds, `-runs=0` replay exit 0 (15 996 runs), `-max_total_time=300` exit 0 (**3 697 874** runs), artifacts dir EMPTY. No `Cargo.toml`/`Cargo.lock` and **0** new `pub` items under `src/` across the whole `115-14`+`115-15` closure.
+
+**BOOKKEEPING: SCHM-01 reads `[x]`** — every command exited 0 and every count matched, which is the marker rule Task 3 exists to enforce. Both prior records in `.planning/REQUIREMENTS.md` are amended, never deleted (`grep -c REOPENED` still returns **1**). `.planning/ROADMAP.md` gained a closure paragraph and the `115-15-PLAN.md` checkbox. **The Phase 115 marker STAYS `[~]` and `115-VERIFICATION.md` was NOT edited** — re-verification is `/gsd:verify-phase 115`'s job and this plan set's output is the evidence it scores. `requirements.mark-complete` was deliberately not run: the traceability row is hand-written with the two-round detail the verb would overwrite.
+
+What follows is the record as it stood after 115-14.
 
 **115-14 HAS LANDED — the POSITION blocker is closed, and the fence was OBSERVED TO FAIL before the fix.** `115-VERIFICATION.md` reopened SCHM-01 a second time: `115-12`'s recursive walk was POSITION-BLIND, testing `DATA_ONLY_KEYWORDS` against EVERY object key, so an `$id`-bearing embedded schema resource filed under a `$defs`/`properties` entry an author NAMED `const`/`enum`/`default`/`examples` was visited by neither walker and its legacy `$schema` survived the v2 pin. **`SUBSCHEMA_MAP_KEYWORDS`** (`properties`, `patternProperties`, `$defs`, `definitions`, `dependentSchemas`) is now consulted FIRST in the member dispatch of both halves; those maps' values are descended into unconditionally and their own keys are never keyword-filtered. Commits `f8692f1d` (code + fences + rustdoc), `07bfdd52` (contract + bindings + ledger), `2bf4d637` (`D-115-AE`).
 
@@ -440,6 +458,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 115-14: the properties-position collision is fenced STRUCTURALLY, not behaviourally — jsonschema 0.49.2 still enforces type there against the DEFECTIVE code, so a behavioural assertion would be a fence that can never fire
 - [Phase ?]: 115-14: the member dispatch was extracted into first_legacy_dialect_in_member / pin_dialect_in_member only AFTER measuring — inline it put pin_dialect_in_place at cognitive 24 against pmat quality-gate's threshold of 23, base at 0 violations; no #[allow] used
 - [Phase ?]: 115-14: SCHM-01's re-booking deliberately left to 115-15 Task 3, after the whole-phase gate actually runs — booking ahead of measurement is ledger D-115-G, already carried twice on this requirement
+- [Phase 115]: 115-15: rename invariance — a metamorphic relation DERIVED from the JSON Schema 2020-12 fact that subschema-map keys are semantically inert author-chosen names — is the only fence proven to fire when BOTH the implementation and every restated copy of its traversal rule are wrong. Restating fences are AGREEMENT checks, satisfied vacuously by a rule defect.
+- [Phase 115]: 115-15: invariant 6's plan-specified 'first container, first entry' bounding was MEASURED blind to this phase's own reproduction seed (exit 0 both-blind) and widened to every root-level subschema-map entry at ~3% campaign cost — D-115-AF. When a negative control fires, check WHICH fence fired: a stronger one firing first masks a weaker one that never ran.
+- [Phase 115]: 115-15: SCHM-01 re-booked [x] only AFTER make quality-gate (exit 0, 5054/0/81 across 309 lines), pmat --checks complexity (0 violations) and the seven SCHM-02/03 binaries (78/78) had all run. Both prior records amended, never deleted; grep -c REOPENED stays 1. Phase 115 marker stays [~].
 
 ### Pending Todos
 
@@ -490,8 +511,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-02T03:40:56.554Z
-Stopped at: Completed 115-12-PLAN.md — SCHM-01 BLOCKER closed in code, tests and contract; 115-13 remains
+Last session: 2026-08-02T04:37:22.343Z
+Stopped at: Completed 115-15-PLAN.md — SCHM-01 re-booked [x] AFTER the whole-phase gate ran; Phase 115 ready for /gsd:verify-phase re-run
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -590,3 +611,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P10 | 3h10m | 3 tasks | 12 files |
 | Phase 115 P12 | 1h05m | 3 tasks | 5 files |
 | Phase 115 P14 | 40m | 2 tasks | 4 files |
+| Phase 115 P15 | 75m | 3 tasks | 7 files |
