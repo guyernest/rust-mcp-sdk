@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
-stopped_at: Completed 115-15-PLAN.md — SCHM-01 re-booked [x] AFTER the whole-phase gate ran; Phase 115 ready for /gsd:verify-phase re-run
-last_updated: "2026-08-02T04:37:29.734Z"
+status: verifying
+stopped_at: Completed 115-16-PLAN.md
+last_updated: "2026-08-02T15:16:07.828Z"
 last_activity: 2026-08-02
 progress:
   total_phases: 72
-  completed_phases: 61
-  total_plans: 354
-  completed_plans: 354
-  percent: 85
+  completed_phases: 60
+  total_plans: 358
+  completed_plans: 355
+  percent: 83
 ---
 
 # Project State
@@ -26,8 +26,60 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
-Plan: 15 of 15 complete — gap-closure round 2 DONE
-Status: Phase 115 awaiting re-verification (`/gsd:verify-phase 115`)
+Plan: 16 of 19 complete — gap-closure round 4 IN PROGRESS (115-16 DONE; 115-17/18/19 remain)
+Status: Executing — 115-17 next
+
+**115-16 HAS LANDED — the CODE half of Gap 1 is closed.** `SUBSCHEMA_MAP_KEYWORDS` was a
+five-entry allow-list omitting `dependencies`, the keyword this same module records at
+`D-115-03-C` as still honoured by `jsonschema` 0.49.2 under the 2020-12 pin. Commits `c350cb53`
+(derivation + structural fence + the sixth entry), `87d241b2` (fuzzing-seam publication,
+disjointness fence, corrected scope claims).
+
+**The entry was established by ENUMERATION, not by patching the reviewed case** — the union over
+the five pinned meta-schema documents of the keywords each binds to an OBJECT-typed schema whose
+`additionalProperties` references the meta-schema itself. Exactly six:
+`properties` / `patternProperties` / `definitions` / `dependencies` / `dependentSchemas` / `$defs`.
+Rejected by that same criterion and named so the derivation is checkable: `$vocabulary` (values are
+booleans) and `dependentRequired` (values are string arrays). The re-runnable `jq` command is in the
+shipped rustdoc.
+
+**⚠ THE FENCE HAD TO BE STRUCTURAL, and this is the material difference from rounds 1–3.** This
+defect produces **no v2 verdict flip**: both `dependencies.Inner` and `dependencies.default` measure
+`(Violates, Violates)` on the pinned `jsonschema` 0.49.2. A behavioural assertion would have PASSED
+against the defective code. The observable is the `Cow` borrow/own decision — which is also exactly
+what gates `compile_2020_12`'s `tracing::warn!`, so with `Cow::Borrowed` the author is told nothing
+at all — plus the rewritten pointer, which ties the rewrite to the position under test.
+`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map` carries its **OWN**
+six-element container literal, never `SUBSCHEMA_MAP_KEYWORDS`, and COLLECTS violations rather than
+aborting: the pre-fix run named **exactly the four `dependencies` pairs, 4 of 24**, and no pair from
+the other five containers. It fired through the collected vec, not through the membership guard
+(`D-115-AF`).
+
+**⚠ A NEGATIVE CONTROL THAT PASSED IS THE FINDING.** Drifting the new
+`fuzz_support::SUBSCHEMA_MAP_KEYWORDS` re-export to a stale five-entry literal left the suite green
+at **25 passed**. **Nothing in `src/` catches seam drift today** — that is the measured justification
+for `115-17`'s compiled mirror test and `115-19`'s source-text drift gate. Publishing the lists
+through the seam makes the gate POSSIBLE; it is not itself the gate.
+
+**⚠ NO FUZZ TARGET WAS RUN, deliberately.** Both restated mirrors still carry the five-entry list, so
+`{"dependencies":{"default":{"$schema":draft-07,…}}}` crashes the fuzzer on CORRECT behaviour until
+`115-17`/`115-18` land. `tests/property_tests.rs` IS safe (its `arb_container()` cannot draw
+`dependencies`) and holds its **20 passed** baseline.
+
+**⚠ NEW ledger entry `D-115-AH`, and its third item invalidates a rationale this phase has repeated
+five times: THERE IS NO PRE-COMMIT HOOK.** `115-14-SUMMARY.md` and `CLAUDE.md` both describe a
+mandatory pre-commit quality gate; measured 2026-08-02, `.git/hooks/` holds **only `*.sample` files**
+and `core.hooksPath` points at that same directory. Nothing mechanically blocks a red commit or
+enforces `make quality-gate` — same shape as `D-115-U`/`V`/`W`/`AB`, applied to the gate CLAUDE.md
+names first. `make lint` was therefore run explicitly before each commit (exit 0). Items (1) and (2)
+are plan-criterion defects: the inline-comment requirement is unsatisfiable alongside the
+ordered-last grep criterion, and the stated pre-plan `grep -c 'dependencies'` baseline of 3 is
+measured as 2.
+
+**`REQUIREMENTS.md` is UNTOUCHED and `requirements mark-complete` was NOT run** — SCHM-01's
+re-booking follows the whole-closure gate in `115-19`, not this plan (`D-115-G` / `D-115-AG`).
+`contracts/` is untouched too: `115-19` owns both contract files outright so Gap 1's keyword widening
+and Gap 2's rescoping land as ONE edit, which is how WR-04 was created in the first place.
 
 **115-15 HAS LANDED — the STRUCTURAL half is closed and SCHM-01 is re-booked `[x]`, written AFTER the gate ran.** `115-14` fixed the traversal; `115-15` fixed the reason nothing caught it. All three fences `115-12`/`115-13` built RESTATE the code's own rule, so a defect in that RULE was invisible to every one of them. Commits `43246c19` (property generator + rename property), `fb97b23d` (fuzz walkers + invariant 6 + seed 14), `d666fffa` (booking), `e53e3665` (SUMMARY).
 
@@ -461,6 +513,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 115]: 115-15: rename invariance — a metamorphic relation DERIVED from the JSON Schema 2020-12 fact that subschema-map keys are semantically inert author-chosen names — is the only fence proven to fire when BOTH the implementation and every restated copy of its traversal rule are wrong. Restating fences are AGREEMENT checks, satisfied vacuously by a rule defect.
 - [Phase 115]: 115-15: invariant 6's plan-specified 'first container, first entry' bounding was MEASURED blind to this phase's own reproduction seed (exit 0 both-blind) and widened to every root-level subschema-map entry at ~3% campaign cost — D-115-AF. When a negative control fires, check WHICH fence fired: a stronger one firing first masks a weaker one that never ran.
 - [Phase 115]: 115-15: SCHM-01 re-booked [x] only AFTER make quality-gate (exit 0, 5054/0/81 across 309 lines), pmat --checks complexity (0 violations) and the seven SCHM-02/03 binaries (78/78) had all run. Both prior records amended, never deleted; grep -c REOPENED stays 1. Phase 115 marker stays [~].
+- [Phase ?]: 115-16: SUBSCHEMA_MAP_KEYWORDS widened to six by DERIVATION over the pinned jsonschema 0.49.2 meta-schemas (kept properties/patternProperties/definitions/dependencies/dependentSchemas/$defs; rejected $vocabulary=booleans, dependentRequired=string arrays) — not by patching the reviewed case
+- [Phase ?]: 115-16: the dependencies fence is STRUCTURAL (Cow borrow/own + rewritten pointer), never behavioural — both dependencies.Inner and dependencies.default measure (Violates, Violates) on jsonschema 0.49.2, so a verdict assertion would pass against the defective code
+- [Phase ?]: 115-16: the fence carries its OWN six-element container literal, never SUBSCHEMA_MAP_KEYWORDS — a fence parameterised by the list whose incompleteness IS the defect cannot fire on that defect (CR-01)
+- [Phase ?]: 115-16: both keyword lists published through the fuzzing seam; a control proved NOTHING in src/ catches seam drift today (stale five-entry re-export left the suite green at 25) — the measured justification for 115-17's mirror test and 115-19's drift gate
 
 ### Pending Todos
 
@@ -511,8 +567,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-02T04:37:22.343Z
-Stopped at: Completed 115-15-PLAN.md — SCHM-01 re-booked [x] AFTER the whole-phase gate ran; Phase 115 ready for /gsd:verify-phase re-run
+Last session: 2026-08-02T15:16:07.810Z
+Stopped at: Completed 115-16-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -612,3 +668,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P12 | 1h05m | 3 tasks | 5 files |
 | Phase 115 P14 | 40m | 2 tasks | 4 files |
 | Phase 115 P15 | 75m | 3 tasks | 7 files |
+| Phase 115 P16 | 55m | 2 tasks | 2 files |

@@ -1060,3 +1060,54 @@ literal criterion `grep -c '^## D-115-AE'` still returns **1** — `115-14`'s en
 correct end state, reached by not writing a duplicate rather than by writing one.
 
 **Owned and closed** by `115-15` Task 3.
+
+## D-115-AH — three plan-text/criterion defects found by executing `115-16`, one of which invalidates a process rationale this phase has repeated five times
+
+**Filed by:** 115-16. Eighth entry in the two-character scheme (`AF`/`AG` are 115-15's). None of
+the three is a code defect; all three are defects in the instruments and the rationale that plans in
+this phase have been copying from each other.
+
+**(1) The plan's own two Task-1 requirements are mutually unsatisfiable, and it is another
+`D-115-1`.** Task 1(c) requires *"Give it an inline comment naming the draft-04..2019-09 spelling,
+the fact that its values are subschemas keyed by INSTANCE PROPERTY NAME, and `D-115-03-C`"*, while
+the acceptance criterion requires `grep -n 'dependentSchemas",$'` to show `"dependencies",` **on the
+following line**. A multi-line comment block between the two entries satisfies the prose and breaks
+the grep; a bare entry satisfies the grep and drops the comment. Resolved by a **trailing same-line
+comment** on the entry itself —
+
+```rust
+    "dependentSchemas",
+    "dependencies", // draft-04..2019-09; values keyed by INSTANCE PROPERTY NAME (D-115-03-C)
+```
+
+— which satisfies both literally, with the full `D-115-03-C` rationale moved into the const's
+rustdoc where Task 2(d) was going to expand it anyway. That placement is also the better one for
+115-19's source-text drift gate: a twelve-line comment inside the `&[ … ]` body would have to be
+stripped before the three copies could be compared as ordered slices.
+
+**(2) The plan states a pre-plan `grep -c 'dependencies'` baseline of 3; the measured value is 2.**
+Both the working tree at plan start and `git show HEAD~1:src/server/output_validation.rs` return
+**2**. The criterion (*"must be strictly greater than its pre-plan value of 3"*) is satisfied either
+way — the post-plan count is 29 — so nothing is affected, but the number was stated from reading
+rather than from running, which is the same authorship habit entry `I` records shipping a wrong
+measured claim into two plans.
+
+**(3) `115-14-SUMMARY.md`'s stated reason for running negative controls INSIDE a task is FALSE in
+this checkout: there is no pre-commit hook.** The claim — repeated as a `patterns-established` entry
+and inherited by 115-15 and 115-16 — is *"the pre-commit hook forbids committing a red tree, so 'add
+the fence → observe it fail → fix → observe it pass' is one commit"*. Measured 2026-08-02:
+`.git/hooks/` contains **only `*.sample` files**, and `core.hooksPath` points at that same directory.
+**Nothing mechanically blocks a red commit.** `CLAUDE.md` § *Pre-Commit Quality Gates* describes the
+hook as MANDATORY and as what makes `make quality-gate` unskippable; on this checkout that enforcement
+does not exist and the gate is honour-system only.
+
+The consequence is narrow but worth stating precisely: the one-commit-per-fence PRACTICE is still
+right (a red commit in history is a bisect hazard), but its stated JUSTIFICATION is not a mechanism,
+so a future plan must not rely on the hook to catch anything. This is the same shape as entries
+`U`, `V`, `W` and `AB` — a gate believed to be running that is not — applied to the gate CLAUDE.md
+names first.
+
+**unowned.** Two separable pieces: install the pre-commit hook this repository documents (or correct
+`CLAUDE.md` to say the enforcement is CI-only), and correct `115-14-SUMMARY.md`'s pattern text. The
+first is a repo-wide tooling change a gap-closure plan must not smuggle in; the second is a landed
+artifact this phase does not rewrite.
