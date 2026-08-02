@@ -2596,7 +2596,7 @@ Plans:
 
 **Gap closure** *(planned 2026-08-01 from `115-VERIFICATION.md`, status `gaps_found`, 3/4 must-haves — SCHM-01 only; SCHM-02 and SCHM-03 re-measured as VERIFIED and untouched)*
 
-- [ ] 115-12-PLAN.md — CR-01: `normalize_schema_dialect` rewrote only the document ROOT `$schema`, so a legacy dialect declaration on an embedded schema resource (a subschema carrying `$id`) survived the v2 pin and resolved an EMPTY vocabulary set there — reproduced twice as `root-draft07 + embedded (v1,v2) = (Violates, Conforms)`, i.e. **v2 validating weaker than v1**. Normalization becomes recursive behind the unchanged `Cow`-returning signature, rewriting every STRING-valued `$schema` at any depth while skipping `const`/`enum`/`default`/`examples` payloads and `properties` entries named `$schema` (both are DATA, not dialect declarations — the fix sketch in the review would have corrupted them). Plus the gate-visible behavioural fence the three excluded layers could not host, the `$id`-bearing case in `normalization_cases()`, the purity postcondition, and the corrected rustdoc / contract invariants / research bullet that all asserted the false "the pin wins UNCONDITIONALLY" property
+- [x] 115-12-PLAN.md — CR-01: `normalize_schema_dialect` rewrote only the document ROOT `$schema`, so a legacy dialect declaration on an embedded schema resource (a subschema carrying `$id`) survived the v2 pin and resolved an EMPTY vocabulary set there — reproduced twice as `root-draft07 + embedded (v1,v2) = (Violates, Conforms)`, i.e. **v2 validating weaker than v1**. Normalization becomes recursive behind the unchanged `Cow`-returning signature, rewriting every STRING-valued `$schema` at any depth while skipping `const`/`enum`/`default`/`examples` payloads and `properties` entries named `$schema` (both are DATA, not dialect declarations — the fix sketch in the review would have corrupted them). Plus the gate-visible behavioural fence the three excluded layers could not host, the `$id`-bearing case in `normalization_cases()`, the purity postcondition, and the corrected rustdoc / contract invariants / research bullet that all asserted the false "the pin wins UNCONDITIONALLY" property
 - [ ] 115-13-PLAN.md — The generators that structurally could not reach the shape: `arb_schema_document()` gains `$id`+`$schema` embedded resources, the fuzz target gains a TOTAL invariant 5 (no legacy dialect survives normalization, implemented independently of the crate's own detector) plus `$defs`/`$id`/`$ref`-with-no-siblings in the neutrality allowlist — the nested-`$schema` exclusion deliberately STAYS, because after the fix v2 is legitimately stricter than v1 there and invariant 3 is an equality. Two committed seeds, a time-boxed `+nightly` campaign, `make quality-gate` + the PR-blocking `pmat --checks complexity`, and SCHM-01 re-booked on post-fix measured evidence as option (a) of the verification report's human-verification item
 
 ### Phase 116: Auth Hardening SEPs
@@ -2662,7 +2662,7 @@ Plans:
 | 113. Stateless HTTP + MRTR | 32/32 | Complete   | 2026-07-27 |
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
-| 115. JSON Schema 2020-12 + Caching Hints | 11/11 | Gap Closure | 2026-08-01 |
+| 115. JSON Schema 2020-12 + Caching Hints | 12/13 | In Progress|  |
 | 116. Auth Hardening SEPs | 0/TBD | Not started | - |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |

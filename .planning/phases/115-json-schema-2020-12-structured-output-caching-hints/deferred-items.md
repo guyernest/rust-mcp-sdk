@@ -35,6 +35,18 @@ two-character scheme deliberately rather than by accident — Phase 114's ledger
 ID-collision incident caused by exactly that omission. Note that a two-character scheme also
 breaks the first-character duplicate check quoted above; extend the check with it.
 
+**The two-character scheme, opened by `115-12` (2026-08-01).** The single-character space was
+full, so `115-12` started `AA` and the next appender continues `AB`, `AC`, … The first-character
+duplicate check quoted above is now **wrong by construction** — `AA`'s first character duplicates
+`A`'s. Replace it with a WHOLE-ID check, which is what it should always have been:
+
+```sh
+grep -o '^## D-115-[A-Z0-9]\{1,2\}' deferred-items.md | sort | uniq -d   # must print nothing
+```
+
+That form is correct for one- and two-character IDs alike, and it does not depend on the crosswalk
+rows dropping their `D-` prefix — so a future rewrite of this file cannot silently re-break it.
+
 | Old ID | Filed by | Subject | **New ID** |
 |---|---|---|---|
 | `115-11-A` | 115-11 | contract location deviation | **`A`** |
@@ -723,6 +735,43 @@ it. The module doc was corrected in the same edit.
 
 **Owner:** 115-10 — closed. `tests/phase115_contract_bindings.rs` was outside this plan's declared
 `files_modified`; the edit is recorded as a deviation in `115-10-SUMMARY.md`.
+
+---
+
+## D-115-AA — `cargo test -- --list` prints NOTHING through this environment's shell hook
+
+**Filed by:** 115-12. First entry in the two-character scheme (see the header).
+
+`115-12` Task 2's acceptance criterion is that `cargo test --lib --features full
+output_validation::tests -- --list` names the two new tests — chosen over a nextest
+`test(/stem/)` selector precisely because entry **`Y`** records that the selector form selects
+ZERO tests and exits 0.
+
+Measured 2026-08-01: run as plain `cargo`, that command emitted only
+
+```
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/pmcp-7248e5728088de8a)
+```
+
+— the 17 test names were **silently dropped**, and the exit code was 0. The environment rewrites
+bare `cargo` through an `rtk` proxy that filters command output; a preceding `grep` for the two
+test names against the same pipeline therefore exited 1 and read as "the tests do not exist".
+Re-running the identical argv as `$HOME/.cargo/bin/cargo` printed all 17 names.
+
+This is the same failure MODE as entry **`T`** (`make` stdout corrupted when redirected) but a
+different manifestation: no redirection is involved, and the loss is total rather than partial.
+Both are instances of *a green exit code over an empty result set*, which is exactly the shape
+entries **`Y`**, **`U`**, **`V`** and **`W`** already record for the fuzz/property/example gates.
+
+**Consequence for plan authors:** an acceptance criterion of the form "`--list` output contains
+X" is fail-OPEN in this environment unless it is run through an absolute binary path. Prefer
+asserting the count (`17 tests, 0 benchmarks` on the `--list` tail, or `17 passed` on the run),
+which cannot be satisfied by an empty result set, and spell the binary absolutely.
+
+**Owner:** 115-12 — worked around, not fixed. The criterion was verified with
+`$HOME/.cargo/bin/cargo` and both test names were observed. Nothing in the repository is changed
+by this entry; it is an environment property, and the repo cannot fix the caller's shell hook.
 
 ---
 
