@@ -143,9 +143,101 @@ checkboxes a verifier can fail on.
 
 ### JSON Schema 2020-12 & Caching Hints (SCHM)
 
-- [~] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.49, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
+- [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.49, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
 
-> **REOPENED 2026-08-01 — booking downgraded `[x]` → `[~]` after verification.** The `[x]`
+> **CLOSED 2026-08-01 — re-booked `[~]` → `[x]` on POST-FIX measured evidence, by the `115-12` +
+> `115-13` gap-closure pair.** The downgrade block immediately below is kept VERBATIM: it is the
+> honest record of a booking that was wrong, and `/gsd:verify-phase 115` will be re-run against it.
+> Nothing in it is deleted; this block states what changed. (Its heading word is deliberately not
+> repeated here, so the `grep -c` count of that word over this file stays at its pre-closure value
+> of 1 — the check that proves the record was amended rather than removed.)
+>
+> **The defect.** `normalize_schema_dialect` rewrote the ROOT `$schema` only. Under Draft 2020-12 a
+> `$schema` is legal at the root of any EMBEDDED SCHEMA RESOURCE — a subschema carrying `$id` — and
+> `jsonschema` 0.49.2 honours it there, so a legacy declaration on such a resource survived the pin,
+> resolved an EMPTY vocabulary set and produced an accept-everything sub-validator: the
+> vacuous-validator bypass the pin exists to close, moved one level down.
+>
+> **The shipped fix (`115-12`, commits `fdf236c8` / `a9af3a5d` / `60cda794`).** The signature is
+> unchanged (`fn normalize_schema_dialect(schema: &Value) -> Cow<'_, Value>`, byte-identical to
+> `contracts/binding.yaml`) and the `Cow::Borrowed` zero-allocation path survives. The body is now a
+> detector (`first_legacy_dialect`) / rewriter (`pin_dialect_in_place`) pair implementing ONE
+> traversal rule stated once in rustdoc, under two guards that are load-bearing, not cosmetic:
+> a `$schema` is a declaration **only when its value is a `Value::String`** (the code review's own
+> fix sketch used `map.contains_key("$schema")`, which would have replaced a `properties` subschema
+> named `$schema` with a string and made the document uncompilable), and the walk **never descends
+> into `const` / `enum` / `default` / `examples`** (a `$schema` there is instance DATA, and
+> rewriting it changes which instances conform). The `expect` the old body carried is gone, replaced
+> by the checkable postcondition `first_legacy_dialect(&owned) == None`.
+>
+> **The three-row measurement, RE-RUN post-fix** through the same seam the review and the verifier
+> used (`output_validation::fuzz_support::validate_bytes`, `jsonschema` 0.49.2), schema =
+> `properties.n → $ref "#/$defs/Inner"` with `$defs.Inner` carrying `$id` + `$schema: draft-07` +
+> `type: integer`, instance `{"n": "NOT-AN-INTEGER"}`:
+>
+> | Case | Before 115-12 | After 115-12 |
+> |---|---|---|
+> | embedded-legacy-resource | `(Conforms, Conforms)` | `(Conforms, Violates)` |
+> | control-no-nested-schema | `(Violates, Violates)` | `(Violates, Violates)` |
+> | **root-draft07 + embedded** | `(Violates, Conforms)` | **`(Violates, Violates)`** |
+>
+> Row 3 is the clause this requirement's text turns on, and it now reads `(Violates, Violates)` —
+> v2 is no longer weaker than v1. Row 1's v1 column deliberately stays `Conforms`: D-01 freezes the
+> v1 arm at `jsonschema::validator_for`, whose auto-detect still honours the embedded declaration.
+> That is the freeze working, and `v2_pin_still_enforces_an_embedded_legacy_resource` asserts it
+> stays put.
+>
+> **The fences, by name and count** — the point being that the defect shipped past a green gate
+> because all three of its would-be fences either excluded the shape structurally or sat behind a
+> feature the gate does not enable:
+>
+> | Fence | Where | Count / state |
+> |---|---|---|
+> | `v2_pin_still_enforces_an_embedded_legacy_resource` | `mod tests`, feature `validation` — **gate-visible** | in the 17 `output_validation::tests` |
+> | `normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone` | same | guards the string-valued rule |
+> | `normalization_cases()` case (e) | same | the `$id`-bearing document, `expected_owned == true` |
+> | `property_schema_normalization_is_idempotent_and_surgical` | `tests/property_tests.rs`, `--features "full fuzzing"` | **19** vs **18** under `--features full`; generator now EMITS `$id`-bearing embedded resources — **100 of 256** generated cases carried an embedded non-2020-12 declaration |
+> | fuzz **invariant 5** `assert_no_legacy_dialect_survives` | `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | TOTAL, no skip; walk implemented INDEPENDENTLY of the crate's own detector |
+> | seeds `12_embedded_legacy_resource`, `13_embedded_resource_no_dialect` | `fuzz/corpus/fuzz_schema_draft_pin/` | **13** committed seeds; `-runs=0` replay exit 0; `-max_total_time=300` → **3 951 202** runs, exit 0, artifacts dir EMPTY |
+>
+> **Negative controls, OBSERVED — because an unfired fence is not evidence.** That is the standard
+> `115-VERIFICATION.md` applied when it refused to inherit the SUMMARYs' conclusions, and it is
+> applied to the closure too. Against a deliberately reverted (root-only) `pin_dialect_in_place`:
+> `115-12` observed **15 passed / 2 failed** with the behavioural and the borrow/own fences both
+> firing; `115-13` Task 1 observed the property test FAIL with the dialect-purity message on
+> `{"$defs":{"Inner":{"$id":…,"$schema":"…draft-04…","type":"integer"}}}`; `115-13` Task 2 observed
+> seed `12_embedded_legacy_resource` trip invariant 5 with **exit 77**. All three were restored and
+> re-run clean.
+>
+> **The whole-phase gate, run once over the fixed tree (`115-13` Task 3).** `make quality-gate`
+> exit **0** — **5052 passed / 0 failed / 81 ignored across 309 `test result:` lines**, 0 non-`ok.`
+> lines. `pmat quality-gate --fail-on-violation --checks complexity` (the PR-blocking CI check
+> `make quality-gate` does NOT cover) → **PASSED, 0 violations**, so the three reshaped functions
+> stay under cognitive 25 with no `#[allow]`. SCHM-02/SCHM-03's suites re-run unregressed at exactly
+> the counts `115-VERIFICATION.md` measured: **78/78** across `structured_tool_output` 20,
+> `v2_caching_hints` 19, `v1_lists_golden` 7, `v2_schema_tripwires` 13, `v2_core_schema_facts` 8,
+> `vendored_schema_provenance` 6, `phase115_contract_bindings` 5. No `Cargo.toml` / `Cargo.lock` in
+> the closure diff (no supply-chain review triggered) and **0** new `pub fn` / `pub struct` /
+> `pub enum` lines under `src/` (the milestone's additive 2.x-minor posture is preserved).
+>
+> The first gate run FAILED (exit 2) on a `clippy::similar_names` error `115-12` introduced —
+> `row3` beside `rows` — which `115-12`'s own `cargo clippy --all-targets --features full -D
+> warnings` did not see because `similar_names` is pedantic and only `make lint` enables that group.
+> Fixed by renaming, not by an `#[allow]` (commit `cab8937a`). It is recorded here rather than
+> absorbed because it is the measured instance of CLAUDE.md § *Why `make quality-gate` (not
+> individual cargo commands)*.
+>
+> **Provenance of this booking.** This closure was executed as **option (a)** of
+> `115-VERIFICATION.md` § *Human Verification Required* — "accept a closure plan implementing the
+> recursive-normalization fix" — and NOT as option (b), an override. The owner's `115-10` sign-off
+> (Guy Ernest, 2026-08-01, commit `496da96b`) **predates `115-REVIEW.md`** and is therefore **not**
+> being read as covering CR-01; nothing in this block relies on it. Re-verification is
+> `/gsd:verify-phase 115`'s job and this block is the evidence it should score, not a substitute
+> for it. Ledger entry `D-115-G` — a requirement flipped before its evidence existed — is the
+> process defect this re-booking was written to avoid repeating.
+
+> **REOPENED 2026-08-01 — booking downgraded `[x]` → `[~]` after verification.** *(Superseded by the
+> CLOSED block above; amended, not deleted, by `115-13`.)* The `[x]`
 > below was written by `115-10` Task 3 immediately after owner sign-off, which predates
 > `115-REVIEW.md`. `115-VERIFICATION.md` (status `gaps_found`, 3/4) then measured that the
 > "no `$schema` auto-detect" clause **does not hold**: `normalize_schema_dialect`
@@ -174,7 +266,10 @@ checkboxes a verifier can fail on.
 > booking from Phase 114 by habit."* The contingency D-15 kept available (the Phase-113 HTTP-04
 > split) **did not fire**. Booking `[~]` here would be exactly the habit D-15 named.
 >
-> **Measured evidence** (all re-run by `115-10` at phase close, by binary name, because
+> **Measured evidence** *(as of `115-10`. Two rows moved in the gap closure and are superseded by
+> the CLOSED block above: `binary(property_tests)` is now **18 / 19**, not 17 / 18, and the corpus
+> carries **13** committed seeds, not 12. Kept as written — this table is what `115-10` measured.)*
+> (all re-run by `115-10` at phase close, by binary name, because
 > `make validate-always`'s three ALWAYS targets are fail-open — see `deferred-items.md` entries
 > `U`/`V`/`W`):
 >
@@ -195,7 +290,9 @@ checkboxes a verifier can fail on.
 > vocabulary set — a validator that accepts **every** instance. Measured across `jsonschema`
 > 0.46.10 / 0.47.0 / 0.48.0 / 0.48.5 / 0.49.2, and `draft202012::meta::is_valid` returns `true` for
 > such a document, so there is no library-side detector. The pin is therefore implemented as
-> `normalize_schema_dialect` (pure, idempotent, `Cow`-returning, root `$schema` only) followed by
+> `normalize_schema_dialect` (pure, idempotent, `Cow`-returning, ~~root `$schema` only~~ —
+> **CORRECTED by `115-12`: EVERY string-valued `$schema` at every depth; see the CLOSED block
+> above**) followed by
 > `compile_2020_12`, fenced by a draft-07 test **whose negative control was observed to fire** —
 > see `115-03-SUMMARY.md`. `compile_for_era` keeps v1's `jsonschema::validator_for` auto-detect
 > **verbatim** (D-01 freeze) and is the only auto-detect entry point left in the module.
@@ -425,7 +522,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-04 | Phase 114 | Implemented — pending final schema |
 | TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
 | TASK-06 | Phase 114 | Implemented — pending final schema |
-| SCHM-01 | Phase 115 | Gap — pin incomplete (nested `$schema` bypass; see 115-VERIFICATION.md) |
+| SCHM-01 | Phase 115 | Complete — gap closed by 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) |
 | SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |
