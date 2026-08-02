@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: verifying
-stopped_at: Completed 115-16-PLAN.md
-last_updated: "2026-08-02T15:16:07.828Z"
+status: executing
+stopped_at: Completed 115-17-PLAN.md
+last_updated: "2026-08-02T16:10:37.434Z"
 last_activity: 2026-08-02
 progress:
   total_phases: 72
@@ -26,8 +26,48 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
-Plan: 16 of 19 complete — gap-closure round 4 IN PROGRESS (115-16 DONE; 115-17/18/19 remain)
-Status: Executing — 115-17 next
+Plan: 17 of 19 complete — gap-closure round 4 IN PROGRESS (115-16/115-17 DONE; 115-18/19 remain)
+Status: Executing — 115-18 next
+
+**115-17 HAS LANDED — the property module now mirrors the six-keyword rule AND can REACH the
+position CR-01 found.** Commits `0268fa34` (six-entry mirror + the compiled mirror-equality gate +
+the WR-06 correction) and `9fc3534c` (six-way container draw from an own literal + the coverage
+proof + all three negative controls). `21 passed` under `--features "full fuzzing"`, `18` under
+`full` — the pair proving the `fuzzing`-gated module actually ran.
+
+**⚠ THE PLAN'S OWN INSTRUCTION WOULD HAVE RE-SHIPPED CR-01, and it was caught only by running the
+controls.** Task 2(a) says to build `arb_container()` FROM `SUBSCHEMA_MAP_KEYWORDS` because that
+constant is now gated. Implemented literally, **every negative control went green (`21 passed`),
+including the both-blind one** — shortening the mirror shrinks the GENERATED SPACE in the same edit,
+so nothing can observe the defect. That is CR-01's *"gated by a crate-derived list one line earlier"*
+recreated inside the plan written to close it. Fixed with `CONTAINER_DRAW`, an OWN six-element
+literal (115-16's `src/`-side pattern, one layer up), plus a **superset** guard — every SHIPPED
+keyword must be drawable — asserted LAST so it can mask neither the mirror comparison nor the
+control. Booked `D-115-AI(4)`. **Standing lesson: a fence's REACHABILITY must not be derived from the
+same artifact as the rule it checks, even when that artifact is gated. A gate makes a copy CORRECT;
+it does not make the fence able to FIRE.**
+
+**⚠ THIS MODULE HAS TWO DERIVED FENCES, NOT ONE (`D-115-AI(5)`).** The both-blind control failed
+`property_schema_normalization_is_idempotent_and_surgical` — not on surgical scope, not on dialect
+purity (both PASSED, as specified), but on the **embedded-resource pointer assertion**, which
+addresses the pointer the generator drew and consults no keyword list. The plan's
+`<which_fence_catches_what_here>` taxonomy, copied into 115-18 and 115-19, names only rename
+invariance. Read `D-115-AI(5)` before trusting it.
+
+**The three negative controls, all OBSERVED** (`115-17-SUMMARY.md` carries the verbatim messages):
+mirror stale → the gate + surgical scope at `/dependencies/const`; `src/` stale → dialect purity
+reaches `/dependencies/const`; BOTH blind → `RENAME INVARIANCE VIOLATED at /dependencies/const vs
+/dependencies/__rename_probe__`, with the mirror gate PASSING as positive proof of both-blindness.
+Coverage: **21 of 260** draws hit `dependencies` + a colliding name + a legacy embedded dialect
+(floor 8), **6 of 6** containers, **70** distinct (container, name) combinations; instrumentation
+removed and grepped.
+
+**`src/server/output_validation.rs` is a 0-byte diff** — restored from a `shasum -a 256 -c`-verified
+snapshot after each control (`OK`), `git diff --exit-code` 0, `git status --short src/` empty.
+`115-18` inherits it clean. **`REQUIREMENTS.md` UNTOUCHED and `requirements mark-complete` NOT run** —
+SCHM-01's re-booking follows 115-19's whole-closure gate (`D-115-G` / `D-115-AG`).
+
+**⚠ `D-115-AI` IS TAKEN — by 115-17. `115-19` must continue at `D-115-AJ`.**
 
 **115-16 HAS LANDED — the CODE half of Gap 1 is closed.** `SUBSCHEMA_MAP_KEYWORDS` was a
 five-entry allow-list omitting `dependencies`, the keyword this same module records at
@@ -517,6 +557,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 115-16: the dependencies fence is STRUCTURAL (Cow borrow/own + rewritten pointer), never behavioural — both dependencies.Inner and dependencies.default measure (Violates, Violates) on jsonschema 0.49.2, so a verdict assertion would pass against the defective code
 - [Phase ?]: 115-16: the fence carries its OWN six-element container literal, never SUBSCHEMA_MAP_KEYWORDS — a fence parameterised by the list whose incompleteness IS the defect cannot fire on that defect (CR-01)
 - [Phase ?]: 115-16: both keyword lists published through the fuzzing seam; a control proved NOTHING in src/ catches seam drift today (stale five-entry re-export left the suite green at 25) — the measured justification for 115-17's mirror test and 115-19's drift gate
+- [Phase ?]: 115-17: arb_container() draws from its OWN six-element literal, never SUBSCHEMA_MAP_KEYWORDS — sourcing it from the gated mirror was measured to make every negative control go green (D-115-AI(4))
+- [Phase ?]: 115-17: the module has TWO fences a rule defect cannot satisfy, not one — the embedded-resource pointer assertion is the second, observed firing in the both-blind control (D-115-AI(5))
 
 ### Pending Todos
 
@@ -567,8 +609,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-02T15:16:07.810Z
-Stopped at: Completed 115-16-PLAN.md
+Last session: 2026-08-02T16:10:37.424Z
+Stopped at: Completed 115-17-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -669,3 +711,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P14 | 40m | 2 tasks | 4 files |
 | Phase 115 P15 | 75m | 3 tasks | 7 files |
 | Phase 115 P16 | 55m | 2 tasks | 2 files |
+| Phase 115 P17 | ~70m | 2 tasks | 1 files |

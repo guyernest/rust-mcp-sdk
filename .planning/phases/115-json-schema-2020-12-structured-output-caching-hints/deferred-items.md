@@ -1111,3 +1111,114 @@ names first.
 `CLAUDE.md` to say the enforcement is CI-only), and correct `115-14-SUMMARY.md`'s pattern text. The
 first is a repo-wide tooling change a gap-closure plan must not smuggle in; the second is a landed
 artifact this phase does not rewrite.
+
+## D-115-AI — five defects found by executing `115-17`, one of which would have shipped CR-01 a second time inside its own gap-closure plan
+
+**Filed by:** 115-17. Ninth entry in the two-character scheme (`AH` is 115-16's, and continuing at
+`AI` is what `115-16-SUMMARY.md` instructs). **115-19 must continue at `D-115-AJ`.**
+
+Items (4) and (5) are code findings that changed what shipped. Items (1)–(3) are plan-text and
+criterion defects of the shape this ledger already records five times.
+
+**(1) The WR-06 grep criterion and the phase's amend-don't-delete convention are mutually
+unsatisfiable, and it is another `D-115-1`.** Task 1(c) says to *"amend rather than delete, per the
+phase's convention"*, while the acceptance criterion requires
+`grep -n 'remove it from only one side' tests/property_tests.rs` to return NOTHING. An amendment that
+QUOTES the falsified sentence — which is what the convention asks for, so a reader can see what was
+wrong — reproduces the literal and fails the grep. Resolved by PARAPHRASING the falsified claim in the
+rustdoc and pointing at `115-REVIEW.md` WR-06 and `115-17-SUMMARY.md`, both of which quote it
+verbatim. Identical in shape to `D-115-AH(1)`; the generalisable rule is already stated at entry `1`.
+
+Second-order instance, worth recording because it cost a full verification cycle: the first
+correction QUOTED THE CRITERION ITSELF (`grep -n 'remove it from only one side'`) in the amendment
+text, which of course still matched. A grep criterion over a file also constrains what that file may
+say ABOUT the criterion.
+
+**(2) Task 1's two negative controls are structurally unreachable in Task 1's tree.** Both require the
+generated space to contain a `dependencies` container, and that arrives with Task 2(a). In the Task 1
+tree `arb_container()` still drew three of six, so:
+
+- the mirror-drift control produced **1** failure, not the specified 2 —
+  `keyword_lists_mirror_the_shipped_ones` alone, with
+  `property_schema_normalization_is_idempotent_and_surgical` **passing** (verified with
+  `--no-fail-fast`, since nextest's default fail-fast cancels the run and would have hidden it);
+- the crate-drift control could not fire at all.
+
+Both were run to completion in the Task 2 tree, where they are reachable, and are recorded in
+`115-17-SUMMARY.md` with the tree they were measured in stated. No coverage was lost; the plan
+ordered the observations one task too early.
+
+**(3) The plan's claim that the false-positive mode "silently shipped between 115-16 and this plan"
+is false.** Task 1's acceptance criterion calls the surgical-scope failure *"what silently shipped
+between 115-16 and this plan"*. Measured: in that window `arb_container()` drew `$defs`,
+`definitions` and `properties` only, so no generated document could reach the `dependencies`
+position and the stale mirror produced **no** false positive. The drift WINDOW was real; the
+false-positive FIRING was not reachable. The mode is real in general, and 115-17 observed it by
+constructing the configuration in which the generated space reaches a container the mirror lacks.
+
+**(4) `arb_container()` sourced from `SUBSCHEMA_MAP_KEYWORDS` reintroduces CR-01 one layer up —
+MEASURED, and it is the reason this entry exists.** Task 2(a) instructs: *"Build it from that constant
+rather than from a fourth literal — the constant is now gated against the shipped values by Task 1(b),
+so a fourth hand-written copy would add drift surface for no gain."* The reasoning is sound about
+drift and wrong about REACHABILITY, and the difference is only visible when the negative controls are
+actually run:
+
+| Control | Draw sourced from the mirror | Draw from an OWN literal |
+|---|---|---|
+| mirror stale, `src/` correct | **21 passed** — no failure but the gate | **2 failed** — gate + surgical scope at `/dependencies/const` |
+| BOTH copies blind | **21 passed** — every fence green | **2 failed** — rename invariance at `/dependencies/const`, + the embedded-pointer assertion |
+
+Removing an entry from the mirror removes that container from the GENERATED SPACE in the same edit,
+so every instrument that could observe the defect goes quiet and the suite reports success. That is
+`115-REVIEW.md` CR-01 verbatim — *"the one instrument the round advertises as … consults no
+`DATA_ONLY_KEYWORDS` list at all is in fact gated by a crate-derived list one line earlier"* — being
+re-created by the plan written to close it, inside the fourth gap-closure round on the same
+requirement.
+
+**Fixed inside the task** (Rule 1): `CONTAINER_DRAW`, a six-element literal owned by this module, with
+the drift risk fenced SEPARATELY by a superset guard in `keyword_lists_mirror_the_shipped_ones` —
+every keyword `src/` ships must be drawable. This is exactly the shape 115-16 chose on the `src/` side
+for `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`, for the same reason,
+and its rationale is now recorded in `CONTAINER_DRAW`'s rustdoc so the "obvious" simplification is not
+re-applied by the next reader.
+
+**The guard is a SUPERSET check, not an equality check, and that is load-bearing.** An equality guard
+would fail in the both-blind configuration (`src/` at five, `CONTAINER_DRAW` at six) and add a third
+failing test to a control whose whole purpose is to isolate one. It is also asserted LAST, so a
+drifted `CONTAINER_DRAW` cannot mask a drifted mirror — `D-115-AF` applied twice in one function.
+
+**The standing lesson, and it is the sharpest form this phase has produced:** *a fence's REACHABILITY
+must not be derived from the same artifact as the rule it checks, even when that artifact is gated.*
+A gate makes a copy CORRECT; it does not make the fence able to FIRE. The two are independent
+properties and this phase has now confused them twice.
+
+**(5) The plan's both-blind criterion is unsatisfiable, because this module has TWO fences of the
+DERIVED kind and its own taxonomy names one.** The criterion requires
+`property_schema_normalization_is_idempotent_and_surgical` to PASS in the both-blind configuration.
+Measured: it FAILS — not on surgical scope and not on dialect purity, both of which pass exactly as
+predicted, but on the **embedded-resource pointer assertion** at the bottom of the same body:
+
+```
+an embedded schema resource's dialect declaration must be rewritten to the 2020-12 URI
+at /dependencies/const/$schema
+```
+
+That assertion addresses the pointer the GENERATOR drew and consults no keyword list, so like rename
+invariance it cannot pass vacuously when the rule is wrong. The plan's
+`<which_fence_catches_what_here>` block, the module rustdoc and the rename property's own rustdoc all
+say rename invariance is *the one* fence here a rule defect cannot satisfy. It is one of two.
+
+The criterion's INTENT — *"confirm the surgical-scope and dialect-purity assertions PASSED"* — was
+discharged exactly, and more strongly than an all-pass would have: assertions in a `proptest!` body
+run top to bottom, so a failure REPORTED at the embedded-pointer assertion is positive evidence that
+the two earlier ones passed for the same case. The independent check that no mirror was missed is
+`keyword_lists_mirror_the_shipped_ones` PASSING, which is what "both copies agree" means. Both
+rustdocs were amended to state the two-fence reality.
+
+**Owner:** 115-17 — (1)–(3) worked around and recorded, (4) and (5) fixed and documented in the
+shipped code. **Residual, unowned:** the `<which_fence_catches_what_here>` taxonomy is copied into
+115-18's and 115-19's plan text with the same one-fence framing; whoever executes them should read
+item (5) before trusting it. And item (4) applies verbatim to
+`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` — if 115-18 derives that target's container selection
+from its own restated `SUBSCHEMA_MAP_KEYWORDS`, its invariant-6 controls will go green for this
+reason and prove nothing.
