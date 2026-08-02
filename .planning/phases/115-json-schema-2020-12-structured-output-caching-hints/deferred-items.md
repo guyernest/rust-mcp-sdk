@@ -805,6 +805,81 @@ replay), which is a CI change, not a phase-115 code change.
 plan asserting something about a fuzz target MUST run its command from inside `fuzz/` with
 `+nightly` and MUST NOT infer anything about that crate from a green `make quality-gate`.
 
+## D-115-AC — WR-03: the fragment-suffixed 2020-12 URI is misclassified as legacy
+
+**Filed by:** 115-14. Third entry in the two-character scheme. **Excluded from this closure
+DELIBERATELY, and the reason is not difficulty — see below.**
+
+**The measurement.** `DRAFT_2020_12` (`src/server/output_validation.rs`) is compared by exact
+string equality, so `"$schema": "https://json-schema.org/draft/2020-12/schema#"` — a legal and
+common spelling, and the same `#`-suffixed style this repository uses for the draft-07 URI
+throughout its own fixtures — is classified as a LEGACY dialect. Measured by `115-REVIEW.md`
+(WR-03) and re-measured independently by `115-VERIFICATION.md` this session:
+
+```
+input      : {"$schema":"https://json-schema.org/draft/2020-12/schema#","type":"object"}
+normalized : {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}
+rewritten  : true   (should be false)
+```
+
+**Two user-visible consequences.** (a) A full-document clone for every distinct schema of that
+shape, on a path whose whole design point is that the common case allocates nothing. (b)
+`compile_2020_12` fires the D-02 `tracing::warn!` telling a tool author that their **correct
+2020-12 declaration** "is ignored and the schema is validated as 2020-12" — the single
+diagnostic D-02 leaves available, fired on a false positive, which is exactly how operators are
+trained to ignore a warning that will one day be true.
+
+**Why 115-14 did not fix it while it had the normalizer open.** The correct FIX SHAPE depends on
+an unmeasured library behaviour: whether `jsonschema` 0.49.2 resolves the fragment-suffixed URI
+to the 2020-12 vocabulary set, or to an EMPTY one. If it resolves EMPTY, then the obvious repair
+— declassify the spelling so `first_legacy_dialect` returns `None` and the document is left
+unrewritten — REINTRODUCES the vacuous-validator bypass this very plan closed, one spelling over.
+The safe variant (keep rewriting, suppress only the warning) needs either a second predicate or a
+second detector, and a second walker restating the same rule is precisely the pathology
+`115-REVIEW.md` WR-02 identifies and this closure exists to remove. Guessing between those two
+shapes inside a gap-closure plan is how the previous two rounds shipped.
+
+**OPEN MEASUREMENT — the entry's first action item.** Compile
+
+```json
+{"$schema": "https://json-schema.org/draft/2020-12/schema#", "type": "object",
+ "properties": {"n": {"type": "integer"}}}
+```
+
+against the instance `{"n": "x"}` through
+`pmcp::server::output_validation::fuzz_support::validate_bytes` on BOTH eras, WITHOUT
+normalization (i.e. bypassing `normalize_schema_dialect`, or with the URI already declassified),
+and record whether `type` is enforced. `Violates` on v2 means the fragment-suffixed spelling
+resolves the real vocabulary set and simple declassification is safe; `Conforms` means it does
+not, and only the keep-rewriting/suppress-the-warning shape is safe. Note that `NEUTRAL_DIALECTS`
+in `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` lists only the non-`#` spelling, so invariant 3
+never reaches such a document either and must be widened by whoever closes this.
+
+**unowned.** Not blocking on SCHM-01: the misclassification makes validation STRICTER (the
+document is normalized and compiled as 2020-12, which is what it already declared), so it is a
+diagnostic and allocation defect, not a bypass.
+
+## D-115-AD — the remaining `115-REVIEW.md` findings this closure does not own
+
+**Filed by:** 115-14. Fourth entry in the two-character scheme. This entry exists so a future
+reader can tell **"not fixed"** from **"not noticed"**. Each item below was read, understood and
+left alone; none is owned by `115-14` or by `115-15`.
+
+| Finding | Severity | File | Subject |
+|---|---|---|---|
+| WR-04 | Warning | `src/server/output_validation.rs` (`DATA_ONLY_KEYWORDS`) | The data guard omits OpenAPI 3.0's SINGULAR `example` and every `x-`/vendor annotation keyword, so instance data in those payloads IS rewritten and IS falsely warned about. Measured: `{"type":"object","example":{"$schema":"…draft-07…"}}` normalizes to the 2020-12 URI inside the `example` payload. First-party relevant, not hypothetical — this repository ships `crates/pmcp-openapi-server`, whose premise is compiling third-party OpenAPI specs into `outputSchema` documents. WR-04 additionally argues for the INVERSE of the shipped design (descend only into positions the vocabulary DEFINES as subschemas, since a deny-list over an open keyword space cannot be completed); `115-14` deliberately declined that, because the current walk is a SUPERSET of what `jsonschema` honours and an allow-list walk would REDUCE what is normalized, including under vendor container keywords that really do hold subschemas. Adding `"example"` to the list is the small, safe half and is still unowned. |
+| WR-05 | Warning | `fuzz/corpus/fuzz_schema_draft_pin/13_embedded_resource_no_dialect` + its `README.md` | The seed declares NO root `$schema`, so `Draft::default() == Draft202012` makes invariant 3 compare 2020-12 against 2020-12 — the README's claim that it is "the first seed to exercise invariant 3 over an embedded-resource shape" overstates what it does. The variant that WOULD compare the two dialects (same document plus a root draft-07 declaration) is not in the corpus. |
+| IN-01 | Info | `tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | `Vec<&&str>` in both restated collectors, purely to satisfy `{:?}`. Both copies sit OUTSIDE every lint gate — `fuzz/` is workspace-excluded (`D-115-AB`) and the property copy is behind `feature = "fuzzing"`, which is in neither `default` nor `full`. |
+| IN-02 | Info | `src/server/output_validation.rs` (`first_legacy_dialect`, `compile_2020_12`) | The `declared` value in the D-02 warning is *a* declaration, not *the* declaration: among siblings the walk follows `serde_json::Map` iteration order, which flips between the default `BTreeMap` backing and a `preserve_order` (`IndexMap`) one. The warning's wording implies determinism it does not have. |
+| IN-03 | Info | `src/server/output_validation.rs` (`pin_dialect_in_place`) | Two `String` allocations per visited `$schema`, including no-op rewrites of a value already equal to `DRAFT_2020_12`, plus a fresh key `String` that `insert` discards for an existing key. |
+
+**unowned**, all five. WR-06 (the property generator's hard-coded `Inner`) and WR-02 (the
+rule-independence mechanism) are NOT in this table: they are `115-15`'s, by that plan's own
+scope. WR-01 and WR-07 are not here either — WR-01 is DISCHARGED by this plan's Task 2 (the
+contract postcondition is now scoped to schema positions and is satisfiable), and WR-07 is a
+README/acceptance-criterion defect in the fuzz corpus documentation that `115-13` already
+recorded the shape of.
+
 ---
 
 # Inherited items

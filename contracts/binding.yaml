@@ -520,6 +520,16 @@ bindings:
     WEAKER than v1. 115-12 made the walk recursive; the `signature:` above is unchanged and
     stays byte-identical to the source. See also `first_legacy_dialect` and
     `pin_dialect_in_place` below.
+    115-14 POSITION CORRECTION: the note above described a walk that keyword-filtered the keys
+    of subschema MAPS. `115-VERIFICATION.md` measured that scope as a validation BYPASS —
+    `properties`, `patternProperties`, `$defs`, `definitions` and `dependentSchemas` map
+    author-chosen NAMES to subschemas, so an entry an author names `const` / `enum` /
+    `default` / `examples` was visited by neither half, and a legacy `$schema` on such an
+    `$id`-bearing embedded resource survived the pin: `$defs.default` measured
+    `(v1, v2) = (Conforms, Conforms)` with `rewritten=false` against the control
+    `$defs.Inner`'s `(Conforms, Violates)` with `rewritten=true`. The walk is now
+    position-aware (`SUBSCHEMA_MAP_KEYWORDS`); the `signature:` above is STILL unchanged and
+    still byte-identical to the source.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -536,6 +546,17 @@ bindings:
     root key there would report `<unknown>` for exactly the embedded-resource case the warning
     exists to explain. Bound because it IS the mechanism, the same reason `compile_for_era` was
     bound by 115-10 (ledger entry J). SCHM-01 / D-02.
+    115-14 POSITION CORRECTION: this note previously described a walk that tested the
+    data-only keyword list against EVERY object key, including the keys of subschema MAPS.
+    That scope was measured as a validation BYPASS by `115-VERIFICATION.md` — a `$defs`
+    entry whose author-chosen name collides with `const` / `enum` / `default` / `examples`
+    was never visited, so the detector reported `None` for a document that carried a legacy
+    declaration and `normalize_schema_dialect` returned `Cow::Borrowed` with nothing
+    rewritten and no `tracing::warn!` fired. The member dispatch now consults
+    `SUBSCHEMA_MAP_KEYWORDS` first and descends into every value of such a map regardless of
+    its name; see the `first_legacy_dialect_in_member` binding below, which is that dispatch
+    split out for CI's cognitive-complexity gate. The `signature:` above is unchanged and
+    stays byte-identical to the source.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -553,6 +574,61 @@ bindings:
     carries a legacy declaration while `compile_2020_12` announces the declaration as ignored.
     The postcondition `first_legacy_dialect(&owned) == None` is what fences that, and it
     replaces the `expect` the root-only body carried. SCHM-01 / D-02.
+    115-14 POSITION CORRECTION: the traversal rule this note recites was measured WRONG, not
+    merely the two halves' agreement on it. `115-VERIFICATION.md` reproduced a legacy
+    `$schema` surviving the pin on an `$id`-bearing embedded resource filed under a `$defs`
+    entry an author had NAMED `default` — the keys of a `properties` / `patternProperties` /
+    `$defs` / `definitions` / `dependentSchemas` map are author-chosen names, never keywords,
+    so the data-only exclusion must not be applied to them. The rewriter now mirrors the
+    corrected detector member-for-member (see `pin_dialect_in_member` below). Note the
+    consequence for the postcondition: because BOTH halves implement the same rule, a defect
+    IN the rule satisfies `first_legacy_dialect(&owned) == None` VACUOUSLY — measured, with
+    the pre-fix run reporting that postcondition as PASSING for the very documents that were
+    never rewritten. The `signature:` above is unchanged and stays byte-identical to the
+    source.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: first_legacy_dialect_in_member
+  module_path: pmcp::server::output_validation
+  signature: |-
+    fn first_legacy_dialect_in_member<'a>(
+        member_key: &str,
+        member_value: &'a Value,
+    ) -> Option<&'a str>
+  status: implemented
+  notes: >-
+    ADDED BY 115-14. `#[cfg(feature = "validation")]`. 115-14 POSITION CORRECTION, detector
+    half: the three-way decision on ONE object member's key — a `SUBSCHEMA_MAP_KEYWORDS` member
+    whose value is an object is a map of author-chosen names and every value is descended into;
+    a `DATA_ONLY_KEYWORDS` member is skipped; everything else (including a malformed subschema
+    map whose value is not an object) takes the ordinary walk. Mutually recursive with
+    `first_legacy_dialect`. Split out rather than inlined for a MEASURED reason: `pmat
+    quality-gate --fail-on-violation --checks complexity` (pmat 3.15.0, the PR-blocking CI gate)
+    reported 0 violations at the commit before 115-14 and, with the dispatch inline, 1 —
+    `pin_dialect_in_place` at cognitive 24 against a threshold of 23. Both halves were split so
+    they stay visibly mirror-image. The `signature:` above is a YAML block scalar, not the
+    file's usual one-line quoted form, because rustfmt wraps this declaration across four lines
+    at 100 columns; it is reproduced byte-for-byte from the shipped source rather than
+    normalized onto one line (ledger `D-115-F`). 115-14's plan text specified this signature
+    WITHOUT lifetimes, which does not compile — two input references and one borrowed output
+    make elision ambiguous. SCHM-01 / D-02.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: output_schema_draft_pin
+  function: pin_dialect_in_member
+  module_path: pmcp::server::output_validation
+  signature: "fn pin_dialect_in_member(member_key: &str, member_value: &mut Value)"
+  status: implemented
+  notes: >-
+    ADDED BY 115-14. `#[cfg(feature = "validation")]`. 115-14 POSITION CORRECTION, rewriter
+    half: the mirror image of `first_legacy_dialect_in_member`, mutually recursive with
+    `pin_dialect_in_place`. It is the function the complexity measurement above was ABOUT — the
+    inline form of this dispatch is what put `pin_dialect_in_place` at cognitive 24. Bound for
+    the same reason 115-12 bound the two walkers and 115-10 bound `compile_for_era` (ledger
+    entry J): it IS the mechanism, and the safety property the `output_schema_draft_pin`
+    invariants assert is a property of these two halves implementing the identical rule.
+    SCHM-01 / D-02.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin

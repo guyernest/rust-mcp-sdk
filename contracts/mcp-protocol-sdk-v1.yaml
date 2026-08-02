@@ -252,7 +252,13 @@ equations:
         = clone(s) with EVERY such $schema := DRAFT_2020_12, otherwise
         walk: a $schema key is a dialect declaration only when its value is a JSON string;
               descend into every member value EXCEPT const / enum / default / examples,
-              which carry INSTANCE DATA rather than subschemas
+              which carry INSTANCE DATA rather than subschemas;
+              BUT the values of properties / patternProperties / $defs / definitions /
+              dependentSchemas are maps from author-chosen names to subschemas, so every one
+              of those values is descended into unconditionally and the data-only exclusion
+              is NEVER applied to those maps' own keys — those keys are names, not keywords
+              (115-14: this clause previously specified the position-BLIND walk, under which
+              a $defs entry an author named `default` was visited by neither half)
       cache_key = (Era, canonical_json_text(schema))
       external $ref (http:// | https:// | file:// | relative under an http-scheme $id)
         => compile error on BOTH eras, zero network and zero filesystem I/O
@@ -264,8 +270,16 @@ equations:
       declares a legacy `$schema` (draft-04/06/07) — at the document root, OR on any
       embedded schema resource below it. An embedded schema resource is a subschema carrying
       its own `$id`; JSON Schema 2020-12 sanctions a `$schema` there and `jsonschema` 0.49.2
-      honours it. EVERY such declaration is normalized to the 2020-12 URI before compilation,
-      never honoured and never used as a vocabulary source
+      honours it. Such a resource is REACHED WHATEVER THE NAME of the `$defs` / `properties` /
+      `patternProperties` / `definitions` / `dependentSchemas` entry it is filed under: those
+      keys are author-chosen names, never keywords, so the const / enum / default / examples
+      exclusion does not apply to them. EVERY such declaration is normalized to the 2020-12
+      URI before compilation, never honoured and never used as a vocabulary source.
+      Measured failure, before 115-14: the document whose only difference from the enforced
+      control was the NAME of its `$defs` entry — `$defs.default` instead of `$defs.Inner` —
+      measured `(v1, v2) = (Conforms, Conforms)` with nothing rewritten, against the control's
+      `(Conforms, Violates)` with `rewritten=true`. The name-position clause of this invariant
+      is what that measurement forced
     - >-
       On Era::V1 the verdict for any (schema, instance) pair is byte-identical to the
       pre-Phase-115 verdict
@@ -282,14 +296,35 @@ equations:
       is a subschema, not a string), nor a `$schema` inside a `const` / `enum` / `default` /
       `examples` payload
     - >-
-      POSTCONDITION: after normalization no `$schema` string anywhere in the document — root or
-      any depth — is anything other than the Draft 2020-12 URI. This is the checkable form of
-      "on v2 the pin wins unconditionally"; the prose form was untestable, and the root-only
-      normalizer satisfied the prose while measurably failing this. Measured failure, before
-      115-12: with a legacy declaration on an embedded schema resource, `(v1, v2)` was
-      `(Violates, Conforms)` — v2 validating WEAKER than v1 (115-VERIFICATION.md). Asserted by
+      POSTCONDITION: after normalization no `$schema` string in any SCHEMA POSITION is anything
+      other than the Draft 2020-12 URI. SCHEMA POSITION means the root, plus every node
+      reachable by descending into every member value EXCEPT a `const` / `enum` / `default` /
+      `examples` payload — and the VALUES of a `properties` / `patternProperties` / `$defs` /
+      `definitions` / `dependentSchemas` map are always schema positions, regardless of the
+      author-chosen name they appear under. This is the checkable form of "on v2 the pin wins
+      unconditionally"; the prose form was untestable, and the root-only normalizer satisfied
+      the prose while measurably failing this. 115-14 SCOPE CORRECTION — the invariant
+      previously read "no `$schema` string anywhere in the document — root or any depth", an
+      UNSCOPED total that is false in two independent ways and unsatisfiable by any CORRECT
+      implementation: (i) a `$schema` inside a `const` / `enum` / `default` / `examples`
+      payload is instance DATA and must SURVIVE (115-REVIEW WR-01; the shipped code correctly
+      leaves it alone and is fenced doing so by
+      `normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone`), and (ii) the
+      position-blind walk never reached a subschema filed under a colliding author-chosen name.
+      Measured failures, kept as the record: before 115-12, with a legacy declaration on an
+      embedded schema resource, `(v1, v2)` was `(Violates, Conforms)` — v2 validating WEAKER
+      than v1 (115-VERIFICATION.md); before 115-14, `$defs.default` measured
+      `(Conforms, Conforms)` with `rewritten=false` against the control `$defs.Inner`'s
+      `(Conforms, Violates)` with `rewritten=true`. Asserted by
       `output_validation::tests::normalize_schema_dialect_changes_only_dollar_schema_keys` over
-      every fixed case, and re-stated independently in `fuzz_schema_draft_pin` by 115-13
+      every fixed case (which 115-14 extends with the `$defs.default` and `properties.examples`
+      cases) and by
+      `output_validation::tests::v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`,
+      which was OBSERVED to fail against the position-blind walkers before the fix landed. It is
+      re-stated in `fuzz_schema_draft_pin` by 115-13 — but note that a restatement of the same
+      RULE can only catch a detector/rewriter DISAGREEMENT, never a defect in the rule itself
+      (115-REVIEW WR-02); the independent instrument is the rename-invariance property 115-15
+      adds
     - >-
       Validation is warn-only on both eras: a mismatch never produces an error result and never
       panics
