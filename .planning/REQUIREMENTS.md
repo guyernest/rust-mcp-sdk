@@ -145,6 +145,152 @@ checkboxes a verifier can fail on.
 
 - [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.49, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
 
+> **CLOSED A FOURTH TIME 2026-08-02 — re-booked on measured evidence covering the `dependencies`
+> POSITION, by the `115-16` + `115-17` + `115-18` + `115-19` gap-closure set (plan round 3).** Every
+> block below is kept VERBATIM; none is deleted, because the sequence *is* the finding. (The downgrade
+> block's heading word is deliberately not repeated in THIS block either, so the `grep -c` count of
+> that word over this file stays at 1 — the check that proves the record was amended rather than
+> removed. That check was itself exercised this round, and the exercise is recorded in
+> `115-19-SUMMARY.md`: appending a sentence carrying the word made it read 2, removing the sentence
+> made it read 1 again. A guard nobody has seen fail is not a guard.)
+>
+> **This is the FOURTH booking of SCHM-01, and the third completeness gap in the same
+> allow/deny-list shape.** `115-15`'s `[x]` was ACCURATE for what it measured — the five keywords
+> then in `SUBSCHEMA_MAP_KEYWORDS`, every one of which it fenced and observed firing. What moved is
+> the level at which the requirement failed: rounds 1 and 2 were defects in the traversal RULE
+> (root-only, then position-blind); this one is a defect in the LIST'S MEMBERSHIP, under a rule that
+> is correct. Every fence `115-15` built enumerated that same constant, so an omission FROM it was
+> invisible to all of them — `115-REVIEW.md` CR-01's sharpest sentence, and the reason this round's
+> instruments carry their own literals.
+>
+> **The defect.** `SUBSCHEMA_MAP_KEYWORDS` omitted `dependencies` — draft-04 / -06 / -07 and
+> 2019-09's own map-from-instance-property-NAME-to-subschema keyword, still declared (deprecated) by
+> the 2020-12 meta-schema. This module's OWN `fuzz_support_tests` comment already recorded the
+> measurement that makes its values live schema positions (`D-115-03-C`: `jsonschema` 0.49.2 still
+> HONOURS `dependencies` under the pin). The two statements contradicted each other for two plans.
+> Measured through the `output_validation::fuzz_support` seam: `dependencies.Inner` →
+> `rewritten=true` against **`dependencies.default` → `rewritten=false`**, so on the second the
+> normalizer returned `Cow::Borrowed`, the legacy declaration survived, and `compile_2020_12`'s
+> `tracing::warn!` — the only D-02 diagnostic a tool author gets — silently did not fire.
+>
+> **And, stated plainly because it is what makes this round different from the previous three: NO v2
+> verdict flip is reproducible at that position.** Both `dependencies.Inner` and
+> `dependencies.default` measure **`(Violates, Violates)`** on the pinned `jsonschema` 0.49.2 —
+> measured independently by the reviewer, the verifier and `115-16` — whereas rounds 1 and 2 each
+> demonstrated a real accept-everything `(Conforms, Conforms)` bypass. That is precisely why the
+> fence here had to be **STRUCTURAL**: the `Cow` borrow/own decision (which is also exactly what
+> `compile_2020_12` branches on to emit its diagnostic, so asserting `Owned` covers the suppressed
+> warning without a `tracing` subscriber) plus the rewritten pointer
+> `/{container}/{name}/$schema == DRAFT_2020_12`. A BEHAVIOURAL assertion at this position would have
+> PASSED against the defective code — a fence that cannot fire, which is the exact failure mode this
+> requirement shipped three times.
+>
+> **The DERIVATION that bounds the fix, rather than a fourth patch of the one case a reviewer found.**
+> The subschema-map keywords are the UNION, over the draft-04 / draft-06 / draft-07 / 2019-09 /
+> 2020-12 meta-schema documents `jsonschema` 0.49.2 ships OFFLINE, of the keywords each meta-schema's
+> own `.properties` map binds to an OBJECT-typed schema whose `additionalProperties` REFERENCES THE
+> META-SCHEMA ITSELF (`{"$ref":"#"}`, `{"$recursiveRef":"#"}`, `{"$dynamicRef":"#meta"}`, or an
+> `anyOf` carrying such a branch). `$vocabulary` (boolean values — vocabulary enablement flags) and
+> `dependentRequired` (string-array values — lists of property names) are excluded by that same
+> criterion. The union is **exactly six**, and `dependencies` was the only omission. Re-run offline,
+> on this tree, in one command:
+>
+> ```bash
+> MS="$(ls -d "$HOME"/.cargo/registry/src/*/jsonschema-0.49.2)/metaschemas"
+> find "$MS" -name '*.json' | while read -r f; do
+>   jq -r --arg f "${f#$MS/}" '(.properties // {}) | to_entries[]
+>     | select((.value|type)=="object") | select(.value.additionalProperties != null)
+>     | "\($f)\t\(.key)"' "$f"
+> done | sort -u
+> ```
+>
+> Run by `115-19` against the closed tree: it reproduces `115-16`'s table exactly — the six plus the
+> two rejects, and nothing else. The `(.value|type)=="object"` guard is load-bearing: `draft7.json`
+> binds `default` and `const` to booleans, and an unguarded `.value.type` exits 5 with the error on
+> stderr and NOTHING on stdout, which is that criterion's own pass condition (`D-115-AE`'s shape).
+>
+> **The fences, by name, with counts and gate visibility:**
+>
+> | Fence | Where | Count / state |
+> |---|---|---|
+> | `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map` — 6 containers × 4 colliding names, iterating its OWN literal, violations COLLECTED not first-abort | `mod tests`, feature `validation` — **gate-visible** | in the **20** `output_validation::tests` |
+> | `keyword_lists_are_disjoint` (`115-REVIEW.md` WR-05's silent precondition) | same | same **20** |
+> | `keyword_lists_mirror_the_shipped_ones` (compiled, ORDERED-slice equality against the `fuzz_support` seam) + the widened six-way `arb_container()` with a superset guard | `tests/property_tests.rs`, `--features "full fuzzing"` | **21** vs **18** under `full`; coverage floor measured at **21 of 260** draws reaching `dependencies` × a colliding name × a legacy dialect, all **6** containers drawn |
+> | fuzz **invariant 6** plus seed `15_dependencies_named_default` (CR-01's reproduction document, committed) | `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | **15** tracked seeds; `-runs=0` replay exit 0 (20 098 runs); `-max_total_time=300` → **3 614 479** runs, exit 0, artifacts dir EMPTY |
+> | **`keyword_list_mirrors`** — the featureless source-text drift gate over ALL THREE literal copies plus the meta-schema-derived expectation | `tests/keyword_list_mirrors.rs`, NO feature flag — **inside `make quality-gate`**, confirmed by the gate transcript running it | **2** |
+>
+> **EVERY negative control observed this round, with the instrument that fired named — because an
+> unfired fence is not evidence, and `D-115-AF` adds: check WHICH fence fired.**
+>
+> 1. `115-16`, pre-fix, list at five: **17 passed / 2 failed**, exactly the two predicted. The
+>    container fence's COLLECTED violation vec contained **exactly the four `dependencies` pairs and
+>    no pair from the other five containers**, and it fired through the sweep, not through the
+>    `contains(&"dependencies")` guard asserted after it.
+> 2. `115-16` Task 2, `"default"` appended to `SUBSCHEMA_MAP_KEYWORDS`: exactly ONE test failed, and
+>    it was `keyword_lists_are_disjoint`.
+> 3. `115-16` Task 2, seam re-export drifted to a stale five-entry literal: **25 passed, exit 0** —
+>    a control that PASSED, and that pass is the finding. Nothing in `src/` catches seam drift; it is
+>    the measured justification for the two gates that followed.
+> 4. `115-17` Control A (mirror stale, crate correct): 2 failures — the mirror gate, and the surgical
+>    scope assertion on a drawn `dependencies` container. Control B (crate stale, mirror correct): 3
+>    failures including dialect purity reaching `/dependencies/…`. Control C (BOTH blind): the mirror
+>    gate PASSED — the independent proof the control was genuinely both-blind — and
+>    `property_normalization_does_not_depend_on_a_subschema_map_key_name` FAILED with a shrunk
+>    counterexample at container `dependencies`, name `const`.
+> 5. `115-18` Control D (crate stale, fuzz mirror correct): exit 77, **invariant 5**, with
+>    `normalized to:` byte-identical to `Input was:`. Control E (same, invariant 5 silenced so it
+>    cannot mask): exit 77, **invariant 6**, at `container: dependencies, name: default` — the reach
+>    measured directly rather than inferred.
+> 6. `115-19`'s three drift-gate controls: one copy shortened → the message NAMES that file (run for
+>    the fuzz copy and again for the property copy); all three shortened in lockstep → assertion 1
+>    passes and the DERIVATION-anchored assertion 2 fires; the constant renamed → *"expected EXACTLY
+>    ONE definition … found 0"* naming that file, rather than a vacuous pass over an empty extraction.
+>
+> **The measured LIMITS, recorded rather than implied.**
+> (i) `115-18` Control F: with the omission SHARED by the crate and the fuzz mirror — the pre-`115-16`
+> world — the fuzz target exits **0** and nothing fires. **A green fuzz run is therefore not evidence
+> that a keyword-list omission is absent.** In that same tree the `src`-side own-literal fence was run
+> and OBSERVED to fail at `output_validation.rs:1429`, so the covering mechanism is discharged by an
+> instrument rather than by assertion; `keyword_list_mirrors` is the second, and it is what would
+> catch the two lists being shortened together in the first place.
+> (ii) The walk remains NAME-DEPENDENT under an author-invented container: `{"components":
+> {"default": …}}` measures `rewritten=false`. A deny-list over an open keyword space cannot be
+> completed. This is BOOKED, not fixed — `D-115-AK` — and the durable fix (the INVERSE walk) was
+> declined by `115-14` with a stated reason. It is now named in three places: the module rustdoc, the
+> contract postcondition, and the ledger.
+>
+> **The whole-closure gate, run over the closed tree BEFORE this block was written (`115-19` Task 3).**
+> `/usr/bin/make quality-gate` exit **0** — 5060 passed / 0 failed / 81 ignored across 312 `test
+> result:` lines, with `keyword_list_mirrors` visible in that run. `pmat quality-gate
+> --fail-on-violation --checks complexity` exit **0**, **0 violations** (`D-115-AE`: `pmat analyze
+> complexity --max-cognitive 25` does NOT reproduce this gate). SCHM-02 and SCHM-03 are NOT reopened
+> and their records are referenced, not rewritten: re-measured unregressed at exactly **78/78**
+> across `structured_tool_output` 20, `v2_caching_hints` 19, `v1_lists_golden` 7,
+> `v2_schema_tripwires` 13, `v2_core_schema_facts` 8, `vendored_schema_provenance` 6,
+> `phase115_contract_bindings` 5. This round's own counts all matched: `output_validation::tests`
+> **20**, `output_validation` under `"full fuzzing"` **25**, `binary(property_tests)` **21** vs **18**
+> under `full`, `binary(keyword_list_mirrors)` **2**. No `Cargo.toml` / `Cargo.lock` anywhere in the
+> `115-16`..`115-19` closure diff, **0** new `pub fn` / `pub struct` / `pub enum` under `src/`, and
+> exactly **2** new `pub const` lines, both inside `pub mod fuzz_support` which the `fuzzing` feature
+> keeps off `cargo public-api`.
+>
+> **One gate run was DISCARDED rather than normalized, and that is recorded here because a
+> disappearing red run is how a phase talks itself into a green one.** The first `make quality-gate`
+> exited **2** on `tests/tool_as_task_lifecycle_http.rs` — both tests panicking at
+> `src/shared/streamable_http.rs:458` on `Failed to load native root certificates … Os(Error { code:
+> -36 })`, a macOS keychain trust-settings I/O error at a PRE-EXISTING `.expect` in production code,
+> touched by nothing in this closure. The identical binary, unchanged, passed standalone immediately
+> afterwards, and the re-run of the whole gate exited 0. Booked as `D-115-AL`.
+>
+> **Provenance.** This closure is the owner's selected option **(a)** on Gap 1 and the doc **fix** on
+> Gap 2, both recorded in `115-HUMAN-UAT.md` (Guy Ernest, 2026-08-02) — NOT an override. The owner's
+> `115-10` sign-off (2026-08-01, commit `496da96b`) predates `115-REVIEW.md` and is expressly not read
+> as covering CR-01; nothing here relies on it. The Phase 115 ROADMAP marker deliberately stays `[~]`
+> and `115-VERIFICATION.md` is untouched — scoring this closure is `/gsd:verify-phase 115`'s job, and
+> this block is the evidence it should score. **The marker was written AFTER every command above had
+> run and every count had matched; had any exited non-zero it would read `[~]` with the failing
+> command named** — which, on this requirement, is the whole point.
+
 > **CLOSED AGAIN 2026-08-02 — re-booked on POST-FIX measured evidence covering the COLLIDING-NAME
 > case, by the `115-14` + `115-15` gap-closure pair (round 2).** Both blocks below are kept
 > VERBATIM. The one immediately following is `115-13`'s closure record; the one after it is the
@@ -637,7 +783,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-04 | Phase 114 | Implemented — pending final schema |
 | TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
 | TASK-06 | Phase 114 | Implemented — pending final schema |
-| SCHM-01 | Phase 115 | Complete — gap closed in two rounds: 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) then 115-14 + 115-15 (POSITION-AWARE traversal — `SUBSCHEMA_MAP_KEYWORDS`, so a keyword deny-list is never tested against a key in NAME position; `$defs.default` now `(Conforms, Violates)`, `rewritten=true`; rename-invariance fences in both generators, derived from the spec rather than restated from the crate's keyword lists) |
+| SCHM-01 | Phase 115 | Complete — gap closed in two rounds: 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) then 115-14 + 115-15 (POSITION-AWARE traversal — `SUBSCHEMA_MAP_KEYWORDS`, so a keyword deny-list is never tested against a key in NAME position; `$defs.default` now `(Conforms, Violates)`, `rewritten=true`; rename-invariance fences in both generators, derived from the spec rather than restated from the crate's keyword lists) then 115-16 + 115-17 + 115-18 + 115-19 (COMPLETENESS — `SUBSCHEMA_MAP_KEYWORDS` omitted `dependencies`, so `dependencies.default` measured `rewritten=false` with no `tracing::warn!`; the list is now the SIX keywords DERIVED from the pinned meta-schemas rather than hand-kept, fenced STRUCTURALLY because no v2 verdict flip is reproducible there — both names are `(Violates, Violates)` — and all three literal copies of both keyword lists are held to that derivation by `tests/keyword_list_mirrors.rs`, the featureless source-text drift gate WR-01 asked for; residual `components.default` → `rewritten=false` booked unowned as `D-115-AK`) |
 | SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |

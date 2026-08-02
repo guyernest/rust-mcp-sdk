@@ -1290,3 +1290,171 @@ re-unified by a future reader.
 
 **Owner:** 115-18 — (1)–(3) worked around and recorded, (5) verified and documented in the shipped
 code. **Residual, unowned:** item (4), the two clippy-dirty fuzz targets.
+
+## D-115-AK — the round-3 `115-REVIEW.md` findings this closure does not own, and the residual it cannot close
+
+**Filed by:** 115-19. Eleventh entry in the two-character scheme (`AH` is 115-16's, `AI` 115-17's,
+`AJ` 115-18's — all three consumed the IDs the ROADMAP originally reserved for THIS triage, and
+`115-18-SUMMARY.md` instructs continuing at `AK`).
+
+This entry exists so a future reader can tell **"not fixed"** from **"not noticed"**, and it covers
+ALL TEN findings of the round-3 review — not just the leftovers. `115-VERIFICATION.md` booked the
+absence of such a triage as an anti-pattern, the first break in three rounds of the convention; this
+closes it.
+
+### Discharged, with the mechanism named
+
+| Finding | Severity | Discharged by |
+|---|---|---|
+| CR-01 | Critical | `115-16`: `"dependencies"` added to `SUBSCHEMA_MAP_KEYWORDS`, established by DERIVATION over the five pinned meta-schema documents rather than by patching the reviewed case, and fenced by `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map` — 6 containers × 4 colliding names, iterating its OWN literal, OBSERVED to fail on exactly the four `dependencies` pairs and no other container. Propagated to both restated mirrors by `115-17` and `115-18`, each with its reach kept independent of the list under test. |
+| WR-01 | Warning | `115-19`: `tests/keyword_list_mirrors.rs`, a FEATURELESS source-text gate over all three literal copies of both lists, comparing them as ORDERED sequences **and** against the meta-schema-derived expectation. The first half catches the "one copy lags/leads" mode; the second catches the LOCKSTEP-removal mode, which no mirror check can see. Partially discharged earlier by `115-16`'s `fuzz_support` seam re-exports and `115-17`'s compiled `keyword_lists_mirror_the_shipped_ones` — but `115-16` MEASURED that the seam alone leaves the suite green at 25, so the seam is an affordance and the gates are the guarantee. |
+| WR-02 | Warning | `115-16`: `normalization_cases()` rows (i) `patternProperties.default`, (j) `dependentSchemas.default`, (k) `definitions.default` — the two keywords in the list since 115-14 and exercised by nothing — plus `115-17`'s six-way `arb_container()`, which makes all six containers drawable for the first time (measured: 6 of 6 drawn, 70 distinct container×name combinations). |
+| WR-03 | Warning | `115-18`: both surviving copies of the retracted `TOTAL — no skip condition` claim retired from `assert_no_legacy_dialect_survives`'s rustdoc and the `fuzz_target!` call site. (Distinct from round-1 WR-03, the fragment-suffixed 2020-12 URI, which remains open under `D-115-AC`.) |
+| WR-04 | Warning | `115-19` Task 2: the `output_schema_draft_pin` equation head rescoped to the `walk:` clause it introduces (both carriers of the retracted total gone from the file), the walk clause / name-position invariant / POSTCONDITION brought to six keywords, and the three `binding.yaml` note heads rewritten so the FIRST sentence a reviewer reads is the corrected one, with the existing CORRECTION paragraphs kept below as changelog. |
+| WR-05 | Warning | **HALF.** `115-16` added `keyword_lists_are_disjoint`, with an observed negative control — the two differently-shaped member dispatches silently depend on that disjointness. The other half is unowned; see below. |
+| WR-06 | Warning | `115-17` for `tests/property_tests.rs` and `115-18` for the fuzz copy: the false-positive risk is now attributed to the SCAN only. `115-18` confirmed it by measurement — on a stale-mirror input, invariant 2 (which uses the strip on BOTH sides) PASSED and invariant 5 (the scan) fired. Both corrections PARAPHRASE the falsified sentence rather than quote it, because the plans' own grep criteria require the literal gone; the verbatim text lives in `115-REVIEW.md` WR-06. |
+
+### Unowned
+
+| Finding | Severity | File | Subject |
+|---|---|---|---|
+| WR-05 (remaining half) | Warning | `src/server/output_validation.rs` — the detector at the `first_legacy_dialect_in_member` dispatch vs the rewriter at `pin_dialect_in_member` | The detector is a `match` whose first arm guards on the VALUE kind and the key class together; the rewriter is an `if`-chain testing the KEY class first and the value kind second. The rustdoc claims both halves were split "so the two remain visibly mirror-image; a reader comparing them should be comparing like with like", which the current shapes do not deliver. They agree today only because the two lists are disjoint — now asserted — so this is a READABILITY and future-edit-safety item, not a live defect. Deliberately not done by `115-16`: it touches both walkers' bodies, and reshaping production code inside a booking round is how a closure acquires an unfenced change. The two RESTATED copies both use the rewriter's `if`-chain shape, so they mirror one half and not the other. **unowned.** |
+| IN-01 | Info | `tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | `Vec<&&str>` in the restated collectors, purely to satisfy `{:?}`. Both copies sit OUTSIDE every lint gate — `fuzz/` is workspace-excluded (`D-115-AB`) and the property copy is behind `feature = "fuzzing"`, which is in neither `default` nor `full`. Cosmetic; recorded because "no gate can see it" is the interesting half. **unowned.** |
+| IN-02 | Info | `src/server/output_validation.rs` (the two `*_in_member` rustdocs), `contracts/binding.yaml` | Three places justify the member-helper extraction — and instruct "do not inline either back" — with *"cognitive 24 against a threshold of 23"*. `CLAUDE.md` documents the CI cap as ≤25 and the gate runs `pmat quality-gate --checks complexity` with no threshold flag, so 23 appears nowhere in the gate configuration. `D-115-AE` records the countervailing MEASUREMENT: the real gate did fail at cognitive 24 where `pmat analyze complexity --max-cognitive 25` reported zero violations, so the number is not invented — it is pmat's RECOMMENDED threshold rather than the project's documented one, and the rustdoc does not say which. Fix is to cite the reproducible command and its output. **unowned.** |
+| IN-03 | Info | `tests/property_tests.rs` (`disambiguate()`) | Maps a drawn name `"n"` to `"n_resource"` unconditionally, though the collision it guards exists only when `container == "properties"` — the only case where `embed_resource()` puts the resource and the `$ref` holder in the same map. For the other five containers the name `"n"` is safe and is now unreachable in the generated space. A narrowing of coverage, not a defect. **unowned.** |
+
+### The residual this closure cannot close, and the fix that was declined
+
+**The walk stays NAME-DEPENDENT under an author-invented container.** Measured, unchanged by this
+round: `{"components": {"default": {"$id": ..., "$schema": "...draft-07...", ...}}}` →
+`rewritten=false`. The six keywords are the complete set the JSON Schema meta-schemas DEFINE as
+subschema maps, so the derivation is finished — but the walk applies `DATA_ONLY_KEYWORDS` to the
+keys of every OTHER object node, including nodes that are not schemas at all. **A deny-list over an
+open keyword space cannot be completed**, and no further enumeration will close this.
+
+The durable fix is the INVERSE walk: descend only into positions the JSON Schema core and applicator
+vocabularies DEFINE as subschemas, and treat everything else as opaque. `115-14` declined it with a
+stated reason that still holds — it would REDUCE what is normalized, including under vendor
+container keywords that really do hold subschemas, and the current walk is deliberately a SUPERSET of
+what `jsonschema` honours within the positions it does reach. Round-1 `WR-04`'s recommendation and
+`D-115-AD`'s row on it are the same argument; this is its third recording and it is still **unowned**.
+
+What changed is that the boundary is now STATED in three places instead of none: the
+`SUBSCHEMA_MAP_KEYWORDS` rustdoc (115-16), the `output_schema_draft_pin` POSTCONDITION's `115-16
+COMPLETENESS CORRECTION` (115-19), and here. A contract that hides its own boundary is the pattern
+this four-round closure exists to end.
+
+**Owner:** none. Every row above is deliberately left for a future phase, and the residual is
+cross-referenced from `D-115-AD`.
+
+## D-115-AL — this round's process outcome, the standing rules it can be cited for, and a gate failure that was NOT normalized
+
+**Filed by:** 115-19. Twelfth entry in the two-character scheme.
+
+### (1) The whole-closure gate, with exit codes and counts
+
+| Command | Result |
+|---|---|
+| `/usr/bin/make quality-gate` | exit **0** — 5060 passed / 0 failed / 81 ignored across 312 `test result:` lines, with `keyword_list_mirrors` visible in the transcript running its 2 tests |
+| `pmat quality-gate --fail-on-violation --checks complexity` | exit **0**, **Total violations: 0** |
+| the seven SCHM-02/SCHM-03 binaries | **78 tests run: 78 passed** — 20 / 19 / 7 / 13 / 8 / 6 / 5, matching `115-VERIFICATION.md` exactly |
+| `output_validation::tests` (`--features full`) | **20** |
+| `output_validation` (`--features "full fuzzing"`) | **25** |
+| `binary(property_tests)` | **21** under `"full fuzzing"`, **18** under `full` |
+| `binary(keyword_list_mirrors)` | **2**, and **2** again under a bare featureless `cargo test --test keyword_list_mirrors` |
+| `python3` PyYAML `safe_load` over both contract files | `yaml ok`, exit 0 |
+| `binary(phase115_contract_bindings)` | **5 passed** |
+| closure-wide `git diff c350cb53~1 HEAD` | **0** `Cargo.toml`/`Cargo.lock` lines, **0** new `pub fn`/`pub struct`/`pub enum` under `src/`, exactly 2 new `pub const` (both inside `pub mod fuzz_support`) |
+
+**Final SCHM-01 marker: `[x]`**, written after every command above had run and every count had
+matched. No command exited non-zero at booking time, so no `[~]` was required.
+
+### (2) A `make quality-gate` run that exited 2 and was DISCARDED — with the discard justified rather than assumed
+
+The FIRST run of the whole-closure gate exited **2**. `tests/tool_as_task_lifecycle_http.rs` —
+`live_http_cross_owner_isolation` and
+`live_http_round_trip_typed_lifecycle_id_consistency_and_capability` — both panicked at
+`src/shared/streamable_http.rs:458`:
+
+```
+Failed to load native root certificates: Custom { kind: NotFound, error: "no native root CA
+certificates found (errors: [... kind: Os(Error { code: -36, message: \"I/O error.\" }) ...])" }
+```
+
+macOS keychain trust-settings I/O error (`ioErr -36`) at a **PRE-EXISTING** `.expect` in production
+code, in a file no plan in this closure touches. Verified before discarding, not after: the
+IDENTICAL test binary (`tool_as_task_lifecycle_http-cc836a23396b9623`, unchanged, no rebuild) ran
+standalone immediately afterwards and reported **2 passed**; free space was 47 Gi both before and
+after (`D-115-0`'s disk-exhaustion shape checked and ruled out); and the full gate was then re-run
+end to end and exited 0.
+
+**Recorded because a red gate run that disappears from the record is how a phase talks itself into a
+green one** — the same discipline `115-18` applied when it declined to rewrite a historical
+measurement to satisfy a grep criterion. The underlying `.expect` is real production behaviour
+(`StreamableHttpTransport::new` panics rather than erroring when the platform trust store is
+unreadable) and is **unowned** — it belongs to whoever owns the transport, not to a schema phase.
+
+### (3) The standing rules this round paid for, stated so they can be cited
+
+- **A marker is written AFTER its measurement, never before.** `D-115-G`, and its two recurrences on
+  this very requirement. `115-16`, `115-17` and `115-18` each left `.planning/REQUIREMENTS.md` a
+  0-byte diff and did not run `requirements mark-complete`; only `115-19`, after both gates exited 0,
+  touched it.
+- **A fence that RESTATES the implementation's rule is not evidence about that rule.** `115-15`'s
+  finding, unchanged.
+- **An unfired fence is not evidence — and when one fires, check WHICH fired.** `D-115-AF`.
+- **NEW, and this round's own: a fence parameterised by the LIST whose incompleteness IS the defect
+  cannot fire on that defect.** That is why `115-16`'s container fence carries its own six-element
+  literal, why `115-17`'s `CONTAINER_DRAW` is an own literal rather than the gated mirror, why
+  `115-18` kept the fuzz copy an independent literal, and why `keyword_list_mirrors` anchors to a
+  DERIVATION rather than to the other two copies. `115-17` proved the point the expensive way: it
+  implemented its plan's instruction literally, sourcing the container draw from the gated mirror,
+  and every negative control reported `21 passed`.
+- **A grep-shaped criterion over a file also constrains what that file may SAY about the criterion.**
+  Third and fourth instances this round: `115-19`'s new test rustdoc quoted the very
+  `grep -c 'use pmcp'` pattern its own criterion forbids (count 1, expected 0 — fixed by rephrasing
+  the heading, intent untouched), and the contract's `115-14 SCOPE CORRECTION` quoted the retracted
+  `root or any depth` wording that a whole-file grep criterion requires absent. The latter was
+  resolved the way `115-17`/`115-18` resolved theirs: PARAPHRASE the retracted claim and point at
+  `115-REVIEW.md` for the verbatim text, so the record survives without the literal. `D-115-1`,
+  `D-115-AH(1)`, `D-115-AI(1)`.
+
+### (4) The fuzz target's measured blind spot, and what covers it
+
+`115-18` Control F: with `dependencies` removed from BOTH `src/` and the fuzz mirror — the
+pre-`115-16` world — the target exits **0** on the seed that reproduces CR-01 and no invariant fires.
+Every fence goes quiet for a stateable reason: the strip is symmetric so invariant 2 passes, the scan
+skips exactly what the walk skipped so invariant 5 passes VACUOUSLY, invariant 6 never selects the
+container because its selection reads that file's list, and invariant 3 skips the document because
+`dependencies` is not dialect-neutral.
+
+**A green fuzz run is therefore NOT evidence that a keyword-list omission is absent.** Two mechanisms
+cover it, and both were measured rather than named: `src`'s own-container-literal fence, run in that
+same both-blind tree and OBSERVED failing at `output_validation.rs:1429`; and
+`tests/keyword_list_mirrors.rs`, whose lockstep control is the direct instrument for the shared
+omission. **That makes `keyword_list_mirrors` load-bearing in a documented way — if it is weakened,
+this residual becomes unowned.**
+
+### (5) Two plan-text predictions this round measured as wrong
+
+- **The contract-corruption control.** `115-19`'s criterion predicts that
+  `binary(phase115_contract_bindings)` still PASSES over a YAML file whose block-scalar indentation
+  is corrupt, "because it hand-parses line-wise". Measured BOTH ways. De-indenting one formula line
+  to **column 5** (the level of `formula:` itself): PyYAML exits non-zero with
+  `ScannerError … line 249, column 5 / could not find expected ':'` while the bindings gate reports
+  **5 passed** — the predicted contrast, and the justification for adding the PyYAML check. But
+  de-indenting the same line to **column 1**: the bindings gate ALSO fails, and instructively — it
+  reports `result_caching_hints` and `structured_content_shape` as bound-but-undefined, i.e. it lost
+  every equation defined AFTER the corruption point while `output_schema_draft_pin`, defined before
+  it, still resolved. So the line-wise reader has PARTIAL, position-dependent sensitivity to YAML
+  damage, which is worse than none for a reader who assumes it has either.
+- **The ledger IDs and the ROADMAP bookkeeping the plan asked for already existed.** The plan
+  instructs `115-19` to file at `D-115-AH`/`D-115-AI`, to change `**Plans**: 15 plans` to 19, and to
+  ADD a round-3 heading. `AH`/`AI`/`AJ` were consumed by 115-16/17/18 (each booking its own measured
+  deviations, which is correct), and the `19 plans` line and the round-3 heading were already written
+  when round 3 was planned. Only the two `[ ]` plan lines needed flipping. Same shape as
+  `D-115-AG(2)`, third occurrence — **a plan's instruction to file at a specific ledger ID is a
+  prediction about the future, and this phase has now falsified it three rounds running.**
+
+**Owner:** 115-19 for (1), (3) and (5). **Residual, unowned:** the `streamable_http.rs:458` `.expect`
+in (2); the two clippy-dirty fuzz targets `D-115-AJ(4)` records, which no repository gate can see.
