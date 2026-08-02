@@ -47,6 +47,11 @@ exclude = [
     # contracts/mcp-protocol-sdk-v1.yaml at runtime and panics when they are
     # absent, which is exactly what a published-crate `cargo test` would hit.
     "tests/phase115_contract_bindings.rs",
+    # Same reason once more: the keyword-list drift gate reads
+    # fuzz/fuzz_targets/fuzz_schema_draft_pin.rs at runtime to compare the third
+    # restated copy of SUBSCHEMA_MAP_KEYWORDS, and `fuzz/` is excluded above.
+    # Shipping it would make `cargo test` panic on the published crate.
+    "tests/keyword_list_mirrors.rs",
     # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",
