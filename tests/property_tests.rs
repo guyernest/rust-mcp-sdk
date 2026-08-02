@@ -843,12 +843,24 @@ mod structured_output_invariants {
 }
 
 /// `$schema` normalization held over arbitrary generated schemas (115-09,
-/// SCHM-01).
+/// SCHM-01; widened by 115-13).
 ///
-/// `src/server/output_validation.rs` fences normalization with four FIXED
-/// documents (`normalize_schema_dialect_changes_only_the_root_dollar_schema`
-/// and `..._is_idempotent`). This is the correct generalization of those two:
-/// idempotence and surgical scope over arbitrary input.
+/// `src/server/output_validation.rs` fences normalization with five FIXED
+/// documents (`normalize_schema_dialect_changes_only_dollar_schema_keys` and
+/// `..._is_idempotent`). This is the correct generalization of those two:
+/// idempotence, surgical scope and post-normalization dialect PURITY over
+/// arbitrary input.
+///
+/// # The normalizer's scope is the whole document, not the root
+///
+/// `normalize_schema_dialect` rewrites EVERY string-valued `$schema` at ANY
+/// depth (115-12). Until then it rewrote only the root key, and this module
+/// could not have noticed: `arb_schema_document()` stripped every non-root
+/// `$schema` before generating, so the generated space structurally excluded
+/// the `$id`-bearing EMBEDDED SCHEMA RESOURCE — the one shape 2020-12 sanctions
+/// a nested declaration on, and the one `115-VERIFICATION.md` reproduced the
+/// vacuous-validator bypass with. The generator now EMITS that shape and the
+/// property asserts over it.
 ///
 /// # Why this module is `fuzzing`-gated, and why that is deliberate
 ///
@@ -880,14 +892,34 @@ mod schema_dialect_normalization_properties {
     /// The Draft 2020-12 meta-schema URI the v2 pin rewrites to.
     const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
-    /// An arbitrary JSON OBJECT usable as a schema document, sometimes carrying
-    /// a root `$schema` drawn from a spread of real and invented draft URIs.
+    /// Keywords whose VALUE is instance data rather than a subschema.
     ///
-    /// The body comes from the crate's existing `arb_json()` strategy; only the
-    /// dialect declaration is generated here, because that is the single key
-    /// the normalizer is allowed to touch.
-    fn arb_schema_document() -> impl Strategy<Value = serde_json::Value> {
-        let dialect = prop_oneof![
+    /// Mirrors `DATA_ONLY_KEYWORDS` in `src/server/output_validation.rs`. The
+    /// shipped walk never descends into these — a `$schema` string inside a
+    /// `const`/`enum`/`default`/`examples` payload is DATA, and rewriting it
+    /// would change which instances conform — so neither do the strip and the
+    /// scan below. Restating the rule here rather than guessing at it is what
+    /// keeps this property an assertion about the SHIPPED normalizer.
+    const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
+
+    /// The `$id` of the generated embedded schema resource.
+    ///
+    /// `example.test` is a reserved, NON-RESOLVABLE host. An `$id` establishes a
+    /// base URI without any fetch, and SEP-2106 forbids I/O anywhere on this
+    /// path — so this value can never become an outbound request even if a
+    /// retriever were somehow compiled in. Every `$ref` this module generates is
+    /// a LOCAL JSON pointer (`#/$defs/Inner`) for the same reason.
+    const EMBEDDED_RESOURCE_ID: &str = "https://example.test/inner";
+
+    /// The seven-way spread of dialect declarations: absent, the four legacy
+    /// drafts, 2020-12 itself, and an invented URI.
+    ///
+    /// Drawn INDEPENDENTLY for the root and for the embedded resource, so every
+    /// combination of the two is reachable — including the pair
+    /// `115-VERIFICATION.md` measured as `(Violates, Conforms)` before 115-12
+    /// (root draft-07 + an embedded draft-07 resource).
+    fn arb_dialect() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
             Just(None),
             Just(Some("http://json-schema.org/draft-04/schema#".to_string())),
             Just(Some("http://json-schema.org/draft-06/schema#".to_string())),
@@ -897,39 +929,139 @@ mod schema_dialect_normalization_properties {
             )),
             Just(Some(DRAFT_2020_12.to_string())),
             "[a-z]{2,6}://[a-z.]{2,10}/[a-z]{2,8}".prop_map(Some),
-        ];
-        (arb_json(), dialect).prop_map(|(body, dialect)| {
-            let mut object = match body {
-                serde_json::Value::Object(map) => map,
-                // A non-object body still makes a usable document once wrapped:
-                // `const` takes an arbitrary value in every draft.
-                other => {
-                    let mut map = serde_json::Map::new();
-                    map.insert("const".to_string(), other);
-                    map
-                },
-            };
-            // `arb_json` never generates a `$schema` key, but removing it first
-            // keeps the injected declaration the ONLY one, whatever that
-            // strategy grows into later.
-            object.remove("$schema");
-            if let Some(uri) = dialect {
-                object.insert("$schema".to_string(), serde_json::Value::String(uri));
-            }
-            serde_json::Value::Object(object)
-        })
+        ]
+    }
+
+    /// An arbitrary JSON OBJECT usable as a schema document, sometimes carrying
+    /// a root `$schema` drawn from a spread of real and invented draft URIs, and
+    /// sometimes carrying an `$id`-bearing EMBEDDED SCHEMA RESOURCE with its own
+    /// independently-drawn declaration.
+    ///
+    /// The body comes from the crate's existing `arb_json()` strategy; the
+    /// dialect declarations and the embedded resource are generated here,
+    /// because those are the only keys the normalizer is allowed to touch.
+    fn arb_schema_document() -> impl Strategy<Value = serde_json::Value> {
+        (arb_json(), arb_dialect(), arb_dialect(), any::<bool>()).prop_map(
+            |(body, dialect, nested_dialect, embed)| {
+                let mut object = match body {
+                    serde_json::Value::Object(map) => map,
+                    // A non-object body still makes a usable document once
+                    // wrapped: `const` takes an arbitrary value in every draft.
+                    other => {
+                        let mut map = serde_json::Map::new();
+                        map.insert("const".to_string(), other);
+                        map
+                    },
+                };
+                // `arb_json` never generates a `$schema` key, but removing it
+                // first keeps the INJECTED declarations the only ones, whatever
+                // that strategy grows into later. The nested declaration below
+                // is injected deliberately rather than removed accidentally —
+                // that accidental removal is what made this generated space
+                // unable to contain the 115-12 defect.
+                object.remove("$schema");
+
+                if embed {
+                    let mut inner = serde_json::Map::new();
+                    // The `$id` is what makes this an EMBEDDED SCHEMA RESOURCE
+                    // rather than an inert subschema: 2020-12 sanctions a
+                    // `$schema` at the root of one, and `jsonschema` 0.49.2
+                    // honours it there.
+                    inner.insert(
+                        "$id".to_string(),
+                        serde_json::Value::String(EMBEDDED_RESOURCE_ID.to_string()),
+                    );
+                    if let Some(uri) = nested_dialect {
+                        inner.insert("$schema".to_string(), serde_json::Value::String(uri));
+                    }
+                    inner.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("integer".to_string()),
+                    );
+                    let mut defs = serde_json::Map::new();
+                    defs.insert("Inner".to_string(), serde_json::Value::Object(inner));
+                    object.insert("$defs".to_string(), serde_json::Value::Object(defs));
+                    // A LOCAL JSON pointer, never a scheme'd URI (SEP-2106).
+                    let mut properties = serde_json::Map::new();
+                    properties.insert(
+                        "n".to_string(),
+                        serde_json::json!({ "$ref": "#/$defs/Inner" }),
+                    );
+                    object.insert(
+                        "properties".to_string(),
+                        serde_json::Value::Object(properties),
+                    );
+                }
+
+                if let Some(uri) = dialect {
+                    object.insert("$schema".to_string(), serde_json::Value::String(uri));
+                }
+                serde_json::Value::Object(object)
+            },
+        )
+    }
+
+    /// Remove every string-valued `$schema` at EVERY depth, skipping the values
+    /// of [`DATA_ONLY_KEYWORDS`].
+    ///
+    /// This is the surgical-scope comparison's stripper. It must mirror the
+    /// shipped traversal rule exactly: a root-only strip would read a legitimate
+    /// NESTED rewrite as collateral damage and fail the property on correct
+    /// behaviour.
+    fn strip_dialect_declarations(node: &mut serde_json::Value) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if map.get("$schema").is_some_and(serde_json::Value::is_string) {
+                    map.remove("$schema");
+                }
+                for (key, value) in map.iter_mut() {
+                    if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
+                        strip_dialect_declarations(value);
+                    }
+                }
+            },
+            serde_json::Value::Array(items) => {
+                items.iter_mut().for_each(strip_dialect_declarations);
+            },
+            _ => {},
+        }
+    }
+
+    /// Every string-valued `$schema` at every depth, under the same skip rule.
+    fn collect_dialect_declarations<'a>(node: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                if let Some(declared) = map.get("$schema").and_then(serde_json::Value::as_str) {
+                    out.push(declared);
+                }
+                for (key, value) in map {
+                    if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
+                        collect_dialect_declarations(value, out);
+                    }
+                }
+            },
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_dialect_declarations(item, out);
+                }
+            },
+            _ => {},
+        }
     }
 
     proptest! {
-        /// Property: normalizing twice equals normalizing once, and the
-        /// normalized document differs from the input ONLY at the root
-        /// `$schema` key.
+        /// Property: normalizing twice equals normalizing once; the normalized
+        /// document differs from the input ONLY at string-valued `$schema` keys
+        /// at ANY depth; and NO legacy declaration survives anywhere.
         ///
-        /// Both halves matter. A non-idempotent rewrite would make the same
-        /// declaration compile to two different validators, because the
+        /// All three halves matter. A non-idempotent rewrite would make the
+        /// same declaration compile to two different validators, because the
         /// validator cache is keyed by schema TEXT. A rewrite that touched any
         /// other key would silently weaken every v2 validator while every
-        /// behavioural test kept passing.
+        /// behavioural test kept passing. And a surviving legacy declaration —
+        /// the 115-12 defect — resolves an EMPTY vocabulary set on that
+        /// resource and yields an accept-everything sub-validator, which the
+        /// first two halves are both blind to.
         #[test]
         fn property_schema_normalization_is_idempotent_and_surgical(
             schema in arb_schema_document()
@@ -949,17 +1081,17 @@ mod schema_dialect_normalization_properties {
                 &input
             );
 
+            // Surgical scope, RECURSIVELY: strip every string-valued `$schema`
+            // at every depth from both sides. A root-only strip would report a
+            // legitimate nested rewrite as collateral damage.
             let mut stripped_input = input.clone();
             let mut stripped_once = once.clone();
-            for document in [&mut stripped_input, &mut stripped_once] {
-                if let Some(object) = document.as_object_mut() {
-                    object.remove("$schema");
-                }
-            }
+            strip_dialect_declarations(&mut stripped_input);
+            strip_dialect_declarations(&mut stripped_once);
             prop_assert_eq!(
                 stripped_input,
                 stripped_once,
-                "normalization touched a key other than the root $schema: {} became {}",
+                "normalization touched a key other than a string-valued $schema: {} became {}",
                 &input,
                 &once
             );
@@ -983,6 +1115,49 @@ mod schema_dialect_normalization_properties {
                     normalized,
                     Some(DRAFT_2020_12),
                     "a declared dialect must be rewritten to the 2020-12 URI: {}",
+                    &once
+                ),
+            }
+
+            // DIALECT PURITY. Total over the normalized document: no
+            // string-valued `$schema` anywhere may be anything but the pinned
+            // URI. This is the assertion the two above cannot make — both are
+            // satisfied by a root-only normalizer.
+            let mut surviving = Vec::new();
+            collect_dialect_declarations(&once, &mut surviving);
+            let legacy: Vec<&&str> = surviving
+                .iter()
+                .filter(|declared| **declared != DRAFT_2020_12)
+                .collect();
+            prop_assert!(
+                legacy.is_empty(),
+                "a LEGACY $schema survived normalization: {:?} in {}. A declaration that \
+                 survives on an $id-bearing embedded schema resource resolves an EMPTY \
+                 vocabulary set there and produces a sub-validator that accepts everything — \
+                 the vacuous-validator bypass 115-VERIFICATION.md reproduced as the row \
+                 `root-draft07 + embedded (v1,v2) = (Violates, Conforms)`, v2 measurably \
+                 WEAKER than v1. normalize_schema_dialect must rewrite EVERY declaration at \
+                 EVERY depth, not just the root one.",
+                legacy,
+                &once
+            );
+
+            // The embedded resource specifically, addressed by POINTER so the
+            // failure message names the path.
+            let nested_declared = input.pointer("/$defs/Inner/$schema");
+            let nested_normalized = once.pointer("/$defs/Inner/$schema");
+            match nested_declared {
+                None => prop_assert!(
+                    nested_normalized.is_none(),
+                    "an embedded resource that declared no dialect must not GAIN one at \
+                     /$defs/Inner/$schema: {}",
+                    &once
+                ),
+                Some(_) => prop_assert_eq!(
+                    nested_normalized.and_then(serde_json::Value::as_str),
+                    Some(DRAFT_2020_12),
+                    "an embedded schema resource's dialect declaration must be rewritten to \
+                     the 2020-12 URI at /$defs/Inner/$schema: {}",
                     &once
                 ),
             }
