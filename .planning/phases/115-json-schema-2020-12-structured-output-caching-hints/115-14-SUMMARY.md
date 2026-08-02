@@ -47,7 +47,7 @@ key-decisions:
   - "A malformed subschema map (a `$defs` whose value is not an object) falls THROUGH to the ordinary walk rather than stopping the descent. CR-01's fix sketch omits this and silently loses coverage relative to the position-blind walk"
   - "The member dispatch was extracted into two helpers only AFTER measuring: inline, it put `pin_dialect_in_place` at cognitive 24 against `pmat quality-gate`'s threshold of 23, with the base commit at 0 violations. Both halves were split so they stay visibly mirror-image; no `#[allow]` was used"
   - "The two RESTATED copies of the traversal rule (`tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) were deliberately NOT touched — they are 115-15's, and the window in which they carry the old rule is named in the shipped rustdoc"
-  - "`.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` were deliberately NOT edited: SCHM-01's re-booking is 115-15's Task 3, after the whole-phase gate has actually run. Booking ahead of measurement is ledger `D-115-G`, the process defect this requirement has now carried twice"
+  - "`.planning/REQUIREMENTS.md` was deliberately NOT edited (0-byte diff) and `requirements mark-complete` was NOT run: SCHM-01's re-booking is 115-15's Task 3, after the whole-phase gate has actually run. Booking ahead of measurement is ledger `D-115-G`, the process defect this requirement has now carried twice. `.planning/ROADMAP.md` carries plan-progress bookkeeping ONLY — the 115-14 checkbox and the 12/13 -> 14/15 row — and the Phase 115 marker stays `[~]`"
 
 patterns-established:
   - "The negative control runs INSIDE the task, not across a commit boundary: the pre-commit hook forbids committing a red tree, so 'add the fence → observe it fail → fix → observe it pass' is one commit whose message records both counts"
@@ -330,10 +330,15 @@ and with an OPEN MEASUREMENT as `D-115-AC` / `D-115-AD`, unowned.
   differently-typed walk restating the same rule catches only a disagreement. The rename-invariance
   property (renaming a `$defs` key must not change the normalized document apart from that key) is
   the instrument that catches a rule defect.
-- **SCHM-01's booking.** `.planning/REQUIREMENTS.md` and `.planning/ROADMAP.md` are UNTOUCHED by
-  this plan and `requirements mark-complete` was deliberately NOT run — booking ahead of the
-  whole-phase gate is ledger `D-115-G`, and this requirement has now carried that defect twice.
-  115-15's Task 3 owns the re-booking, AFTER `make quality-gate` has actually run over the closure.
+- **SCHM-01's booking.** `.planning/REQUIREMENTS.md` is **UNTOUCHED — a 0-byte diff** — and
+  `requirements mark-complete` was deliberately NOT run. Booking ahead of the whole-phase gate is
+  ledger `D-115-G`, and this requirement has now carried that defect twice. 115-15's Task 3 owns
+  the re-booking, AFTER `make quality-gate` has actually run over the closure.
+  `.planning/ROADMAP.md` was touched for **plan-progress bookkeeping ONLY** (`roadmap
+  update-plan-progress 115`): the `115-14-PLAN.md` checkbox and the progress-table row
+  `12/13 → 14/15`, a two-line diff. **The Phase 115 marker stays `[~]`** and no requirement
+  statement was edited — that is the distinction the plan's "do not edit ROADMAP" instruction is
+  protecting, and it holds.
 
 ## Self-Check: PASSED
 

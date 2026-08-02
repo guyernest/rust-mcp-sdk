@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 115-12-PLAN.md — SCHM-01 BLOCKER closed in code, tests and contract; 115-13 remains
-last_updated: "2026-08-02T02:58:09.024Z"
-last_activity: 2026-08-02 -- Phase 115 planning complete
+last_updated: "2026-08-02T03:41:15.030Z"
+last_activity: 2026-08-02
 progress:
   total_phases: 72
   completed_phases: 60
   total_plans: 354
-  completed_plans: 352
+  completed_plans: 353
   percent: 83
 ---
 
@@ -21,13 +21,33 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
 **Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
-**Current focus:** Phase 115 gap closure is **COMPLETE (13/13)** — SCHM-01's Draft 2020-12 pin was incomplete (reopened 2026-08-01, post-sign-off). `115-12` fixed the normalizer, the fences and the contract; `115-13` widened the property/fuzz generators, ran the whole-phase gate green and re-booked SCHM-01 `[x]` on post-fix evidence. **Next: `/gsd:verify-phase 115`** — the phase marker deliberately stays `[~]` until re-verification scores the closure. Phase 116 (auth-hardening-seps) is queued behind that.
+**Current focus:** Phase 115 — json-schema-2020-12-structured-output-caching-hints
 
 ## Current Position
 
-Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — **gap closure SHIPPED, 13/13 plans. Awaiting RE-VERIFICATION.** SCHM-01 is re-booked `[x]` on post-fix measured evidence; SCHM-02 and SCHM-03 were never downgraded and are unregressed at 78/78. The phase marker in ROADMAP.md stays `[~]` on purpose: scoring the closure is `/gsd:verify-phase 115`'s job, not the executor's.
-Plan: 13 of 13 (115-13 complete — generators widened, whole-phase gate green, SCHM-01 re-booked)
-Status: Ready to execute
+Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
+Plan: 14 of 15 complete — next is 115-15
+Status: Executing Phase 115 (gap-closure round 2)
+
+**115-14 HAS LANDED — the POSITION blocker is closed, and the fence was OBSERVED TO FAIL before the fix.** `115-VERIFICATION.md` reopened SCHM-01 a second time: `115-12`'s recursive walk was POSITION-BLIND, testing `DATA_ONLY_KEYWORDS` against EVERY object key, so an `$id`-bearing embedded schema resource filed under a `$defs`/`properties` entry an author NAMED `const`/`enum`/`default`/`examples` was visited by neither walker and its legacy `$schema` survived the v2 pin. **`SUBSCHEMA_MAP_KEYWORDS`** (`properties`, `patternProperties`, `$defs`, `definitions`, `dependentSchemas`) is now consulted FIRST in the member dispatch of both halves; those maps' values are descended into unconditionally and their own keys are never keyword-filtered. Commits `f8692f1d` (code + fences + rustdoc), `07bfdd52` (contract + bindings + ledger), `2bf4d637` (`D-115-AE`).
+
+**The negative control, recorded verbatim in `115-14-SUMMARY.md`:** against the position-blind body the suite reported **16 passed / 2 failed** — `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword` (`BYPASS ($defs.const): the v2 Draft 2020-12 pin accepted a STRING where the embedded schema resource declares integer`) and `normalize_schema_dialect_changes_only_dollar_schema_keys` (`borrow/own decision is wrong … left: false, right: true` — i.e. `rewritten=false`, so no `tracing::warn!` fired and the author got NO signal). After the fix: **18 passed / 0 failed**.
+
+**⚠ THE MEASUREMENT `115-15` MUST BUILD ON: the purity postcondition passed VACUOUSLY.** Measured directly against the pre-fix body with a throwaway probe: for BOTH `$defs.default` and `properties.examples`, `owned=false` (nothing rewritten) yet `first_legacy_dialect(&normalized) == None` **PASSED** — the blind detector agreed with the blind rewriter that there was nothing there. `first_legacy_dialect(&owned) == None` is a detector/rewriter **AGREEMENT** check, not an independence check; a defect in the shared RULE satisfies it, which is why 115-13's independently-TYPED fuzz invariant 5 could not see this either (`115-REVIEW.md` WR-02). The independent instrument is the **rename-invariance** property `115-15` adds. This is now written into the shipped rustdoc and into the contract invariant.
+
+**⚠ A NEW INSTRUMENT TRAP, `D-115-AE`: `pmat analyze complexity --max-cognitive 25` does NOT reproduce the PR-blocking gate.** With the new dispatch inline, that command reported ZERO violations under `src/` while `pmat quality-gate --fail-on-violation --checks complexity` FAILED — `pin_dialect_in_place` at cognitive **24** against pmat's **recommended 23**, not the documented maximum 25. **Budget 23.** The base commit measured 0 violations (proven by restoring `git show HEAD:` over the file, running the gate, and restoring from a `/bin/cp` snapshot with `shasum -a 256 -c` OK), so the +1 was this change's own; the dispatch was therefore extracted into `first_legacy_dialect_in_member` / `pin_dialect_in_member` (both halves, to stay mirror-image; **no `#[allow]`**), each bound in `contracts/binding.yaml`. The plan's `jq` criterion is fail-open a SECOND way: the field is `file` (values prefixed `./`), not `path`, so as written jq exits 5 with an error on **stderr** and prints **nothing on stdout** — its own pass condition.
+
+**⚠ `115-15` MUST NOT RUN THE FUZZER TO JUDGE 115-14.** The two RESTATED copies of the traversal rule (`tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) still carry the OLD position-blind rule, deliberately — they are `115-15`'s. With the fix landed, an input shaped `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}` makes the fuzz target's invariant-2 strip report a FALSE positive. That window is named in the shipped rustdoc.
+
+**Contract, WR-01 discharged:** `output_schema_draft_pin`'s POSTCONDITION invariant was an UNSCOPED total ("no `$schema` string anywhere in the document"), false in TWO independent ways and unsatisfiable by any CORRECT implementation — a `$schema` inside a `const`/`enum`/`default`/`examples` payload is instance DATA and must SURVIVE, and the colliding name was never reached. It is now a total over **SCHEMA POSITIONS**, with the term defined inside the invariant, both historical measurements kept (amend, never delete) and the fences named. The `walk:` clause (which SPECIFIED the defect) and invariant 1 are corrected the same way.
+
+**Gates:** 18/18 unit, 5/5 `fuzz_support_tests`, `binary(phase115_contract_bindings)` 5/5, `binary(v2_schema_tripwires)` 13/13, `binary(structured_tool_output)` 20/20, `binary(v1_lists_golden)` 7/7 (the v1 wire did not move), `binary(property_tests)` 19/19, wasm `--features "wasm,validation"` exit 0, `/usr/bin/make lint` exit 0, `cargo fmt --check` exit 0, `pmat quality-gate` exit 0. `make quality-gate` and the `+nightly` campaign are `115-15`'s Task 3, once over the whole closure. `Cargo.toml`/`Cargo.lock` byte-unchanged.
+
+**BOOKKEEPING: `.planning/REQUIREMENTS.md` is UNTOUCHED by 115-14 (0-byte diff) and `requirements mark-complete` was deliberately NOT run.** SCHM-01's re-booking is `115-15`'s Task 3, AFTER the whole-phase gate has actually run — booking ahead of measurement is ledger `D-115-G`, the process defect this requirement has now carried twice. `.planning/ROADMAP.md` carries plan-progress bookkeeping ONLY (the `115-14-PLAN.md` checkbox and the `12/13` → `14/15` row, a two-line diff); **the Phase 115 marker stays `[~]`** and no requirement statement was edited.
+
+**Declined and BOOKED, not silently dropped:** `D-115-AC` (WR-03, the fragment-suffixed 2020-12 URI misclassified as legacy — excluded because its correct fix shape depends on an UNMEASURED library behaviour: if `jsonschema` 0.49.2 resolves `…/2020-12/schema#` to an EMPTY vocabulary set, simply declassifying the spelling REINTRODUCES the bypass this plan closed; the open measurement is the entry's first action item) and `D-115-AD` (WR-04's singular `example`/vendor keywords — first-party relevant because this repo ships `crates/pmcp-openapi-server` — plus WR-05, IN-01, IN-02, IN-03). All unowned.
+
+What follows is the record as it stood before 115-14.
 
 **The gap — CLOSED. In code by 115-12 (`fdf236c8`, `a9af3a5d`, `60cda794`), in the generators and the booking by 115-13 (`c913aeb1`, `d74ef8b7`, `cab8937a`, `1621b3b0`).** Re-measured on the fixed tree through the same seam: `root-draft07 + embedded (v1,v2) = (Violates, Violates)`.
 
@@ -102,7 +122,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-02 -- Phase 115 planning complete
+Last activity: 2026-08-02
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -416,6 +436,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 115]: 115-12: a `$schema` is a dialect declaration ONLY when its value is a JSON string, and the walk never descends into `const`/`enum`/`default`/`examples` (`DATA_ONLY_KEYWORDS`) — so a `$schema` that is instance DATA is left byte-identical. The CR-01 fix sketch lacked both guards and would have corrupted such documents.
 - [Phase 115]: 115-12: rewriting EVERY declaration is deliberately a superset of what `jsonschema` honours (an `$id`-less nested `$schema` is inert and is rewritten anyway) — strictly safer, and it makes the postcondition `first_legacy_dialect(&owned) == None` statable without a per-node `$id` analysis.
 - [Phase 115]: 115-12: v1 stays frozen (D-01). The embedded-resource row measures `(Conforms, Violates)` after the fix — only the v2 column moved; the v1 `validator_for` auto-detect still honours the embedded draft-07 declaration, and changing that was declined as a breaking change for 2025-11-25 servers.
+- [Phase ?]: 115-14: implemented 115-VERIFICATION missing-item 1 EXACTLY (SUBSCHEMA_MAP_KEYWORDS position-aware traversal) and nothing wider; WR-04's inverse allow-list design declined and booked, because the current walk is deliberately a SUPERSET of what jsonschema honours
+- [Phase ?]: 115-14: the properties-position collision is fenced STRUCTURALLY, not behaviourally — jsonschema 0.49.2 still enforces type there against the DEFECTIVE code, so a behavioural assertion would be a fence that can never fire
+- [Phase ?]: 115-14: the member dispatch was extracted into first_legacy_dialect_in_member / pin_dialect_in_member only AFTER measuring — inline it put pin_dialect_in_place at cognitive 24 against pmat quality-gate's threshold of 23, base at 0 violations; no #[allow] used
+- [Phase ?]: 115-14: SCHM-01's re-booking deliberately left to 115-15 Task 3, after the whole-phase gate actually runs — booking ahead of measurement is ledger D-115-G, already carried twice on this requirement
 
 ### Pending Todos
 
@@ -466,7 +490,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-02T00:00:30.794Z
+Last session: 2026-08-02T03:40:56.554Z
 Stopped at: Completed 115-12-PLAN.md — SCHM-01 BLOCKER closed in code, tests and contract; 115-13 remains
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -565,3 +589,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P09 | 2h36m | 4 tasks | 20 files |
 | Phase 115 P10 | 3h10m | 3 tasks | 12 files |
 | Phase 115 P12 | 1h05m | 3 tasks | 5 files |
+| Phase 115 P14 | 40m | 2 tasks | 4 files |
