@@ -880,6 +880,60 @@ contract postcondition is now scoped to schema positions and is satisfiable), an
 README/acceptance-criterion defect in the fuzz corpus documentation that `115-13` already
 recorded the shape of.
 
+## D-115-AE — `pmat analyze complexity --max-cognitive 25` does NOT reproduce the PR-blocking gate, and the documented `jq` criterion is fail-OPEN twice over
+
+**Filed by:** 115-14. Fifth entry in the two-character scheme. **This is an instrument trap every
+future plan in this repository inherits**, and it was caught here only because the executor ran
+the real gate binary as well as the criterion it was given.
+
+**Measured 2026-08-01, pmat 3.15.0, on the 115-14 tree with the position-aware walk inline
+(before the member-helper extraction):**
+
+| Command | Result |
+|---|---|
+| `pmat analyze complexity --format json --max-cognitive 25` → violations under `src/` | **none** — 13 violations, all under `tests/` and `crates/*/tests/` |
+| `pmat quality-gate --fail-on-violation --checks complexity` | **FAILED, exit 1** — `./src/server/output_validation.rs:218 - pin_dialect_in_place: cognitive-complexity - Cognitive complexity of 24 exceeds recommended complexity of 23` |
+
+The two disagree because `quality-gate` fails on pmat's **recommended** threshold (23), while
+`--max-cognitive 25` sets the **maximum** and reports 24 as compliant. CLAUDE.md § *CI Quality
+Gates* documents the gate as `pmat quality-gate --fail-on-violation --checks complexity` and
+documents the diagnostic as `analyze complexity --max-cognitive 25` — **the diagnostic is weaker
+than the gate it is meant to predict.** A function at cognitive 24 passes every local check a plan
+is likely to run and then blocks the PR. Budget 23, not 25.
+
+**And the documented `jq` path is fail-open in a second, independent way.** `115-14`'s acceptance
+criterion (inherited from CLAUDE.md's phrasing and from entry **`K`**) is
+
+```sh
+pmat analyze complexity --format json --max-cognitive 25 | jq '.summary.violations[] | select(.path | startswith("src/"))'   # must print nothing
+```
+
+Entry **`K`** already records that `.violations[]` reads `null` and the working path is
+`.summary.violations[]`. The remaining half is the FIELD name: it is `file`, not `path`, and its
+values are prefixed `./`. Run as written, jq exits **5** with
+`jq: error: startswith() requires string inputs` **on stderr** and prints **nothing on stdout** —
+which is precisely the criterion's pass condition. A criterion whose failure mode is
+indistinguishable from its success condition verifies nothing. The working form is
+
+```sh
+pmat analyze complexity --format json 2>/dev/null | jq -r '.summary.violations[] | select(.file | startswith("./src/"))'
+```
+
+and the honest form is to run `pmat quality-gate --fail-on-violation --checks complexity` and read
+its exit code, which is what CI actually does.
+
+**A third, smaller trap, recorded for whoever needs a per-function number:** `.files[]` in that
+JSON is capped (`top_files_limit`), so a function that is not a top hotspot has NO per-function
+entry at all — at `--max-cognitive 1` the walkers of `src/server/output_validation.rs` still do not
+appear. There is no way to read "this function's cognitive complexity" out of that output for an
+ordinary function; the only reliable signal is whether it crosses a threshold you set.
+
+**Owner:** 115-14 — worked around, not fixed. The plan's criterion was run BOTH as written and in
+the corrected form, and the real gate was run as the tie-breaker; the extraction of
+`first_legacy_dialect_in_member` / `pin_dialect_in_member` is the code consequence. Nothing in the
+repository is changed by this entry — it is a property of the tool and of the criterion phrasing,
+and the fix belongs in whatever text future plans copy the criterion from.
+
 ---
 
 # Inherited items
