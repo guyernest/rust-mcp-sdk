@@ -82,19 +82,47 @@
 //!    `default-features = false` everywhere, so no resolver is compiled in);
 //!    this target's only obligation is not to hang. Seed `08` keeps the case in
 //!    the corpus.
-//! 5. **Post-normalization dialect PURITY.** No string-valued `$schema` anywhere
-//!    in the NORMALIZED document may be anything but the 2020-12 URI. TOTAL —
-//!    no skip condition, no neutrality reasoning — so it holds for every input
-//!    that parses as JSON, INCLUDING the documents invariant 3 excludes. Added
-//!    by 115-13 to close `115-VERIFICATION.md` `missing:` item 4: the shipped
-//!    root-only normalizer left a legacy declaration alive on an `$id`-bearing
-//!    EMBEDDED SCHEMA RESOURCE, which resolves an EMPTY vocabulary set there and
-//!    produces an accept-everything sub-validator, and invariants 2 and 3 were
-//!    both blind to it (2 stripped only the root, 3 skipped every document
-//!    containing a nested `$schema`). The scan is implemented INDEPENDENTLY here
-//!    rather than reusing the crate's own detector — deliberately, because the
-//!    crate's unit-test postcondition already uses that detector, so only an
-//!    independent walk catches a detector/rewriter disagreement.
+//! 5. **Post-normalization dialect PURITY.** No string-valued `$schema` at any
+//!    SCHEMA POSITION in the NORMALIZED document may be anything but the
+//!    2020-12 URI. Added by 115-13 to close `115-VERIFICATION.md` `missing:`
+//!    item 4: the shipped root-only normalizer left a legacy declaration alive
+//!    on an `$id`-bearing EMBEDDED SCHEMA RESOURCE, which resolves an EMPTY
+//!    vocabulary set there and produces an accept-everything sub-validator, and
+//!    invariants 2 and 3 were both blind to it (2 stripped only the root, 3
+//!    skipped every document containing a nested `$schema`).
+//!
+//!    **CORRECTION (115-15).** 115-13 documented this invariant as "TOTAL — no
+//!    skip condition, no neutrality reasoning — so it holds for every input that
+//!    parses as JSON" and its scan as "implemented INDEPENDENTLY" of the crate's
+//!    detector. Both claims are false as written, and the correction is kept
+//!    beside them because believing them is what let a defect ship a third time:
+//!
+//!    - The scan DOES have a skip condition —
+//!      [`collect_dialect_declarations`] does not descend into a
+//!      [`DATA_ONLY_KEYWORDS`] payload, because a `$schema` string inside a
+//!      `const`/`enum`/`default`/`examples` value is instance DATA that must
+//!      SURVIVE. The invariant is therefore total over SCHEMA POSITIONS, not
+//!      over every input; the term is what invariant 6 turns on.
+//!    - Independence in IMPLEMENTATION is not independence in RULE. This scan
+//!      restates the SAME traversal rule as the code under test, so it catches a
+//!      detector/rewriter DISAGREEMENT and cannot catch a defect in the rule they
+//!      share. That was MEASURED: against the pre-115-14 body, `$defs.default`
+//!      carrying `$id` + a draft-07 `$schema` was skipped by the rewriter AND by
+//!      this scan AND by the crate's own detector — all three agreed there was
+//!      nothing there, and all three were wrong (115-14-SUMMARY, "The
+//!      postcondition passed VACUOUSLY").
+//! 6. **Rename invariance — the instrument for a defect in the RULE** (115-15,
+//!    `115-REVIEW.md` WR-02). Renaming an entry of a `properties` /
+//!    `patternProperties` / `$defs` / `definitions` / `dependentSchemas` map must
+//!    not change how that entry normalizes. DERIVED from a JSON Schema 2020-12
+//!    fact rather than restated from the crate's keyword lists: the keys of those
+//!    maps are AUTHOR-CHOSEN NAMES with no keyword semantics under the core and
+//!    applicator vocabularies, so normalizing an entry cannot depend on the name
+//!    it is filed under. It consults no `DATA_ONLY_KEYWORDS` list at all, which
+//!    is precisely what invariants 2 and 5 cannot say — and it fires on a FUTURE
+//!    rule defect too, e.g. a sixth data-only keyword gained without the position
+//!    exception. Exercised by seed `14_defs_named_default`, and OBSERVED to trip
+//!    against a deliberately restored position-blind normalizer.
 //!
 //! # Why invariant 3 is an EQUALITY and not a monotonicity claim
 //!
@@ -223,6 +251,39 @@ const DIALECT_NEUTRAL_KEYWORDS: &[&str] = &[
 /// and the independence is the point (see invariant 5 in the module docs).
 const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 
+/// Keywords whose VALUE is a MAP from AUTHOR-CHOSEN NAMES to subschemas.
+///
+/// Mirrors `SUBSCHEMA_MAP_KEYWORDS` in `src/server/output_validation.rs`
+/// (115-14). The mirror is REQUIRED, not cosmetic parity: with the position rule
+/// shipped and this copy still blind, an input shaped
+/// `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}` — a
+/// `properties` entry NAMED `$schema` whose value is a string, i.e. a name bound
+/// to a NON-schema — is correctly left alone by the shipped walk, while a
+/// position-blind [`strip_dialect_declarations`] would remove it from only one
+/// side of invariant 2's comparison and a position-blind
+/// [`collect_dialect_declarations`] would report it to invariant 5 as a surviving
+/// legacy declaration. Both are FALSE POSITIVES that crash the fuzzer on CORRECT
+/// behaviour.
+///
+/// [`DATA_ONLY_KEYWORDS`] is a list of KEYWORDS and must never be tested against
+/// the keys of these maps. That category error was the 115-14 defect: an
+/// `$id`-bearing embedded resource filed under a `$defs` entry an author had
+/// NAMED `default` survived the v2 pin.
+const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+];
+
+/// The name invariant 6 renames a subschema-map entry to.
+///
+/// Long and `__`-delimited so it cannot plausibly collide with a name a real
+/// input (or a libFuzzer mutation of one) already uses; invariant 6 skips the
+/// input outright if it does.
+const RENAME_PROBE_NAME: &str = "__rename_probe__";
+
 /// The Draft 2020-12 meta-schema URI the v2 pin rewrites every declaration to.
 const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
@@ -283,6 +344,18 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
             // `properties` and `$defs` map AUTHOR-CHOSEN NAMES to subschemas, so
             // their keys are not keywords and must not be allowlist-checked;
             // only their values are schemas.
+            //
+            // DO NOT "FIX" THIS TO MATCH THE OTHER WALKERS. This predicate was
+            // ALREADY position-aware when the two walkers below were not — the
+            // same distinction, written two hundred lines away and never applied
+            // on the crate's side (see `SUBSCHEMA_MAP_KEYWORDS` in
+            // `src/server/output_validation.rs`). It is why
+            // `115-VERIFICATION.md` measured invariant 3 as correctly SKIPPING
+            // the defective document instead of misreporting it. The narrower
+            // pair here is deliberate: this is a NEUTRALITY allowlist, and
+            // `patternProperties` / `definitions` / `dependentSchemas` are absent
+            // from `DIALECT_NEUTRAL_KEYWORDS` on purpose, so they can never reach
+            // this match.
             "properties" | "$defs" => value
                 .as_object()
                 .is_some_and(|map| map.values().all(|v| is_neutral_subschema(v, false))),
@@ -300,8 +373,9 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
     true
 }
 
-/// Remove every string-valued `$schema` at EVERY depth, skipping the values of
-/// [`DATA_ONLY_KEYWORDS`] — the traversal rule 115-12 shipped.
+/// Remove every string-valued `$schema` at every SCHEMA POSITION, skipping the
+/// values of [`DATA_ONLY_KEYWORDS`] in KEYWORD position only — the traversal
+/// rule 115-12 shipped, corrected to the position rule 115-14 shipped.
 fn strip_dialect_declarations(node: &mut Value) {
     match node {
         Value::Object(map) => {
@@ -309,9 +383,7 @@ fn strip_dialect_declarations(node: &mut Value) {
                 map.remove("$schema");
             }
             for (key, value) in map.iter_mut() {
-                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
-                    strip_dialect_declarations(value);
-                }
+                strip_dialect_declarations_in_member(key, value);
             }
         },
         Value::Array(items) => items.iter_mut().for_each(strip_dialect_declarations),
@@ -319,12 +391,37 @@ fn strip_dialect_declarations(node: &mut Value) {
     }
 }
 
-/// Every string-valued `$schema` at every depth, under the same skip rule.
+/// The three-way MEMBER dispatch of the stripper, mirroring
+/// `pin_dialect_in_member` in `src/server/output_validation.rs`. See
+/// [`SUBSCHEMA_MAP_KEYWORDS`] for why the mirror is required.
+fn strip_dialect_declarations_in_member(member_key: &str, member_value: &mut Value) {
+    if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+        // NAME position: descend into every value, never keyword-filter the
+        // map's own keys. A non-object value is a malformed document and falls
+        // through to the ordinary walk, so no coverage is lost relative to the
+        // position-blind version.
+        match member_value {
+            Value::Object(named_subschemas) => {
+                named_subschemas
+                    .values_mut()
+                    .for_each(strip_dialect_declarations);
+            },
+            malformed => strip_dialect_declarations(malformed),
+        }
+    } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+        strip_dialect_declarations(member_value);
+    }
+}
+
+/// Every string-valued `$schema` at every SCHEMA POSITION, under the same
+/// position-aware rule as [`strip_dialect_declarations`].
 ///
-/// Implemented INDEPENDENTLY of the crate's own `first_legacy_dialect` (which is
-/// private and invisible here anyway). That independence is invariant 5's whole
-/// point: the crate's unit-test postcondition uses the crate's detector, so a
-/// detector/rewriter disagreement is only visible to a walk written separately.
+/// Implemented in a different TYPE from the crate's own `first_legacy_dialect`
+/// (which is private and invisible here anyway), but NOT in a different RULE —
+/// see the 115-15 correction on invariant 5 in the module docs. A separate walk
+/// catches a detector/rewriter DISAGREEMENT; only
+/// [`assert_normalization_is_invariant_under_rename`] catches a defect in the
+/// rule all three copies share.
 fn collect_dialect_declarations<'a>(node: &'a Value, out: &mut Vec<&'a str>) {
     match node {
         Value::Object(map) => {
@@ -332,9 +429,7 @@ fn collect_dialect_declarations<'a>(node: &'a Value, out: &mut Vec<&'a str>) {
                 out.push(declared);
             }
             for (key, value) in map {
-                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
-                    collect_dialect_declarations(value, out);
-                }
+                collect_dialect_declarations_in_member(key, value, out);
             }
         },
         Value::Array(items) => {
@@ -343,6 +438,27 @@ fn collect_dialect_declarations<'a>(node: &'a Value, out: &mut Vec<&'a str>) {
             }
         },
         _ => {},
+    }
+}
+
+/// The three-way MEMBER dispatch of the scan, mirroring
+/// `first_legacy_dialect_in_member` in `src/server/output_validation.rs`.
+fn collect_dialect_declarations_in_member<'a>(
+    member_key: &str,
+    member_value: &'a Value,
+    out: &mut Vec<&'a str>,
+) {
+    if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+        match member_value {
+            Value::Object(named_subschemas) => {
+                for subschema in named_subschemas.values() {
+                    collect_dialect_declarations(subschema, out);
+                }
+            },
+            malformed => collect_dialect_declarations(malformed, out),
+        }
+    } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+        collect_dialect_declarations(member_value, out);
     }
 }
 
@@ -409,6 +525,133 @@ fn assert_no_legacy_dialect_survives(schema_bytes: &[u8]) {
          `root-draft07 + embedded (v1,v2) = (Violates, Conforms)`, v2 WEAKER than v1. \
          `normalize_schema_dialect` must rewrite EVERY declaration at EVERY depth, not just \
          the root one. Input was: {input}, normalized to: {once}"
+    );
+}
+
+/// Invariant 6, over one parsed schema: normalizing an entry of a subschema map
+/// must not depend on the NAME it is filed under.
+///
+/// # Why this is the only invariant here that a defect in the RULE cannot satisfy
+///
+/// Invariants 2 and 5 RESTATE the shipped traversal rule (in a different type,
+/// but the same rule). Two copies of one rule can only disagree with each other;
+/// when the rule itself is wrong they AGREE, and the assertion passes vacuously —
+/// measured against the pre-115-14 body, where the rewriter, this file's scan and
+/// the crate's own detector all skipped a `$defs` entry named `default` and all
+/// three were wrong.
+///
+/// This invariant is DERIVED instead, from a JSON Schema 2020-12 fact: the keys
+/// of `properties`, `patternProperties`, `$defs`, `definitions` and
+/// `dependentSchemas` are AUTHOR-CHOSEN NAMES with no keyword semantics under the
+/// core and applicator vocabularies. Therefore normalizing an entry cannot depend
+/// on the name it is filed under, and two documents differing ONLY in that name
+/// must produce equal normalized subtrees. It consults no [`DATA_ONLY_KEYWORDS`]
+/// list at all, so it also fires on a FUTURE rule defect that special-cases some
+/// other name.
+///
+/// # Cost, and the discipline recorded for invariants 1-3
+///
+/// This helper makes its OWN `normalize_bytes` calls, on two small probe
+/// documents it constructs — not on the fuzzer's input. That is unavoidable
+/// (there is no other way to normalize the renamed variant) and it is cheap:
+/// normalization COMPILES NOTHING; it is a walk plus a clone on the rewrite path.
+/// The module docs' exec/s note is about repeat VALIDATION — a second
+/// `validate_bytes` on the deliberately UNCACHED seam builds a second validator —
+/// and repeat traversal is not that. The work is bounded to the ROOT-LEVEL
+/// subschema maps: every entry of each is probed once, the entries' subtrees are
+/// disjoint, and nested containers are not descended into — so the total is
+/// linear in the document, the same order as invariant 5's scan.
+///
+/// 115-15-PLAN specified "the FIRST container and its FIRST entry" instead. That
+/// was MEASURED to be blind to this phase's own reproduction document: in seed
+/// `14_defs_named_default` the first root-level subschema map is `properties`
+/// and its first entry is `n` (a plain `$ref` holder carrying no `$schema`), so
+/// the interesting entry — `$defs.default` — was never probed and this invariant
+/// PASSED against a fully position-blind normalizer. A fence that cannot fire on
+/// the case it exists for is the exact failure mode this plan closes, so the
+/// selection was widened. See `D-115-AF`.
+///
+/// The probe documents' `$ref`s (if the subtree contains any) will dangle.
+/// That is a legitimate input: normalization never resolves `$ref`s, and nothing
+/// here compiles the probe.
+fn assert_normalization_is_invariant_under_rename(schema_bytes: &[u8]) {
+    let Ok(schema) = serde_json::from_slice::<Value>(schema_bytes) else {
+        return;
+    };
+    let Some(root) = schema.as_object() else {
+        return;
+    };
+
+    // Every entry of every ROOT-LEVEL subschema map. Bounded: each entry's
+    // subtree is probed once, the subtrees are disjoint, and normalization is a
+    // walk plus a clone — so the total stays linear in the document, the same
+    // order as invariant 5's scan. Nested containers are deliberately NOT
+    // descended into; that would re-walk the same bytes once per level.
+    for (container, container_value) in root {
+        if !SUBSCHEMA_MAP_KEYWORDS.contains(&container.as_str()) {
+            continue;
+        }
+        let Some(named_subschemas) = container_value.as_object() else {
+            continue;
+        };
+        for (original_name, subtree) in named_subschemas {
+            assert_entry_normalizes_the_same_under_any_name(container, original_name, subtree);
+        }
+    }
+}
+
+/// One entry of one subschema map, normalized under its own name and under
+/// [`RENAME_PROBE_NAME`], asserted equal. The per-entry half of invariant 6.
+fn assert_entry_normalizes_the_same_under_any_name(
+    container: &str,
+    original_name: &str,
+    subtree: &Value,
+) {
+    if original_name == RENAME_PROBE_NAME {
+        return;
+    }
+
+    let probe_document = |entry_name: &str| {
+        let mut named = serde_json::Map::new();
+        named.insert(entry_name.to_string(), subtree.clone());
+        let mut document = serde_json::Map::new();
+        document.insert(container.to_string(), Value::Object(named));
+        serde_json::to_vec(&Value::Object(document)).ok()
+    };
+    let (Some(original_bytes), Some(renamed_bytes)) = (
+        probe_document(original_name),
+        probe_document(RENAME_PROBE_NAME),
+    ) else {
+        return;
+    };
+    let (Some((_, original_once, _)), Some((_, renamed_once, _))) = (
+        normalize_bytes(&original_bytes),
+        normalize_bytes(&renamed_bytes),
+    ) else {
+        return;
+    };
+
+    let original_subtree = original_once
+        .get(container)
+        .and_then(|map| map.get(original_name));
+    let renamed_subtree = renamed_once
+        .get(container)
+        .and_then(|map| map.get(RENAME_PROBE_NAME));
+    assert_eq!(
+        original_subtree, renamed_subtree,
+        "RENAME INVARIANCE VIOLATED. The keys of properties / patternProperties / $defs / \
+         definitions / dependentSchemas are AUTHOR-CHOSEN NAMES with no keyword semantics under \
+         the JSON Schema 2020-12 core and applicator vocabularies, so normalizing an entry \
+         CANNOT depend on the name it is filed under. A difference here means the traversal is \
+         treating a NAME as a KEYWORD — the `115-VERIFICATION.md` defect class, measured as \
+         `$defs.default -> verdicts=(Conforms, Conforms), rewritten=false` against the control \
+         `$defs.Inner -> (Conforms, Violates), rewritten=true`. A legacy declaration that \
+         survives on an `$id`-bearing embedded resource resolves an EMPTY vocabulary set there \
+         and produces a sub-validator that accepts EVERYTHING. This invariant is DERIVED from \
+         the spec rather than restated from the crate's keyword lists, which is precisely what \
+         invariants 2 and 5 are not — a defect in the rule they share satisfies both of them. \
+         container: {container}, name: {original_name}, normalized under the original name: \
+         {original_once}, under the probe: {renamed_once}"
     );
 }
 
@@ -482,6 +725,13 @@ fuzz_target!(|data: &[u8]| {
     // exists as a separate invariant rather than as a relaxed neutrality
     // predicate. Its own single `normalize_bytes` call lives at its entry.
     assert_no_legacy_dialect_survives(schema_bytes);
+
+    // Invariant 6. The only fence in this file DERIVED from a spec fact rather
+    // than restated from the crate's traversal rule, and therefore the only one
+    // a defect in that rule cannot satisfy. It normalizes two probe documents it
+    // builds itself; see its rustdoc for why that does not violate the exec/s
+    // discipline recorded above.
+    assert_normalization_is_invariant_under_rename(schema_bytes);
 
     // Invariants 1 + 3.
     assert_dialect_neutral_eras_agree(schema_bytes, instance_bytes);

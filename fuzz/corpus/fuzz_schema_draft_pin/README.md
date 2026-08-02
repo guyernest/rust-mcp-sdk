@@ -45,11 +45,27 @@ Write it with a short `python3` heredoc rather than by hand-counting bytes:
 import json, struct
 schema   = json.dumps({"type": "object"}, separators=(",", ":")).encode()
 instance = json.dumps({}, separators=(",", ":")).encode()
-open("14_my_case", "wb").write(bytes([1]) + struct.pack("<I", len(schema)) + schema + instance)
+open("15_my_case", "wb").write(bytes([1]) + struct.pack("<I", len(schema)) + schema + instance)
 ```
 
-Name the file after what it covers, keep the two-digit numeric prefix (the
-plan's acceptance check counts `^[0-9]`), and add a row below.
+Name the file after what it covers, keep the two-digit numeric prefix — that
+prefix is what `fuzz/.gitignore`'s narrow re-include (`corpus/*` ignored,
+`README.md` and `[0-9][0-9]_*` re-included) matches, so a seed without it is
+silently never committed — and add a row below.
+
+**Counting the seeds.** Count TRACKED files, never directory entries:
+
+```bash
+git ls-files fuzz/corpus/fuzz_schema_draft_pin/ | grep -c '/[0-9][0-9]_'
+```
+
+Earlier revisions of this file told the reader to run `ls | grep -c '^[0-9]'`.
+That is wrong in any tree where the fuzzer has actually run: libFuzzer writes
+every newly-discovered unit into this same directory under a hex name, and
+plenty of those names begin with a digit — the count comes back in the thousands
+when it means 14 (`115-REVIEW.md` WR-07). A criterion that returns 3382 when the
+answer is 14 verifies nothing, which is the same defect class this file already
+calls out one section above for `make test-fuzz`.
 
 ## The files
 
@@ -68,3 +84,4 @@ plan's acceptance check counts `^[0-9]`), and add a row below.
 | `11_draft07_content_encoding`  | 1   | The MEASURED era divergence: `contentEncoding` is an assertion in draft-07 and only an annotation from 2019-09, so v1 says `Violates` and v2 says `Conforms`. Not dialect-neutral, so invariant 3 skips — this seed is what keeps a future "just assert the eras always agree" edit honest. |
 | `12_embedded_legacy_resource`  | 1   | Phase 115-13. The `115-VERIFICATION.md` BLOCKER document: root `$schema` draft-07, `properties.n` a local `#/$defs/Inner` pointer, and `$defs.Inner` an `$id`-bearing EMBEDDED SCHEMA RESOURCE carrying its OWN draft-07 `$schema` + `type: integer`; instance `{"n": "NOT-AN-INTEGER"}`. Not dialect-neutral (nested `$schema`), so invariant 3 SKIPS it — this seed is what **invariant 5** (post-normalization dialect purity) exercises, and it has been OBSERVED to trip that invariant with a non-zero exit against a root-only normalizer. |
 | `13_embedded_resource_no_dialect` | 1 | Phase 115-13. The same document with the nested `$schema` removed and no root declaration, so it IS dialect-neutral under the widened `$defs`/`$id`/`$ref` allowlist — the first seed to exercise **invariant 3** over an embedded-resource shape. The pair `12`/`13` is the control: `13` proves enforcement works on the shape, `12` proves the dialect switch on it cannot survive the pin. |
+| `14_defs_named_default`        | 1   | Phase 115-15. The COLLIDING-NAME case, and the `115-VERIFICATION.md` reproduction document verbatim: `12`'s shape with the `$defs` entry RENAMED from `Inner` to `default` — a name that collides with a `DATA_ONLY_KEYWORDS` entry. No root `$schema`; `properties.n` is a local `#/$defs/default` pointer; instance `{"n": "NOT-AN-INTEGER"}`. Exercises **invariants 5 and 6**. Against the position-blind normalizer the keyword deny-list was tested against a key in NAME position, so neither walker visited the resource and its draft-07 declaration survived the v2 pin — measured `(Conforms, Conforms)` with `rewritten=false`, against the `$defs.Inner` control's `(Conforms, Violates)`. OBSERVED to trip an invariant with a non-zero exit against a deliberately restored position-blind normalizer. |
