@@ -1222,3 +1222,71 @@ item (5) before trusting it. And item (4) applies verbatim to
 `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` — if 115-18 derives that target's container selection
 from its own restated `SUBSCHEMA_MAP_KEYWORDS`, its invariant-6 controls will go green for this
 reason and prove nothing.
+
+## D-115-AJ — five items from executing `115-18`; the round's inherited taxonomy CHECKED rather than restated, and one criterion that a measurement contradicts
+
+**Filed by:** 115-18. Tenth entry in the two-character scheme (`AI` is 115-17's, five items, and
+continuing at `AJ` is what `115-17-SUMMARY.md` instructs). **115-19 must continue at `D-115-AK`.**
+
+None of these changed a fence's behaviour. Items (1)–(3) are criterion/plan-text defects; (4) is a
+scope-boundary discovery left unfixed on purpose; (5) is the positive result of the check the
+inherited findings demanded.
+
+**(1) Control D's panic reports the surviving declaration as a URI LIST, never as a JSON POINTER, so
+the criterion's "with a `/dependencies/default` declaration in the reported list" cannot be satisfied
+literally.** `assert_no_legacy_dialect_survives` collects `&str` VALUES —
+`collect_dialect_declarations` pushes `map.get("$schema")`, discarding the path it was found at — so
+the observed message reads `A LEGACY $schema SURVIVED NORMALIZATION:
+["http://json-schema.org/draft-07/schema#"]`. The POSITION is recoverable only from the `Input was:`
+/ `normalized to:` documents the same message embeds, both of which show the declaration sitting at
+`dependencies.default`. The criterion's INTENT — attribution of the finding to that position — is
+discharged by those documents plus the single-file run that makes attribution unambiguous anyway.
+**Not worth fixing**: threading pointers through the collector would add a second restatement of the
+traversal rule (the paths would have to be built by the same walk), which is more drift surface for a
+diagnostic improvement. Recorded so 115-19 does not read the criterion as unmet.
+
+**(2) Task 2 necessarily edits a file its `<files>` line does not list.** `<files>` for Task 2 is the
+seed plus the corpus README, but the same plan's threat register mitigates `T-115-DEP-15` by requiring
+Control F's exit 0 to be *"repeated in the constant's rustdoc"* — and that constant is in
+`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`, Task 1's file. The controls' measured numbers do not
+exist until Task 2 has run, so they cannot honestly be written during Task 1. Resolved by writing the
+LIMIT qualitatively in Task 1 and appending the measured numbers (controls D and F, and the
+`output_validation.rs:1429` attribution) in Task 2. The alternative — writing the numbers in Task 1 —
+would have been the booking-ahead-of-measurement defect this phase has already recorded twice
+(`D-115-G`, `D-115-AG`).
+
+**(3) "The tracked-seed count reads 15 in every place it appears" collides with a HISTORICAL
+measurement.** The corpus README's `Counting the seeds` section carries WR-07's measured pair — `ls |
+grep -c '^[0-9]'` returned **3382** against a tracked count of **14** — and mechanically rewriting
+both 14s to 15 would falsify a measurement to satisfy a criterion. Resolved by stating the live count
+explicitly ("The tracked seed count is **15** as of phase 115-18"), rewriting the surrounding prose to
+refer to "the tracked count above" rather than a hardcoded number, and labelling the 3382/14 pair as
+historical with a note that it is deliberately not restated. Same shape as `D-115-AI(1)` and
+`D-115-AH(1)`: a grep-shaped criterion over a document also constrains what that document may say
+about its own history.
+
+**(4) Pre-existing clippy failures in two OTHER fuzz targets — left unfixed (SCOPE BOUNDARY).**
+`cd fuzz && cargo +nightly clippy --all-targets -- -D warnings` exits 101 on
+`fuzz_targets/fuzz_token_code_mode.rs` (4 errors) and `fuzz_targets/auth_flows.rs` (8 errors, e.g.
+`len_zero` at `:355`). `fuzz_schema_draft_pin` itself is CLEAN — `cargo +nightly clippy --bin
+fuzz_schema_draft_pin -- -D warnings` exits 0, and the dirty-target output does not mention it once.
+These are untouched by this plan and invisible to every repository gate for the reason `D-115-AB`
+records (`fuzz/` is in the workspace `exclude` array, so `make quality-gate` lints nothing here).
+**Unowned.** Whoever cleans them should note that no gate will tell them the debt exists.
+
+**(5) The inherited `<which_fence_catches_what_here>` taxonomy is WRONG for `tests/property_tests.rs`
+and RIGHT for this file — checked, not assumed.** `D-115-AI(5)` measured that the property module has
+TWO fences a rule defect cannot satisfy (rename invariance AND the embedded-resource pointer
+assertion), falsifying the one-fence framing that 115-18's plan inherits verbatim. Re-checking the
+claim against THIS file: it holds, for a structural reason worth writing down rather than a lucky one.
+The only other candidate is invariant 3's `is_dialect_neutral`, which is genuinely independent of the
+crate's keyword lists — it was position-aware before either walker was. It is nonetheless not a second
+fence for this defect class, twice over: a nested `$schema` makes a document non-neutral and every
+reproduction document here carries one, and `dependencies` is additionally absent from
+`DIALECT_NEUTRAL_KEYWORDS`. Control F confirms it behaviourally — with both copies blind, NOTHING in
+this file fired. The reasoning is now recorded at invariant 6's rustdoc under "Is it really the ONLY
+one? Checked, not assumed", with the `tests/` divergence named so the two taxonomies are not
+re-unified by a future reader.
+
+**Owner:** 115-18 — (1)–(3) worked around and recorded, (5) verified and documented in the shipped
+code. **Residual, unowned:** item (4), the two clippy-dirty fuzz targets.

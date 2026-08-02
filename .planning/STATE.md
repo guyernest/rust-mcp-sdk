@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 115-17-PLAN.md
-last_updated: "2026-08-02T16:10:37.434Z"
+last_updated: "2026-08-02T17:00:46.432Z"
 last_activity: 2026-08-02
 progress:
   total_phases: 72
   completed_phases: 60
   total_plans: 358
-  completed_plans: 355
+  completed_plans: 356
   percent: 83
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
-Plan: 17 of 19 complete — gap-closure round 4 IN PROGRESS (115-16/115-17 DONE; 115-18/19 remain)
-Status: Executing — 115-18 next
+Plan: 18 of 19 complete — gap-closure round 4 IN PROGRESS (115-16/115-17 DONE; 115-18/19 remain)
+Status: Ready to execute
 
 **115-17 HAS LANDED — the property module now mirrors the six-keyword rule AND can REACH the
 position CR-01 found.** Commits `0268fa34` (six-entry mirror + the compiled mirror-equality gate +
@@ -712,3 +712,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P15 | 75m | 3 tasks | 7 files |
 | Phase 115 P16 | 55m | 2 tasks | 2 files |
 | Phase 115 P17 | ~70m | 2 tasks | 1 files |
+| Phase 115 P18 | ~75m | 2 tasks | 3 files |
