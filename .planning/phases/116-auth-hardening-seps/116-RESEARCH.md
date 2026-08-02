@@ -1278,7 +1278,11 @@ locked decisions.
 | **Release: workspace publish order — `pmcp` (2) before `cargo-pmcp` (12)** | D-19 bumps `cargo-pmcp` and re-pins `pmcp`. Ordering already correct; the pin must be updated in `cargo-pmcp/Cargo.toml`. |
 | **`make quality-gate` before pushing a commit or PR** | Reiterated in CLAUDE.md's closing line. |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All five questions were resolved during plan-phase on 2026-08-02. Per-item resolutions are
+> annotated inline; the resolving artifacts are the owner's scope decision (recorded in
+> 116-CONTEXT.md `<deferred>`) and plans 116-01/116-05/116-15 (committed `6b57ca10`).
 
 1. **Two MCP-spec client MUSTs are unimplemented and are not in AUTH-01..03: RFC 9728 Protected
    Resource Metadata discovery, and the RFC 8707 `resource` parameter.**
@@ -1294,6 +1298,9 @@ locked decisions.
    - *Recommendation:* **Do not silently absorb.** Record both as deferred items with a named owner
      and note the D-18 dependency explicitly. If the phase wants AS-change detection to match the
      spec's stated mechanism, that is a scope decision for `/gsd:discuss-phase`, not for the planner.
+   - ✅ **RESOLVED (2026-08-02):** Owner chose **defer both**. Recorded as two named deferred items
+     in 116-CONTEXT.md `<deferred>` with the D-18 dependency stated; zero plan tasks implement
+     them; 116-15 Task 3's deferred-items register carries them with owners.
 
 2. **`make doc-check` is red (28 errors) and blocks the org-required `gate`; owner is UNASSIGNED.**
    - *What we know:* Measured exit 2 / 28 errors at branch HEAD; zero in files this phase edits;
@@ -1303,6 +1310,8 @@ locked decisions.
      merge where this is handled once.
    - *Recommendation:* Do not adopt it into scope. Measure it as a **delta** and state in the phase
      summary that the phase neither caused nor cleared it.
+   - ✅ **RESOLVED (2026-08-02):** Recommendation adopted as orchestrator directive — measured as a
+     delta in 116-01 (baseline) and 116-15 (closing gates); not adopted into scope.
 
 3. **AUTH-01's requirement text says "strict on v2, lenient on v1," which D-01 shows is not
    implementable and the spec does not ask for.**
@@ -1316,6 +1325,9 @@ locked decisions.
      on v1" was realized as "strict whenever the AS advertises or emits `iss`, lenient otherwise" —
      which is *strictly safer for v1 than the requirement asked for*, and say so. Consider proposing
      a requirement-text amendment rather than booking against words the code does not implement.
+   - ✅ **RESOLVED (2026-08-02):** Booking language adopted verbatim in 116-15 Task 2 — AUTH-01 is
+     booked against the spec's RFC 9207 table ("strict whenever the AS advertises or emits `iss`,
+     lenient otherwise") with the realization stated plainly.
 
 4. **Does the credential-store trait carry refresh, or only load/save/delete?**
    - CONTEXT explicitly leaves this open and notes a deliberate answer belongs with the deferred
@@ -1324,12 +1336,19 @@ locked decisions.
    - *Recommendation:* Smallest viable seam — `load`/`save`/`delete` only, with refresh staying in
      `OAuthHelper` and *reading* the store for `client_id`. A trait that owns refresh would need an
      HTTP client, breaking D-07's I/O-free-construction and D-06's wasm-cleanliness in one move.
+   - ✅ **RESOLVED (2026-08-02):** Recommendation adopted — 116-05 cites this question explicitly
+     and implements `load`/`save`/`delete` only; refresh stays in `OAuthHelper`, which *reads* the
+     store for `client_id`.
 
 5. **Does an existing provable-contract cover the auth surface?**
    - `make comply` runs inside `make quality-gate` and CLAUDE.md mandates contract-first. Not
      inspected this session (contracts live outside this repo at `../provable-contracts/`).
    - *Recommendation:* First plan task should check `../provable-contracts/contracts/pmcp/` for an
      auth contract before any source edit.
+   - ✅ **RESOLVED (2026-08-02):** 116-01 Task 1 performs the check before any source edit. Planner
+     measurement: contracts are in-repo at `contracts/` (not `../provable-contracts/`); `make
+     comply` resolves `contracts/{binding,mcp-protocol-sdk-v1,team-servers-v1}.yaml`, and a grep
+     for `oauth|dcr|issuer|credential` returns zero hits — the executor re-verifies and records it.
 
 ## Sources
 
