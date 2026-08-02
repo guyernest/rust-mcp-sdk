@@ -332,11 +332,19 @@ const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 /// - With this copy INDEPENDENT and CORRECT while the crate's list is missing an
 ///   entry, invariant 5's scan reaches a position the crate's walk skipped, sees
 ///   the surviving legacy declaration and FIRES. That is a real detection
-///   capability.
+///   capability, and it is MEASURED — 115-18 control D, the shipped list cut to
+///   five and this one at six, on seed `15_dependencies_named_default`: exit 77
+///   in [`assert_no_legacy_dialect_survives`], reporting
+///   `["http://json-schema.org/draft-07/schema#"]` with `normalized to:`
+///   byte-identical to `Input was:`.
 /// - With this copy DERIVED from the crate, the scan skips exactly what the walk
 ///   skipped, the two agree, and the target exits 0 on the very document that
 ///   reproduces the defect. The fuzzer becomes blind to every keyword-list
-///   omission BY CONSTRUCTION.
+///   omission BY CONSTRUCTION. This is not hypothetical: 115-17 measured the
+///   equivalent mistake one layer up in `tests/property_tests.rs`, where sourcing
+///   the container DRAW from the gated mirror made all three of its negative
+///   controls report `21 passed` (`D-115-AI(4)`). A gate makes a copy CORRECT; it
+///   does not make a fence able to FIRE.
 ///
 /// The cost of independence is silent DRIFT, and drift is what 115-19's
 /// source-text gate closes: it reads this file, `tests/property_tests.rs` and
@@ -356,11 +364,19 @@ const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 /// never selects the container because its selection reads THIS list, and
 /// invariant 3 skips the document because `dependencies` is not dialect-neutral.
 ///
+/// **MEASURED** — 115-18 control F, both copies cut to five, on seed
+/// `15_dependencies_named_default`: **exit 0**, 1 input executed in 9 ms, no
+/// invariant reached. The seed that reproduces CR-01 is waved straight through.
+///
 /// **So a green fuzz run is NOT evidence that a keyword-list omission is absent.**
 /// The primary instrument for a LIST omission is `src`'s own fence,
 /// `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`,
-/// which carries its OWN container literal for exactly this reason; the secondary
-/// one is 115-19's source-text drift gate over the three copies.
+/// which carries its OWN container literal for exactly this reason. That
+/// attribution is measured too, not asserted: in the same both-blind tree the
+/// fence FAILED at `src/server/output_validation.rs:1429` while this whole file
+/// stayed green. The secondary mechanism is 115-19's source-text drift gate over
+/// the three copies, which is what would catch the two lists being shortened
+/// together in the first place.
 const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
     "properties",
     "patternProperties",

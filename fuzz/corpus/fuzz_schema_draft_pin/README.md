@@ -59,13 +59,19 @@ silently never committed — and add a row below.
 git ls-files fuzz/corpus/fuzz_schema_draft_pin/ | grep -c '/[0-9][0-9]_'
 ```
 
+The tracked seed count is **15** as of phase 115-18.
+
 Earlier revisions of this file told the reader to run `ls | grep -c '^[0-9]'`.
 That is wrong in any tree where the fuzzer has actually run: libFuzzer writes
 every newly-discovered unit into this same directory under a hex name, and
-plenty of those names begin with a digit — the count comes back in the thousands
-when it means 14 (`115-REVIEW.md` WR-07). A criterion that returns 3382 when the
-answer is 14 verifies nothing, which is the same defect class this file already
-calls out one section above for `make test-fuzz`.
+plenty of those names begin with a digit — so the count comes back in the
+thousands when the real answer is the tracked count above. `115-REVIEW.md` WR-07
+measured exactly that: `ls | grep -c '^[0-9]'` returned **3382** in a tree whose
+tracked seed count was 14 at the time. (Those two numbers are a HISTORICAL
+measurement and are deliberately not restated as 15 — the point they make is the
+ratio, not the current total.) A criterion that returns 3382 when the answer is
+14 verifies nothing, which is the same defect class this file already calls out
+one section above for `make test-fuzz`.
 
 ## The files
 
@@ -85,3 +91,4 @@ calls out one section above for `make test-fuzz`.
 | `12_embedded_legacy_resource`  | 1   | Phase 115-13. The `115-VERIFICATION.md` BLOCKER document: root `$schema` draft-07, `properties.n` a local `#/$defs/Inner` pointer, and `$defs.Inner` an `$id`-bearing EMBEDDED SCHEMA RESOURCE carrying its OWN draft-07 `$schema` + `type: integer`; instance `{"n": "NOT-AN-INTEGER"}`. Not dialect-neutral (nested `$schema`), so invariant 3 SKIPS it — this seed is what **invariant 5** (post-normalization dialect purity) exercises, and it has been OBSERVED to trip that invariant with a non-zero exit against a root-only normalizer. |
 | `13_embedded_resource_no_dialect` | 1 | Phase 115-13. The same document with the nested `$schema` removed and no root declaration, so it IS dialect-neutral under the widened `$defs`/`$id`/`$ref` allowlist — the first seed to exercise **invariant 3** over an embedded-resource shape. The pair `12`/`13` is the control: `13` proves enforcement works on the shape, `12` proves the dialect switch on it cannot survive the pin. |
 | `14_defs_named_default`        | 1   | Phase 115-15. The COLLIDING-NAME case, and the `115-VERIFICATION.md` reproduction document verbatim: `12`'s shape with the `$defs` entry RENAMED from `Inner` to `default` — a name that collides with a `DATA_ONLY_KEYWORDS` entry. No root `$schema`; `properties.n` is a local `#/$defs/default` pointer; instance `{"n": "NOT-AN-INTEGER"}`. Exercises **invariants 5 and 6**. Against the position-blind normalizer the keyword deny-list was tested against a key in NAME position, so neither walker visited the resource and its draft-07 declaration survived the v2 pin — measured `(Conforms, Conforms)` with `rewritten=false`, against the `$defs.Inner` control's `(Conforms, Violates)`. OBSERVED to trip an invariant with a non-zero exit against a deliberately restored position-blind normalizer. |
+| `15_dependencies_named_default` | 1  | Phase 115-18. `115-REVIEW.md` **CR-01**'s reproduction document verbatim — seed `14`'s document ONE KEYWORD OVER, with `$defs` replaced by `dependencies`: a `dependencies` entry an author NAMED `default`, which the five-entry `SUBSCHEMA_MAP_KEYWORDS` never visited. No root `$schema`; `properties.n` is a local `#/dependencies/default` pointer; the entry carries `$id` + a draft-07 `$schema` + `type: integer`; instance `{"n": "NOT-AN-INTEGER"}`. Exercises **invariants 5 and 6**, and each was OBSERVED to trip on it in a configuration that ISOLATES it: with the SHIPPED list cut to five and the target's mirror at six, invariant 5 fired (`A LEGACY $schema SURVIVED NORMALIZATION`, exit 77); with invariant 5's call additionally commented out so the stronger fence could not mask the weaker, invariant 6 fired (`RENAME INVARIANCE VIOLATED … container: dependencies, name: default`, exit 77). **AND — the honest half — this seed exits 0 when the target's own mirror SHARES the crate's omission** (both lists at five: exit 0, nothing reached). So a green run of this target is NOT evidence that a keyword-list omission is absent; the instrument for that is `src`'s own fence `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`, which carries its OWN container literal and DID fail in that same both-blind tree, plus 115-19's source-text drift gate over the three copies. |
