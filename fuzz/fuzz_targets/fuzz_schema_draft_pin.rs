@@ -63,9 +63,11 @@
 //!    (T-115-24).
 //! 2. **Normalization idempotence and surgical scope.** Normalizing twice equals
 //!    normalizing once, and the normalized document differs from the input ONLY
-//!    at the root `$schema` key. A normalizer that also dropped a sibling
-//!    keyword would silently weaken every v2 validator while every
-//!    behavioural test still passed.
+//!    at string-valued `$schema` keys, at ANY depth (115-12 made the normalizer
+//!    recursive; a ROOT-only strip here would read a legitimate nested rewrite
+//!    as collateral damage). A normalizer that also dropped a sibling keyword
+//!    would silently weaken every v2 validator while every behavioural test
+//!    still passed.
 //! 3. **Dialect-neutral era AGREEMENT.** When the schema's keyword set is drawn
 //!    only from keywords whose meaning is IDENTICAL in draft-07 and 2020-12, the
 //!    two eras must return the SAME verdict. Skipped when either verdict is
@@ -80,6 +82,19 @@
 //!    `default-features = false` everywhere, so no resolver is compiled in);
 //!    this target's only obligation is not to hang. Seed `08` keeps the case in
 //!    the corpus.
+//! 5. **Post-normalization dialect PURITY.** No string-valued `$schema` anywhere
+//!    in the NORMALIZED document may be anything but the 2020-12 URI. TOTAL —
+//!    no skip condition, no neutrality reasoning — so it holds for every input
+//!    that parses as JSON, INCLUDING the documents invariant 3 excludes. Added
+//!    by 115-13 to close `115-VERIFICATION.md` `missing:` item 4: the shipped
+//!    root-only normalizer left a legacy declaration alive on an `$id`-bearing
+//!    EMBEDDED SCHEMA RESOURCE, which resolves an EMPTY vocabulary set there and
+//!    produces an accept-everything sub-validator, and invariants 2 and 3 were
+//!    both blind to it (2 stripped only the root, 3 skipped every document
+//!    containing a nested `$schema`). The scan is implemented INDEPENDENTLY here
+//!    rather than reusing the crate's own detector — deliberately, because the
+//!    crate's unit-test postcondition already uses that detector, so only an
+//!    independent walk catches a detector/rewriter disagreement.
 //!
 //! # Why invariant 3 is an EQUALITY and not a monotonicity claim
 //!
@@ -108,7 +123,24 @@
 //!
 //! `type`, `properties`, `required`, `enum`, `const`, `minimum`, `maximum`,
 //! `minLength`, `maxLength`, `pattern`, `additionalProperties`, `minItems`,
-//! `maxItems`.
+//! `maxItems`, and — added by 115-13 — the three REFERENCE keywords `$defs`,
+//! `$id` and `$ref`:
+//!
+//! - `$defs` — a container of subschemas under AUTHOR-CHOSEN names. Not a
+//!   draft-07 keyword (draft-07 spells the container `definitions`), but an
+//!   unrecognized keyword is IGNORED in draft-07 rather than reinterpreted, and
+//!   a `#/$defs/...` JSON pointer resolves identically under both drafts. Its
+//!   values are recursed into the way `properties`' values are; its KEYS are
+//!   names, so they are never allowlist-checked.
+//! - `$id` — a base-URI declaration in draft-06 onwards, identical in draft-07
+//!   and 2020-12. It carries a string, so there is nothing to recurse into. It
+//!   is what makes a subschema an EMBEDDED SCHEMA RESOURCE, and admitting it is
+//!   what lets invariant 3 reach that shape at all.
+//! - `$ref` — admitted **only when it is the SOLE key of its object.** A `$ref`
+//!   with assertion siblings diverges: siblings are IGNORED in draft-07 and
+//!   HONOURED under 2020-12, a divergence this repo already records as measured
+//!   and reachable (see "Why invariant 3 is an EQUALITY" above). It carries a
+//!   string; the guard is structural, on the containing object.
 //!
 //! ## Excluded, each with its reason
 //!
@@ -133,6 +165,14 @@
 //! draft-04 `{"type": "integer"}` rejects `1.0`, which draft-06 onwards accepts.
 //! A nested `$schema` is excluded because it is a per-resource dialect switch
 //! from 2019-09 onwards and merely ignored in draft-07.
+//!
+//! **That nested-`$schema` exclusion was NOT relaxed by 115-13, deliberately.**
+//! After the recursive pin, a legacy declaration on an embedded resource makes
+//! v2 STRICTER than v1 — v1's auto-detect still honours the per-resource switch
+//! and drops the keywords under it, while v2 normalizes it away and enforces
+//! them — which is a LEGITIMATE era divergence that invariant 3's EQUALITY would
+//! misreport as a bug. Invariant 5 is what covers those documents instead: it is
+//! structural, over the normalized document, and needs no neutrality reasoning.
 
 #![no_main]
 
@@ -165,7 +205,26 @@ const DIALECT_NEUTRAL_KEYWORDS: &[&str] = &[
     "additionalProperties",
     "minItems",
     "maxItems",
+    // The three REFERENCE keywords, admitted by 115-13 so invariant 3 can reach
+    // embedded-resource shapes. `$ref` additionally carries a SOLE-KEY guard in
+    // `is_neutral_subschema`; see the module docs for all three reasons.
+    "$defs",
+    "$id",
+    "$ref",
 ];
+
+/// Keywords whose VALUE is instance DATA rather than a subschema.
+///
+/// Mirrors `DATA_ONLY_KEYWORDS` in `src/server/output_validation.rs`. The
+/// shipped normalization walk never descends into these — a `$schema` string
+/// inside a `const`/`enum`/`default`/`examples` payload is DATA, and rewriting
+/// it would change which instances conform — so neither do the strip and the
+/// scan below. Restated here rather than imported: the crate's copy is private,
+/// and the independence is the point (see invariant 5 in the module docs).
+const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
+
+/// The Draft 2020-12 meta-schema URI the v2 pin rewrites every declaration to.
+const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 
 /// Root `$schema` declarations under which every keyword in
 /// [`DIALECT_NEUTRAL_KEYWORDS`] means the same thing. draft-04 and draft-06 are
@@ -203,6 +262,13 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
         // eras, which invariant 3 skips anyway.
         return schema.is_boolean();
     };
+    // `$ref` is dialect-neutral ONLY as the SOLE key of its object. Sibling
+    // keywords alongside a `$ref` are IGNORED in draft-07 and HONOURED under
+    // 2020-12 — a measured divergence in the v2-is-stricter direction, which an
+    // EQUALITY invariant would misreport as a bug.
+    if object.contains_key("$ref") && object.len() > 1 {
+        return false;
+    }
     for (key, value) in object {
         if key == "$schema" {
             if !is_root {
@@ -214,16 +280,17 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
             return false;
         }
         let nested_is_neutral = match key.as_str() {
-            // `properties` maps AUTHOR-CHOSEN NAMES to subschemas, so its keys
-            // are not keywords and must not be allowlist-checked; only its
-            // values are schemas.
-            "properties" => value
+            // `properties` and `$defs` map AUTHOR-CHOSEN NAMES to subschemas, so
+            // their keys are not keywords and must not be allowlist-checked;
+            // only their values are schemas.
+            "properties" | "$defs" => value
                 .as_object()
                 .is_some_and(|map| map.values().all(|v| is_neutral_subschema(v, false))),
             // A schema (or a boolean) in its own right.
             "additionalProperties" => is_neutral_subschema(value, false),
-            // `type`, `required`, `enum`, `const` and the numeric / string /
-            // array bounds carry DATA, not subschemas — nothing to recurse into.
+            // `type`, `required`, `enum`, `const`, `$id`, `$ref` and the numeric
+            // / string / array bounds carry DATA or a string, not subschemas —
+            // nothing to recurse into.
             _ => true,
         };
         if !nested_is_neutral {
@@ -231,6 +298,52 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
         }
     }
     true
+}
+
+/// Remove every string-valued `$schema` at EVERY depth, skipping the values of
+/// [`DATA_ONLY_KEYWORDS`] — the traversal rule 115-12 shipped.
+fn strip_dialect_declarations(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            if map.get("$schema").is_some_and(Value::is_string) {
+                map.remove("$schema");
+            }
+            for (key, value) in map.iter_mut() {
+                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
+                    strip_dialect_declarations(value);
+                }
+            }
+        },
+        Value::Array(items) => items.iter_mut().for_each(strip_dialect_declarations),
+        _ => {},
+    }
+}
+
+/// Every string-valued `$schema` at every depth, under the same skip rule.
+///
+/// Implemented INDEPENDENTLY of the crate's own `first_legacy_dialect` (which is
+/// private and invisible here anyway). That independence is invariant 5's whole
+/// point: the crate's unit-test postcondition uses the crate's detector, so a
+/// detector/rewriter disagreement is only visible to a walk written separately.
+fn collect_dialect_declarations<'a>(node: &'a Value, out: &mut Vec<&'a str>) {
+    match node {
+        Value::Object(map) => {
+            if let Some(declared) = map.get("$schema").and_then(Value::as_str) {
+                out.push(declared);
+            }
+            for (key, value) in map {
+                if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
+                    collect_dialect_declarations(value, out);
+                }
+            }
+        },
+        Value::Array(items) => {
+            for item in items {
+                collect_dialect_declarations(item, out);
+            }
+        },
+        _ => {},
+    }
 }
 
 /// Invariant 2, over one parsed schema.
@@ -247,18 +360,55 @@ fn assert_normalization_is_idempotent_and_surgical(schema_bytes: &[u8]) {
          validators. Input was: {input}"
     );
 
+    // RECURSIVE, not root-only: 115-12 made the normalizer rewrite every
+    // string-valued `$schema` at any depth, so stripping only the root here
+    // would read a legitimate NESTED rewrite as collateral damage and fire this
+    // assertion on correct behaviour.
     let mut stripped_input = input.clone();
     let mut stripped_once = once.clone();
-    for document in [&mut stripped_input, &mut stripped_once] {
-        if let Some(object) = document.as_object_mut() {
-            object.remove("$schema");
-        }
-    }
+    strip_dialect_declarations(&mut stripped_input);
+    strip_dialect_declarations(&mut stripped_once);
     assert_eq!(
         stripped_input, stripped_once,
-        "normalization touched a key other than the ROOT $schema. Dropping or rewriting a \
-         sibling keyword silently WEAKENS every v2 validator while behavioural tests keep \
-         passing. Input was: {input}, normalized to: {once}"
+        "normalization touched a key other than a string-valued $schema. Dropping or \
+         rewriting a sibling keyword silently WEAKENS every v2 validator while behavioural \
+         tests keep passing. Input was: {input}, normalized to: {once}"
+    );
+}
+
+/// Invariant 5, over one parsed schema: NO legacy dialect declaration survives
+/// normalization, anywhere in the document.
+///
+/// Total — no skip condition. It holds for every input that parses as JSON,
+/// including the documents `is_dialect_neutral` excludes, which is exactly why
+/// it is a second invariant rather than a relaxation of that predicate.
+///
+/// `normalize_bytes` is called ONCE here, at entry, and the `fuzz_target!` body
+/// does not call it again on this input's behalf — the same discipline the
+/// module docs record for invariants 1-3. Normalization is a pure walk plus a
+/// clone on the rewrite path; it compiles nothing, so this second helper entry
+/// costs a traversal, not a validator build.
+fn assert_no_legacy_dialect_survives(schema_bytes: &[u8]) {
+    let Some((input, once, _twice)) = normalize_bytes(schema_bytes) else {
+        return;
+    };
+
+    let mut surviving = Vec::new();
+    collect_dialect_declarations(&once, &mut surviving);
+    let legacy: Vec<&&str> = surviving
+        .iter()
+        .filter(|declared| **declared != DRAFT_2020_12)
+        .collect();
+    assert!(
+        legacy.is_empty(),
+        "A LEGACY $schema SURVIVED NORMALIZATION: {legacy:?}. Under Draft 2020-12 a `$schema` \
+         is legal at the root of any EMBEDDED SCHEMA RESOURCE (a subschema carrying `$id`) and \
+         `jsonschema` honours it there, resolving an EMPTY vocabulary set on that resource and \
+         producing a sub-validator that accepts EVERYTHING — the vacuous-validator bypass the \
+         v2 pin exists to close, moved one level down. `115-VERIFICATION.md` measured it as \
+         `root-draft07 + embedded (v1,v2) = (Violates, Conforms)`, v2 WEAKER than v1. \
+         `normalize_schema_dialect` must rewrite EVERY declaration at EVERY depth, not just \
+         the root one. Input was: {input}, normalized to: {once}"
     );
 }
 
@@ -292,7 +442,8 @@ fn assert_dialect_neutral_eras_agree(schema_bytes: &[u8], instance_bytes: &[u8])
     // this target exists for, because a vacuous v2 validator returns `Conforms`
     // where v1 returns `Violates` on a neutral schema.
     assert_eq!(
-        v1, v2,
+        v1,
+        v2,
         "DIALECT-NEUTRAL ERA DISAGREEMENT. This schema uses only keywords whose meaning is \
          identical in draft-07 and 2020-12, so both eras must reach the same verdict. The \
          usual cause is the vacuous-validator bypass: a legacy `$schema` declaration compiled \
@@ -325,6 +476,12 @@ fuzz_target!(|data: &[u8]| {
     // Calling them here as well compiled the same schema twice per invariant,
     // which halved exec/s on the deliberately UNCACHED fuzz seam.
     assert_normalization_is_idempotent_and_surgical(schema_bytes);
+
+    // Invariant 5. TOTAL — it holds for every input that parses as JSON,
+    // including the documents invariant 3 skips, which is the whole reason it
+    // exists as a separate invariant rather than as a relaxed neutrality
+    // predicate. Its own single `normalize_bytes` call lives at its entry.
+    assert_no_legacy_dialect_survives(schema_bytes);
 
     // Invariants 1 + 3.
     assert_dialect_neutral_eras_agree(schema_bytes, instance_bytes);

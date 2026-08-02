@@ -8,11 +8,16 @@ exercise. Replaying the corpus is an acceptance criterion of `115-09-PLAN.md`:
 
 ```bash
 cd fuzz
-cargo fuzz run fuzz_schema_draft_pin -- -runs=0 corpus/fuzz_schema_draft_pin
+cargo +nightly fuzz run fuzz_schema_draft_pin -- -runs=0 corpus/fuzz_schema_draft_pin
 ```
 
 `-runs=0` replays every committed seed with NO mutation. A non-zero exit means a
 seed now trips an invariant.
+
+**`+nightly` is REQUIRED** (115-13): `cargo fuzz` passes `-Zsanitizer=address`,
+which stable rustc refuses, so the plain form fails to BUILD. `make test-fuzz`
+invokes the plain form and swallows the non-zero exit, reporting success having
+fuzzed nothing — do not cite it as evidence (ledger `D-115-U`).
 
 ## Byte layout
 
@@ -40,7 +45,7 @@ Write it with a short `python3` heredoc rather than by hand-counting bytes:
 import json, struct
 schema   = json.dumps({"type": "object"}, separators=(",", ":")).encode()
 instance = json.dumps({}, separators=(",", ":")).encode()
-open("12_my_case", "wb").write(bytes([1]) + struct.pack("<I", len(schema)) + schema + instance)
+open("14_my_case", "wb").write(bytes([1]) + struct.pack("<I", len(schema)) + schema + instance)
 ```
 
 Name the file after what it covers, keep the two-digit numeric prefix (the
@@ -61,3 +66,5 @@ plan's acceptance check counts `^[0-9]`), and add a row below.
 | `09_deeply_nested_object`      | 1   | 20 levels of nested `properties`, with a matching 20-level instance — recursion depth in the normalizer, the neutrality predicate and the validator. |
 | `10_raw_garbage`               | 0   | The RAW family: non-JSON on both sides. Only invariant 1 (totality) applies.                            |
 | `11_draft07_content_encoding`  | 1   | The MEASURED era divergence: `contentEncoding` is an assertion in draft-07 and only an annotation from 2019-09, so v1 says `Violates` and v2 says `Conforms`. Not dialect-neutral, so invariant 3 skips — this seed is what keeps a future "just assert the eras always agree" edit honest. |
+| `12_embedded_legacy_resource`  | 1   | Phase 115-13. The `115-VERIFICATION.md` BLOCKER document: root `$schema` draft-07, `properties.n` a local `#/$defs/Inner` pointer, and `$defs.Inner` an `$id`-bearing EMBEDDED SCHEMA RESOURCE carrying its OWN draft-07 `$schema` + `type: integer`; instance `{"n": "NOT-AN-INTEGER"}`. Not dialect-neutral (nested `$schema`), so invariant 3 SKIPS it — this seed is what **invariant 5** (post-normalization dialect purity) exercises, and it has been OBSERVED to trip that invariant with a non-zero exit against a root-only normalizer. |
+| `13_embedded_resource_no_dialect` | 1 | Phase 115-13. The same document with the nested `$schema` removed and no root declaration, so it IS dialect-neutral under the widened `$defs`/`$id`/`$ref` allowlist — the first seed to exercise **invariant 3** over an embedded-resource shape. The pair `12`/`13` is the control: `13` proves enforcement works on the shape, `12` proves the dialect switch on it cannot survive the pin. |

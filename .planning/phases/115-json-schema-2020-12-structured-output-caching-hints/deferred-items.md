@@ -773,6 +773,38 @@ which cannot be satisfied by an empty result set, and spell the binary absolutel
 `$HOME/.cargo/bin/cargo` and both test names were observed. Nothing in the repository is changed
 by this entry; it is an environment property, and the repo cannot fix the caller's shell hook.
 
+## D-115-AB — `make quality-gate` cannot SEE the `fuzz/` crate at all
+
+**Filed by:** 115-13. Second entry in the two-character scheme.
+
+`Cargo.toml:665` lists `fuzz` in the workspace's `exclude = [...]` array. Every gate command is
+workspace-scoped — `cargo fmt --all`, `cargo clippy --all-targets`, `cargo test`, and therefore
+`make quality-gate` and CI — so **not one of them formats, lints, builds or runs anything under
+`fuzz/`.** The only thing that compiles that crate is a manual `cd fuzz && cargo +nightly fuzz
+build`.
+
+Measured 2026-08-01, and this is the part worth keeping: at commit `c913aeb1` the file
+`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` carried a **pre-existing rustfmt violation** (an
+`assert_eq!(v1, v2, …)` argument list rustfmt wants split across lines) while root
+`cargo fmt --all -- --check` exited **0**. The violation was introduced by 115-09, survived
+115-09's, 115-10's and 115-12's green gates, and was found here only because this plan runs
+`cargo fmt` from *inside* `fuzz/`. 115-13 fixed it in passing.
+
+This is the SAME class of blindness the whole 115-12/115-13 closure exists to repair, one level
+up: `fuzzing` is in neither `default` nor `full`, so a fence written behind that feature does not
+run under the gate (`115-12`'s own key decision), and now — a strictly larger hole — the entire
+crate that HOSTS those fences is outside the gate's field of view. A fuzz target that stopped
+compiling, or whose invariant was deleted, would be reported by nothing.
+
+**Not fixed here, deliberately.** Adding `fuzz` to the workspace members would pull
+`libfuzzer-sys` and a nightly-only sanitizer flag into every `cargo build` in the repo; the right
+shape is a separate CI job (`cd fuzz && cargo +nightly fuzz build --all` plus the `-runs=0` corpus
+replay), which is a CI change, not a phase-115 code change.
+
+**unowned.** Candidate owner: whoever next touches `.github/workflows/ci.yml`. Until then, any
+plan asserting something about a fuzz target MUST run its command from inside `fuzz/` with
+`+nightly` and MUST NOT infer anything about that crate from a green `make quality-gate`.
+
 ---
 
 # Inherited items
