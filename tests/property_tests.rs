@@ -883,6 +883,35 @@ mod structured_output_invariants {
 /// and [`arb_container`] now draw both, and every assertion addresses the drawn
 /// shape rather than a hard-coded pointer.
 ///
+/// # AMENDMENT (115-16 / 115-17): the rule covers SIX containers, not five
+///
+/// The amendment above names five containers because that is what 115-14
+/// shipped. **The list was incomplete**, and the omission — `dependencies` —
+/// is `115-REVIEW.md` CR-01. It is draft-04..2019-09's own
+/// map-from-INSTANCE-PROPERTY-NAME-to-subschema keyword, still declared
+/// (deprecated) by the 2020-12 meta-schema, and `D-115-03-C` records that
+/// `jsonschema` 0.49.2 STILL HONOURS it under the 2020-12 pin. 115-16 widened
+/// the shipped list to six by DERIVATION over the five pinned meta-schema
+/// documents rather than by patching the reviewed case; 115-17 mirrors that
+/// here and gates the mirror with [`keyword_lists_mirror_the_shipped_ones`].
+///
+/// The defect was measured three times independently through this crate's own
+/// `fuzz_support` seam: `dependencies.Inner` -> `rewritten=true` against
+/// `dependencies.default` -> `rewritten=false`, so the legacy declaration
+/// survived and `compile_2020_12`'s `tracing::warn!` — the only D-02 diagnostic
+/// an author gets — silently did not fire.
+///
+/// **And no v2 VERDICT FLIP is reproducible at that position on the pinned
+/// `jsonschema` 0.49.2.** Both `dependencies.Inner` and `dependencies.default`
+/// enforce `type` identically at `(Violates, Violates)`, so a behavioural
+/// assertion about that position would have PASSED against the defective code —
+/// a fence that cannot fire, which is the exact failure mode this phase shipped
+/// three times. The observable is therefore the NORMALIZATION, which is what
+/// every assertion in this module already asserts, and the fence that reaches
+/// the defect is the rename-invariance property below — but only since
+/// [`arb_container`] gained the ability to DRAW `dependencies` (115-17), which
+/// it could not before.
+///
 /// # Which fence catches a defect in the RULE (`115-REVIEW.md` WR-02)
 ///
 /// Not the dialect-purity assertion. Purity is asserted through
@@ -942,17 +971,78 @@ mod schema_dialect_normalization_properties {
 
     /// Keywords whose VALUE is a MAP from AUTHOR-CHOSEN NAMES to subschemas.
     ///
-    /// Mirrors `SUBSCHEMA_MAP_KEYWORDS` in `src/server/output_validation.rs`.
-    /// The mirror is REQUIRED, not decorative. `strip_dialect_declarations` and
-    /// `collect_dialect_declarations` below are restatements of the shipped
-    /// traversal rule, and a restatement that disagrees with the shipped rule
-    /// fails this property on CORRECT behaviour: a generated document with a
-    /// `$schema` STRING bound to a NAME inside one of these maps (e.g.
-    /// `{"properties": {"$schema": "…draft-07…"}}`) is left alone by the shipped
-    /// walk — the name is bound to a non-schema — while a position-blind strip
-    /// here would remove it from only one side of the surgical-scope comparison,
-    /// and a position-blind scan would report it as a surviving legacy
-    /// declaration. Both are FALSE POSITIVES against a correct normalizer.
+    /// Mirrors `SUBSCHEMA_MAP_KEYWORDS` in `src/server/output_validation.rs`,
+    /// and — since 115-17 — is GATED against it by
+    /// [`keyword_lists_mirror_the_shipped_ones`] rather than hand-maintained on
+    /// trust (`115-REVIEW.md` WR-01).
+    ///
+    /// The mirror is REQUIRED, not decorative. [`strip_dialect_declarations`]
+    /// and [`collect_dialect_declarations`] below are restatements of the
+    /// shipped traversal rule, and a restatement that disagrees with the shipped
+    /// rule fails this property on CORRECT behaviour.
+    ///
+    /// # AMENDMENT (115-17): which half can FALSE-POSITIVE (`115-REVIEW.md` WR-06)
+    ///
+    /// This paragraph used to justify the position-aware STRIP by claiming that
+    /// a position-blind strip would delete a name-bound `$schema` from just ONE
+    /// side of the surgical-scope comparison. **That was false**, and in a round
+    /// whose whole subject is "the restated copies must state the rule the code
+    /// actually implements" it is worth correcting rather than deleting. (The
+    /// falsified sentence is quoted VERBATIM in `115-REVIEW.md` WR-06 and in
+    /// `115-17-SUMMARY.md`; it is PARAPHRASED here because 115-17 carries a grep
+    /// criterion requiring that sentence's literal text to be absent from this
+    /// file, which the phase's amend-don't-delete convention would otherwise
+    /// contradict. Booked as `D-115-AI(1)`, a `D-115-1` instance.)
+    ///
+    /// [`strip_dialect_declarations`] is applied to BOTH `stripped_input` and
+    /// `stripped_once`, so for the cited input
+    /// `{"properties": {"$schema": "…draft-07…"}}` the shipped walk leaves the
+    /// document unchanged, the two clones are identical, and ANY deterministic
+    /// strip — position-blind included — keeps them equal. That assertion cannot
+    /// fire from a blind strip.
+    ///
+    /// The false-positive risk belongs to the SCAN, and only to it: a
+    /// position-blind [`collect_dialect_declarations`] descends into the map as
+    /// though the map were a schema, sees the string-valued `$schema` bound to a
+    /// NAME, and reports it to the dialect-purity assertion as a surviving
+    /// legacy declaration — a genuine FALSE POSITIVE against a correct
+    /// normalizer. The stripper mirrors the shipped rule so the two walks stay
+    /// readable as one rule, not because a blind strip could fire that
+    /// assertion.
+    ///
+    /// What the position-aware strip DOES buy is sensitivity in the other
+    /// direction — stated here as a reading of the two walks, NOT as a measured
+    /// control, because producing one needs a position-blind NORMALIZER rather
+    /// than a position-blind mirror: were the shipped walk ever to over-reach
+    /// into NAME position, the position-aware strip leaves the differing
+    /// `$schema` in place on both sides and the surgical-scope assertion FIRES,
+    /// whereas a blind strip would delete the difference from both sides and
+    /// mask it.
+    ///
+    /// # The six entries, and how to re-derive them instead of trusting them
+    ///
+    /// The list is the UNION, over the draft-04 / draft-06 / draft-07 / 2019-09
+    /// / 2020-12 meta-schema documents `jsonschema` 0.49.2 ships offline, of the
+    /// keywords each meta-schema's own `.properties` map binds to an
+    /// OBJECT-typed schema whose `additionalProperties` REFERENCES THE
+    /// META-SCHEMA ITSELF — `{"$ref":"#"}` (draft-04/06/07),
+    /// `{"$recursiveRef":"#"}` (2019-09), `{"$dynamicRef":"#meta"}` (2020-12),
+    /// or an `anyOf` with such a branch (`dependencies`). Two keywords match the
+    /// object-with-`additionalProperties` shape and are REJECTED by the
+    /// self-reference criterion — `$vocabulary`, whose values are enablement
+    /// flags, and `dependentRequired`, whose values are lists of property names.
+    /// 115-16's SUMMARY carries the full derivation table and the re-runnable
+    /// `jq` command; `src/server/output_validation.rs` carries the same rustdoc.
+    ///
+    /// `dependencies` is the sixth entry. It was MISSING from every copy of this
+    /// list until 115-16 (`115-REVIEW.md` CR-01) and from this one until 115-17,
+    /// and `D-115-03-C` records that `jsonschema` 0.49.2 STILL HONOURS the
+    /// keyword under the 2020-12 pin — so its values are live schema positions,
+    /// not inert data.
+    ///
+    /// The ORDER is load-bearing: [`keyword_lists_mirror_the_shipped_ones`] and
+    /// 115-19's source-text drift gate both compare the copies as ORDERED
+    /// slices, so `dependencies` sits LAST, exactly as it does in `src/`.
     ///
     /// [`DATA_ONLY_KEYWORDS`] is a list of KEYWORDS and must never be tested
     /// against the keys of these maps; that category error was the 115-14
@@ -963,7 +1053,76 @@ mod schema_dialect_normalization_properties {
         "$defs",
         "definitions",
         "dependentSchemas",
+        "dependencies", // draft-04..2019-09; values keyed by INSTANCE PROPERTY NAME (D-115-03-C)
     ];
+
+    /// This module's two keyword lists equal the ones `src/` actually ships.
+    ///
+    /// # The only instrument in this module that catches DRIFT
+    ///
+    /// The rule these lists encode is RESTATED by hand in three files
+    /// (`src/server/output_validation.rs`, here, and
+    /// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) and until 115-16 published
+    /// the shipped values through the `fuzzing` seam, nothing compared them
+    /// (`115-REVIEW.md` WR-01). Every other assertion in this module is blind to
+    /// drift in one direction or the other; this one is not.
+    ///
+    /// Both drift directions are silent WITHOUT this gate, and they are
+    /// asymmetric, which is why the message below names both:
+    ///
+    /// - **the crate list gains an entry and this copy does not.** The restated
+    ///   scan then holds the OLD rule against the NEW behaviour and becomes a
+    ///   FALSE-POSITIVE GENERATOR against correct code. Not hypothetical: that
+    ///   was the live state of this file between 115-16 landing and 115-17, and
+    ///   115-17 observed it as a negative control — the surgical-scope assertion
+    ///   failing on a drawn `dependencies` container while `src/` was correct.
+    /// - **an entry is removed from every copy in lockstep.** Coverage vanishes
+    ///   with ZERO test failures, because two copies of one wrong rule agree.
+    ///   `patternProperties` and `dependentSchemas` sat in exactly that state
+    ///   from 115-14 to 115-16. This gate CANNOT see that case — the copies
+    ///   still agree. The instrument that can is
+    ///   `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`
+    ///   in `src/server/output_validation.rs`, which iterates its OWN
+    ///   six-element container literal and never `SUBSCHEMA_MAP_KEYWORDS`. The
+    ///   two mechanisms are a PAIR, not duplication: this one pins the copies
+    ///   together, that one pins them to the spec.
+    ///
+    /// A plain `#[test]`, not a `proptest!` — there is nothing to generate, and
+    /// a constant-vs-constant comparison must run exactly once.
+    #[test]
+    fn keyword_lists_mirror_the_shipped_ones() {
+        use pmcp::server::output_validation::fuzz_support;
+
+        assert_eq!(
+            SUBSCHEMA_MAP_KEYWORDS,
+            fuzz_support::SUBSCHEMA_MAP_KEYWORDS,
+            "this module's SUBSCHEMA_MAP_KEYWORDS mirror has DRIFTED from the shipped list. \
+             Compared as ORDERED slices, deliberately: 115-19's source-text drift gate compares \
+             the three copies the same way, and `dependencies` is ordered LAST in `src/` for \
+             that reason. If the CRATE gained an entry and this copy did not, the restated \
+             collect_dialect_declarations below now holds the OLD rule against the NEW \
+             behaviour and reports a name-bound $schema STRING as a surviving legacy \
+             declaration — a FALSE POSITIVE against a correct normalizer, which is what \
+             property_schema_normalization_is_idempotent_and_surgical will fail on next. If \
+             instead an entry was removed from EVERY copy in lockstep, this assertion cannot \
+             see it at all — the copies still agree while coverage silently vanishes; the \
+             instrument for that case is \
+             v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map in \
+             src/server/output_validation.rs, which carries its OWN six-element container \
+             literal. The two are a pair."
+        );
+        assert_eq!(
+            DATA_ONLY_KEYWORDS,
+            fuzz_support::DATA_ONLY_KEYWORDS,
+            "this module's DATA_ONLY_KEYWORDS mirror has DRIFTED from the shipped list. The \
+             same two asymmetric failure modes apply as for SUBSCHEMA_MAP_KEYWORDS above: a \
+             crate-side ADDITION turns the restated walkers into false-positive generators \
+             against correct code, and a lockstep REMOVAL deletes coverage with no test \
+             failure anywhere. Note that these keywords are only ever tested in KEYWORD \
+             position — testing them against the keys of a SUBSCHEMA_MAP_KEYWORDS map is the \
+             category error that WAS the 115-14 defect."
+        );
+    }
 
     /// The name a subschema-map entry is renamed to by the rename-invariance
     /// property.
@@ -1236,10 +1395,18 @@ mod schema_dialect_normalization_properties {
     ///
     /// This is the surgical-scope comparison's stripper. It must mirror the
     /// shipped traversal rule exactly — including the position distinction, see
-    /// [`SUBSCHEMA_MAP_KEYWORDS`] — because any disagreement fails the property
-    /// on CORRECT behaviour: a root-only strip reads a legitimate NESTED rewrite
-    /// as collateral damage, and a position-blind strip removes a name-bound
-    /// `$schema` string the shipped walk deliberately leaves alone.
+    /// [`SUBSCHEMA_MAP_KEYWORDS`] — but the two disagreements have DIFFERENT
+    /// consequences, and 115-17 corrects this rustdoc where it used to run them
+    /// together (`115-REVIEW.md` WR-06):
+    ///
+    /// - a ROOT-ONLY strip reads a legitimate NESTED rewrite as collateral
+    ///   damage and fails the property on CORRECT behaviour — a real false
+    ///   positive;
+    /// - a POSITION-BLIND strip does NOT. It is applied to both sides of the
+    ///   comparison, so it removes a name-bound `$schema` string from both and
+    ///   the assertion stays satisfied. What it costs is SENSITIVITY: it would
+    ///   MASK a normalizer that over-reached into NAME position, which the
+    ///   position-aware form catches. See [`SUBSCHEMA_MAP_KEYWORDS`].
     fn strip_dialect_declarations(node: &mut serde_json::Value) {
         match node {
             serde_json::Value::Object(map) => {
@@ -1460,14 +1627,30 @@ mod schema_dialect_normalization_properties {
         ///
         /// This invariant is DERIVED instead, from a JSON Schema 2020-12 fact:
         /// the keys of `properties`, `patternProperties`, `$defs`,
-        /// `definitions` and `dependentSchemas` are AUTHOR-CHOSEN NAMES with no
-        /// keyword semantics under the core and applicator vocabularies.
-        /// Therefore normalizing an entry cannot depend on the name it is filed
-        /// under, and two documents differing ONLY in that name must produce
-        /// equal normalized subtrees. It consults no `DATA_ONLY_KEYWORDS` list
-        /// at all, so it fires on a rule defect — including a FUTURE one that
-        /// special-cases some other name, or that gains a sixth data-only
-        /// keyword without gaining the position exception.
+        /// `definitions`, `dependentSchemas` and `dependencies` are
+        /// AUTHOR-CHOSEN NAMES with no keyword semantics under the core and
+        /// applicator vocabularies. Therefore normalizing an entry cannot depend
+        /// on the name it is filed under, and two documents differing ONLY in
+        /// that name must produce equal normalized subtrees. It consults no
+        /// `DATA_ONLY_KEYWORDS` list at all, so it fires on a rule defect —
+        /// including a FUTURE one that special-cases some other name, or that
+        /// gains a sixth data-only keyword without gaining the position
+        /// exception.
+        ///
+        /// # AMENDMENT (115-17): DERIVED is not the same as REACHABLE
+        ///
+        /// The paragraph above was true of this assertion and false of this
+        /// TEST, and the gap is `115-REVIEW.md` CR-01's sharpest sentence: the
+        /// one instrument the round advertised as consulting no crate-derived
+        /// list *"is in fact gated by a crate-derived list one line earlier"*.
+        /// The CONTAINER comes from [`arb_container`], which drew three of the
+        /// then-five keywords, so `dependencies` — the position the defect
+        /// actually lived at — was STRUCTURALLY UNREACHABLE in the generated
+        /// space and this fence could not fire on it however derived its
+        /// invariant was. 115-17 widened that draw to all six and MEASURED the
+        /// resulting coverage; the fence was then observed to fail on a
+        /// `dependencies` entry in the configuration where every restatement in
+        /// this module passes.
         ///
         /// SUBTREE equality, not whole-document equality: the two documents'
         /// `$ref` strings legitimately differ (`#/<container>/<name>` vs
@@ -1512,16 +1695,21 @@ mod schema_dialect_normalization_properties {
                 original_subtree,
                 probe_subtree,
                 "RENAME INVARIANCE VIOLATED at {} vs {}. The keys of properties / \
-                 patternProperties / $defs / definitions / dependentSchemas are AUTHOR-CHOSEN \
-                 NAMES with no keyword semantics under the JSON Schema 2020-12 core and \
-                 applicator vocabularies, so normalizing an entry CANNOT depend on the name it \
-                 is filed under. A difference here means the traversal is treating a NAME as a \
-                 KEYWORD — the 115-VERIFICATION.md defect class, measured as \
+                 patternProperties / $defs / definitions / dependentSchemas / dependencies are \
+                 AUTHOR-CHOSEN NAMES with no keyword semantics under the JSON Schema 2020-12 \
+                 core and applicator vocabularies, so normalizing an entry CANNOT depend on the \
+                 name it is filed under. A difference here means the traversal is treating a \
+                 NAME as a KEYWORD — the 115-VERIFICATION.md defect class, measured as \
                  `$defs.default -> verdicts=(Conforms, Conforms), rewritten=false` against the \
-                 control `$defs.Inner -> (Conforms, Violates), rewritten=true`. This invariant \
-                 is DERIVED from the spec, not restated from the crate's keyword lists, which \
-                 is why it fires where the purity assertion above passes vacuously. \
-                 Normalized under the drawn name: {}. Normalized under the probe: {}.",
+                 control `$defs.Inner -> (Conforms, Violates), rewritten=true`, and re-measured \
+                 one keyword over by 115-REVIEW.md CR-01 as `dependencies.default -> \
+                 rewritten=false` against `dependencies.Inner -> rewritten=true`. Note that the \
+                 CR-01 case flips NO v2 verdict on the pinned jsonschema 0.49.2 — both rows \
+                 measure (Violates, Violates) — so the observable is the NORMALIZATION and a \
+                 behavioural assertion there would pass against the defective code. This \
+                 invariant is DERIVED from the spec, not restated from the crate's keyword \
+                 lists, which is why it fires where the purity assertion above passes \
+                 vacuously. Normalized under the drawn name: {}. Normalized under the probe: {}.",
                 original_path,
                 probe_path,
                 &original_once,
