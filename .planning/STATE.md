@@ -4,7 +4,7 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 115-17-PLAN.md
-last_updated: "2026-08-02T18:10:49.137Z"
+last_updated: "2026-08-02T18:54:31.223Z"
 last_activity: 2026-08-02
 progress:
   total_phases: 72
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 115 (json-schema-2020-12-structured-output-caching-hints) — EXECUTING
-Plan: 19 of 19 complete — gap-closure round 4 IN PROGRESS (115-16/115-17 DONE; 115-18/19 remain)
+Phase: 999.1
+Plan: Not started
 Status: Ready to execute
 
 **115-17 HAS LANDED — the property module now mirrors the six-keyword rule AND can REACH the
