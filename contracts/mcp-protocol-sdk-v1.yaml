@@ -246,22 +246,46 @@ equations:
         Era::V1 => jsonschema::validator_for(schema)                  (auto-detect; unchanged)
         Era::V2 => draft202012::new(normalize_schema_dialect(schema)) (pinned)
       normalize_schema_dialect(s)
-        = s                     when NO string-valued $schema anywhere in s names a dialect
-                                other than DRAFT_2020_12 (root or any depth; the absent and
-                                the already-2020-12 documents are both this case)
-        = clone(s) with EVERY such $schema := DRAFT_2020_12, otherwise
+        = s                     when no string-valued $schema in any SCHEMA POSITION of s —
+                                the positions the `walk:` clause below defines — names a
+                                dialect other than DRAFT_2020_12 (the absent and the
+                                already-2020-12 documents are both this case)
+        = clone(s) with every such $schema := DRAFT_2020_12, otherwise
         walk: a $schema key is a dialect declaration only when its value is a JSON string;
               descend into every member value EXCEPT const / enum / default / examples,
               which carry INSTANCE DATA rather than subschemas;
               BUT the values of properties / patternProperties / $defs / definitions /
-              dependentSchemas are maps from author-chosen names to subschemas, so every one
-              of those values is descended into unconditionally and the data-only exclusion
-              is NEVER applied to those maps' own keys — those keys are names, not keywords
+              dependentSchemas / dependencies are maps from author-chosen names to
+              subschemas, so every one of those values is descended into unconditionally
+              and the data-only exclusion is NEVER applied to those maps' own keys — those
+              keys are names, not keywords
               (115-14: this clause previously specified the position-BLIND walk, under which
-              a $defs entry an author named `default` was visited by neither half)
+              a $defs entry an author named `default` was visited by neither half.
+               115-16: the enumeration stood at FIVE keywords and omitted `dependencies`;
+               see the 115-16 COMPLETENESS CORRECTION on the POSTCONDITION invariant below)
       cache_key = (Era, canonical_json_text(schema))
       external $ref (http:// | https:// | file:// | relative under an http-scheme $id)
         => compile error on BOTH eras, zero network and zero filesystem I/O
+
+      115-19 SCOPE CORRECTION on the equation head above.
+        The head previously stated an UNSCOPED TOTAL — a condition over every string-valued
+        $schema in s, at the root and at every depth, with no exclusion — five lines above the
+        `walk:` clause it introduces, which has always stated the scoped rule. No CORRECT
+        implementation can satisfy the unscoped form, and it is falsified by three documents:
+          {"const": {"$schema": "http://json-schema.org/draft-07/schema#"}}
+            — the payload is instance DATA and MUST survive; the shipped code handles this
+              correctly and is fenced doing so by
+              `normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone`
+          {"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}
+            — a NAME bound to a non-schema; also handled correctly
+          {"dependencies": {"default": {"$id": ..., "$schema": "...draft-07...", ...}}}
+            — the one it handled INCORRECTLY, until 115-16 (115-REVIEW.md CR-01)
+        115-14 corrected the POSTCONDITION invariant and the name-position invariant and left
+        this head stale, which is why round-1 WR-01 was only HALF closed and round-3 WR-04
+        reported the same shape again — here and in three `contracts/binding.yaml` note heads.
+        An equation no correct implementation can satisfy cannot gate anything. The retracted
+        wording is deliberately NOT requoted here; it is preserved verbatim in
+        `115-REVIEW.md` WR-04 and in this file's git history.
     domain: Declared outputSchema x emitted structuredContent x negotiated protocol era
     codomain: Some(human-readable mismatch message) or None
     invariants:
@@ -271,10 +295,11 @@ equations:
       embedded schema resource below it. An embedded schema resource is a subschema carrying
       its own `$id`; JSON Schema 2020-12 sanctions a `$schema` there and `jsonschema` 0.49.2
       honours it. Such a resource is REACHED WHATEVER THE NAME of the `$defs` / `properties` /
-      `patternProperties` / `definitions` / `dependentSchemas` entry it is filed under: those
-      keys are author-chosen names, never keywords, so the const / enum / default / examples
-      exclusion does not apply to them. EVERY such declaration is normalized to the 2020-12
-      URI before compilation, never honoured and never used as a vocabulary source.
+      `patternProperties` / `definitions` / `dependentSchemas` / `dependencies` entry it is
+      filed under: those keys are author-chosen names, never keywords, so the const / enum /
+      default / examples exclusion does not apply to them. EVERY such declaration is
+      normalized to the 2020-12 URI before compilation, never honoured and never used as a
+      vocabulary source.
       Measured failure, before 115-14: the document whose only difference from the enforced
       control was the NAME of its `$defs` entry — `$defs.default` instead of `$defs.Inner` —
       measured `(v1, v2) = (Conforms, Conforms)` with nothing rewritten, against the control's
@@ -300,12 +325,15 @@ equations:
       other than the Draft 2020-12 URI. SCHEMA POSITION means the root, plus every node
       reachable by descending into every member value EXCEPT a `const` / `enum` / `default` /
       `examples` payload — and the VALUES of a `properties` / `patternProperties` / `$defs` /
-      `definitions` / `dependentSchemas` map are always schema positions, regardless of the
-      author-chosen name they appear under. This is the checkable form of "on v2 the pin wins
-      unconditionally"; the prose form was untestable, and the root-only normalizer satisfied
-      the prose while measurably failing this. 115-14 SCOPE CORRECTION — the invariant
-      previously read "no `$schema` string anywhere in the document — root or any depth", an
-      UNSCOPED total that is false in two independent ways and unsatisfiable by any CORRECT
+      `definitions` / `dependentSchemas` / `dependencies` map are always schema positions,
+      regardless of the author-chosen name they appear under. This is the checkable form of
+      "on v2 the pin wins unconditionally"; the prose form was untestable, and the root-only
+      normalizer satisfied the prose while measurably failing this. 115-14 SCOPE CORRECTION —
+      the invariant previously stated an UNSCOPED total over every `$schema` string in the
+      document, at the root and at every depth (the retracted wording is preserved verbatim in
+      `115-REVIEW.md` and in this file's git history rather than requoted here, so a grep for
+      the retracted claim finds only the record and not the contract) — a total that is false
+      in two independent ways and unsatisfiable by any CORRECT
       implementation: (i) a `$schema` inside a `const` / `enum` / `default` / `examples`
       payload is instance DATA and must SURVIVE (115-REVIEW WR-01; the shipped code correctly
       leaves it alone and is fenced doing so by
@@ -324,7 +352,48 @@ equations:
       re-stated in `fuzz_schema_draft_pin` by 115-13 — but note that a restatement of the same
       RULE can only catch a detector/rewriter DISAGREEMENT, never a defect in the rule itself
       (115-REVIEW WR-02); the independent instrument is the rename-invariance property 115-15
-      adds
+      adds.
+      115-16 COMPLETENESS CORRECTION — the enumeration of subschema-map keywords in this
+      invariant, in the name-position invariant above and in the `walk:` clause stood at FIVE
+      and omitted `dependencies`: draft-04 / -06 / -07 and 2019-09's own
+      map-from-instance-property-NAME-to-subschema keyword, still declared (deprecated) by the
+      2020-12 meta-schema and still HONOURED by `jsonschema` 0.49.2 under the pin, which this
+      SDK's own `fuzz_support_tests` had already measured and recorded as `D-115-03-C`. The two
+      statements contradicted each other for two plans (115-REVIEW.md CR-01).
+      MEASURED: `dependencies.Inner` -> `rewritten=true` against `dependencies.default` ->
+      `rewritten=false`, so the legacy declaration survived on the second and
+      `compile_2020_12`'s `tracing::warn!` — the only D-02 diagnostic an author gets — silently
+      did not fire. BOTH names measure `(v1, v2) = (Violates, Violates)`, i.e. NO v2 verdict
+      flip is reproducible at this position on the pinned `jsonschema` 0.49.2.
+      That measurement is why the fence this invariant now rests on is STRUCTURAL rather than
+      BEHAVIOURAL, and it is the single most important sentence this contract carries forward:
+      a verdict assertion at this position would have PASSED against the defective code — a
+      fence that cannot fire, which is the failure mode this requirement shipped three times.
+      The structural observables are the `Cow` borrow/own decision (which is also exactly what
+      `compile_2020_12` branches on to emit its diagnostic) and the rewritten pointer
+      `/{container}/{name}/$schema == DRAFT_2020_12`.
+      DERIVATION, not a hand-kept list: the SIX keywords are the UNION, over the draft-04 /
+      draft-06 / draft-07 / 2019-09 / 2020-12 meta-schema documents `jsonschema` 0.49.2 ships
+      offline, of the keywords each meta-schema's own `.properties` map binds to an
+      OBJECT-typed schema whose `additionalProperties` references the meta-schema itself.
+      `$vocabulary` (boolean values) and `dependentRequired` (string-array values) are excluded
+      by that same criterion. `dependencies` was the only omission; the per-(file, keyword)
+      table and the one-command re-derivation are recorded in 115-16's SUMMARY.
+      FENCES this invariant now rests on, by name:
+      `output_validation::tests::v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`
+      — gate-visible, iterating its OWN six-element container literal rather than the constant
+      whose incompleteness was the defect, and OBSERVED to fail on exactly the four
+      `dependencies` pairs and no other container before the entry landed — and
+      `keyword_list_mirrors`, the featureless source-text drift gate that holds all three
+      literal copies of the two keyword lists to each other AND to the derivation above.
+      BOUNDARY, stated because a contract that hides its own boundary is the pattern this
+      closure exists to end: the walk is a SUPERSET of what `jsonschema` honours WITHIN those
+      six positions, and is NOT a superset over author-invented containers. Measured residual:
+      `{"components": {"default": {...}}}` -> `rewritten=false`. A deny-list over an open
+      keyword space cannot be completed; the durable fix is the INVERSE walk (descend only into
+      positions the core and applicator vocabularies DEFINE as subschemas), which 115-14
+      declined because it would REDUCE what is normalized, including under vendor containers
+      that really do hold subschemas
     - >-
       Validation is warn-only on both eras: a mismatch never produces an error result and never
       panics

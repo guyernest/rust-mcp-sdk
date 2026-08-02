@@ -506,11 +506,15 @@ bindings:
   status: implemented
   notes: >-
     Written by 115-03 Task 3(b). `#[cfg(feature = "validation")]`. Pure and idempotent:
-    `Cow::Borrowed` when NO string-valued `$schema` anywhere in the document names a dialect
-    other than `DRAFT_2020_12`, otherwise a clone in which EVERY such `$schema` — at the root
-    and at any depth — is overwritten with `DRAFT_2020_12`. Touches no other key, and never a
-    `$schema` that is instance DATA (a `properties` entry named `$schema`, or a `const` /
-    `enum` / `default` / `examples` payload). SCHM-01 / D-02.
+    `Cow::Borrowed` when no string-valued `$schema` in any SCHEMA POSITION of the document
+    names a dialect other than `DRAFT_2020_12`, otherwise a clone in which every such
+    `$schema` is overwritten with `DRAFT_2020_12`. SCHEMA POSITION is the scope the
+    equation's `walk:` clause defines: the root, plus every node reached by descending into
+    every member value EXCEPT a `const` / `enum` / `default` / `examples` payload, plus every
+    VALUE of a `properties` / `patternProperties` / `$defs` / `definitions` /
+    `dependentSchemas` / `dependencies` map whatever author-chosen name it is filed under.
+    Touches no other key, and never a `$schema` that is instance DATA (a `properties` entry
+    named `$schema`, or a `const` / `enum` / `default` / `examples` payload). SCHM-01 / D-02.
     115-12 SCOPE CORRECTION: this note previously read "`Cow::Borrowed` when the ROOT `$schema`
     is absent or already 2020-12 … Touches no other key and no nested `$schema`", describing a
     root-only rewrite. `115-VERIFICATION.md` measured that scope as a validation BYPASS — a
@@ -530,6 +534,20 @@ bindings:
     `$defs.Inner`'s `(Conforms, Violates)` with `rewritten=true`. The walk is now
     position-aware (`SUBSCHEMA_MAP_KEYWORDS`); the `signature:` above is STILL unchanged and
     still byte-identical to the source.
+    115-16 COMPLETENESS CORRECTION: the position-aware walk 115-14 landed enumerated FIVE
+    subschema-map keywords and omitted `dependencies` — draft-04 / -06 / -07 and 2019-09's own
+    map-from-instance-property-NAME-to-subschema keyword, still honoured by `jsonschema`
+    0.49.2 under the 2020-12 pin, as this SDK's own `fuzz_support_tests` had already recorded
+    (`D-115-03-C`). Measured: `dependencies.Inner` -> `rewritten=true` against
+    `dependencies.default` -> `rewritten=false`, so on the second this function returned
+    `Cow::Borrowed`, the legacy declaration survived and `compile_2020_12`'s `tracing::warn!`
+    did not fire. NO v2 verdict flip is reproducible at that position — both names measure
+    `(Violates, Violates)` on the pinned `jsonschema` — which is why the fence is STRUCTURAL
+    (the `Cow` borrow/own decision plus the rewritten pointer) rather than behavioural: a
+    verdict assertion would have PASSED against the defective code. The list is now the SIX
+    keywords DERIVED from the draft-04 / -06 / -07 / 2019-09 / 2020-12 meta-schemas rather
+    than hand-kept, and all three literal copies of it are held to that derivation by
+    `keyword_list_mirrors`. The `signature:` above is unchanged yet again.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -539,8 +557,12 @@ bindings:
   status: implemented
   notes: >-
     ADDED BY 115-12. `#[cfg(feature = "validation")]`. The DETECTOR half of the normalization:
-    returns the first `$schema` string, searched root-first at any depth, that is not already
-    `DRAFT_2020_12`, or `None`. It is what makes `normalize_schema_dialect`'s `Cow::Borrowed`
+    returns the first `$schema` string in a SCHEMA POSITION — the scope the equation's `walk:`
+    clause defines, searched root-first — that is not already `DRAFT_2020_12`, or `None`. A
+    `$schema` inside a `const` / `enum` / `default` / `examples` payload is instance DATA and
+    is deliberately NOT reported; the VALUES of the six subschema-map keywords ARE reported,
+    whatever author-chosen name they are filed under. It is what makes
+    `normalize_schema_dialect`'s `Cow::Borrowed`
     zero-allocation path decidable over the whole document rather than just the root, and it is
     also the source of the `declared` value `compile_2020_12` names in its warning — reading the
     root key there would report `<unknown>` for exactly the embedded-resource case the warning
@@ -557,6 +579,15 @@ bindings:
     its name; see the `first_legacy_dialect_in_member` binding below, which is that dispatch
     split out for CI's cognitive-complexity gate. The `signature:` above is unchanged and
     stays byte-identical to the source.
+    115-16 COMPLETENESS CORRECTION: `SUBSCHEMA_MAP_KEYWORDS` stood at FIVE entries and omitted
+    `dependencies`, so this detector reported `None` for a document carrying a legacy
+    declaration on an `$id`-bearing embedded resource filed under a `dependencies` entry an
+    author had named `default` — the same category error 115-14 closed, one keyword over
+    (115-REVIEW.md CR-01). The sixth entry was established by DERIVATION over the draft-04 /
+    -06 / -07 / 2019-09 / 2020-12 meta-schemas, not by patching the reviewed case, and
+    `$vocabulary` and `dependentRequired` are excluded by that same criterion. The fence is
+    STRUCTURAL because no v2 verdict flip is reproducible at that position on the pinned
+    `jsonschema` 0.49.2.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -565,9 +596,13 @@ bindings:
   signature: "fn pin_dialect_in_place(node: &mut Value)"
   status: implemented
   notes: >-
-    ADDED BY 115-12. `#[cfg(feature = "validation")]`. The REWRITER half: overwrites EVERY
-    string-valued `$schema` with `DRAFT_2020_12`, in place, on the clone
-    `normalize_schema_dialect` already had to make. It implements the SAME traversal rule as
+    ADDED BY 115-12. `#[cfg(feature = "validation")]`. The REWRITER half: overwrites every
+    string-valued `$schema` in a SCHEMA POSITION with `DRAFT_2020_12`, in place, on the clone
+    `normalize_schema_dialect` already had to make — SCHEMA POSITION being the scope the
+    equation's `walk:` clause defines, so a `$schema` inside a `const` / `enum` / `default` /
+    `examples` payload is left alone as instance DATA while the VALUES of the six
+    subschema-map keywords are rewritten whatever name they are filed under. It implements the
+    SAME traversal rule as
     `first_legacy_dialect` — a string-valued `$schema` is a declaration, `const` / `enum` /
     `default` / `examples` payloads are instance data and are never descended into — and a
     disagreement between the two is a defect, because it produces a `Cow::Owned` that still
@@ -586,6 +621,17 @@ bindings:
     the pre-fix run reporting that postcondition as PASSING for the very documents that were
     never rewritten. The `signature:` above is unchanged and stays byte-identical to the
     source.
+    115-16 COMPLETENESS CORRECTION: the rule both halves recite was measured INCOMPLETE as
+    well as previously wrong — `SUBSCHEMA_MAP_KEYWORDS` omitted `dependencies`, so this
+    rewriter skipped an `$id`-bearing embedded resource filed under a `dependencies` entry
+    named `default` and `normalize_schema_dialect` returned `Cow::Borrowed`. The vacuity note
+    above applies with full force here: because both halves read the same constant, the
+    postcondition passed VACUOUSLY over exactly the documents that were never rewritten, and
+    every fence 115-15 added enumerated that same constant, so an omission FROM it was
+    invisible to all of them. That is why the 115-16 fence
+    (`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`) carries its
+    OWN six-element container literal, and why `keyword_list_mirrors` anchors the three
+    literal copies to the meta-schema derivation rather than to each other.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -613,6 +659,14 @@ bindings:
     normalized onto one line (ledger `D-115-F`). 115-14's plan text specified this signature
     WITHOUT lifetimes, which does not compile — two input references and one borrowed output
     make elision ambiguous. SCHM-01 / D-02.
+    115-16 COMPLETENESS CORRECTION: the `SUBSCHEMA_MAP_KEYWORDS` arm of this three-way
+    dispatch tested a FIVE-entry list that omitted `dependencies`, so a `dependencies` member
+    fell to the ordinary walk and its author-chosen keys were then tested against
+    `DATA_ONLY_KEYWORDS` — the category error this function exists to prevent. The list is now
+    the SIX keywords derived from the pinned meta-schemas; the dispatch shape, the mutual
+    recursion and the `signature:` above are all unchanged. The disjointness this dispatch
+    silently depends on — no key in BOTH lists — is now asserted by
+    `output_validation::tests::keyword_lists_are_disjoint` (115-REVIEW.md WR-05).
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
@@ -629,6 +683,15 @@ bindings:
     entry J): it IS the mechanism, and the safety property the `output_schema_draft_pin`
     invariants assert is a property of these two halves implementing the identical rule.
     SCHM-01 / D-02.
+    115-16 COMPLETENESS CORRECTION: this half read the same five-entry
+    `SUBSCHEMA_MAP_KEYWORDS` as its detector twin, so the omission of `dependencies` was
+    mirrored perfectly — which is precisely why "these two halves implement the identical
+    rule" is NOT evidence that the rule is right. The list is now the SIX keywords derived
+    from the pinned meta-schemas. Note also that this half is written as an `if`-chain testing
+    the KEY class first while the detector is a `match` guarding on the VALUE kind and the key
+    class together; they agree today only because the two lists are disjoint, which
+    `keyword_lists_are_disjoint` now asserts. Writing both dispatches in one shape is
+    115-REVIEW.md WR-05's remaining half and is booked unowned in `deferred-items.md`.
 
 - contract: mcp-protocol-sdk-v1.yaml
   equation: output_schema_draft_pin
