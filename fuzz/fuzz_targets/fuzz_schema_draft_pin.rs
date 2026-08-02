@@ -113,7 +113,8 @@
 //!      postcondition passed VACUOUSLY").
 //! 6. **Rename invariance — the instrument for a defect in the RULE** (115-15,
 //!    `115-REVIEW.md` WR-02). Renaming an entry of a `properties` /
-//!    `patternProperties` / `$defs` / `definitions` / `dependentSchemas` map must
+//!    `patternProperties` / `$defs` / `definitions` / `dependentSchemas` /
+//!    `dependencies` map must
 //!    not change how that entry normalizes. DERIVED from a JSON Schema 2020-12
 //!    fact rather than restated from the crate's keyword lists: the keys of those
 //!    maps are AUTHOR-CHOSEN NAMES with no keyword semantics under the core and
@@ -121,8 +122,15 @@
 //!    it is filed under. It consults no `DATA_ONLY_KEYWORDS` list at all, which
 //!    is precisely what invariants 2 and 5 cannot say — and it fires on a FUTURE
 //!    rule defect too, e.g. a sixth data-only keyword gained without the position
-//!    exception. Exercised by seed `14_defs_named_default`, and OBSERVED to trip
-//!    against a deliberately restored position-blind normalizer.
+//!    exception. Exercised by seeds `14_defs_named_default` and
+//!    `15_dependencies_named_default`, and OBSERVED to trip against a deliberately
+//!    restored position-blind normalizer on each.
+//!
+//!    Its REACH, however, is NOT derived: the container selection reads this
+//!    file's [`SUBSCHEMA_MAP_KEYWORDS`], so a keyword absent from that list is a
+//!    container this invariant never probes. See its rustdoc for the two
+//!    mechanisms that cover the residual, and for the measured configuration in
+//!    which this whole file detects nothing.
 //!
 //! # Why invariant 3 is an EQUALITY and not a monotonicity claim
 //!
@@ -175,6 +183,19 @@
 //! - `dependencies` — split into `dependentRequired` / `dependentSchemas` in
 //!   2020-12 (a spec-level divergence, even though the crate still honours the
 //!   old spelling today).
+//!
+//!   **`dependencies` IS in [`SUBSCHEMA_MAP_KEYWORDS`] and is deliberately absent
+//!   HERE, and those are DIFFERENT QUESTIONS.** Do not "harmonize" the two lists:
+//!   doing so turns one of them into a defect. This allowlist asks *do both eras
+//!   agree about what this keyword MEANS* — no, so invariant 3 SKIPS any document
+//!   containing it, which is why seed `05_draft07_dependencies` exercises that
+//!   skip. The subschema-map list asks *are this keyword's VALUES schema positions
+//!   the normalizer must reach* — yes, because `D-115-03-C` measured that
+//!   `jsonschema` 0.49.2 still honours `dependencies` under the 2020-12 pin, so a
+//!   legacy declaration left alive in there is live. A keyword can be
+//!   semantically divergent (excluded here) and still hold real schema positions
+//!   (included there); `definitions` and `patternProperties` are in the same
+//!   position for the same reason.
 //! - `items` (array form) — replaced by `prefixItems`; the array form is a
 //!   COMPILE ERROR under 2020-12.
 //! - `exclusiveMinimum` / `exclusiveMaximum` (boolean form) — became numeric in
@@ -254,27 +275,99 @@ const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 /// Keywords whose VALUE is a MAP from AUTHOR-CHOSEN NAMES to subschemas.
 ///
 /// Mirrors `SUBSCHEMA_MAP_KEYWORDS` in `src/server/output_validation.rs`
-/// (115-14). The mirror is REQUIRED, not cosmetic parity: with the position rule
-/// shipped and this copy still blind, an input shaped
-/// `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}` — a
-/// `properties` entry NAMED `$schema` whose value is a string, i.e. a name bound
+/// (115-14, widened to six by 115-16). The mirror is REQUIRED, not cosmetic
+/// parity, and this copy going STALE against the shipped rule has a directly
+/// observable symptom: with the six-keyword walk shipped and this copy at five,
+/// an input shaped
+/// `{"dependencies": {"$schema": "http://json-schema.org/draft-07/schema#"}}` — a
+/// `dependencies` entry NAMED `$schema` whose value is a string, i.e. a NAME bound
 /// to a NON-schema — is correctly left alone by the shipped walk, while a
-/// position-blind [`strip_dialect_declarations`] would remove it from only one
-/// side of invariant 2's comparison and a position-blind
-/// [`collect_dialect_declarations`] would report it to invariant 5 as a surviving
-/// legacy declaration. Both are FALSE POSITIVES that crash the fuzzer on CORRECT
-/// behaviour.
+/// position-blind [`collect_dialect_declarations`] descends into the map as though
+/// the map itself were a schema and reports the name-bound STRING to invariant 5
+/// as a surviving legacy declaration. That is a FALSE POSITIVE that CRASHES THE
+/// FUZZER ON CORRECT BEHAVIOUR, and it was OBSERVED on this tree before the list
+/// was widened: exit 77 inside [`assert_no_legacy_dialect_survives`], with the
+/// panic's `normalized to:` document byte-identical to its `Input was:` document —
+/// the shipped normalizer had touched nothing, and the scan invented the finding.
+///
+/// **The STRIP half cannot false-positive, and earlier revisions of this rustdoc
+/// claimed it could** (`115-REVIEW.md` WR-06). [`strip_dialect_declarations`] is
+/// applied to BOTH sides of invariant 2's comparison; on such an input the shipped
+/// walk leaves the document unchanged, so `input == once`, so ANY deterministic
+/// strip — position-blind included — keeps the two clones equal and the assertion
+/// cannot fire. Measured in the control above: invariant 2 runs FIRST and PASSED;
+/// the panic came from invariant 5. The strip mirrors the shipped rule so the two
+/// walks here stay readable as one rule, not because it could false-positive.
 ///
 /// [`DATA_ONLY_KEYWORDS`] is a list of KEYWORDS and must never be tested against
 /// the keys of these maps. That category error was the 115-14 defect: an
 /// `$id`-bearing embedded resource filed under a `$defs` entry an author had
-/// NAMED `default` survived the v2 pin.
+/// NAMED `default` survived the v2 pin. `dependencies` is the SAME defect one
+/// keyword over (`115-REVIEW.md` CR-01), and seed `15_dependencies_named_default`
+/// is its reproduction document.
+///
+/// # The list is a DERIVATION, not a patch (115-16)
+///
+/// It is the UNION, over the draft-04 / draft-06 / draft-07 / 2019-09 / 2020-12
+/// meta-schema documents `jsonschema` 0.49.2 ships offline, of the keywords each
+/// meta-schema's own `.properties` map binds to an OBJECT-typed schema whose
+/// `additionalProperties` REFERENCES THE META-SCHEMA ITSELF — `{"$ref":"#"}`
+/// (draft-04/06/07), `{"$recursiveRef":"#"}` (2019-09), `{"$dynamicRef":"#meta"}`
+/// (2020-12), or an `anyOf` carrying such a branch (`dependencies`). That shape is
+/// precisely "a map whose keys are author-chosen and whose values are subschemas".
+/// Two keywords match the object-with-`additionalProperties` shape and are
+/// REJECTED by the self-reference criterion, and naming them is what makes the
+/// enumeration checkable rather than asserted: `$vocabulary` (its values are
+/// enablement booleans) and `dependentRequired` (its values are lists of property
+/// names). The union is exactly these six. The full derivation, including the `jq`
+/// command to re-run it, is on the shipped constant.
+///
+/// # Why this copy stays an INDEPENDENT literal
+///
+/// 115-16 published both keyword lists through the `fuzzing` seam as `pub const`
+/// re-exports, and importing them here would make drift structurally impossible.
+/// **Do not do it.** It would also make this target structurally unable to detect
+/// the defect class it exists for, and that trade is MEASURED rather than argued:
+///
+/// - With this copy INDEPENDENT and CORRECT while the crate's list is missing an
+///   entry, invariant 5's scan reaches a position the crate's walk skipped, sees
+///   the surviving legacy declaration and FIRES. That is a real detection
+///   capability.
+/// - With this copy DERIVED from the crate, the scan skips exactly what the walk
+///   skipped, the two agree, and the target exits 0 on the very document that
+///   reproduces the defect. The fuzzer becomes blind to every keyword-list
+///   omission BY CONSTRUCTION.
+///
+/// The cost of independence is silent DRIFT, and drift is what 115-19's
+/// source-text gate closes: it reads this file, `tests/property_tests.rs` and
+/// `src/server/output_validation.rs` as TEXT and asserts the three literals are
+/// identical AND ORDERED — which is why `dependencies` is appended LAST here, as
+/// it is in `src/`. That gate matters more here than anywhere else in the
+/// repository: ledger `D-115-AB` records that the workspace `exclude` array means
+/// `make quality-gate` formats, lints, builds and runs NOTHING under `fuzz/`, so
+/// this copy has no other safety net.
+///
+/// # The LIMIT of this target
+///
+/// When this copy and the crate SHARE an omission, every invariant in this file
+/// passes and the target exits 0 on the reproduction document: the strip is
+/// symmetric (invariant 2 passes), the scan skips exactly what the walk skipped
+/// (invariant 5 passes VACUOUSLY), [`assert_normalization_is_invariant_under_rename`]
+/// never selects the container because its selection reads THIS list, and
+/// invariant 3 skips the document because `dependencies` is not dialect-neutral.
+///
+/// **So a green fuzz run is NOT evidence that a keyword-list omission is absent.**
+/// The primary instrument for a LIST omission is `src`'s own fence,
+/// `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`,
+/// which carries its OWN container literal for exactly this reason; the secondary
+/// one is 115-19's source-text drift gate over the three copies.
 const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
     "properties",
     "patternProperties",
     "$defs",
     "definitions",
     "dependentSchemas",
+    "dependencies", // draft-04..2019-09; values keyed by INSTANCE PROPERTY NAME (D-115-03-C)
 ];
 
 /// The name invariant 6 renames a subschema-map entry to.
@@ -353,9 +446,21 @@ fn is_neutral_subschema(schema: &Value, is_root: bool) -> bool {
             // `115-VERIFICATION.md` measured invariant 3 as correctly SKIPPING
             // the defective document instead of misreporting it. The narrower
             // pair here is deliberate: this is a NEUTRALITY allowlist, and
-            // `patternProperties` / `definitions` / `dependentSchemas` are absent
-            // from `DIALECT_NEUTRAL_KEYWORDS` on purpose, so they can never reach
-            // this match.
+            // `patternProperties` / `definitions` / `dependentSchemas` /
+            // `dependencies` are absent from `DIALECT_NEUTRAL_KEYWORDS` on
+            // purpose, so they can never reach this match.
+            //
+            // `dependencies` joined that list in 115-18 and is the sharpest case:
+            // it IS one of the six `SUBSCHEMA_MAP_KEYWORDS` and is NOT
+            // dialect-neutral, which is not a contradiction because the two lists
+            // answer different questions — "do both eras agree about this
+            // keyword's MEANING" (no: 2020-12 split it into `dependentRequired` /
+            // `dependentSchemas`, so invariant 3 must skip such documents) versus
+            // "are this keyword's VALUES schema positions the normalizer must
+            // reach" (yes: `D-115-03-C` measured `jsonschema` 0.49.2 still
+            // honouring it under the pin). Widening this allowlist to "match" the
+            // other one would make invariant 3 assert an equality across a real
+            // spec divergence.
             "properties" | "$defs" => value
                 .as_object()
                 .is_some_and(|map| map.values().all(|v| is_neutral_subschema(v, false))),
@@ -495,9 +600,28 @@ fn assert_normalization_is_idempotent_and_surgical(schema_bytes: &[u8]) {
 /// Invariant 5, over one parsed schema: NO legacy dialect declaration survives
 /// normalization, anywhere in the document.
 ///
-/// Total — no skip condition. It holds for every input that parses as JSON,
-/// including the documents `is_dialect_neutral` excludes, which is exactly why
-/// it is a second invariant rather than a relaxation of that predicate.
+/// Total over SCHEMA POSITIONS under the traversal rule the shipped walk
+/// implements — **NOT over every input**. A `$schema` inside a `const` / `enum` /
+/// `default` / `examples` payload is instance DATA and must SURVIVE, so
+/// [`collect_dialect_declarations`] deliberately does not descend there and this
+/// assertion says nothing about such a document. See the 115-15 CORRECTION on
+/// invariant 5 in the module docs for the full statement and for why the
+/// independence claim beside it was retracted too.
+///
+/// **History, amended rather than deleted (`115-REVIEW.md` WR-03).** Through
+/// 115-17 this rustdoc and the call-site comment in the `fuzz_target!` body both
+/// asserted the invariant was total with no skip condition, holding for every
+/// input that parses as JSON — three hundred lines from the module-doc correction
+/// that had already labelled that claim false. `{"const":{"$schema":"…draft-07…"}}`
+/// parses as JSON and is deliberately outside the invariant. Both copies were
+/// corrected in 115-18; the retracted wording is quoted in `115-REVIEW.md` WR-03
+/// rather than here, so a grep for it finds the review and not a live claim.
+///
+/// What survives of the original point is narrower and still true: this invariant
+/// is a SEPARATE invariant rather than a relaxation of `is_dialect_neutral`,
+/// because it also covers the documents that predicate excludes — a nested
+/// `$schema` makes a document non-neutral, and those are precisely the
+/// embedded-resource shapes this assertion exists for.
 ///
 /// `normalize_bytes` is called ONCE here, at entry, and the `fuzz_target!` body
 /// does not call it again on this input's behalf — the same discipline the
@@ -541,13 +665,45 @@ fn assert_no_legacy_dialect_survives(schema_bytes: &[u8]) {
 /// three were wrong.
 ///
 /// This invariant is DERIVED instead, from a JSON Schema 2020-12 fact: the keys
-/// of `properties`, `patternProperties`, `$defs`, `definitions` and
-/// `dependentSchemas` are AUTHOR-CHOSEN NAMES with no keyword semantics under the
-/// core and applicator vocabularies. Therefore normalizing an entry cannot depend
-/// on the name it is filed under, and two documents differing ONLY in that name
-/// must produce equal normalized subtrees. It consults no [`DATA_ONLY_KEYWORDS`]
-/// list at all, so it also fires on a FUTURE rule defect that special-cases some
-/// other name.
+/// of `properties`, `patternProperties`, `$defs`, `definitions`,
+/// `dependentSchemas` and `dependencies` are AUTHOR-CHOSEN NAMES with no keyword
+/// semantics under the core and applicator vocabularies. Therefore normalizing an
+/// entry cannot depend on the name it is filed under, and two documents differing
+/// ONLY in that name must produce equal normalized subtrees. It consults no
+/// [`DATA_ONLY_KEYWORDS`] list at all, so it also fires on a FUTURE rule defect
+/// that special-cases some other name.
+///
+/// # Its REACH is not derived, and that is the remaining limit
+///
+/// The invariant is derived from a spec fact; the set of positions it VISITS is
+/// not. The container selection below reads this file's [`SUBSCHEMA_MAP_KEYWORDS`],
+/// so a keyword missing from that list is a container this invariant never probes
+/// — it does not fail, it never runs. That is `115-REVIEW.md` CR-01's *"the one
+/// instrument the round advertises as derived … is in fact gated by a
+/// crate-derived list one line earlier"*, and it is why 115-18's control F
+/// (both copies blind) exits 0 on the reproduction document.
+///
+/// Two mechanisms cover that residual, and neither of them is in this file:
+/// 115-19's source-text drift gate, which asserts the three restated literals are
+/// identical and ordered; and `src`'s own fence
+/// `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`,
+/// which carries its OWN container literal so an omission FROM the shipped list is
+/// visible to it. Naming them here makes this a pointer rather than a complaint.
+///
+/// # Is it really the ONLY one? Checked, not assumed
+///
+/// Invariant 3's [`is_dialect_neutral`] is also independent of the crate's keyword
+/// lists — it was position-aware before either walker was — so it is a candidate
+/// second derived fence. It is NOT one for this defect class, structurally: a
+/// nested `$schema` makes a document non-neutral, and every reproduction document
+/// here carries one, so invariant 3 SKIPS them by design (see "That nested-`$schema`
+/// exclusion was NOT relaxed" in the module docs). `dependencies` is additionally
+/// absent from [`DIALECT_NEUTRAL_KEYWORDS`], which skips CR-01's document a second
+/// time over. The check is worth recording because the equivalent taxonomy in
+/// `tests/property_tests.rs` claimed one derived fence and 115-17 MEASURED two
+/// (`D-115-AI(5)`): there, the embedded-resource POINTER assertion also fires
+/// without consulting a keyword list. This file has no such assertion, so the
+/// count here really is one — for that reason, not by inheritance.
 ///
 /// # Cost, and the discipline recorded for invariants 1-3
 ///
@@ -640,8 +796,9 @@ fn assert_entry_normalizes_the_same_under_any_name(
     assert_eq!(
         original_subtree, renamed_subtree,
         "RENAME INVARIANCE VIOLATED. The keys of properties / patternProperties / $defs / \
-         definitions / dependentSchemas are AUTHOR-CHOSEN NAMES with no keyword semantics under \
-         the JSON Schema 2020-12 core and applicator vocabularies, so normalizing an entry \
+         definitions / dependentSchemas / dependencies are AUTHOR-CHOSEN NAMES with no keyword \
+         semantics under the JSON Schema 2020-12 core and applicator vocabularies, so \
+         normalizing an entry \
          CANNOT depend on the name it is filed under. A difference here means the traversal is \
          treating a NAME as a KEYWORD — the `115-VERIFICATION.md` defect class, measured as \
          `$defs.default -> verdicts=(Conforms, Conforms), rewritten=false` against the control \
@@ -720,10 +877,15 @@ fuzz_target!(|data: &[u8]| {
     // which halved exec/s on the deliberately UNCACHED fuzz seam.
     assert_normalization_is_idempotent_and_surgical(schema_bytes);
 
-    // Invariant 5. TOTAL — it holds for every input that parses as JSON,
-    // including the documents invariant 3 skips, which is the whole reason it
-    // exists as a separate invariant rather than as a relaxed neutrality
-    // predicate. Its own single `normalize_bytes` call lives at its entry.
+    // Invariant 5. Total over SCHEMA POSITIONS under the traversal rule the
+    // shipped walk implements — NOT over every input: a `$schema` inside a
+    // `const` / `enum` / `default` / `examples` payload is instance DATA and must
+    // survive, so the scan does not descend there. (This comment asserted the
+    // unqualified version through 115-17; see the 115-15 correction on invariant 5
+    // in the module docs, and `115-REVIEW.md` WR-03.) It still covers the
+    // documents invariant 3 skips, which is why it exists as a separate invariant
+    // rather than as a relaxed neutrality predicate. Its own single
+    // `normalize_bytes` call lives at its entry.
     assert_no_legacy_dialect_survives(schema_bytes);
 
     // Invariant 6. The only fence in this file DERIVED from a spec fact rather
