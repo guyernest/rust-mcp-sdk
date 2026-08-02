@@ -145,6 +145,121 @@ checkboxes a verifier can fail on.
 
 - [x] **SCHM-01**: Schema validation runs Draft 2020-12 explicitly pinned (jsonschema 0.49, no `$schema` auto-detect), staying wasm-clean and SEP-2106-compliant (no external `$ref` dereference)
 
+> **CLOSED AGAIN 2026-08-02 — re-booked on POST-FIX measured evidence covering the COLLIDING-NAME
+> case, by the `115-14` + `115-15` gap-closure pair (round 2).** Both blocks below are kept
+> VERBATIM. The one immediately following is `115-13`'s closure record; the one after it is the
+> original downgrade. Neither is deleted — the sequence *is* the finding. (The downgrade block's
+> heading word is deliberately not repeated in THIS block either, so the `grep -c` count of that word
+> over this file stays at 1 — the check that proves the record was amended rather than removed.)
+>
+> **`115-13`'s `[x]` was premature — for the SECOND time on this requirement.** Its evidence table
+> was accurate for the cases it MEASURED (an embedded resource filed under a `$defs` entry named
+> `Inner`), but its conclusion generalized past them. `115-VERIFICATION.md` falsified it by renaming
+> a single `$defs` key. This is ledger `D-115-G` — a requirement booked ahead of the evidence that
+> would falsify it — recurring in a narrower form on the very requirement `D-115-G` was filed about,
+> and naming that plainly is more useful to a future reader than the marker itself.
+>
+> **The residual defect.** `115-12`'s recursive walk was POSITION-BLIND: it tested
+> `DATA_ONLY_KEYWORDS` (`const`/`enum`/`default`/`examples`) against EVERY object key. But the keys
+> of `properties` / `patternProperties` / `$defs` / `definitions` / `dependentSchemas` are
+> AUTHOR-CHOSEN NAMES, never keywords. An `$id`-bearing embedded schema resource filed under a
+> `$defs` entry an author had NAMED `default` was therefore visited by NEITHER walker, and its legacy
+> `$schema` survived the v2 pin — the same vacuous-validator bypass, moved sideways instead of down.
+>
+> **The shipped fix (`115-14`, commits `f8692f1d` / `07bfdd52` / `2bf4d637`).** A
+> `SUBSCHEMA_MAP_KEYWORDS` constant consulted FIRST in the member dispatch of BOTH walkers, making it
+> a three-way decision: a member in that list whose value is an object → recurse into every VALUE,
+> never keyword-filtering the map's own keys; the same key with a non-object (malformed) value →
+> ordinary walk, so no coverage is lost; otherwise → the `DATA_ONLY_KEYWORDS` skip, unchanged. Both
+> signatures stay byte-identical to `contracts/binding.yaml`. The dispatch was extracted into
+> `first_legacy_dialect_in_member` / `pin_dialect_in_member` only AFTER measuring that inline it put
+> `pin_dialect_in_place` at cognitive 24 against `pmat quality-gate`'s threshold of 23; no `#[allow]`
+> was used.
+>
+> **The measurement**, through the same seam (`output_validation::fuzz_support`, `jsonschema`
+> 0.49.2), instance `{"n": "NOT-AN-INTEGER"}`:
+>
+> | Document | Before 115-14 | After 115-14 |
+> |---|---|---|
+> | `$defs.Inner` (control) | `(Conforms, Violates)`, `rewritten=true` | `(Conforms, Violates)`, `rewritten=true` |
+> | **`$defs.default`** | **`(Conforms, Conforms)`, `rewritten=false`** | **`(Conforms, Violates)`, `rewritten=true`** |
+> | `$defs.const` / `.enum` / `.examples` | as `$defs.default` | enforced, as the control |
+> | `properties.{const,enum,default,examples}` | not rewritten | `Cow::Owned`, `/properties/<name>/$schema == 2020-12` |
+>
+> `rewritten=false` is the part with teeth: the normalizer returned `Cow::Borrowed`, so no
+> `tracing::warn!` fired either and the author got NO signal. The `properties`-position row is fenced
+> STRUCTURALLY, deliberately — `jsonschema` 0.49.2 still enforces `type` there against the DEFECTIVE
+> code, so a behavioural assertion would have been a fence that can never fire.
+>
+> **The fences, by name, with counts and gate visibility:**
+>
+> | Fence | Where | Count / state |
+> |---|---|---|
+> | `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword` | `mod tests`, feature `validation` — **gate-visible** | in the **18** `output_validation::tests` (17 + 1) |
+> | `normalization_cases()` (f) `$defs.default` and (g) `properties.examples` | same | flow through the structural and idempotence fences automatically; `normalization_cases()` returns 7 |
+> | `property_normalization_does_not_depend_on_a_subschema_map_key_name` | `tests/property_tests.rs`, `--features "full fuzzing"` | **20** vs **18** under `--features full`; generator now DRAWS the colliding names — **58 of 256** cases drew one together with an embedded non-2020-12 dialect, all 12 container×name combinations hit |
+> | fuzz **invariant 6** `assert_normalization_is_invariant_under_rename` | `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | derived from the spec, not restated from the crate's lists |
+> | seed `14_defs_named_default` | `fuzz/corpus/fuzz_schema_draft_pin/` | **14** committed seeds; `-runs=0` replay exit 0 (15 996 runs); `-max_total_time=300` → **3 697 874** runs, exit 0, artifacts dir EMPTY |
+>
+> **THREE negative controls OBSERVED this round — because an unfired fence is not evidence.** That is
+> the standard `115-VERIFICATION.md` applied when it refused to inherit the SUMMARYs' conclusions.
+>
+> 1. `115-14` Task 1, against the position-blind body: **16 passed / 2 failed**, exactly the two
+>    predicted — `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword` (`BYPASS
+>    ($defs.const): the v2 Draft 2020-12 pin accepted a STRING where the embedded schema resource
+>    declares integer`) and `normalize_schema_dialect_changes_only_dollar_schema_keys` (borrow/own,
+>    `left: false, right: true`).
+> 2. `115-15` Task 1, with the position-blind member filter restored:
+>    `property_normalization_does_not_depend_on_a_subschema_map_key_name` FAILED — *"RENAME
+>    INVARIANCE VIOLATED at `/$defs/const` vs `/$defs/__rename_probe__`"* — with a shrunk
+>    counterexample whose entry name is one of the four colliding literals.
+> 3. `115-15` Task 2, same revert: seed `14_defs_named_default` exits **1** naming invariant 5. And
+>    the decisive one — with BOTH restated copies of the rule ALSO made blind (so invariants 2 and 5
+>    pass vacuously, exactly as they did pre-`115-14`), that seed still exits **1**, naming
+>    **invariant 6**. That is the direct proof that invariant 6 is the instrument for a defect in the
+>    shared rule.
+>
+> All were restored from `shasum -a 256 -c`-verified snapshots and re-run clean; `git status --short
+> src/` empty afterwards.
+>
+> **The STRUCTURAL finding, and what was done about it.** All three fences that existed before this
+> round RESTATED the code's own traversal rule: the unit postcondition called the crate's own blind
+> DETECTOR, the property generator hard-coded the definition name `"Inner"` so its space could not
+> draw a colliding one, and fuzz invariant 5's collector re-implemented the same filter while its
+> module doc called the scan *"TOTAL — no skip condition"* and *"INDEPENDENT"*. Independent in
+> IMPLEMENTATION only, never in RULE — and a rule defect is exactly what that cannot catch. It was
+> MEASURED: for both `$defs.default` and `properties.examples`, `owned=false` (nothing rewritten) yet
+> `first_legacy_dialect(&normalized) == None` PASSED. A postcondition satisfied vacuously by the
+> defect it was written to catch.
+>
+> The repair is a metamorphic relation DERIVED from a JSON Schema 2020-12 fact instead of restated
+> from pmcp's source: the keys of the five subschema-map keywords are author-chosen names with no
+> keyword semantics under the core and applicator vocabularies, therefore **normalizing an entry must
+> not depend on the name it is filed under**. It consults no keyword list at all, it fires on the
+> shipped defect immediately, and it would equally catch a future rule defect that special-cases some
+> other name or gains a sixth data-only keyword without gaining the position exception. It exists in
+> both generators, and both were observed to fire. Invariant 5's two false doc claims are corrected
+> in place.
+>
+> **The whole-phase gate, run over the fixed tree BEFORE this marker was written (`115-15` Task 3).**
+> `/usr/bin/make quality-gate` exit **0** — **5054 passed / 0 failed / 81 ignored across 309 `test
+> result:` lines**. `pmat quality-gate --fail-on-violation --checks complexity` exit **0**, **0
+> violations**, so both reshaped walkers stay under the gate with no `#[allow]`. SCHM-02/SCHM-03
+> re-run unregressed at exactly the counts `115-VERIFICATION.md` measured: **78/78** across
+> `structured_tool_output` 20, `v2_caching_hints` 19, `v1_lists_golden` 7, `v2_schema_tripwires` 13,
+> `v2_core_schema_facts` 8, `vendored_schema_provenance` 6, `phase115_contract_bindings` 5. No
+> `Cargo.toml` / `Cargo.lock` anywhere in the `115-14`+`115-15` closure diff, and **0** new `pub fn` /
+> `pub struct` / `pub enum` lines under `src/` — the milestone's additive 2.x-minor posture holds
+> without a `cargo public-api` run.
+>
+> **Provenance.** This closure is **option (a)** of `115-VERIFICATION.md` § *Human Verification
+> Required* — "accept a further closure plan implementing position-aware traversal" — and NOT option
+> (b), an override. The owner's `115-10` sign-off (Guy Ernest, 2026-08-01, commit `496da96b`)
+> predates `115-REVIEW.md` and is expressly **not** read as covering CR-01; nothing here relies on
+> it. Re-verification is `/gsd:verify-phase 115`'s job and this block is the evidence it should
+> score. The marker was written AFTER every command above had run and every count had matched —
+> which, on this requirement, is the whole point.
+
 > **CLOSED 2026-08-01 — re-booked `[~]` → `[x]` on POST-FIX measured evidence, by the `115-12` +
 > `115-13` gap-closure pair.** The downgrade block immediately below is kept VERBATIM: it is the
 > honest record of a booking that was wrong, and `/gsd:verify-phase 115` will be re-run against it.
@@ -522,7 +637,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TASK-04 | Phase 114 | Implemented — pending final schema |
 | TASK-05 | Phase 114 | Implemented — pending final schema (see the TASK-05 scope qualification above) |
 | TASK-06 | Phase 114 | Implemented — pending final schema |
-| SCHM-01 | Phase 115 | Complete — gap closed by 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) |
+| SCHM-01 | Phase 115 | Complete — gap closed in two rounds: 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) then 115-14 + 115-15 (POSITION-AWARE traversal — `SUBSCHEMA_MAP_KEYWORDS`, so a keyword deny-list is never tested against a key in NAME position; `$defs.default` now `(Conforms, Violates)`, `rewritten=true`; rename-invariance fences in both generators, derived from the spec rather than restated from the crate's keyword lists) |
 | SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
 | AUTH-01 | Phase 116 | Pending |

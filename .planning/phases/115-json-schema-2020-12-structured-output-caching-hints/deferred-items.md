@@ -984,3 +984,79 @@ as a **delta against the phase base** precisely so this inherited count cannot b
 something Phase 115 introduced, and so a genuine Phase 115 regression cannot hide inside it.
 
 **unowned.**
+
+## D-115-AF — a fence specified to probe only the FIRST entry was blind to this phase's OWN reproduction seed
+
+`115-15-PLAN.md` Task 2(b) specified fuzz invariant 6 as: find "the FIRST member of the root object
+whose key is in `SUBSCHEMA_MAP_KEYWORDS` and whose value is a non-empty object; take that map's
+FIRST entry". The bounding was there for a good reason — keep the added cost a traversal rather than
+a scan — and it was implemented literally first.
+
+**Then it was measured, and it did not fire on seed `14_defs_named_default`.** That seed is the
+`115-VERIFICATION.md` reproduction document verbatim:
+
+```json
+{"type":"object","properties":{"n":{"$ref":"#/$defs/default"}},
+ "$defs":{"default":{"$id":"…","$schema":"…draft-07…","type":"integer"}}}
+```
+
+In insertion order the FIRST root-level subschema map is `properties`, and its FIRST entry is `n` —
+a plain `$ref` holder carrying no `$schema` at all. The interesting entry, `$defs.default`, was
+never probed. With BOTH restated copies of the traversal rule made position-blind (so invariants 2
+and 5 pass vacuously, exactly as they did pre-`115-14`), the target on that seed exited **0**.
+
+That is precisely the failure mode this plan exists to close — a fence that cannot fire on the case
+it was written for — and it was found only because the negative control was run in the "both copies
+blind" configuration rather than only the "`src/` blind" one. In the weaker configuration invariant
+5 fires first and MASKS the fact that invariant 6 is asleep.
+
+**Fixed inside the task** (Rule 1): the selection was widened to EVERY entry of EVERY root-level
+subschema map. Each entry's subtree is probed once, the subtrees are disjoint, and nested containers
+are still not descended into, so the total stays linear in the document — the same order as
+invariant 5's scan. Measured cost: the `-max_total_time=300` campaign went **3 814 764** runs
+(first-entry-only) → **3 697 874** runs (widened), about 3%. Re-measured in the both-blind
+configuration, the widened invariant 6 exits **1** on seed 14 with `RENAME INVARIANCE VIOLATED`.
+
+**Standing lesson, and it generalizes past this phase:** when a negative control fires, check WHICH
+fence fired. A stronger fence firing first hides a weaker one that never ran. Run the control in the
+configuration that silences the fences you are NOT trying to measure.
+
+**Owned and closed** by `115-15` Task 2; no follow-up needed. Recorded because the plan text still
+carries the narrower spec and a future reader comparing plan to code will otherwise read the
+widening as unexplained drift.
+
+## D-115-AG — the outcome of this round's own process question, and the ID the plan asked for was taken
+
+Two things, both bookkeeping, both worth writing down because this requirement has now paid for the
+first one twice.
+
+**(1) The outcome.** `115-15` Task 3 ran the gate BEFORE touching any booking, which is the whole
+reason the task sits last in the plan. `/usr/bin/make quality-gate` exit **0** (5054 passed / 0
+failed / 81 ignored across 309 `test result:` lines); `pmat quality-gate --fail-on-violation --checks
+complexity` exit **0**, 0 violations; the seven SCHM-02/SCHM-03 binaries **78/78**, matching
+`115-VERIFICATION.md` exactly (20 + 19 + 7 + 13 + 8 + 6 + 5). Every command passed and every count
+matched, so SCHM-01's marker was written **`[x]`**. Had any of them failed it would have been `[~]`
+and this entry would name the failing command instead.
+
+**The standing rule this phase has now paid for twice**, stated once so it can be cited rather than
+re-derived:
+
+- *A requirement's marker is written AFTER its measurement, never before.* `D-115-G` is the first
+  instance; `115-13`'s `[x]` — accurate for the cases it measured, generalized past them — is the
+  second, on the same requirement.
+- *A fence that RESTATES the implementation's rule is not evidence about that rule.* It is an
+  agreement check between two copies of one rule, satisfied vacuously when the rule is wrong. This
+  was measured three times over in this phase. Evidence about a rule has to be DERIVED from
+  something outside the implementation — here, a JSON Schema 2020-12 vocabulary fact.
+- *An unfired fence is not evidence.* Every fence added in this round carries an OBSERVED negative
+  control, recorded with its message. See also `D-115-AF` on checking WHICH fence fired.
+
+**(2) The ID.** `115-15-PLAN.md` Task 3(e) instructs "Append `D-115-AE`" and states that `115-14`
+took `AC` and `AD`. `115-14` in fact took **`AC`, `AD` and `AE`** — `AE` is the pmat
+`--max-cognitive 25` fail-open entry, filed as a deviation after the plan for `115-15` was written.
+Appending a second `D-115-AE` would have broken the ledger's whole-ID duplicate check, which is one
+of the same plan's acceptance criteria. The scheme therefore continues at `AF` / `AG`. The plan's
+literal criterion `grep -c '^## D-115-AE'` still returns **1** — `115-14`'s entry — which is the
+correct end state, reached by not writing a duplicate rather than by writing one.
+
+**Owned and closed** by `115-15` Task 3.
