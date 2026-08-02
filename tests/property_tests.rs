@@ -1122,6 +1122,32 @@ mod schema_dialect_normalization_properties {
              position — testing them against the keys of a SUBSCHEMA_MAP_KEYWORDS map is the \
              category error that WAS the 115-14 defect."
         );
+
+        // Asserted LAST, and as a SUPERSET rather than an equality, both
+        // deliberately. Last, so that a drifted CONTAINER_DRAW cannot mask a
+        // drifted mirror (D-115-AF: check WHICH fence fired). Superset, so that
+        // the both-blind negative control — in which the shipped list is
+        // temporarily SHORTER than CONTAINER_DRAW — leaves the generated space
+        // intact and the rename fence free to fire, which is the entire point
+        // of running that control.
+        let undrawable: Vec<&&str> = fuzz_support::SUBSCHEMA_MAP_KEYWORDS
+            .iter()
+            .filter(|shipped| !CONTAINER_DRAW.contains(shipped))
+            .collect();
+        assert!(
+            undrawable.is_empty(),
+            "{undrawable:?} are SHIPPED subschema-map keywords that arb_container() cannot \
+             draw, so no generated document can ever file its embedded resource there and \
+             every fence in this module is blind at those positions. That is 115-REVIEW.md \
+             CR-01 verbatim — `dependencies` was in the shipped rule while arb_container() \
+             drew three of five, and the rename-invariance property, whose invariant is \
+             DERIVED and consults no keyword list, was still unable to reach the defect \
+             because its CONTAINER selection was gated by a crate-derived list one line \
+             earlier. Add the keyword to CONTAINER_DRAW. Do NOT `fix` this by sourcing the \
+             draw from SUBSCHEMA_MAP_KEYWORDS: that was measured (D-115-AI(4)) to make every \
+             negative control in this module go green, because shortening the list then \
+             shrinks the generated space in the same edit."
+        );
     }
 
     /// The name a subschema-map entry is renamed to by the rename-invariance
@@ -1185,13 +1211,88 @@ mod schema_dialect_normalization_properties {
         ]
     }
 
-    /// The subschema-map keyword the generated resource is filed under.
+    /// The containers [`arb_container`] can draw — its OWN six-element literal,
+    /// deliberately NOT [`SUBSCHEMA_MAP_KEYWORDS`].
     ///
-    /// Three of the five [`SUBSCHEMA_MAP_KEYWORDS`]. `properties` is included
-    /// deliberately: it is the position where a colliding name is also an
-    /// INSTANCE property name, which is the shape a real author hits first.
+    /// # Why this is a fourth copy on purpose (`D-115-AI(4)`)
+    ///
+    /// 115-17 first built the draw as
+    /// `proptest::sample::select(SUBSCHEMA_MAP_KEYWORDS)` — one list, no fourth
+    /// literal, and gated against the crate by
+    /// [`keyword_lists_mirror_the_shipped_ones`], which reads like the better
+    /// design. It was MEASURED to be the wrong one: with the draw sourced from
+    /// the mirror, removing an entry from the mirror removes that container from
+    /// the GENERATED SPACE in the same edit, so the negative controls that are
+    /// supposed to observe the defect all went green. The both-blind control
+    /// reported `21 passed` — a fence that cannot fire, dressed as a passing
+    /// suite.
+    ///
+    /// That is `115-REVIEW.md` CR-01 reintroduced one layer up: the
+    /// rename-invariance property's invariant is DERIVED and consults no keyword
+    /// list, but its CONTAINER selection would once again have been *"gated by a
+    /// crate-derived list one line earlier"*. It is also the same conclusion
+    /// 115-16 reached on the `src/` side, where
+    /// `v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`
+    /// carries its own six-element container literal for exactly this reason: a
+    /// fence parameterised by the list whose incompleteness IS the defect cannot
+    /// fire on that defect.
+    ///
+    /// The drift risk a fourth literal creates is real and is fenced separately,
+    /// by the SUPERSET guard at the end of
+    /// [`keyword_lists_mirror_the_shipped_ones`]: every keyword `src/` ships must
+    /// be drawable here. A superset check rather than an equality check,
+    /// deliberately — an equality check would fail in the both-blind control
+    /// configuration and mask the result the control exists to produce.
+    const CONTAINER_DRAW: &[&str] = &[
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "dependencies",
+    ];
+
+    /// The subschema-map keyword the generated resource is filed under: all six
+    /// of [`CONTAINER_DRAW`].
+    ///
+    /// # AMENDMENT (115-17): three of five, and why that was a hole
+    ///
+    /// This drew a hard-coded `prop_oneof![Just("$defs"), Just("definitions"),
+    /// Just("properties")]` until 115-17 — three of the then-five keywords — and
+    /// the consequences were two, both measured:
+    ///
+    /// - **`dependencies` was STRUCTURALLY UNREACHABLE in the generated space.**
+    ///   That is `115-REVIEW.md` CR-01's *"Why nothing catches it"*: the
+    ///   rename-invariance property is the one fence here whose invariant is
+    ///   DERIVED rather than restated, and it was nonetheless *"gated by a
+    ///   crate-derived list one line earlier"* — this one. No draw, no document,
+    ///   no fence, however sound the invariant.
+    /// - **`patternProperties` and `dependentSchemas` were exercised by NOTHING**
+    ///   — no test, no property draw, no corpus seed — from 115-14 to 115-16
+    ///   (`115-REVIEW.md` WR-02). Deleting them from all three copies of the list
+    ///   passed the entire suite.
+    ///
+    /// The draw is over [`CONTAINER_DRAW`], NOT over
+    /// [`SUBSCHEMA_MAP_KEYWORDS`] — see that constant's rustdoc for the measured
+    /// reason, which is the same one that put an own literal in the `src/` side
+    /// fence.
+    ///
+    /// `properties` remains reachable and remains the most interesting of the
+    /// six: it is the position where a colliding name is ALSO an instance
+    /// property name, which is the shape a real author hits first.
+    ///
+    /// # Two escaping questions this widening raises, both answered NO
+    ///
+    /// `patternProperties` keys are REGEXES. Every name [`arb_definition_name`]
+    /// can draw — the five literals `Inner` / `const` / `enum` / `default` /
+    /// `examples` and the `[a-zA-Z_][a-zA-Z0-9_]{0,6}` arm — is a valid regex
+    /// matching itself literally, as is [`RENAME_PROBE_NAME`], so no regex
+    /// escaping is needed at any draw.
+    ///
+    /// And none of those names contains `/` or `~`, so the JSON Pointers and the
+    /// local `$ref`s built from them need no RFC 6901 escaping either.
     fn arb_container() -> impl Strategy<Value = &'static str> {
-        prop_oneof![Just("$defs"), Just("definitions"), Just("properties")]
+        proptest::sample::select(CONTAINER_DRAW)
     }
 
     /// Where a generated document filed its embedded schema resource.
@@ -1502,6 +1603,37 @@ mod schema_dialect_normalization_properties {
         /// the 115-12 defect — resolves an EMPTY vocabulary set on that
         /// resource and yields an accept-everything sub-validator, which the
         /// first two halves are both blind to.
+        ///
+        /// # AMENDMENT (115-17): the LAST assertion here is a fence of the
+        /// # DERIVED kind, and this module's own doc said otherwise
+        ///
+        /// The module rustdoc and the rename property below both state that
+        /// rename invariance is *the one* fence here that a defect in the RULE
+        /// cannot satisfy. 115-17's both-blind negative control MEASURED that to
+        /// be wrong: with `dependencies` removed from `src/` AND from this
+        /// file's mirror — the configuration in which idempotence, surgical
+        /// scope, the root check and dialect purity all pass, three of them
+        /// VACUOUSLY, and `keyword_lists_mirror_the_shipped_ones` passes because
+        /// the two copies agree — this test still FAILED, at the embedded-
+        /// resource pointer assertion at the bottom of the body:
+        ///
+        /// ```text
+        /// an embedded schema resource's dialect declaration must be rewritten
+        /// to the 2020-12 URI at /dependencies/const/$schema
+        /// ```
+        ///
+        /// That assertion addresses the pointer the GENERATOR drew, so like
+        /// rename invariance it consults no keyword list of the crate's and
+        /// cannot pass vacuously when the rule is wrong. Its reachability has
+        /// the same precondition, and it is the precondition CR-01 identified:
+        /// [`arb_container`] must be able to DRAW the container. It could not
+        /// draw `dependencies` before 115-17, which is why this assertion — like
+        /// every other here — was silent through three gap-closure rounds.
+        ///
+        /// Assertions in a `proptest!` body run top to bottom, so a failure
+        /// REPORTED at that assertion is positive evidence that surgical scope
+        /// and dialect purity PASSED for the same case. That is how 115-17
+        /// discharged its both-blind criterion. Booked as `D-115-AI(5)`.
         #[test]
         fn property_schema_normalization_is_idempotent_and_surgical(
             generated in arb_schema_document()
@@ -1585,6 +1717,12 @@ mod schema_dialect_normalization_properties {
             // The embedded resource specifically, addressed by the POINTER the
             // generator actually drew — container AND name — so the failure
             // message names the real path and a colliding name is covered.
+            //
+            // This is the SECOND fence in this module of the DERIVED kind, not
+            // a restatement: it consults no keyword list, so it does NOT pass
+            // vacuously when the rule is wrong. 115-17's both-blind control
+            // observed it firing at /dependencies/const/$schema while every
+            // restatement above passed. See this test's rustdoc, D-115-AI(5).
             if let Some(embedded) = &generated.embedded {
                 let pointer = embedded.dialect_pointer();
                 let nested_declared = input.pointer(&pointer);
