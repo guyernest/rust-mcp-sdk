@@ -2625,20 +2625,49 @@ Plans:
 **Plans**: 15 plans in 10 waves *(planned 2026-08-02. Scope note: RFC 9728 Protected Resource Metadata discovery and the RFC 8707 `resource` parameter were DEFERRED by owner decision on 2026-08-02 and are not planned here. RESEARCH amendments A1-A4 are authoritative corrections to CONTEXT decisions whose literal wording is unimplementable, and the plans implement the corrected shapes. Every verification block uses `--features full,oauth` — `oauth` is not in the `full` feature, so bare `make quality-gate` compiles none of this phase's code surface — and every nextest filter uses `binary(...)`, never `test(/.../)`, which selects zero and exits 0.)*
 
 Plans:
+**Wave 1**
+
 - [ ] 116-01-PLAN.md — Wave 1. Phase baselines, contract-first check, gate proof. No source files: records the semver baseline against `b2bf9157`, the `make doc-check` 28-error distribution as a DELTA anchor, the measured `--features full` vs `full,oauth` nextest A/B (0 vs 5 on `binary(oauth_dcr_integration)`), the wasm32 target probe RESEARCH assumption A5 left open, and the dependency fence with Pitfall 6's precise oauth2 scoping. Also OBSERVES the D-15 tripwire reporting the four auth files under a temporary widening, then reverts to a zero-byte diff — the pre-fix violation list 116-14 must drive to zero
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 116-02-PLAN.md — Wave 2. AUTH-01's semantics: three marker-const error identities (`ISS_MISMATCH_MARKER`, `STATE_MISMATCH_MARKER`, `REAUTH_REQUIRED_MARKER`) on `Error::Protocol` per amendment A2 — `Error::Authentication` is a bare-String tuple variant with no `data` member, so a marker there would make its own predicate return false — plus the ungated, wasm-clean `src/shared/oauth_validation.rs` holding `AuthorizationRequestRecord`, `IssPresence`, `validate_authorization_response` (the spec's normative 4-row table, state-then-iss-then-error ordering) and the pure D-04 precedence resolver. Property tests derive the no-normalization invariant from RFC 3986 §6.2.2-6.2.3 rather than restating the comparison operator
 - [ ] 116-03-PLAN.md — Wave 2. AUTH-02's carrier: `application_type` inherent accessors over `DcrRequest`/`DcrResponse`'s existing `#[serde(flatten)] extra` map (D-09), never a field — `DcrRequest` is public, all-pub-field and not `#[non_exhaustive]` with ten in-repo literal sites, so a field is `constructible_struct_adds_field` = MAJOR. Documented last-write-wins precedence with collision tests in both orders, and a wire-shape test proving the flatten carrier emits a top-level key
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 116-04-PLAN.md — Wave 3. The remaining pure primitives: SEP-2351's ORDERED candidate list (amendment A3 — the spec requires a probe sequence, and RESEARCH measured that D-13's literal append-to-insert swap 404s Microsoft Entra ID, whose URL is in this SDK's own doctest), the RFC 8414 §3.3 `issuer_matches_metadata` anchor comparison, and D-10's `derive_application_type` where a mixed `redirect_uris` vector is an explicit error. A property test asserts the appended form survives in every candidate list
 - [ ] 116-05-PLAN.md — Wave 3. AUTH-03's storage seam: `CredentialStore` keyed by `(issuer, account scope)` so SEP-2352's "MUST NOT reuse across authorization servers" holds by key shape rather than by enforcement code, with load/save/delete only (Open Question 4 — a trait owning refresh would need an HTTP client and break both I/O-free construction and wasm-cleanliness). Ships `InMemoryCredentialStore` and a `FileCredentialStore` porting cargo-pmcp's proven atomic 0o600 write plus the schema 1→2 migration, and wires a wasm32 build fence into the org-required `gate`
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 116-06-PLAN.md — Wave 4. Pitfall 1, the phase's most consequential finding: `fetch_discovery` validates the document's `issuer` against the issuer used to build the URL BEFORE the metadata escapes, because without it AUTH-01's whole comparison is anchored on an attacker-chosen value. Plus the ordered candidate probe, a new `AuthorizationServerExtras` sibling type carrying the RFC 9207 flag (amendment A1 — a field on `OidcDiscoveryMetadata` would be MAJOR), and a streaming two-refusal reqwest bounded-read helper. The lying-document fixture must be OBSERVED failing pre-fix
-- [ ] 116-07-PLAN.md — Wave 5. The same three changes for `generic_oidc.rs` and `cognito.rs`, which build the identical wrong URL; Cognito additionally never trimmed a trailing slash. Its TTL cache must keep short-circuiting and must never cache an anchor-rejected document. Explicitly does NOT touch the MCP resource-server side
 - [ ] 116-08-PLAN.md — Wave 4. House ALWAYS requirements: a fuzz target over `validate_authorization_response` and `discovery_url_candidates` whose Ok-invariant is decoded INDEPENDENTLY inside the target, so it can see a rule defect the crate shares with a restating mirror; and `examples/c11_oauth_iss_state_validation.rs`, which actually RUNS the accept and both reject paths with no network, no browser and no `oauth` feature
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 116-07-PLAN.md — Wave 5. The same three changes for `generic_oidc.rs` and `cognito.rs`, which build the identical wrong URL; Cognito additionally never trimmed a trailing slash. Its TTL cache must keep short-circuiting and must never cache an anchor-rejected document. Explicitly does NOT touch the MCP resource-server side
 - [ ] 116-09-PLAN.md — Wave 5. AUTH-01 wired into the CLI flow: the per-request record built before the redirect, `state` bound via `generate_state()` (today it is an unnamed temporary at `:712`, and generated by the wrong RFC's helper), the callback carrying the full query instead of a bare code, validation before redemption, and the D-04 builder plus `PMCP_OAUTH_ISS_VALIDATION`. Every rejection test carries an `expect(0)` mock on `/token` — the code is never redeemed
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 116-10-PLAN.md — Wave 6. Two SEPs at one edit site: derived `application_type` sent unconditionally (D-11, with echo divergence warned and never fatal), `grant_types` gaining `refresh_token` and `offline_access` requested only when advertised (amendment A3's finding that SEP-2207's actual content is additional to D-14's defects), and an actionable registration-rejection error naming what was sent. SEP-837's optional retry MAY is deliberately not adopted
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 116-11-PLAN.md — Wave 7. The store adopted: credentials and the DCR-issued `client_id` keyed by `(issuer, account)`, the issuer-less legacy `oauth-tokens.json` never read and its discard announced once, and D-18's AS-change detection refined by amendment A4 to branch on credential provenance — warn-and-re-register for DCR, a typed `reauth_required` error for pre-registered, which is what the spec's two adjacent sentences actually prescribe
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 116-12-PLAN.md — Wave 8. D-14's three refresh defects, all of which block headless operation: the stored refresh token destroyed whenever the AS omits one, DCR clients unable to refresh at all, and `scope` never sent. Plus D-08's `Interactivity::RefreshOnly` making the browser path unreachable by construction instead of a five-minute wait on a listener nothing can reach, and this file's remaining hygiene — bounded reads, the post-hoc DCR cap upgraded to streaming, the plaintext token log, and the private PKCE duplicates
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 116-13-PLAN.md — Wave 9. D-19's convergence: cargo-pmcp drops its parallel `TokenCacheV1`, keeps `oauth-cache.json` as the surviving path and migration source, and its five `auth` subcommands become thin wrappers over the same seam a platform would implement — with `logout`'s four semantics test-pinned first. Scopes the no-oauth2 claim by keeping cargo-pmcp's pre-existing direct `oauth2 = "5.0"` confined to `deployment/`, and makes versions/pins coherent for publish
 - [ ] 116-14-PLAN.md — Wave 9. D-113-V closed by measurement: both `EXTRA_SCOPE` and the `REQUIRED_FILES` anti-vacuity guard widened to the four auth files, the tripwire reporting zero, `WHOLE_BODY_ALLOWLIST` still empty at its written floor, and the module doc naming AUTH-03/D-15 as second owner. Runs LAST among source-touching plans on purpose — widening earlier would leave the gate red for waves. Both the negative control and the anti-vacuity control are RUN, not assumed
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
 - [ ] 116-15-PLAN.md — Wave 10. Every gate run at HEAD and recorded as a delta, then and only then the D-20 bookings, each citing an artifact plus a named `binary(...)` and a non-zero count. AUTH-01 is booked against the spec's flag-keyed rule with the realization stated plainly — `Client::era()` does not exist pre-connection, and "strict whenever the AS advertises or emits `iss`" is strictly safer for v1 than the requirement asked for. Closes with a deferred-items register giving every deferral, amendment and limitation a named owner
 
 ### Phase 117: Agents, Tester & v1 Severability
