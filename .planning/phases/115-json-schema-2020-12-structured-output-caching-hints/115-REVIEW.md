@@ -1,545 +1,679 @@
 ---
 phase: 115-json-schema-2020-12-structured-output-caching-hints
-reviewed: 2026-08-02T04:55:48Z
+reviewed: 2026-08-02T18:35:02Z
 depth: standard
-scope: gap-closure round 2 (plans 115-14 and 115-15) — NOT full-phase coverage
-diff_base: fc674e40
+scope: gap-closure round 4 (plans 115-16..115-19) — NOT full-phase coverage
+diff_base: f9fad51c
+head: a7c31fbf
 supersedes_note: >-
-  This file replaces the gap-closure round-1 review (plans 115-12 and 115-13) at
-  the same path. That pass is preserved in git history at 695a7123; its findings
-  (CR-01, WR-01..WR-07, IN-01..IN-03) are not re-litigated here. Where a round-1
-  finding is only PARTIALLY closed by round 2, the residue is booked below as a
-  NEW finding against the round-2 change, with the round-1 ID named for
-  traceability. Round 1 in turn replaced the 2026-08-01 full-phase review
-  (preserved at c478e75a).
-files_reviewed: 7
+  This file replaces the gap-closure round-3 review (plans 115-14 and 115-15) at
+  the same path. That pass is preserved in git history at 1b286b22; its findings
+  (CR-01, WR-01..WR-07, IN-01..IN-03) are NOT re-litigated here. Where a round-3
+  finding is only PARTIALLY closed by round 4, the residue is booked below as a
+  NEW finding with the round-3 ID named for traceability (see IN-02, which is
+  round-3 IN-03's residue, and WR-03, which is round-3 WR-02's shape one position
+  class over). Round 3 in turn replaced round 2 (695a7123 / c478e75a lineage).
+files_reviewed: 8
 files_reviewed_list:
   - src/server/output_validation.rs
+  - tests/keyword_list_mirrors.rs
   - tests/property_tests.rs
   - fuzz/fuzz_targets/fuzz_schema_draft_pin.rs
-  - fuzz/corpus/fuzz_schema_draft_pin/14_defs_named_default
+  - fuzz/corpus/fuzz_schema_draft_pin/15_dependencies_named_default
   - fuzz/corpus/fuzz_schema_draft_pin/README.md
   - contracts/mcp-protocol-sdk-v1.yaml
   - contracts/binding.yaml
 findings:
   critical: 1
   warning: 6
-  info: 3
-  total: 10
+  info: 4
+  total: 11
 status: issues_found
 ---
 
-# Phase 115: Code Review Report (GAP-CLOSURE ROUND 2)
+# Phase 115: Code Review Report — gap-closure round 4
 
-**Reviewed:** 2026-08-02T04:55:48Z
+**Reviewed:** 2026-08-02T18:35:02Z
 **Depth:** standard
-**Files Reviewed:** 7
+**Diff base:** `f9fad51c..a7c31fbf`
+**Files Reviewed:** 8
 **Status:** issues_found
 
 ## Scope
 
-**This is a GAP-CLOSURE review of plans 115-14 and 115-15 only.** It is not
-full-phase coverage. Phase 115 received a 38-file full-phase review on
-2026-08-01 (preserved at `c478e75a`) and a 6-file gap-closure review of plans
-115-12/115-13 on 2026-08-02 (preserved at `695a7123`). This pass covers only the
-seven files changed between `fc674e40` and `b94ff70f`. A later reader must not
-read this document as coverage of the other ~31 files in the phase.
+Plans 115-16 through 115-19 only. This is NOT a full-phase review. Round-3
+findings are not re-litigated except where round 4 closed them only partially.
 
-Findings from the two superseded passes are not repeated. Round-1 `WR-03` (the
-fragment-suffixed `2020-12#` URI misclassified as legacy) and round-1 `WR-04`
-(`DATA_ONLY_KEYWORDS` omits OpenAPI's singular `example`) were verified to still
-be present on this tree and remain open under their round-1 IDs.
+The round's stated purpose was to close round-3 `CR-01` (`SUBSCHEMA_MAP_KEYWORDS`
+omitted `dependencies`) by DERIVATION rather than by patching, and to make the
+defending instruments observable. Both halves were judged.
 
 ## Summary
 
-The 115-14 position fix is real and it works on the shape it was written for. I
-reproduced the shipped walk verbatim against `jsonschema` 0.49.2 in an isolated
-crate and measured the control pair the plan claims:
+**The six-keyword derivation is CORRECT and COMPLETE, and I re-ran it offline
+rather than taking it on trust.** Over the nineteen meta-schema documents
+`jsonschema` 0.49.2 ships in `metaschemas/`, the keywords whose `.properties`
+entry is an object binding `additionalProperties` to a self-reference are exactly
+`{properties, patternProperties, $defs, definitions, dependentSchemas,
+dependencies}`, with `$vocabulary` (boolean values) and `dependentRequired`
+(string-array values) rejected by that same criterion. There is no seventh
+omission at the map-position class. The `dependencies` addition is behaviourally
+sound: I traced every shape it changes and the only behaviour change is on the
+malformed `{"dependencies": {"$schema": "<string>"}}` document, which the module
+rustdoc already names.
 
-```
-$defs.Inner   (control)   rewritten=true   (v1,v2) = (Conforms, Violates)
-$defs.default (colliding) rewritten=true   (v1,v2) = (Conforms, Violates)
-```
+**`tests/keyword_list_mirrors.rs`'s two-assertion design is sound in the specific
+way the scope note asked about.** `EXPECTED_SUBSCHEMA_MAP_KEYWORDS` is a literal
+in the gate file, sourced from none of the three copies; the file imports nothing
+from the crate; the extractor is fail-CLOSED (exactly-one-definition guard,
+non-empty guard, comment-stripping that survives the trailing `dependencies`
+comment). All 25 `output_validation` unit tests, both drift-gate tests, all 21
+property tests and a `cargo check` of the excluded `fuzz/` crate pass on this
+tree.
 
-Both now enforce. All 23 `output_validation` unit tests pass under
-`--features "full fuzzing"`, both `schema_dialect_normalization_properties`
-proptests pass, and `pmat quality-gate --fail-on-violation --checks complexity`
-(pmat 3.15.0) reports `Total violations: 0` on this tree. The detector and the
-rewriter agree on all five (key-class × value-kind) combinations reachable
-today, the rename-invariance property and fuzz invariant 6 are both genuinely
-name-blind (they consult no keyword list), and neither produces a false positive
-against the shipped rule — I traced the `{"properties": {"$schema": "…draft-07…"}}`
-false-positive shape through all three restated copies and it is now handled
-correctly in each.
+**But three things are wrong, and the first ships.**
 
-**The fix is scoped to a five-entry allow-list, and the allow-list is
-incomplete.** `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies` — draft-07's own
-map-from-property-NAME-to-subschema keyword, which this very module records
-(`src/server/output_validation.rs:707-712`, D-115-03-C) as still honoured by
-`jsonschema` 0.49.2 under the 2020-12 pin. Measured on this tree with the shipped
-walk:
+1. `tests/keyword_list_mirrors.rs` is PACKAGED into the published crate while the
+   `fuzz/` tree it reads at runtime is EXCLUDED from it — so `cargo test` on the
+   published `pmcp` tarball panics. The repo has already hit this exact failure
+   twice and excluded two other tests for it, with comments in `Cargo.toml`
+   stating the rule verbatim. Measured with `cargo package --list`. (CR-01)
+2. The round's PRIMARY fence — the one the contract, three rustdocs and the plan
+   all name as the instrument for a list omission — carries an anti-vacuity
+   assertion that is a **tautology** and can never fail, and draws its NAME axis
+   from a crate-derived list while its rustdoc's independence claim covers only
+   the CONTAINER axis. (WR-01, WR-02)
+3. The round derived ONE position class (maps) and then wrote its scope
+   statements as if that class plus ordinary member descent were the whole rule.
+   **Array descent — `allOf` / `anyOf` / `oneOf` / `prefixItems`, the commonest
+   carrier of an embedded schema resource — is implemented in both walkers,
+   absent from the contract's `SCHEMA POSITION` definition, and exercised by no
+   test, no property draw and no corpus seed.** Deleting both `Value::Array` arms
+   passes the entire suite. That is round-3 `WR-02`'s shape one position class
+   over, and the derivation criterion the round adopted structurally cannot find
+   it. (WR-03)
 
-```
-$ref -> #/dependencies/Inner     rewritten=true     <- normalized
-$ref -> #/dependencies/default   rewritten=false    <- NOT normalized, no warn
-$ref -> #/components/Inner       rewritten=true
-$ref -> #/components/default     rewritten=false
-```
+The trap the scope note asked about — "a fence's reachability must not derive
+from the same artifact as the rule it checks" — **survives, on the NAME axis of
+the `src/` fence** (WR-01) and in the `make quality-gate`-invisibility of the one
+guard that pins `CONTAINER_DRAW` (WR-05). It does NOT survive in
+`tests/property_tests.rs`, where 115-17 handled it correctly with an own literal
+plus a superset guard; `src/` simply did not copy that pattern.
 
-Normalization is therefore **still name-dependent**: renaming a `dependencies`
-entry from `Inner` to `default` flips `Cow::Owned` to `Cow::Borrowed`, the legacy
-declaration survives, and `compile_2020_12`'s `tracing::warn!` — the only D-02
-diagnostic a tool author gets — silently does not fire. That is the identical
-category error 115-14 exists to close, one keyword over, and **both** of the new
-fences 115-15 added are structurally blind to it, because both enumerate the same
-five-entry list whose incompleteness is the defect: the property generator's
-`arb_container()` draws three of the five, and fuzz invariant 6 iterates the fuzz
-copy of `SUBSCHEMA_MAP_KEYWORDS`. Booked as CR-01.
+No assertion in this round depends on a v2 verdict flip that cannot happen: I
+checked every new assertion, and all of them are structural (`Cow` borrow/own
+plus a rewritten pointer) exactly as the scope note requires.
 
-The secondary theme is that this round shipped three literal copies of two
-keyword lists across `src/`, `tests/` and `fuzz/`, documented in each file as
-"the mirror is REQUIRED", with **no gate that they stay in sync** — and left
-several of the same-file claims the round was booked to correct (round-1 `WR-02`)
-still standing three hundred lines from their own correction.
+---
 
 ## Critical Issues
 
-### CR-01: `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies`, so the 115-14 name-position bypass survives one keyword over — and both new fences structurally cannot reach it
+### CR-01: `tests/keyword_list_mirrors.rs` ships in the published crate but reads `fuzz/`, which does not — `cargo test` on the published tarball panics
 
-**File:** `src/server/output_validation.rs:160-166` (definition),
-`209-227` / `265-280` (the two dispatches);
-`tests/property_tests.rs:960-966`, `1034-1036`;
-`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:272-278`, `577-601`;
-`contracts/mcp-protocol-sdk-v1.yaml:253-261`, `270-280`
+**File:** `tests/keyword_list_mirrors.rs:79`, `:149-167`; `Cargo.toml:15-53`
 
 **Issue:**
 
-`SUBSCHEMA_MAP_KEYWORDS` lists `properties`, `patternProperties`, `$defs`,
-`definitions`, `dependentSchemas`. Every other object key falls to the ordinary
-walk, which applies `DATA_ONLY_KEYWORDS` to the key — including keys that are
-**author-chosen names, not keywords**. `dependencies` is exactly such a container:
-in draft-04 through 2019-09 its value is a map from an instance-property NAME to
-a subschema (or to an array of names). draft-07-declared documents are precisely
-the documents this normalizer exists for, and the repo already ships one
-(`fuzz/corpus/fuzz_schema_draft_pin/05_draft07_dependencies`).
-
-Measured on this tree, with the shipped walk (`first_legacy_dialect`,
-`first_legacy_dialect_in_member`, `pin_dialect_in_place`, `pin_dialect_in_member`,
-`normalize_schema_dialect`) copied byte-for-byte into an isolated crate pinned to
-`jsonschema =0.49.2`, over two documents differing ONLY in the NAME of the entry:
-
-| Document | `normalize_schema_dialect` |
-|---|---|
-| `{"type":"object","properties":{"n":{"$ref":"#/dependencies/Inner"}},"dependencies":{"Inner":{"$id":"https://example.test/inner","$schema":"http://json-schema.org/draft-07/schema#","type":"integer"}}}` | `Cow::Owned`, **rewritten** |
-| the same with the entry named `default` | `Cow::Borrowed`, **nothing rewritten** |
-
-The second row is `115-VERIFICATION.md`'s reproduction document with `$defs`
-replaced by `dependencies`. It is reachable by any author who writes a draft-07
-schema with a dependent subschema keyed on a property named `default`, `const`,
-`enum` or `examples`.
-
-The same holds for **any** non-keyword container an author invents, e.g.
-`{"components": {"default": {…}}}` (measured `rewritten=false`), because the
-data-only deny-list is applied at every object node regardless of whether that
-node is a schema at all.
-
-Three consequences, in descending certainty:
-
-1. **The D-02 diagnostic is silently suppressed.** `compile_2020_12` only warns
-   when `normalize_schema_dialect` returns `Owned`. For the `default`-named row
-   it returns `Borrowed`, so the author is never told their declaration was
-   ignored. This is certain and is a behavioural defect today.
-2. **The module's and the contract's stated postcondition is false for a
-   reachable three-line document.** `src/server/output_validation.rs:384-387`
-   asserts "Rewriting every declaration is deliberately a SUPERSET of what
-   `jsonschema` honours … which is what makes the postcondition above statable
-   without a per-node `$id` analysis". It is not a superset: it is name-dependent
-   at these positions.
-3. **Latent validation bypass.** I could NOT demonstrate a v2 verdict flip
-   through this position on `jsonschema` 0.49.2 — both `dependencies.Inner` and
-   `dependencies.default` measured `v2 = Violates`, i.e. 0.49.2 does not appear to
-   treat a `#/dependencies/…` node as an embedded-resource root today. That is
-   stated plainly rather than glossed. But the module itself refuses to rely on
-   that: the `properties` half of
-   `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`
-   (`src/server/output_validation.rs:1101-1130`) is fenced STRUCTURALLY for
-   exactly this reason — "a behavioural assertion would pass against the
-   defective code" — and the honouring behaviour has already shifted across
-   0.46.10 → 0.49.2 within this phase's own measurements. A safety property that
-   holds only because of an un-pinned library implementation detail is the
-   condition under which this defect shipped twice already.
-
-**Why nothing catches it.** Every fence added by 115-15 is parameterised by the
-same incomplete list:
-
-- `tests/property_tests.rs:1034-1036` — `arb_container()` draws
-  `$defs | definitions | properties`. `dependencies` is unreachable in the
-  generated space.
-- `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:591` — invariant 6 skips any root
-  member whose key is not in the fuzz copy of `SUBSCHEMA_MAP_KEYWORDS`.
-- `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:451` — invariant 5's scan restates
-  the same list, so it agrees with the shipped walk and reports nothing.
-- `src/server/output_validation.rs:1080`, `1109`, `1394-1435` — the unit fences
-  and `normalization_cases()` use only `$defs` and `properties`.
-
-The one instrument the round advertises as "DERIVED from a JSON Schema 2020-12
-fact … consults no `DATA_ONLY_KEYWORDS` list at all" is in fact gated by a
-crate-derived list one line earlier.
-
-**Fix:**
+The new drift gate reads three repository files at RUNTIME and hard-panics when
+any is missing:
 
 ```rust
-// src/server/output_validation.rs
-const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
-    "properties",
-    "patternProperties",
-    "$defs",
-    "definitions",
-    "dependentSchemas",
-    // draft-04..2019-09 spelling; its values are subschemas keyed by INSTANCE
-    // PROPERTY NAME, and `jsonschema` 0.49.2 still honours the keyword under the
-    // 2020-12 pin (D-115-03-C), so its values are live schema positions.
-    "dependencies",
-];
+const FUZZ_FILE: &str = "fuzz/fuzz_targets/fuzz_schema_draft_pin.rs";
+
+fn read(relative: &str) -> String {
+    let full = repo_root().join(relative);          // repo_root() = env!("CARGO_MANIFEST_DIR")
+    fs::read_to_string(&full).unwrap_or_else(|e| panic!("cannot read {relative}: {e}\n…"))
+}
 ```
 
-mirrored in `tests/property_tests.rs:960` and
-`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:272`, plus
-`Just("dependencies")` added to `arb_container()` and a
-`dependencies.default` row added to `normalization_cases()` and to
-`v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`.
+`Cargo.toml`'s package `exclude` array contains `"fuzz/"` (line 20). It does NOT
+contain `tests/keyword_list_mirrors.rs`. Measured on this tree:
 
-That closes the measured case. It does **not** close the general one — an
-arbitrary container (`components`, a vendor extension) still gets the deny-list
-applied to its name keys. Round-1 `WR-04`'s recommendation stands and should be
-booked explicitly: a deny-list over an open keyword space cannot be completed, so
-the durable fix is to invert the walk — descend only into positions the JSON
-Schema core/applicator vocabularies DEFINE as subschemas, and treat everything
-else as opaque. Whichever route is taken, the contract text (`WR-04` below) must
-be corrected to match, because it currently asserts the superset property that
-CR-01 falsifies.
+```
+$ cargo package --list --allow-dirty | grep -E '^(tests/(keyword_list_mirrors|property_tests)\.rs|fuzz/)'
+tests/keyword_list_mirrors.rs
+tests/property_tests.rs
+```
+
+`fuzz/` contributes zero entries. So the published `pmcp` crate ships an
+integration test that reads a path guaranteed to be absent, and both of its tests
+panic:
+
+```
+cannot read fuzz/fuzz_targets/fuzz_schema_draft_pin.rs: No such file or directory (os error 2)
+```
+
+This breaks `cargo test` for every downstream consumer who builds from the
+crates.io tarball — distro packagers (Debian/Fedora rust packaging run the test
+suite from the tarball) and `cargo vendor` flows most directly. Nothing catches
+it locally or in CI: `cargo package`'s verify step BUILDS the package, it does
+not RUN its tests, and every in-repo gate runs from a tree that has `fuzz/`.
+
+**This repository already knows the rule and has applied it twice.** The very
+same `exclude` array carries two entries whose comments state the defect verbatim:
+
+```toml
+    "contracts/",
+    # Reads contracts/team-servers-v1.yaml at runtime; contracts/ is excluded
+    # above (crates.io size limit), so shipping this test would break a
+    # downstream `cargo test` on the published crate — keep it out too.
+    "tests/team_contracts_conformance.rs",
+    # Same reason: reads contracts/binding.yaml and
+    # contracts/mcp-protocol-sdk-v1.yaml at runtime and panics when they are
+    # absent, which is exactly what a published-crate `cargo test` would hit.
+    "tests/phase115_contract_bindings.rs",
+```
+
+The new file's own rustdoc (`:143-147`) says it is written in the "same shape as
+`tests/phase115_contract_bindings.rs`, so there is one convention in this
+repository for 'an integration test that reads repository source files', not
+two." It copied the shape and missed the one packaging step the convention
+requires.
+
+**Fix** — add the exclusion, with the same comment form so the next reader sees
+the rule rather than a bare path:
+
+```toml
+    # Reads src/server/output_validation.rs, tests/property_tests.rs AND
+    # fuzz/fuzz_targets/fuzz_schema_draft_pin.rs at runtime and panics when any
+    # is absent; `fuzz/` is excluded above, so shipping this test would break a
+    # downstream `cargo test` on the published crate — keep it out too.
+    "tests/keyword_list_mirrors.rs",
+```
+
+Do NOT "fix" this by making `read()` tolerant of a missing file: a gate that
+silently skips the one copy no other instrument can see is the fail-open shape
+`D-115-AE` records, and the file's own `extract_list` guards already reject that
+pattern for the empty-list case. Excluding the file from the package is the
+correct fix — the gate is a repository-internal instrument, not crate content.
+
+A follow-up worth doing in the same edit: add a one-line acceptance criterion
+that `cargo package --list | grep -c 'tests/keyword_list_mirrors.rs'` returns 0,
+so the third occurrence of this class is caught by a criterion rather than by a
+fourth review.
+
+---
 
 ## Warnings
 
-### WR-01: Three literal copies of two keyword lists, no gate that they agree — and each file's rustdoc calls the mirror "REQUIRED"
+### WR-01: The anti-vacuity assertion in the round's primary fence is a tautology, and the fence's NAME axis is drawn from a crate-derived list
 
-**File:** `src/server/output_validation.rs:140`, `160-166`;
-`tests/property_tests.rs:941`, `960-966`;
-`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:252`, `272-278`
+**File:** `src/server/output_validation.rs:1396-1425` (assertion at `:1418-1425`,
+name draw at `:1400`)
 
-**Issue:** `DATA_ONLY_KEYWORDS` and `SUBSCHEMA_MAP_KEYWORDS` are each written out
-three times. `grep -rn "SUBSCHEMA_MAP_KEYWORDS: &\[&str\]" src tests fuzz` returns
-exactly three definitions; `grep -n "SUBSCHEMA\|DATA_ONLY" Makefile` returns
-nothing. There is no test, no `include!`, and no source-text gate asserting the
-three agree — while every one of the three rustdocs states that the mirror is
-mandatory and that a divergence breaks the fence on CORRECT behaviour.
-
-The failure modes are asymmetric and both are silent:
-
-- Crate list gains an entry, mirrors do not → the property and fuzz fences turn
-  into FALSE-POSITIVE generators (a legitimately-left-alone name-bound `$schema`
-  is reported by the position-blind scan as a surviving legacy declaration).
-- An entry is removed from all three in lockstep → coverage disappears with zero
-  test failures (see WR-02).
-
-This is the same "the defensive layer restates the rule and nothing checks the
-restatement" mechanism that produced the 115-14 defect, reinstated at a new seam.
-
-**Fix:** publish the two lists through the existing `fuzzing` seam and assert
-equality, so drift is a compile-or-test failure rather than a silent one:
+**Issue:**
 
 ```rust
-// src/server/output_validation.rs, inside `pub mod fuzz_support`
-pub const DATA_ONLY_KEYWORDS: &[&str] = super::DATA_ONLY_KEYWORDS;
-pub const SUBSCHEMA_MAP_KEYWORDS: &[&str] = super::SUBSCHEMA_MAP_KEYWORDS;
+let mut examined = 0usize;
+for container in containers {
+    for &name in DATA_ONLY_KEYWORDS {
+        examined += 1;
+        …
+    }
+}
+
+// Anti-vacuity: the grid was actually swept.
+assert_eq!(
+    examined,
+    containers.len() * DATA_ONLY_KEYWORDS.len(),
+    …
+);
 ```
 
+`examined` is incremented exactly `containers.len() * DATA_ONLY_KEYWORDS.len()`
+times by construction, and the assertion recomputes that same product from the
+same two slices. **It cannot fail for any value of either list.** With
+`DATA_ONLY_KEYWORDS` empty the loop body never runs, `examined == 0`,
+`0 == 6 * 0` passes, `violations` is empty, the membership guard passes, and the
+fence reports green having examined ZERO (container, name) pairs — while its
+comment says "the grid was actually swept."
+
+This is the exact pattern the round's own new file names and defends against one
+directory over (`tests/keyword_list_mirrors.rs:212-219`: *"a criterion whose
+failure mode is indistinguishable from its success condition verifies
+nothing"*, citing `D-115-AE` and `D-115-AA`). The lesson was applied to
+`extract_list`'s non-empty guard and not to the fence that the contract
+(`mcp-protocol-sdk-v1.yaml:382-388`), the module rustdoc (`:527-530`), the
+property module (`tests/property_tests.rs:1083-1088`) and the fuzz target
+(`:371-379`) all name as the PRIMARY instrument for a keyword-list omission.
+
+Second, subtler half: the fence's rustdoc (`:1349-1358`) makes an independence
+claim that covers only ONE of the two axes — *"The container list below is
+deliberately NOT `SUBSCHEMA_MAP_KEYWORDS` … a fence parameterised by the list
+whose incompleteness is the defect cannot fire on that defect."* The NAME axis
+is `for &name in DATA_ONLY_KEYWORDS`, i.e. parameterised by the other half of the
+very rule under test, and the rustdoc is silent about it. The coupling happens to
+be principled today (the colliding-name set IS the data-only set), but the claim
+as written is broader than the code, which is the failure mode this phase has
+shipped three times.
+
+**Fix** — make the guard falsifiable and state the axis honestly:
+
 ```rust
-// tests/property_tests.rs (and the same shape in the fuzz target's own tests)
+// Anti-vacuity: the grid was actually swept. The expected count is a LITERAL,
+// not a product of the two slices being iterated — recomputing the loop bounds
+// from the loop bounds cannot fail, and `DATA_ONLY_KEYWORDS` emptied would then
+// report a zero-pair sweep as a pass (115-REVIEW.md round-4 WR-01).
+assert_eq!(
+    examined, 24,
+    "expected 6 spec-defined containers x 4 data-only names = 24 probes, swept {examined}. \
+     If the NAME axis (DATA_ONLY_KEYWORDS) changed, update this literal deliberately — the \
+     names swept here are the colliding-name set, which is what makes this fence a fence."
+);
+```
+
+### WR-02: The same fence's own `containers` literal has no completeness guard, so it can silently lag the shipped list
+
+**File:** `src/server/output_validation.rs:1386-1394`, `:1444-1453`
+
+**Issue:** The fence carries its own six-element `containers` literal (correct,
+and the reason it can fire on an omission FROM `SUBSCHEMA_MAP_KEYWORDS`). The
+price of an own literal is drift, and the only thing paid against it is a
+single-keyword membership assertion:
+
+```rust
+assert!(SUBSCHEMA_MAP_KEYWORDS.contains(&"dependencies"), …);
+```
+
+That pins one keyword. It says nothing about the other five, and nothing at all
+about a seventh. If a future round adds a keyword to `SUBSCHEMA_MAP_KEYWORDS`
+(and to the three copies the drift gate pins, and to `EXPECTED_*`, and to
+`CONTAINER_DRAW`, all of which have gates), this fence's literal stays at six,
+never probes the new position, and reports green — the one instrument billed as
+immune to the list's incompleteness silently stops covering the newest entry.
+
+`tests/property_tests.rs` faced the identical tension for `CONTAINER_DRAW` and
+solved it correctly (`:1126-1150`): an own literal for the DRAW, plus a SUPERSET
+guard asserted separately and LAST, deliberately not an equality so the
+both-blind negative control still works. `src/` did not copy that half.
+
+**Fix** — replace the single-keyword guard with the superset form, keeping it
+separate from the sweep exactly as the property module does:
+
+```rust
+// The completeness guard, asserted SEPARATELY from the sweep above so the sweep
+// stays independent of the list it is checking. SUPERSET, not equality: in the
+// both-blind negative control the shipped list is deliberately SHORTER, and an
+// equality would fail there and mask the result that control exists to produce.
+let unprobed: Vec<&&str> = SUBSCHEMA_MAP_KEYWORDS
+    .iter()
+    .filter(|shipped| !containers.contains(shipped))
+    .collect();
+assert!(
+    unprobed.is_empty(),
+    "{unprobed:?} are SHIPPED subschema-map keywords this fence never probes, so an embedded \
+     resource filed there is covered by nothing here. Add them to `containers` — and do NOT \
+     source `containers` from SUBSCHEMA_MAP_KEYWORDS, which would make the sweep unable to fire \
+     on an omission from that list (115-REVIEW.md CR-01, D-115-AI(4))."
+);
+```
+
+### WR-03: Array descent is a schema-position class the contract does not define and nothing exercises — deleting both `Value::Array` arms passes the whole suite
+
+**File:** `src/server/output_validation.rs:265`, `:325`, `:1736-1808`;
+`contracts/mcp-protocol-sdk-v1.yaml:254-261`, `:324-329`;
+`contracts/binding.yaml:509-516`, `:560-565`, `:599-604`
+
+**Issue:** Both walkers descend into arrays:
+
+```rust
+Value::Array(items) => items.iter().find_map(first_legacy_dialect),      // detector, :265
+Value::Array(items) => items.iter_mut().for_each(pin_dialect_in_place),  // rewriter, :325
+```
+
+That branch is what reaches an `$id`-bearing embedded schema resource carried by
+`allOf` / `anyOf` / `oneOf` / `prefixItems` — the commonest way a real schema
+carries subschemas, and a strictly larger position class than
+`patternProperties` and `dependentSchemas`, whose non-exercise was round-3
+`WR-02`. Two problems, both measured:
+
+**(a) The contract does not define it as a schema position.** 115-19 rewrote the
+equation head, the `walk:` clause and three `binding.yaml` note heads and
+defined `SCHEMA POSITION` as:
+
+> the root, plus every node reached by descending into every member value EXCEPT
+> a `const` / `enum` / `default` / `examples` payload, plus every VALUE of a
+> `properties` / … / `dependencies` map
+
+An array has no members. Descending into the member value `allOf` reaches the
+ARRAY node and the definition terminates there — so under the contract as
+written, the elements of an `allOf` array are NOT schema positions, and the
+`POSTCONDITION` invariant (`:324-329`) says nothing about a legacy `$schema`
+surviving inside one. An implementation that dropped array descent would satisfy
+the contract while re-opening the vacuous-validator bypass for every
+`allOf`-borne embedded resource. This is round-3 `WR-04`'s shape — a scope
+statement that does not match the code — reproduced in the very sentences 115-19
+rewrote to close `WR-04`.
+
+**(b) No instrument exercises it.** Measured by exhaustive absence across every
+file in scope plus the tracked seed corpus:
+
+```
+$ grep -rn 'allOf\|anyOf\|oneOf\|prefixItems' src/server/output_validation.rs \
+      tests/property_tests.rs fuzz/fuzz_targets/fuzz_schema_draft_pin.rs \
+      tests/keyword_list_mirrors.rs
+# only prose matches (the `anyOf` branch of the derivation criterion, and
+# seed 07's array-form `items` COMPILE-error row) — no document, no fixture
+$ for f in $(git ls-files fuzz/corpus/fuzz_schema_draft_pin/ | grep '/[0-9][0-9]_'); do
+      grep -lE 'allOf|anyOf|oneOf|prefixItems' "$f"; done
+# (no output — 15 tracked seeds, zero hits)
+```
+
+`normalization_cases()` has eleven rows (a)..(k) and not one puts a `$schema`
+inside an array in schema position. The property generator injects `$schema` only
+at the root and at `container/name`, and `arb_json()` structurally cannot emit a
+`$schema` key at all — so the generated space cannot contain the shape either.
+The only array in any fixture is `dollar_schema_inside_examples`
+(`:1952-1955`), which asserts the walk does NOT reach into an array under a
+data-only keyword — the negative case, never the positive one.
+
+Consequence: deleting both `Value::Array` arms leaves the entire suite green.
+That is exactly the `patternProperties` / `dependentSchemas` situation round-3
+`WR-02` reported, one position class over, and the round's derivation criterion
+(objects whose `additionalProperties` self-references) structurally cannot find
+it, because array-of-subschema keywords bind `items` / `$ref`-to-self, not
+`additionalProperties`.
+
+**Fix** — two edits, both small:
+
+1. Add a positive row to `normalization_cases()` so the branch is fenced:
+
+```rust
+// (l) ARRAY position. `allOf` / `anyOf` / `oneOf` / `prefixItems` carry
+// subschemas in an ARRAY, and both walkers reach them through their
+// `Value::Array` arm (:265, :325). That arm was exercised by no test, no
+// property draw and no corpus seed until this row — deleting it passed the
+// whole suite (115-REVIEW.md round-4 WR-03).
+(
+    json!({
+        "type": "object",
+        "allOf": [{
+            "$id": "https://example.test/inner",
+            "$schema": DRAFT_07,
+            "type": "integer"
+        }]
+    }),
+    true,
+),
+```
+
+2. Extend the contract's `walk:` clause with the rule the module rustdoc already
+   states as rule 4, and mirror it into the `SCHEMA POSITION` sentence of the
+   `POSTCONDITION` invariant and the three `binding.yaml` note heads:
+
+```
+              at an ARRAY node, every ELEMENT is a schema position and is
+              descended into (allOf / anyOf / oneOf / prefixItems carry
+              subschemas in arrays); the data-only exclusion still applies at the
+              MEMBER that introduced the array, so an `enum` or `examples` array
+              is never entered
+```
+
+### WR-04: The derivation every copy is anchored to is under-specified in all five shipped statements — followed literally it yields FOUR keywords, not six
+
+**File:** `tests/keyword_list_mirrors.rs:86-118` and `:300-314`;
+`src/server/output_validation.rs:190-227`;
+`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:309-323`;
+`tests/property_tests.rs:1022-1041`;
+`contracts/mcp-protocol-sdk-v1.yaml:375-381`
+
+**Issue:** All five shipped copies state the derivation the same way:
+
+> the UNION, over the draft-04 / draft-06 / draft-07 / 2019-09 / 2020-12
+> meta-schema documents `jsonschema` 0.49.2 ships offline, of the keywords each
+> meta-schema's own `.properties` map binds to an OBJECT-typed schema carrying an
+> `additionalProperties` that REFERENCES THE META-SCHEMA ITSELF
+
+with a `jq` one-liner over `<metaschema.json>`. Run exactly that over the five
+named documents (measured against
+`~/.cargo/registry/src/*/jsonschema-0.49.2/metaschemas/`):
+
+| document | keywords produced |
+|---|---|
+| `draft4.json` | `definitions`, `properties`, `patternProperties`, `dependencies` |
+| `draft6.json` | same four |
+| `draft7.json` | same four |
+| `draft2019-09/schema.json` | `definitions`, `dependencies` |
+| `draft2020-12/schema.json` | `definitions`, `dependencies` |
+| **UNION** | **FOUR: `definitions`, `properties`, `patternProperties`, `dependencies`** |
+
+`$defs` and `dependentSchemas` do not appear, and NEITHER of the two keywords the
+rustdocs name as "REJECTED by the self-reference criterion" appears either —
+because `$defs` and `$vocabulary` live in `draft20{19-09,20-12}/meta/core.json`,
+`properties` / `patternProperties` / `dependentSchemas` in
+`…/meta/applicator.json`, and `dependentRequired` in `…/meta/validation.json`.
+The 2019-09 and 2020-12 top-level `schema.json` files are `allOf` shells that
+declare almost no applicator keywords at all. The sweep must include nine
+`meta/*.json` vocabulary documents, and no shipped copy says so.
+
+The full, correct per-file table IS recorded — but only in
+`115-16-SUMMARY.md § THE DERIVATION`, a planning artifact, which does say *"which
+is why the sweep has to include `meta/*.json` and not just the two roots."*
+
+Why this matters rather than being pedantry: `tests/keyword_list_mirrors.rs`'s
+ASSERTION 2 is the only instrument that can see a lockstep removal, and its
+failure message (`:310-313`) routes the maintainer straight into the
+under-specified copy:
+
+> WHAT TO DO: re-run the meta-schema derivation documented on
+> `EXPECTED_SUBSCHEMA_MAP_KEYWORDS` **in this file** and change the expectation
+> only if the derivation itself produces a different union.
+
+A maintainer who follows that instruction gets four keywords, concludes the
+derivation "produces a different union", and deletes `$defs` and
+`dependentSchemas` from the expectation and then from all three copies — which
+is precisely the WR-01 lockstep-removal mode the gate exists to prevent, executed
+under the gate's own instructions.
+
+**Fix** — one sentence in each of the five copies, and the `jq` invocation
+corrected in the two that carry it:
+
+```text
+/// The sweep is over NINETEEN documents, not five: for 2019-09 and 2020-12 the
+/// applicator, core and validation VOCABULARY documents under `meta/` are where
+/// the keywords live — `$defs` and `$vocabulary` in `meta/core.json`,
+/// `properties` / `patternProperties` / `dependentSchemas` in
+/// `meta/applicator.json`, `dependentRequired` in `meta/validation.json`. The
+/// two root `schema.json` files are `allOf` shells and yield only `definitions`
+/// and `dependencies`. Running the command below over the five DRAFT roots alone
+/// produces FOUR keywords and neither rejected keyword — do not stop there.
+///
+/// ```text
+/// for f in draft4.json draft6.json draft7.json \
+///          draft2019-09/schema.json draft2019-09/meta/*.json \
+///          draft2020-12/schema.json draft2020-12/meta/*.json; do
+///   jq -r '(.properties // {}) | to_entries[]
+///          | select((.value|type)=="object")
+///          | select(.value|has("additionalProperties"))
+///          | "\(.key)\t\(.value.additionalProperties|tojson)"' "$f"
+/// done | sort -u
+/// ```
+```
+
+(The guarded `select((.value|type)=="object")` note is accurate and should stay —
+I reproduced the unguarded form exiting 5 on `draft7.json`, which binds
+`.properties.default` and `.properties.const` to `true`.)
+
+### WR-05: The only guard pinning `CONTAINER_DRAW` to the shipped list does not run under `make quality-gate`, and the gate that does run cannot see it
+
+**File:** `tests/property_tests.rs:953`, `:1126-1150`, `:1246-1253`;
+`tests/keyword_list_mirrors.rs:82`; `Makefile:296-299`, `:361`
+
+**Issue:** 115-17 introduced a FOURTH literal, `CONTAINER_DRAW`, for a measured
+and correct reason (`D-115-AI(4)`: sourcing the draw from the mirror makes every
+negative control go green). The drift risk that creates is paid for by exactly
+one assertion — the `undrawable` superset guard inside
+`keyword_lists_mirror_the_shipped_ones`.
+
+That test lives in a module gated
+`#[cfg(all(test, feature = "fuzzing", feature = "validation"))]`, and `fuzzing`
+is in neither `default` nor `full`. Trace the mandated local gate:
+
+- `make quality-gate` → `test-all` → `test-unit` (`--lib --features full`),
+  `test-doc`, `test-property` (`--features "full" -- --ignored property_` — note
+  BOTH the missing `fuzzing` and the `--ignored` filter), `test-examples`,
+  `test-integration` (`cargo test --test '*' --features "full"`).
+- None of those enables `fuzzing`, so the whole
+  `schema_dialect_normalization_properties` module — the mirror equality test,
+  the `undrawable` guard, and both properties — is not compiled and does not run.
+
+It runs only in CI (`.github/workflows/ci.yml:93`, `cargo test --all-features`).
+Meanwhile the gate that DOES run locally, `tests/keyword_list_mirrors.rs`, reads
+`tests/property_tests.rs` as text but extracts only `SUBSCHEMA_MAP_KEYWORDS` and
+`DATA_ONLY_KEYWORDS` — `CONTAINER_DRAW` (`:1246`) and the `src/` fence's
+`containers` literal (`src/server/output_validation.rs:1387`) are outside its
+`COPIES` list entirely.
+
+`CLAUDE.md` states `make quality-gate` is mandatory before every commit and PR.
+So of the six literal copies of this list in the tree, the mandated local gate
+covers three; CI covers a fourth; and two — the two that exist specifically to
+be independent — are covered locally by nothing.
+
+**Fix** — the drift gate is featureless and already reads both files as text.
+Extend it rather than adding a sixth mechanism:
+
+```rust
+/// The two INDEPENDENT literals — `CONTAINER_DRAW` (tests/property_tests.rs) and
+/// the `src/` fence's own container list. Each exists to be independent of the
+/// shipped constant, so neither may be an equality; each must be a SUPERSET of
+/// the derivation-anchored expectation, or the fence that reads it silently
+/// stops probing a shipped position.
 #[test]
-fn keyword_lists_mirror_the_shipped_ones() {
-    use pmcp::server::output_validation::fuzz_support as seam;
-    assert_eq!(SUBSCHEMA_MAP_KEYWORDS, seam::SUBSCHEMA_MAP_KEYWORDS);
-    assert_eq!(DATA_ONLY_KEYWORDS, seam::DATA_ONLY_KEYWORDS);
+fn independent_container_literals_cover_every_derived_keyword() {
+    for (path, name) in [
+        (PROPERTY_FILE, "CONTAINER_DRAW"),
+        (SRC_FILE, "SPEC_DEFINED_SUBSCHEMA_MAP_CONTAINERS"),
+    ] {
+        let drawn = extract_list(&read(path), path, name);
+        let missing: Vec<&&str> = EXPECTED_SUBSCHEMA_MAP_KEYWORDS
+            .iter()
+            .filter(|k| !drawn.iter().any(|d| d == *k))
+            .collect();
+        assert!(missing.is_empty(), "{name} in {path} cannot reach {missing:?} …");
+    }
 }
 ```
 
-The seam is already `fuzzing`-gated and therefore off the public API surface, so
-this adds nothing to `cargo public-api`.
+This requires promoting the `src/` fence's `let containers = [...]` to a
+module-level `const SPEC_DEFINED_SUBSCHEMA_MAP_CONTAINERS: &[&str] = &[…];` so
+the text extractor's marker can find it — a one-line change that also makes
+WR-02's superset guard read naturally.
 
-### WR-02: `patternProperties` and `dependentSchemas` are in the list but no test, property draw or corpus seed exercises either
+### WR-06: `strip_every_dollar_schema` is the one restatement left position-BLIND, inside the gate-visible surgical-scope fence
 
-**File:** `src/server/output_validation.rs:160-166`, `1080`, `1109`,
-`1394-1435`; `tests/property_tests.rs:1034-1036`;
-`fuzz/corpus/fuzz_schema_draft_pin/`
+**File:** `src/server/output_validation.rs:1816-1827`, used at `:1866-1876`
 
-**Issue:** Of the five entries added by 115-14, only `$defs` and `properties`
-appear in any fence:
+**Issue:** 115-17 and 115-18 made the property-test and fuzz-target strippers
+position-aware, and both rustdocs now argue at length that the position-aware
+form buys SENSITIVITY: *"were the shipped walk ever to over-reach into NAME
+position, the position-aware strip leaves the differing `$schema` in place on
+both sides and the surgical-scope assertion FIRES, whereas a blind strip would
+delete the difference from both sides and mask it"*
+(`tests/property_tests.rs:1013-1020`; same argument at
+`fuzz_schema_draft_pin.rs:293-300`).
 
-- `normalization_cases()` (`:1394-1435`) — `$defs`, `properties`
-- `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword` — `$defs`
-  (loop at `:1080`), `properties` (loop at `:1109`)
-- `arb_container()` — `$defs`, `definitions`, `properties`
-- corpus seeds 12/13/14 — `$defs`, `properties`
-
-Deleting `"patternProperties"` and `"dependentSchemas"` from all three copies of
-the list passes the entire suite. I verified both positions currently work
-(`$ref -> #/patternProperties/default` and `#/dependentSchemas/default` both
-measured `rewritten=true`), so this is an unfenced-correct-behaviour gap rather
-than a live defect — but two of the five entries the round added are protected by
-nothing.
-
-**Fix:** widen `arb_container()` to all five entries (it costs one `Just` each
-and the generator already parameterises the pointer), and add a
-`patternProperties.default` row to `normalization_cases()`. `patternProperties`
-keys are regexes, so `arb_definition_name()`'s literals are all valid patterns
-and no escaping is needed.
-
-### WR-03: `assert_no_legacy_dialect_survives`'s own rustdoc and the `fuzz_target!` call-site still assert the exact claim the module doc's 115-15 CORRECTION labels false
-
-**File:** `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:94-113` (the correction),
-`:498-501` (the contradicting rustdoc), `:723-726` (the contradicting comment)
-
-**Issue:** 115-15 was booked to close round-1 `WR-02` ("Fuzz invariant 5 is
-documented as 'TOTAL — no skip condition'; its collector has a skip condition").
-The module-level doc was corrected at `:94-113`:
-
-> The scan DOES have a skip condition — `collect_dialect_declarations` does not
-> descend into a `DATA_ONLY_KEYWORDS` payload … The invariant is therefore total
-> over SCHEMA POSITIONS, not over every input
-
-Two copies of the retracted claim survive verbatim in the same file:
+`src/`'s own copy was not updated and remains fully blind:
 
 ```rust
-// :498-501
-/// Total — no skip condition. It holds for every input that parses as JSON,
-/// including the documents `is_dialect_neutral` excludes, which is exactly why
-/// it is a second invariant rather than a relaxation of that predicate.
-
-// :723-726
-// Invariant 5. TOTAL — it holds for every input that parses as JSON,
-```
-
-A reader who opens the function or the `fuzz_target!` body — the two places a
-maintainer actually looks — reads the false version. `{"const":{"$schema":"…draft-07…"}}`
-parses as JSON and the invariant does not hold over it, by design.
-
-**Fix:** replace both with the corrected scope, e.g. `/// Total over SCHEMA
-POSITIONS under the traversal rule the shipped walk implements — NOT over every
-input: a `$schema` inside a const / enum / default / examples payload is instance
-DATA and must survive. See the 115-15 correction on invariant 5 in the module
-docs.` and cross-reference `:94-113` from both.
-
-### WR-04: The contract's normative `equation:` still states the unscoped total that 115-14 corrected in the POSTCONDITION three lines below
-
-**File:** `contracts/mcp-protocol-sdk-v1.yaml:248-252` and `:299-320`;
-`contracts/binding.yaml:508-513` (`normalize_schema_dialect`), `:542-547`
-(`first_legacy_dialect`), `:569-575` (`pin_dialect_in_place`)
-
-**Issue:** 115-14 rewrote the `walk:` clause (`:253-261`) and the POSTCONDITION
-invariant (`:299`, now correctly scoped to "any SCHEMA POSITION"), but left the
-equation head above them untouched:
-
-```yaml
-normalize_schema_dialect(s)
-  = s   when NO string-valued $schema anywhere in s names a dialect
-        other than DRAFT_2020_12 (root or any depth; ...)
-  = clone(s) with EVERY such $schema := DRAFT_2020_12, otherwise
-```
-
-So the same YAML block now says two different things four lines apart. The head
-is falsified by three documents the shipped code handles CORRECTLY:
-
-- `{"const": {"$schema": "http://json-schema.org/draft-07/schema#"}}` → returns
-  `s`, must (data guard, fenced by
-  `normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone`)
-- `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}` →
-  returns `s`, must (name position bound to a non-schema; this is the shape
-  `src/server/output_validation.rs:416-426` calls out by name)
-
-and by one it handles INCORRECTLY (`{"dependencies": {"default": …}}`, CR-01).
-An equation that no correct implementation can satisfy cannot gate anything —
-this is round-1 `WR-01` half-closed: the postcondition was fixed, the equation
-that defines the function was not.
-
-The three `binding.yaml` notes have the same shape: each opens with the unscoped
-claim ("anywhere in the document", "at any depth", "overwrites EVERY string-valued
-`$schema`") and only qualifies it in an appended `115-14 POSITION CORRECTION`
-paragraph. A reader who stops at the first sentence — which is what a
-`pmat comply` reviewer diffing a signature does — reads the retracted scope.
-
-**Fix:** bring the equation head into line with the POSTCONDITION it sits above:
-
-```yaml
-normalize_schema_dialect(s)
-  = s   when no string-valued $schema in any SCHEMA POSITION of s (see `walk:`
-        below) names a dialect other than DRAFT_2020_12
-  = clone(s) with every such $schema := DRAFT_2020_12, otherwise
-```
-
-and prefix each of the three `binding.yaml` note heads with "(scope corrected by
-115-14 — read the POSITION CORRECTION below before this sentence)" or, better,
-rewrite the head and keep the correction as changelog.
-
-### WR-05: Detector and rewriter are written in structurally different shapes despite being documented as "visibly mirror-image", and nothing enforces the list disjointness they silently depend on
-
-**File:** `src/server/output_validation.rs:209-227` vs `:265-280`
-
-**Issue:** The detector dispatch is a `match` whose first arm guards on the VALUE
-kind and the key class together:
-
-```rust
-Value::Object(named_subschemas) if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) => …,
-_ if DATA_ONLY_KEYWORDS.contains(&member_key) => None,
-_ => first_legacy_dialect(member_value),
-```
-
-The rewriter dispatch is an `if` chain that tests the KEY class first and the
-value kind second:
-
-```rust
-if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) { match member_value { … } }
-else if !DATA_ONLY_KEYWORDS.contains(&member_key) { pin_dialect_in_place(member_value); }
-```
-
-I enumerated all five (key-class × value-kind) combinations and they agree
-today — but only because the two lists are disjoint. Put one key in both (a
-plausible future edit: `dependencies` is a subschema map in draft-07 and pure
-data in some vendor dialects; `examples` is a container in some OpenAPI
-tooling) and for a NON-object value the detector takes arm 2 and returns `None`
-while the rewriter takes the SUBSCHEMA branch and descends — a detector/rewriter
-divergence, which `:172-177` states "is a defect". The rustdoc at `:199-204`
-claims both halves were split "so the two remain visibly mirror-image; a reader
-comparing them should be comparing like with like", which the current shapes do
-not deliver.
-
-Note also that the two RESTATED copies
-(`tests/property_tests.rs:1262-1281`, `fuzz/…:397-414`) both use the rewriter's
-`if`-chain shape, so they mirror one half and not the other.
-
-**Fix:** write both dispatches in the same three-way shape, and make the
-dependency explicit rather than implicit:
-
-```rust
-#[test]
-fn keyword_lists_are_disjoint() {
-    assert!(
-        SUBSCHEMA_MAP_KEYWORDS.iter().all(|k| !DATA_ONLY_KEYWORDS.contains(k)),
-        "a key in BOTH lists makes the detector's match and the rewriter's if-chain \
-         disagree for a non-object value — the divergence normalize_schema_dialect's \
-         postcondition exists to forbid"
-    );
+fn strip_every_dollar_schema(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            map.remove("$schema");                       // unconditional: value kind ignored
+            for value in map.values_mut() { strip_every_dollar_schema(value); }  // no DATA_ONLY skip
+        },
+        Value::Array(items) => items.iter_mut().for_each(strip_every_dollar_schema),
+        _ => {},
+    }
 }
 ```
 
-### WR-06: The mirrors' stated justification for the strip half is false — only the SCAN half can false-positive
+It is applied to both sides of the `expected_owned == true` branch of
+`normalize_schema_dialect_changes_only_dollar_schema_keys` — the gate-visible
+surgical-scope fence. By the same argument the other two files now make, it
+MASKS, for every Owned case, a normalizer that over-reached into a nested
+`const` / `enum` / `default` / `examples` payload or that corrupted a nested
+`properties` entry named `$schema` (it deletes the subschema outright, since it
+does not check the value kind). The `mixed` document in
+`normalize_schema_dialect_leaves_a_dollar_schema_that_is_data_alone`
+(`:1979-2007`) covers both positions, but only at the ROOT.
 
-**File:** `tests/property_tests.rs:946-955`;
-`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:256-266`
+The residual risk is bounded — an edit that deleted `DATA_ONLY_KEYWORDS` wholesale
+still trips the Borrowed-case assertions — but the inconsistency is exactly the
+kind this round exists to remove: three restatements of one rule, two corrected
+with a stated rationale and the third left behind.
 
-**Issue:** Both mirror rustdocs justify the position-aware `strip` with:
+**Fix** — mirror `pin_dialect_in_member`, as the other two strippers now do:
 
-> a position-blind strip here would remove it from only one side of the
-> surgical-scope comparison
+```rust
+fn strip_every_dollar_schema(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            if map.get("$schema").is_some_and(Value::is_string) {
+                map.remove("$schema");
+            }
+            for (key, value) in map.iter_mut() {
+                strip_every_dollar_schema_in_member(key, value);
+            }
+        },
+        Value::Array(items) => items.iter_mut().for_each(strip_every_dollar_schema),
+        _ => {},
+    }
+}
 
-That is not how the comparison works. `strip_dialect_declarations` is applied to
-BOTH `stripped_input` and `stripped_once`
-(`tests/property_tests.rs:1360-1363`, `fuzz/…:483-486`). For the cited input
-`{"properties": {"$schema": "…draft-07…"}}` the shipped walk correctly leaves the
-document unchanged, so `input == once`, so the two clones are identical, so ANY
-deterministic strip — position-blind included — keeps them equal. The assertion
-cannot fire.
+fn strip_every_dollar_schema_in_member(member_key: &str, member_value: &mut Value) {
+    if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+        match member_value {
+            Value::Object(named) => named.values_mut().for_each(strip_every_dollar_schema),
+            malformed => strip_every_dollar_schema(malformed),
+        }
+    } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+        strip_every_dollar_schema(member_value);
+    }
+}
+```
 
-The claim IS true for the other half: a position-blind
-`collect_dialect_declarations` descends into the `properties` MAP as though the
-map were a schema, sees the string-valued `$schema` bound to a NAME, and reports
-it to invariant 5 as a surviving legacy declaration — a genuine false positive on
-correct behaviour. `src/server/output_validation.rs:420-426` states exactly this
-and only this ("their surviving-declaration **scan** report a FALSE positive").
-The two mirrors over-generalised it to cover the stripper as well.
-
-Not a code defect — the strippers are correct — but in a round whose entire
-subject is "the restated copies must state the rule the code actually
-implements", two of the three copies carry a justification that does not survive
-inspection, which is how a future maintainer talks themselves into a wrong
-simplification.
-
-**Fix:** in both mirror rustdocs, attribute the false-positive risk to the scan
-only:
-
-> a position-blind [`collect_dialect_declarations`] would report a name-bound
-> `$schema` STRING as a surviving legacy declaration — a false positive against a
-> correct normalizer. The stripper is applied to BOTH sides of the surgical-scope
-> comparison so a blind strip cannot fire that assertion; it mirrors the shipped
-> rule so the two walks stay readable as one rule, not because it could
-> false-positive.
+---
 
 ## Info
 
-### IN-01: The README row for seed `14_defs_named_default` contradicts itself about the root `$schema`, and misidentifies which seed it derives from
+### IN-01: Assertion 1 of the drift gate is logically subsumed by assertion 2
 
-**File:** `fuzz/corpus/fuzz_schema_draft_pin/README.md:87`
+**File:** `tests/keyword_list_mirrors.rs:25-27`, `:270-315`
 
-**Issue:** The row says seed 14 is "**`12`'s shape** with the `$defs` entry
-RENAMED from `Inner` to `default`" and then, in the same sentence, "**No root
-`$schema`**". Decoded, the two seeds are:
+**Issue:** The module rustdoc presents the two assertions as covering different
+modes — *"Mode 1 is caught by comparing the three copies to each other. Mode 2 is
+caught only by comparing them to something none of them is"*. Assertion 2
+compares EVERY copy to `expected` (`for (path, list) in &extracted`), so any
+copy-to-copy disagreement necessarily makes at least one copy differ from
+`expected` too. Assertion 1 therefore cannot fire on anything assertion 2 misses;
+its real value is a more targeted failure message naming the two drifted files.
 
-```
-12: {"$schema":"http://json-schema.org/draft-07/schema#","type":"object",
-     "properties":{"n":{"$ref":"#/$defs/Inner"}},"$defs":{"Inner":{...}}}
-14: {"type":"object","properties":{"n":{"$ref":"#/$defs/default"}},
-     "$defs":{"default":{"$id":...,"$schema":"...draft-07...","type":"integer"}}}
-```
+Not a defect — but the "two instruments" framing overstates the independence
+count, and the scope note's question ("do the two assertions collapse into one?")
+has the answer "yes for detection, no for diagnosis". Worth stating that way in
+the rustdoc so the next reader does not budget two guarantees where there is one.
 
-Seed 12 carries a root declaration; seed 14 does not. Seed 14 is seed **13**'s
-shape with the embedded `$schema` restored and the entry renamed. Both halves of
-the sentence cannot be true. Consequence: seed 14 never reaches
-`compile_2020_12`'s warn path via a root declaration and never exercises the
-`(Violates, Conforms)` regression row that seed 12 covers. The seed still trips
-invariants 5 and 6 against a position-blind normalizer (I traced both), so the
-coverage claim holds — only the provenance sentence is wrong.
+**Fix:** reword to "Assertion 1 exists for the failure MESSAGE — it names the two
+files that disagree. Assertion 2 is the one that detects both modes."
 
-**Fix:** change the row to "`13`'s shape with the embedded resource's draft-07
-`$schema` restored and the `$defs` entry renamed from `Inner` to `default`", or
-add the root declaration to the seed so the sentence becomes true and the seed
-also covers the warn path.
+### IN-02 (residue of round-3 IN-03): `disambiguate()` was not fixed, and 115-17 doubled its blast radius
 
-### IN-02: The "cognitive 24 against a threshold of 23" justification for the two extracted helpers is not the project's documented threshold and is not reproducible from the gate invocation
+**File:** `tests/property_tests.rs:1388-1396`, used at `:1429` and `:1472`
 
-**File:** `src/server/output_validation.rs:199-204`, `:259-264`;
-`contracts/binding.yaml:604-610`
+**Issue:** Round-3 `IN-03` reported that `disambiguate()` maps a drawn name `"n"`
+to `"n_resource"` unconditionally, while the collision it guards exists only when
+`container == "properties"` (the only case where `embed_resource` puts the
+resource and the `$ref` holder in the same map, `:1359-1371`). It was not fixed.
 
-**Issue:** Three places justify the `*_in_member` extraction — and instruct "Do
-not inline either back" — with "`pin_dialect_in_place` at cognitive 24 against a
-threshold of 23". `CLAUDE.md` documents the CI cap as cognitive **≤25**
-(`pmat analyze complexity --format json --max-cognitive 25`, hard cap 50); the CI
-job runs `pmat quality-gate --fail-on-violation --checks complexity` with no
-threshold flag, and `.pmat/project.toml` carries no cognitive threshold. A
-threshold of 23 appears nowhere in the gate configuration. Verified on this tree
-with pmat 3.15.0: `pmat quality-gate --fail-on-violation --checks complexity`
-→ `Total violations: 0`, and `pmat analyze complexity --max-cognitive 25`
-→ `violations: 0`.
+115-17 then widened `arb_container()` from three containers to six, so the
+narrowing now applies to FIVE containers where no collision is possible instead
+of two. The sharpest case is the one this round added: `dependencies` keys are
+INSTANCE PROPERTY NAMES, and `"n"` is precisely the instance property the
+generated `$ref` holder uses — making `dependencies: {"n": …}` the most
+realistic entry name in that container, and the one the generated space now
+cannot produce.
 
-The extraction is independently justified (the two halves ARE more readable
-split) and the gate passes either way, so nothing is broken. But a "do not
-change this back" instruction resting on a number that contradicts the project's
-own documented cap will not survive its first challenge.
-
-**Fix:** cite the reproducible command and its output, or drop the specific
-numbers and keep the readability rationale.
-
-### IN-03: `disambiguate()` narrows the generated name space for containers where no collision is possible
-
-**File:** `tests/property_tests.rs:1130-1136`, used at `:1169` and `:1212`
-
-**Issue:** `disambiguate()` maps a drawn name `"n"` to `"n_resource"`
-unconditionally. The collision it guards against exists only when
-`container == "properties"`, because that is the only case where
-`embed_resource()` puts the resource and the `$ref` holder (`"n"`) in the same
-map (`:1099-1111`). For `$defs` and `definitions` the name `"n"` is perfectly
-safe and is now unreachable in the generated space.
-
-**Fix:**
+**Fix:** the round-3 suggestion still applies verbatim —
 
 ```rust
 fn disambiguate(container: &str, name: String) -> String {
@@ -551,38 +685,71 @@ fn disambiguate(container: &str, name: String) -> String {
 }
 ```
 
+### IN-03: `cache_key = (Era, canonical_json_text(schema))` is not canonical — `preserve_order` is enabled
+
+**File:** `src/server/output_validation.rs:614-650` (key built at `:639`);
+`contracts/mcp-protocol-sdk-v1.yaml:266`
+
+**Issue:** The cache key is `schema.to_string()`, and `Cargo.toml:58` enables
+`serde_json`'s `preserve_order`, so `Value::Object` is insertion-ordered and
+`to_string()` is order-DEPENDENT. Two schemas that compare `==` (serde_json's
+`Map` equality is order-insensitive) but were built with different key order
+produce two distinct cache entries. The contract calls this
+`canonical_json_text` and the rustdoc calls it "canonical schema text"; neither
+is accurate.
+
+No correctness impact — the duplicate entries hold identical validators, and the
+era half of the key is what the invariant actually depends on. But it does mean
+the "bounded by the number of distinct DECLARED schemas" bound
+(`:743-746`, and the fuzz seam's justification for using the uncached path) is
+bounded by distinct schema TEXTS, which is a larger set. Worth naming so the
+uncached-fuzz-path rationale is not read as stronger than it is.
+
+**Fix:** say "insertion-ordered JSON text" in both places, or key on a canonical
+form if the duplicate entries ever matter.
+
+### IN-04: A cross-file line-number citation has already rotted
+
+**File:** `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:376`
+
+**Issue:** *"the fence FAILED at `src/server/output_validation.rs:1429` while
+this whole file stayed green."* The assertion in question
+(`assert!(violations.is_empty(), …)`) begins at `:1430` on this tree — the
+citation was off by one before the round even landed. Hard-coded line numbers in
+cross-file prose rot on the next edit and cannot be gated.
+
+**Fix:** cite the test NAME and the assertion's message, both of which are
+greppable and stable:
+`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`,
+`"an $id-bearing embedded schema resource carrying a legacy $schema was NOT
+rewritten"`.
+
 ---
 
 ## Verification performed for this review
 
-- `cargo test --features "full fuzzing" --lib output_validation -- --test-threads=1`
-  → 23 passed, 0 failed.
-- `cargo test --features "full fuzzing" --test property_tests schema_dialect_normalization`
-  → 2 passed (`property_schema_normalization_is_idempotent_and_surgical`,
-  `property_normalization_does_not_depend_on_a_subschema_map_key_name`).
-- `pmat quality-gate --fail-on-violation --checks complexity` (pmat 3.15.0)
-  → `Total violations: 0`.
-- `pmat analyze complexity --format json --max-cognitive 25` → 0 violations.
-- `git ls-files fuzz/corpus/fuzz_schema_draft_pin/ | grep -c '/[0-9][0-9]_'`
-  → `14`, matching the README's documented count; `fuzz/.gitignore`'s
-  `!corpus/fuzz_schema_draft_pin/[0-9][0-9]_*` re-include does match the new seed.
-- Seeds 05, 12, 13 and 14 decoded and checked against their README rows.
-- The shipped walk (all four helpers plus `normalize_schema_dialect`) copied
-  byte-for-byte into an isolated crate pinned to `jsonschema =0.49.2` and driven
-  over 14 documents covering `$defs`, `definitions`, `properties`,
-  `patternProperties`, `dependentSchemas`, `dependencies`, an arbitrary
-  container, a nested `$defs`, and an `allOf` array — each in a `Inner` vs
-  `default` pair. This is the source of every "measured" claim above.
-- Detector/rewriter agreement enumerated over all five (key-class × value-kind)
-  combinations reachable with the current disjoint lists.
-- Fuzz and property mirrors traced by hand against the shipped rule on the six
-  shapes most likely to false-positive (`properties.$schema` bound to a string,
-  `$schema` with an object value, a `SUBSCHEMA_MAP` member with a non-object
-  value, an array under `properties`, `const`/`enum`/`default`/`examples`
-  payloads, and the rename probe over a non-schema subtree). No false positive
-  found in either mirror.
+Everything below was run on this tree at `a7c31fbf` unless noted. No source file
+was modified.
 
-_Reviewed: 2026-08-02T04:55:48Z_
+| Check | Result |
+|---|---|
+| Re-derived `SUBSCHEMA_MAP_KEYWORDS` offline over all 19 `jsonschema-0.49.2/metaschemas/**.json` documents | Exactly the six shipped keywords; `$vocabulary` and `dependentRequired` rejected as documented. **No seventh omission.** |
+| Same derivation over ONLY the five documents the shipped rustdocs name | FOUR keywords, neither rejected keyword — WR-04 |
+| Unguarded `.value.type` `jq` form on `draft7.json` | exit 5, empty stdout — the rustdoc's guard note is accurate |
+| `cargo test --test keyword_list_mirrors` | 2 passed |
+| `cargo test --lib --features "full fuzzing" output_validation` | 25 passed (incl. `v2_pin_rewrites_…`, `keyword_lists_are_disjoint`) |
+| `cargo test --features "full fuzzing" --test property_tests` | 21 passed (incl. both new properties and the mirror gate) |
+| `cargo check --manifest-path fuzz/Cargo.toml --bin fuzz_schema_draft_pin` | clean — the workspace-excluded target still compiles |
+| `cargo package --list --allow-dirty` | `tests/keyword_list_mirrors.rs` PRESENT, `fuzz/**` ABSENT — **CR-01** |
+| Seed `15_dependencies_named_default` byte layout decoded | selector 1, `schema_len=203` == actual, instance `{"n":"NOT-AN-INTEGER"}`, schema parses; reaches invariants 5 and 6, correctly skipped by 3 |
+| `git ls-files fuzz/corpus/fuzz_schema_draft_pin/ \| grep -c '/[0-9][0-9]_'` | 15 — matches the README's claim, and `fuzz/.gitignore`'s re-include pattern tracks the new seed |
+| Detector/rewriter equivalence traced over all four member cases given disjoint lists | Agree in every case; `keyword_lists_are_disjoint` is the right precondition guard |
+| Grep for `allOf`/`anyOf`/`oneOf`/`prefixItems` across the reviewed files and all 15 tracked seeds | Prose only; zero fixtures — **WR-03** |
+| Feature-gate trace of `make quality-gate` → `test-all` vs `fuzzing` | `schema_dialect_normalization_properties` never runs locally; CI `--all-features` (`ci.yml:93`) does run it — **WR-05** |
+| Round-3 WR-01/02/03/04/06/07 closure | Closed. WR-05 half-closed and correctly booked in `deferred-items.md:1314,1321`. IN-01 and IN-02 (round-3 numbering) untouched, not re-litigated. |
+
+---
+
+_Reviewed: 2026-08-02T18:35:02Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
-_Scope: gap-closure round 2 (plans 115-14 and 115-15) — NOT full-phase coverage_
