@@ -823,14 +823,14 @@ mod tests {
         // The regression DIRECTION, stated as its own assertion: row 3's v1
         // column was `Violates` all along, so a `None` on v2 here means v2 is
         // measurably WEAKER than v1 — the one direction SCHM-01 forbids.
-        let row3 = root_and_embedded_legacy_schema();
+        let regression_direction = root_and_embedded_legacy_schema();
         assert!(
-            schema_mismatch(&row3, &violating, Some(Era::V1)).is_some(),
+            schema_mismatch(&regression_direction, &violating, Some(Era::V1)).is_some(),
             "v1 must keep rejecting this instance — D-01 freezes the v1 arm, so if this became a \
              `None` the v1 auto-detect wire moved, which this phase declined to do"
         );
         assert!(
-            schema_mismatch(&row3, &violating, Some(Era::V2)).is_some(),
+            schema_mismatch(&regression_direction, &violating, Some(Era::V2)).is_some(),
             "REGRESSION DIRECTION: `(v1, v2) = (Violates, Conforms)` — v2 accepting an instance \
              v1 correctly rejects is the exact regression SCHM-01 was written to forbid. \
              Measured as (Violates, Conforms) before 115-12; it must now be (Violates, Violates)."
