@@ -843,7 +843,7 @@ mod structured_output_invariants {
 }
 
 /// `$schema` normalization held over arbitrary generated schemas (115-09,
-/// SCHM-01; widened by 115-13).
+/// SCHM-01; widened by 115-13, corrected and made position-aware by 115-15).
 ///
 /// `src/server/output_validation.rs` fences normalization with five FIXED
 /// documents (`normalize_schema_dialect_changes_only_dollar_schema_keys` and
@@ -861,6 +861,44 @@ mod structured_output_invariants {
 /// a nested declaration on, and the one `115-VERIFICATION.md` reproduced the
 /// vacuous-validator bypass with. The generator now EMITS that shape and the
 /// property asserts over it.
+///
+/// # AMENDMENT (115-15): the scope is every SCHEMA POSITION, not "any depth"
+///
+/// The section above states 115-12's scope, and 115-12's scope was wrong in a
+/// second, narrower way that this module could ALSO not have noticed. The
+/// shipped walk (115-14) descends into the VALUES of a `properties` /
+/// `patternProperties` / `$defs` / `definitions` / `dependentSchemas` map
+/// unconditionally, because those maps' keys are AUTHOR-CHOSEN NAMES and never
+/// keywords; the `DATA_ONLY_KEYWORDS` skip applies only in KEYWORD position.
+/// Before 115-14 the skip was applied to every key uniformly, so an embedded
+/// resource filed under a `$defs` entry an author had NAMED `const` / `enum` /
+/// `default` / `examples` was visited by neither walker and kept its legacy
+/// declaration — `$defs.default` measured `(Conforms, Conforms)` with
+/// `rewritten=false`, against the control `$defs.Inner` -> `(Conforms,
+/// Violates)`, `rewritten=true`.
+///
+/// This module's generator hard-coded the definition name `"Inner"` at the
+/// point 115-13 widened it, so the widened generated space STRUCTURALLY could
+/// not contain that document (`115-REVIEW.md` WR-06). [`arb_definition_name`]
+/// and [`arb_container`] now draw both, and every assertion addresses the drawn
+/// shape rather than a hard-coded pointer.
+///
+/// # Which fence catches a defect in the RULE (`115-REVIEW.md` WR-02)
+///
+/// Not the dialect-purity assertion. Purity is asserted through
+/// [`collect_dialect_declarations`], which RESTATES the same traversal rule as
+/// the code under test — so it is an AGREEMENT check between two copies of one
+/// rule and is satisfied VACUOUSLY when the rule itself is wrong. That was
+/// MEASURED against the pre-115-14 body: for `$defs.default` the crate's own
+/// detector reported `None` while nothing had been rewritten (115-14-SUMMARY,
+/// "The postcondition passed VACUOUSLY").
+///
+/// The instrument for a rule defect is
+/// [`property_normalization_does_not_depend_on_a_subschema_map_key_name`],
+/// whose invariant is DERIVED from a JSON Schema 2020-12 fact — the keys of the
+/// five subschema-map keywords are semantically inert, author-chosen names — and
+/// consults no keyword list of the crate's at all. It was OBSERVED to fail
+/// against a deliberately restored position-blind normalizer.
 ///
 /// # Why this module is `fuzzing`-gated, and why that is deliberate
 ///
@@ -902,13 +940,47 @@ mod schema_dialect_normalization_properties {
     /// keeps this property an assertion about the SHIPPED normalizer.
     const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 
+    /// Keywords whose VALUE is a MAP from AUTHOR-CHOSEN NAMES to subschemas.
+    ///
+    /// Mirrors `SUBSCHEMA_MAP_KEYWORDS` in `src/server/output_validation.rs`.
+    /// The mirror is REQUIRED, not decorative. `strip_dialect_declarations` and
+    /// `collect_dialect_declarations` below are restatements of the shipped
+    /// traversal rule, and a restatement that disagrees with the shipped rule
+    /// fails this property on CORRECT behaviour: a generated document with a
+    /// `$schema` STRING bound to a NAME inside one of these maps (e.g.
+    /// `{"properties": {"$schema": "…draft-07…"}}`) is left alone by the shipped
+    /// walk — the name is bound to a non-schema — while a position-blind strip
+    /// here would remove it from only one side of the surgical-scope comparison,
+    /// and a position-blind scan would report it as a surviving legacy
+    /// declaration. Both are FALSE POSITIVES against a correct normalizer.
+    ///
+    /// [`DATA_ONLY_KEYWORDS`] is a list of KEYWORDS and must never be tested
+    /// against the keys of these maps; that category error was the 115-14
+    /// defect.
+    const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+    ];
+
+    /// The name a subschema-map entry is renamed to by the rename-invariance
+    /// property.
+    ///
+    /// Sixteen characters and containing `__`, so [`arb_definition_name`] —
+    /// whose regex arm tops out at seven characters — structurally cannot draw
+    /// it, and the two documents under comparison can never collide.
+    const RENAME_PROBE_NAME: &str = "__rename_probe__";
+
     /// The `$id` of the generated embedded schema resource.
     ///
     /// `example.test` is a reserved, NON-RESOLVABLE host. An `$id` establishes a
     /// base URI without any fetch, and SEP-2106 forbids I/O anywhere on this
     /// path — so this value can never become an outbound request even if a
     /// retriever were somehow compiled in. Every `$ref` this module generates is
-    /// a LOCAL JSON pointer (`#/$defs/Inner`) for the same reason.
+    /// a LOCAL JSON pointer (`#/<container>/<name>`) for the same reason —
+    /// never a scheme'd URI, at any draw.
     const EMBEDDED_RESOURCE_ID: &str = "https://example.test/inner";
 
     /// The seven-way spread of dialect declarations: absent, the four legacy
@@ -932,82 +1004,242 @@ mod schema_dialect_normalization_properties {
         ]
     }
 
+    /// The NAME a generated embedded schema resource is filed under.
+    ///
+    /// `Just("Inner")` is the CONTROL — it keeps every case reachable that was
+    /// reachable before 115-15 widened this. The four literals `const`, `enum`,
+    /// `default` and `examples` are exactly the names the 115-14 defect turned
+    /// on: they collide with [`DATA_ONLY_KEYWORDS`], and a walk that tests that
+    /// list against a key in NAME position never visits the resource filed under
+    /// them. The regex arm keeps the space open for a name nobody thought of.
+    ///
+    /// None of these can contain `/` or `~`, so the JSON Pointers and the local
+    /// `$ref`s built from them need no RFC 6901 escaping.
+    fn arb_definition_name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("Inner".to_string()),
+            Just("const".to_string()),
+            Just("enum".to_string()),
+            Just("default".to_string()),
+            Just("examples".to_string()),
+            "[a-zA-Z_][a-zA-Z0-9_]{0,6}",
+        ]
+    }
+
+    /// The subschema-map keyword the generated resource is filed under.
+    ///
+    /// Three of the five [`SUBSCHEMA_MAP_KEYWORDS`]. `properties` is included
+    /// deliberately: it is the position where a colliding name is also an
+    /// INSTANCE property name, which is the shape a real author hits first.
+    fn arb_container() -> impl Strategy<Value = &'static str> {
+        prop_oneof![Just("$defs"), Just("definitions"), Just("properties")]
+    }
+
+    /// Where a generated document filed its embedded schema resource.
+    #[derive(Debug, Clone)]
+    struct EmbeddedPointer {
+        container: &'static str,
+        name: String,
+    }
+
+    impl EmbeddedPointer {
+        /// The JSON Pointer of the embedded resource's dialect declaration.
+        fn dialect_pointer(&self) -> String {
+            format!("/{}/{}/$schema", self.container, self.name)
+        }
+    }
+
+    /// A generated schema document together with the drawn shape the assertions
+    /// need in order to address it.
+    ///
+    /// A named struct rather than a tuple, deliberately: a multi-element tuple
+    /// destructured in a property body is what produced 115-13's
+    /// `clippy::similar_names` gate failure, and distinct field names cannot.
+    #[derive(Debug, Clone)]
+    struct GeneratedSchemaDocument {
+        document: serde_json::Value,
+        embedded: Option<EmbeddedPointer>,
+    }
+
+    /// File an `$id`-bearing EMBEDDED SCHEMA RESOURCE under `container`/`name`
+    /// and wire a LOCAL `$ref` to it.
+    ///
+    /// The `$id` is what makes this an embedded schema resource rather than an
+    /// inert subschema: 2020-12 sanctions a `$schema` at the root of one, and
+    /// `jsonschema` 0.49.2 honours it there.
+    ///
+    /// When `container` IS `properties` the resource and the `$ref` holder share
+    /// one map — the resource goes under `name` and the `$ref` under `n`; the
+    /// caller guarantees `name != "n"` so the two never collide.
+    fn embed_resource(
+        object: &mut serde_json::Map<String, serde_json::Value>,
+        container: &'static str,
+        name: &str,
+        nested_dialect: Option<&str>,
+    ) {
+        let mut inner = serde_json::Map::new();
+        inner.insert(
+            "$id".to_string(),
+            serde_json::Value::String(EMBEDDED_RESOURCE_ID.to_string()),
+        );
+        if let Some(uri) = nested_dialect {
+            inner.insert(
+                "$schema".to_string(),
+                serde_json::Value::String(uri.to_string()),
+            );
+        }
+        inner.insert(
+            "type".to_string(),
+            serde_json::Value::String("integer".to_string()),
+        );
+
+        // A LOCAL JSON pointer, never a scheme'd URI (SEP-2106).
+        let reference = serde_json::json!({ "$ref": format!("#/{container}/{name}") });
+
+        let mut properties = serde_json::Map::new();
+        if container == "properties" {
+            properties.insert(name.to_string(), serde_json::Value::Object(inner));
+        } else {
+            let mut named = serde_json::Map::new();
+            named.insert(name.to_string(), serde_json::Value::Object(inner));
+            object.insert(container.to_string(), serde_json::Value::Object(named));
+        }
+        properties.insert("n".to_string(), reference);
+        object.insert(
+            "properties".to_string(),
+            serde_json::Value::Object(properties),
+        );
+    }
+
+    /// An arbitrary object body, wrapped when the drawn value is not an object.
+    fn body_object(body: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        match body {
+            serde_json::Value::Object(map) => map,
+            // A non-object body still makes a usable document once wrapped:
+            // `const` takes an arbitrary value in every draft.
+            other => {
+                let mut map = serde_json::Map::new();
+                map.insert("const".to_string(), other);
+                map
+            },
+        }
+    }
+
+    /// A drawn name, with the one value that would collide with the `$ref`
+    /// holder mapped away.
+    fn disambiguate(name: String) -> String {
+        if name == "n" {
+            "n_resource".to_string()
+        } else {
+            name
+        }
+    }
+
     /// An arbitrary JSON OBJECT usable as a schema document, sometimes carrying
     /// a root `$schema` drawn from a spread of real and invented draft URIs, and
     /// sometimes carrying an `$id`-bearing EMBEDDED SCHEMA RESOURCE with its own
-    /// independently-drawn declaration.
+    /// independently-drawn declaration, filed under a drawn CONTAINER using a
+    /// drawn NAME.
     ///
     /// The body comes from the crate's existing `arb_json()` strategy; the
     /// dialect declarations and the embedded resource are generated here,
     /// because those are the only keys the normalizer is allowed to touch.
-    fn arb_schema_document() -> impl Strategy<Value = serde_json::Value> {
-        (arb_json(), arb_dialect(), arb_dialect(), any::<bool>()).prop_map(
-            |(body, dialect, nested_dialect, embed)| {
-                let mut object = match body {
-                    serde_json::Value::Object(map) => map,
-                    // A non-object body still makes a usable document once
-                    // wrapped: `const` takes an arbitrary value in every draft.
-                    other => {
-                        let mut map = serde_json::Map::new();
-                        map.insert("const".to_string(), other);
-                        map
-                    },
-                };
-                // `arb_json` never generates a `$schema` key, but removing it
-                // first keeps the INJECTED declarations the only ones, whatever
-                // that strategy grows into later. The nested declaration below
-                // is injected deliberately rather than removed accidentally —
-                // that accidental removal is what made this generated space
-                // unable to contain the 115-12 defect.
-                object.remove("$schema");
-
-                if embed {
-                    let mut inner = serde_json::Map::new();
-                    // The `$id` is what makes this an EMBEDDED SCHEMA RESOURCE
-                    // rather than an inert subschema: 2020-12 sanctions a
-                    // `$schema` at the root of one, and `jsonschema` 0.49.2
-                    // honours it there.
-                    inner.insert(
-                        "$id".to_string(),
-                        serde_json::Value::String(EMBEDDED_RESOURCE_ID.to_string()),
-                    );
-                    if let Some(uri) = nested_dialect {
-                        inner.insert("$schema".to_string(), serde_json::Value::String(uri));
-                    }
-                    inner.insert(
-                        "type".to_string(),
-                        serde_json::Value::String("integer".to_string()),
-                    );
-                    let mut defs = serde_json::Map::new();
-                    defs.insert("Inner".to_string(), serde_json::Value::Object(inner));
-                    object.insert("$defs".to_string(), serde_json::Value::Object(defs));
-                    // A LOCAL JSON pointer, never a scheme'd URI (SEP-2106).
-                    let mut properties = serde_json::Map::new();
-                    properties.insert(
-                        "n".to_string(),
-                        serde_json::json!({ "$ref": "#/$defs/Inner" }),
-                    );
-                    object.insert(
-                        "properties".to_string(),
-                        serde_json::Value::Object(properties),
-                    );
-                }
-
-                if let Some(uri) = dialect {
-                    object.insert("$schema".to_string(), serde_json::Value::String(uri));
-                }
-                serde_json::Value::Object(object)
-            },
+    fn arb_schema_document() -> impl Strategy<Value = GeneratedSchemaDocument> {
+        (
+            arb_json(),
+            arb_dialect(),
+            arb_dialect(),
+            any::<bool>(),
+            arb_definition_name(),
+            arb_container(),
         )
+            .prop_map(
+                |(body, dialect, nested_dialect, embed, drawn_name, container)| {
+                    let mut object = body_object(body);
+                    // `arb_json` never generates a `$schema` key, but removing
+                    // it first keeps the INJECTED declarations the only ones,
+                    // whatever that strategy grows into later. The nested
+                    // declaration below is injected deliberately rather than
+                    // removed accidentally — that accidental removal is what
+                    // made this generated space unable to contain the 115-12
+                    // defect.
+                    object.remove("$schema");
+
+                    let embedded = if embed {
+                        let name = disambiguate(drawn_name);
+                        embed_resource(&mut object, container, &name, nested_dialect.as_deref());
+                        Some(EmbeddedPointer { container, name })
+                    } else {
+                        None
+                    };
+
+                    if let Some(uri) = dialect {
+                        object.insert("$schema".to_string(), serde_json::Value::String(uri));
+                    }
+                    GeneratedSchemaDocument {
+                        document: serde_json::Value::Object(object),
+                        embedded,
+                    }
+                },
+            )
     }
 
-    /// Remove every string-valued `$schema` at EVERY depth, skipping the values
-    /// of [`DATA_ONLY_KEYWORDS`].
+    /// One drawn document built TWICE — once under the drawn name, once under
+    /// [`RENAME_PROBE_NAME`] — differing in nothing else.
+    #[derive(Debug, Clone)]
+    struct RenamedPair {
+        container: &'static str,
+        original_name: String,
+        under_original: serde_json::Value,
+        under_probe: serde_json::Value,
+    }
+
+    /// A strategy that ALWAYS embeds, for the rename-invariance property.
+    ///
+    /// A dedicated strategy rather than a `prop_assume!` over
+    /// [`arb_schema_document`], so no case is discarded and the effective sample
+    /// size stays the configured 256.
+    fn arb_embedded_schema_document() -> impl Strategy<Value = RenamedPair> {
+        (
+            arb_json(),
+            arb_dialect(),
+            arb_dialect(),
+            arb_definition_name(),
+            arb_container(),
+        )
+            .prop_map(|(body, dialect, nested_dialect, drawn_name, container)| {
+                let base = body_object(body);
+                let original_name = disambiguate(drawn_name);
+                let build = |entry: &str| {
+                    let mut object = base.clone();
+                    object.remove("$schema");
+                    embed_resource(&mut object, container, entry, nested_dialect.as_deref());
+                    if let Some(uri) = &dialect {
+                        object.insert(
+                            "$schema".to_string(),
+                            serde_json::Value::String(uri.clone()),
+                        );
+                    }
+                    serde_json::Value::Object(object)
+                };
+                RenamedPair {
+                    under_original: build(&original_name),
+                    under_probe: build(RENAME_PROBE_NAME),
+                    container,
+                    original_name,
+                }
+            })
+    }
+
+    /// Remove every string-valued `$schema` at EVERY SCHEMA POSITION, skipping
+    /// the values of [`DATA_ONLY_KEYWORDS`] in KEYWORD position only.
     ///
     /// This is the surgical-scope comparison's stripper. It must mirror the
-    /// shipped traversal rule exactly: a root-only strip would read a legitimate
-    /// NESTED rewrite as collateral damage and fail the property on correct
-    /// behaviour.
+    /// shipped traversal rule exactly — including the position distinction, see
+    /// [`SUBSCHEMA_MAP_KEYWORDS`] — because any disagreement fails the property
+    /// on CORRECT behaviour: a root-only strip reads a legitimate NESTED rewrite
+    /// as collateral damage, and a position-blind strip removes a name-bound
+    /// `$schema` string the shipped walk deliberately leaves alone.
     fn strip_dialect_declarations(node: &mut serde_json::Value) {
         match node {
             serde_json::Value::Object(map) => {
@@ -1015,9 +1247,7 @@ mod schema_dialect_normalization_properties {
                     map.remove("$schema");
                 }
                 for (key, value) in map.iter_mut() {
-                    if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
-                        strip_dialect_declarations(value);
-                    }
+                    strip_dialect_declarations_in_member(key, value);
                 }
             },
             serde_json::Value::Array(items) => {
@@ -1027,7 +1257,31 @@ mod schema_dialect_normalization_properties {
         }
     }
 
-    /// Every string-valued `$schema` at every depth, under the same skip rule.
+    /// The three-way MEMBER dispatch of the stripper, mirroring
+    /// `pin_dialect_in_member` in `src/server/output_validation.rs`.
+    fn strip_dialect_declarations_in_member(
+        member_key: &str,
+        member_value: &mut serde_json::Value,
+    ) {
+        if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+            // NAME position: descend into every value, never keyword-filter the
+            // map's own keys. A non-object value is a malformed document and
+            // falls through to the ordinary walk, losing no coverage.
+            match member_value {
+                serde_json::Value::Object(named_subschemas) => {
+                    named_subschemas
+                        .values_mut()
+                        .for_each(strip_dialect_declarations);
+                },
+                malformed => strip_dialect_declarations(malformed),
+            }
+        } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+            strip_dialect_declarations(member_value);
+        }
+    }
+
+    /// Every string-valued `$schema` at every SCHEMA POSITION, under the same
+    /// position-aware rule as [`strip_dialect_declarations`].
     fn collect_dialect_declarations<'a>(node: &'a serde_json::Value, out: &mut Vec<&'a str>) {
         match node {
             serde_json::Value::Object(map) => {
@@ -1035,9 +1289,7 @@ mod schema_dialect_normalization_properties {
                     out.push(declared);
                 }
                 for (key, value) in map {
-                    if !DATA_ONLY_KEYWORDS.contains(&key.as_str()) {
-                        collect_dialect_declarations(value, out);
-                    }
+                    collect_dialect_declarations_in_member(key, value, out);
                 }
             },
             serde_json::Value::Array(items) => {
@@ -1046,6 +1298,27 @@ mod schema_dialect_normalization_properties {
                 }
             },
             _ => {},
+        }
+    }
+
+    /// The three-way MEMBER dispatch of the scan, mirroring
+    /// `first_legacy_dialect_in_member` in `src/server/output_validation.rs`.
+    fn collect_dialect_declarations_in_member<'a>(
+        member_key: &str,
+        member_value: &'a serde_json::Value,
+        out: &mut Vec<&'a str>,
+    ) {
+        if SUBSCHEMA_MAP_KEYWORDS.contains(&member_key) {
+            match member_value {
+                serde_json::Value::Object(named_subschemas) => {
+                    for subschema in named_subschemas.values() {
+                        collect_dialect_declarations(subschema, out);
+                    }
+                },
+                malformed => collect_dialect_declarations(malformed, out),
+            }
+        } else if !DATA_ONLY_KEYWORDS.contains(&member_key) {
+            collect_dialect_declarations(member_value, out);
         }
     }
 
@@ -1064,9 +1337,9 @@ mod schema_dialect_normalization_properties {
         /// first two halves are both blind to.
         #[test]
         fn property_schema_normalization_is_idempotent_and_surgical(
-            schema in arb_schema_document()
+            generated in arb_schema_document()
         ) {
-            let bytes = serde_json::to_vec(&schema)
+            let bytes = serde_json::to_vec(&generated.document)
                 .map_err(|e| TestCaseError::fail(format!("schema must serialize: {e}")))?;
             let Some((input, once, twice)) = normalize_bytes(&bytes) else {
                 return Err(TestCaseError::fail(
@@ -1142,25 +1415,118 @@ mod schema_dialect_normalization_properties {
                 &once
             );
 
-            // The embedded resource specifically, addressed by POINTER so the
-            // failure message names the path.
-            let nested_declared = input.pointer("/$defs/Inner/$schema");
-            let nested_normalized = once.pointer("/$defs/Inner/$schema");
-            match nested_declared {
-                None => prop_assert!(
-                    nested_normalized.is_none(),
-                    "an embedded resource that declared no dialect must not GAIN one at \
-                     /$defs/Inner/$schema: {}",
-                    &once
-                ),
-                Some(_) => prop_assert_eq!(
-                    nested_normalized.and_then(serde_json::Value::as_str),
-                    Some(DRAFT_2020_12),
-                    "an embedded schema resource's dialect declaration must be rewritten to \
-                     the 2020-12 URI at /$defs/Inner/$schema: {}",
-                    &once
-                ),
+            // The embedded resource specifically, addressed by the POINTER the
+            // generator actually drew — container AND name — so the failure
+            // message names the real path and a colliding name is covered.
+            if let Some(embedded) = &generated.embedded {
+                let pointer = embedded.dialect_pointer();
+                let nested_declared = input.pointer(&pointer);
+                let nested_normalized = once.pointer(&pointer);
+                match nested_declared {
+                    None => prop_assert!(
+                        nested_normalized.is_none(),
+                        "an embedded resource that declared no dialect must not GAIN one at \
+                         {}: {}",
+                        pointer,
+                        &once
+                    ),
+                    Some(_) => prop_assert_eq!(
+                        nested_normalized.and_then(serde_json::Value::as_str),
+                        Some(DRAFT_2020_12),
+                        "an embedded schema resource's dialect declaration must be rewritten \
+                         to the 2020-12 URI at {}: {}",
+                        pointer,
+                        &once
+                    ),
+                }
             }
+        }
+    }
+
+    proptest! {
+        /// Property: normalizing an entry of a subschema map must not depend on
+        /// the NAME it is filed under.
+        ///
+        /// # This is the one fence in this module that a defect in the RULE
+        /// # cannot satisfy
+        ///
+        /// Every other fence here — and the crate's own purity postcondition,
+        /// and the fuzz target's invariants 2 and 5 — RESTATES the shipped
+        /// traversal rule. Two copies of one rule can only disagree with each
+        /// other; when the rule itself is wrong they agree, and the assertion
+        /// passes VACUOUSLY. That was measured (115-14-SUMMARY): against the
+        /// pre-115-14 body, `$defs.default` normalized to itself with
+        /// `rewritten=false` while the crate's detector reported `None`.
+        ///
+        /// This invariant is DERIVED instead, from a JSON Schema 2020-12 fact:
+        /// the keys of `properties`, `patternProperties`, `$defs`,
+        /// `definitions` and `dependentSchemas` are AUTHOR-CHOSEN NAMES with no
+        /// keyword semantics under the core and applicator vocabularies.
+        /// Therefore normalizing an entry cannot depend on the name it is filed
+        /// under, and two documents differing ONLY in that name must produce
+        /// equal normalized subtrees. It consults no `DATA_ONLY_KEYWORDS` list
+        /// at all, so it fires on a rule defect — including a FUTURE one that
+        /// special-cases some other name, or that gains a sixth data-only
+        /// keyword without gaining the position exception.
+        ///
+        /// SUBTREE equality, not whole-document equality: the two documents'
+        /// `$ref` strings legitimately differ (`#/<container>/<name>` vs
+        /// `#/<container>/__rename_probe__`) and normalization never resolves
+        /// refs, so comparing whole documents would fail on a difference that is
+        /// not a defect.
+        #[test]
+        fn property_normalization_does_not_depend_on_a_subschema_map_key_name(
+            pair in arb_embedded_schema_document()
+        ) {
+            // Structurally unreachable (the probe is 16 characters and
+            // `arb_definition_name` tops out at 7), asserted rather than
+            // assumed so it discards nothing.
+            prop_assert_ne!(
+                pair.original_name.as_str(),
+                RENAME_PROBE_NAME,
+                "the drawn name must never collide with the rename probe"
+            );
+
+            let original_bytes = serde_json::to_vec(&pair.under_original)
+                .map_err(|e| TestCaseError::fail(format!("schema must serialize: {e}")))?;
+            let probe_bytes = serde_json::to_vec(&pair.under_probe)
+                .map_err(|e| TestCaseError::fail(format!("schema must serialize: {e}")))?;
+
+            let Some((_, original_once, _)) = normalize_bytes(&original_bytes) else {
+                return Err(TestCaseError::fail(
+                    "a document produced by serde_json must parse back as JSON",
+                ));
+            };
+            let Some((_, probe_once, _)) = normalize_bytes(&probe_bytes) else {
+                return Err(TestCaseError::fail(
+                    "a document produced by serde_json must parse back as JSON",
+                ));
+            };
+
+            let original_path = format!("/{}/{}", pair.container, pair.original_name);
+            let probe_path = format!("/{}/{}", pair.container, RENAME_PROBE_NAME);
+            let original_subtree = original_once.pointer(&original_path);
+            let probe_subtree = probe_once.pointer(&probe_path);
+
+            prop_assert_eq!(
+                original_subtree,
+                probe_subtree,
+                "RENAME INVARIANCE VIOLATED at {} vs {}. The keys of properties / \
+                 patternProperties / $defs / definitions / dependentSchemas are AUTHOR-CHOSEN \
+                 NAMES with no keyword semantics under the JSON Schema 2020-12 core and \
+                 applicator vocabularies, so normalizing an entry CANNOT depend on the name it \
+                 is filed under. A difference here means the traversal is treating a NAME as a \
+                 KEYWORD — the 115-VERIFICATION.md defect class, measured as \
+                 `$defs.default -> verdicts=(Conforms, Conforms), rewritten=false` against the \
+                 control `$defs.Inner -> (Conforms, Violates), rewritten=true`. This invariant \
+                 is DERIVED from the spec, not restated from the crate's keyword lists, which \
+                 is why it fires where the purity assertion above passes vacuously. \
+                 Normalized under the drawn name: {}. Normalized under the probe: {}.",
+                original_path,
+                probe_path,
+                &original_once,
+                &probe_once
+            );
         }
     }
 }
