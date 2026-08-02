@@ -1458,3 +1458,112 @@ this residual becomes unowned.**
 
 **Owner:** 115-19 for (1), (3) and (5). **Residual, unowned:** the `streamable_http.rs:458` `.expect`
 in (2); the two clippy-dirty fuzz targets `D-115-AJ(4)` records, which no repository gate can see.
+
+---
+
+## D-115-AM — the round-4 `115-REVIEW.md` findings, triaged on the owner's approval
+
+**Booked:** 2026-08-02, by the `/gsd:execute-phase 115` orchestrator at phase close-out, on the
+owner's `approved` answer to items 3 and 4 of `115-HUMAN-UAT.md`.
+
+`115-REVIEW.md` (round 4, committed `67b2e8f1`) returned 1 critical, 6 warnings and 4 info over
+plans `115-16`..`115-19`. `115-VERIFICATION.md` scored the round **4/4 with no BLOCKER** and routed
+the untriaged findings to Human Verification, because this phase's standing convention is that a
+review finding is either FIXED or EXPLICITLY BOOKED — never silently absorbed. The owner answered
+`approved`, which selects **defer-and-book** for everything still open. This entry is that booking.
+Nothing here is closed by it; it is a record of what is known and unowned.
+
+### (1) CR-01 — CLOSED, not deferred
+
+`tests/keyword_list_mirrors.rs` reads `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` at runtime and
+hard-panics when it is absent, but `Cargo.toml` excluded `fuzz/` from the published package and NOT
+the test — so `cargo test` on the crates.io tarball would have panicked. Measured with
+`cargo package --list --allow-dirty`, which listed the test and no `fuzz/` entry.
+
+Fixed in `71a44f40` by adding `tests/keyword_list_mirrors.rs` to the exclude array beside the two
+neighbouring entries excluded for the identical reason — one of which,
+`tests/phase115_contract_bindings.rs`, is the convention the new file's own rustdoc claims to follow.
+Re-verified both directions: absent from `cargo package --list`, and still 2/2 locally under
+`--features full`. **No residual.**
+
+### (2) WR-03 — array descent: unfenced and outside the contract's stated scope. THE LIVE RESIDUAL.
+
+`allOf`/`anyOf`/`oneOf`/`prefixItems` is the commonest carrier of an embedded schema resource. The
+descent IS implemented — `src/server/output_validation.rs:265` (detector) and `:325` (rewriter) —
+and the module rustdoc already states it as rule 4. What is missing is every layer around it:
+
+- **Deleting both `Value::Array` arms passes the entire suite.** Measured independently twice: by
+  the round-4 reviewer, and again by the round-4 verifier, who commented out both arms, rebuilt, and
+  recorded `output_validation` 25/25, `binary(property_tests)` 21/21 and the fuzz crate's
+  `cargo check` all green with the descent disabled. The file was restored and hash-verified at
+  `a97f5cb2…3192c`, matching every prior round's recorded value.
+- It is exercised by **no test, no property draw and no corpus seed**.
+- It is **absent from the contract's `SCHEMA POSITION` definition** — the same sentences `115-19`
+  rewrote to close WR-04, which therefore scoped the map axis correctly and left the array axis
+  unstated.
+- The `additionalProperties`-self-reference criterion that bounded `115-16`'s six-keyword derivation
+  **structurally cannot find it**: it enumerates map-position keywords, and an array position has no
+  keyword to enumerate.
+
+**Why this did NOT reopen SCHM-01 a fourth time.** Rounds 1, 2 and round-3's CR-01 each involved a
+demonstrable behavioural defect in code as shipped — a real verdict weakening, a real
+accept-everything bypass, a real name-dependent rewrite. Here the code is correct and unconditional,
+and there is **no author-chosen name at an array position** for a `DATA_ONLY_KEYWORDS` collision to
+hide behind, which is the exact shape that reopened this requirement three times. The gap is in the
+FENCES and the PROSE, not the behaviour. The verifier argued this from measurement and the owner
+ratified it.
+
+**Residual, unowned.** The honest statement of the risk: this is round-3 WR-02's shape one position
+class over. Nothing prevents a future edit from breaking array descent silently, and the contract
+does not currently claim the code covers it. A closure plan would add array-position coverage to the
+property draw, the fuzz corpus and the contract's position definition.
+
+### (3) WR-01 — the `src/` fence's anti-vacuity guard is a tautology
+
+`assert_eq!(examined, containers.len() * DATA_ONLY_KEYWORDS.len(), …)` at
+`src/server/output_validation.rs:1417-1425` recomputes the loop bounds from the loop bounds and
+therefore **cannot fail**. Confirmed a genuine tautology by the round-4 verifier, independently of
+the reviewer. Its purpose — proving the fence actually examined the grid it claims to — is
+unserved. Related: the fence's independence rustdoc covers only the container axis while its name
+axis iterates `DATA_ONLY_KEYWORDS`, so the `D-115-AI(4)` reachability trap is documented as absent
+on one axis only. **Residual, unowned.**
+
+### (4) WR-05 — the rename-invariance fences never run under the mandated gate
+
+The property fences are gated `feature = "fuzzing"`, which is in neither `default` nor `full`, so
+`make quality-gate` — the command CLAUDE.md mandates before every commit — does not run them.
+Traced through `Makefile:216-231` vs `Cargo.toml:204-205,243` vs `ci.yml:93`. The only guard pinning
+`CONTAINER_DRAW` is in that same gated set. This is `D-115-AB`'s shape (a gate that cannot see the
+thing it is credited with covering) applied to this round's own new fences. **Residual, unowned.**
+
+### (5) WR-04 — the six-keyword derivation is correct, but its documented procedure is not reproducible
+
+Re-running the procedure every shipped rustdoc describes — over the five meta-schema documents those
+rustdocs name — yields **four** keywords and neither "rejected" keyword. `$defs`,
+`dependentSchemas`, `$vocabulary` and `dependentRequired` live only in the nine `meta/*.json`
+vocabulary files, which no shipped copy mentions. The round-4 reviewer re-derived the set correctly
+over all **19** documents `jsonschema` 0.49.2 ships and confirmed **no seventh omission** at the
+map-position class — so the LIST is right; only the instructions for regenerating it are wrong.
+
+The sharp edge: `tests/keyword_list_mirrors.rs`'s failure message tells a maintainer to re-run that
+documented procedure, which would route them into producing a four-keyword expectation — the
+lockstep-removal mode the gate exists to prevent. **Residual, unowned.**
+
+### (6) WR-02, WR-06, IN-01..IN-04 — booked as read
+
+Recorded without individual restatement: they are documentation-precision and
+assertion-budget observations (e.g. IN-01: `keyword_list_mirrors`'s assertion 2 subsumes assertion 1
+for DETECTION purposes, so its rustdoc budgets two guarantees where there is one). None asserts a
+behavioural defect. See `115-REVIEW.md` at `67b2e8f1` for the full text. **Residual, unowned.**
+
+---
+
+**Owner:** none of (2)-(6) — all residual and unowned by design, on the owner's `approved`
+disposition. (1) is closed.
+
+**Standing rule this round adds, from `D-115-AI(4)`/`115-17`'s near-miss:** *a fence's REACHABILITY
+must not be derived from the same artifact as the rule it checks, even when that artifact is gated.
+A gate makes a copy correct; it does not make the fence able to fire.* `115-17`'s plan instructed it
+to derive the container draw from the gated constant; implemented literally, every negative control
+reported `21 passed`, because shortening the mirror shrinks the generated space in the same edit.
+Caught only because the control was RUN rather than assumed.

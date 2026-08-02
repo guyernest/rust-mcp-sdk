@@ -1,5 +1,5 @@
 ---
-status: partial
+status: resolved
 phase: 115-json-schema-2020-12-structured-output-caching-hints
 source: [115-VERIFICATION.md]
 started: 2026-08-02T05:12:44Z
@@ -10,12 +10,12 @@ rounds:
     status: answered 2026-08-02 — both FIX, closed by plans 115-16..115-19
   - round: 4
     items: [3, 4]
-    status: pending
+    status: answered 2026-08-02 — both DEFER-AND-BOOK, recorded as D-115-AM
 ---
 
 ## Current Test
 
-[round-3 items 1 and 2 answered and closed; round-4 items 3 and 4 awaiting human decision]
+[all four items answered — rounds 3 and 4 both closed out]
 
 ## Tests
 
@@ -27,35 +27,41 @@ result: issue — owner (Guy Ernest) selected **option (a)**, 2026-08-02. A furt
 expected: The equation head still states an unscoped total ("NO string-valued `$schema` anywhere in `s` … root or any depth" / "EVERY such `$schema`") five lines above the correctly-scoped `walk:` clause it introduces (lines 253-261) — round 3's own review WR-04, independently confirmed present by direct read. Either a small doc-only fix (scope the equation head to match the walk clause and the already-corrected invariants), or an explicit `deferred-items.md` entry accepting the inconsistency as documentation debt.
 result: issue — owner (Guy Ernest) selected **fix**, 2026-08-02. Scope the equation head to match the `walk:` clause and the already-corrected `invariants:` block. NOT accepted as documentation debt. See Gap 2.
 
-### 3. Decide the disposition of `115-REVIEW.md` (round 4) WR-03 — array descent is unfenced and absent from the contract's scope statement
+### 3. [ANSWERED — defer and book] Decide the disposition of `115-REVIEW.md` (round 4) WR-03 — array descent is unfenced and absent from the contract's scope statement
 expected: Either (a) a further closure plan adds regression coverage for array descent (`allOf`/`anyOf`/`oneOf`/`prefixItems`) and extends the contract's `SCHEMA POSITION` definition to name it, or (b) the finding is booked to `deferred-items.md` with a stated rationale.
 
 Measured, independently, by both the round-4 reviewer and the round-4 verifier: array descent is implemented at `src/server/output_validation.rs:265` and `:325`, and **deleting both `Value::Array` arms passes the entire suite** — `output_validation` 25/25, `binary(property_tests)` 21/21, and the fuzz crate's `cargo check`, all green with the descent disabled. It is exercised by no test, no property draw and no corpus seed, and it is absent from the contract's `SCHEMA POSITION` definition — the same sentences 115-19 rewrote to close WR-04.
 
 The verifier's verdict, which the owner may accept or overrule: this does **not** reopen SCHM-01. Rounds 1, 2 and round-3's CR-01 each involved a demonstrable behavioural defect in shipped code — a real verdict weakening, a real accept-everything bypass, a real name-dependent rewrite. Here the code is already correct and unconditional, and there is no author-chosen name at an array position for a `DATA_ONLY_KEYWORDS` collision to hide behind, which is the exact shape that reopened this requirement three times. What is missing is fences and prose for a rule the code implements correctly and its own rustdoc already states as rule 4.
-result: [pending]
+result: answered — owner (Guy Ernest) replied `approved` on 2026-08-02, ratifying the verifier's verdict and selecting **option (b), defer-and-book**. SCHM-01 is NOT reopened. Booked as `D-115-AM(2)` with the measured evidence, the reasoning for not reopening, and the residual stated as unowned.
 
-### 4. Triage the remaining round-4 review findings into `deferred-items.md`
+### 4. [ANSWERED — defer and book] Triage the remaining round-4 review findings into `deferred-items.md`
 expected: The round-4 review's findings are fixed or explicitly booked, following the convention already used for `D-115-AK` (which triaged all ten round-3 findings). Confirmed by grep that none has been triaged yet: the ledger's highest entries are `D-115-AK`/`D-115-AL`, both filed for the ROUND-3 review; no `D-115-AM` exists.
 
 Outstanding: WR-01 (the `src/` fence's anti-vacuity assertion `assert_eq!(examined, containers.len() * DATA_ONLY_KEYWORDS.len())` at `:1417-1425` recomputes the loop bounds from the loop bounds and cannot fail — confirmed a genuine tautology by the verifier), WR-02, WR-04 (the six-keyword derivation is correct but its documented procedure is not reproducible — run over the five documents every shipped rustdoc names it yields four keywords, because `$defs`/`dependentSchemas`/`$vocabulary`/`dependentRequired` live only in the nine `meta/*.json` vocabulary files no copy mentions), WR-05 (the rename-invariance fences are `fuzzing`-gated and never run under the mandated `make quality-gate` — traced through `Makefile:216-231` vs `Cargo.toml:204-205,243` vs `ci.yml:93`), WR-06, and IN-01..04.
 
 CR-01 (packaging) is already fixed in `71a44f40` and needs no triage.
-result: [pending]
+result: answered — owner replied `approved` on 2026-08-02, selecting **defer-and-book** for all remaining findings. Booked as `D-115-AM`, sections (3) through (6), each marked residual and unowned. CR-01 recorded as closed in section (1).
 
 ## Summary
 
 total: 4
 passed: 0
-issues: 2
-pending: 2
+issues: 4
+pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
 
 ### Gap 1 — `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies` (from 115-REVIEW.md CR-01)
-status: failed
+status: resolved
+resolved: 2026-08-02 by plans 115-16 (constant widened to six by derivation over the 19 meta-schema
+  documents jsonschema 0.49.2 ships, `dependencies` added), 115-17 (property mirror + container draw
+  widened three to six), 115-18 (fuzz mirror + corpus seed 15_dependencies_named_default) and 115-19
+  (tests/keyword_list_mirrors.rs drift gate). Verified: all three copies read byte-identical at six
+  entries; `make quality-gate` exit 0 at 5060 passed; the round-4 reviewer re-derived the set
+  independently and found no seventh omission at the map-position class.
 severity: critical (per review) / measured-as-no-verdict-flip (per 115-VERIFICATION.md)
 disposition: FIX — owner selected closure option (a) on 2026-08-02, declining the deferral route.
 
@@ -94,7 +100,10 @@ Open sub-questions the closure plan must settle from measurement, not assumption
   property draw and no corpus seed (review WR-02) — coverage for them belongs in the same pass.
 
 ### Gap 2 — contract `formula:` equation head overstates the pin's scope (from 115-REVIEW.md WR-04)
-status: failed
+status: resolved
+resolved: 2026-08-02 by plan 115-19. The equation head now reads "when no string-valued $schema in
+  any SCHEMA POSITION of s — the positions the `walk:` clause below defines", and the three
+  binding.yaml note heads were swept to match. Confirmed by direct read.
 severity: documentation-only
 disposition: FIX — owner selected the doc fix on 2026-08-02, declining the accept-as-debt route.
 
