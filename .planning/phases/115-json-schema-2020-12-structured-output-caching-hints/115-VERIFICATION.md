@@ -1,277 +1,338 @@
 ---
 phase: 115-json-schema-2020-12-structured-output-caching-hints
-verified: 2026-08-02T01:40:00Z
-status: gaps_found
-score: 3/4 must-haves verified
+verified: 2026-08-02T06:30:00Z
+status: human_needed
+score: 4/4 must-haves verified
 overrides_applied: 0
 re_verification:
   previous_status: gaps_found
   previous_score: 3/4
   gaps_closed:
-    - "The SPECIFIC bypass measured in the prior report — a legacy `$schema` on the `$defs.Inner`
-       embedded resource (root-draft07 + embedded, `(v1,v2) = (Violates, Conforms)`) — is closed.
-       Re-measured on this tree: `(Violates, Violates)`. `normalize_schema_dialect` is now
-       recursive, not root-only, and 17/17 unit tests + the widened property test (19 vs 18) +
-       fuzz invariant 5 + 2 new corpus seeds all pass."
+    - "SCHM-01's round-2 BLOCKER (position-blind normalization): DATA_ONLY_KEYWORDS was tested
+       against every object key regardless of whether that key sat in KEYWORD position or NAME
+       position, so a $defs/properties/patternProperties/definitions/dependentSchemas entry an
+       author named const/enum/default/examples was invisible to both first_legacy_dialect and
+       pin_dialect_in_place. Closed by 115-14's SUBSCHEMA_MAP_KEYWORDS (5-entry) three-way member
+       dispatch in both walkers. INDEPENDENTLY RE-CONFIRMED this session by direct source read
+       (src/server/output_validation.rs:160-280) and by re-running the fences fresh:
+       output_validation::tests 18/18 pass, including
+       v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword (the fence the round-2
+       report's reproduction document maps onto)."
+    - "The round-2 finding that all three pre-existing defensive layers RESTATED the same defective
+       rule (the unit postcondition called the crate's own detector; the property generator
+       hard-coded the definition name 'Inner'; fuzz invariant 5's collector re-implemented the same
+       filter) is closed by 115-15's rename-invariance metamorphic property/fuzz-invariant, DERIVED
+       from the JSON Schema 2020-12 name-semantics fact rather than restated from the crate's
+       keyword lists. INDEPENDENTLY RE-CONFIRMED: property_tests 20/20 pass under `--features "full
+       fuzzing"` (18 under `--features full`, proving the fuzzing-gated module actually ran),
+       including property_normalization_does_not_depend_on_a_subschema_map_key_name; corpus seed
+       14_defs_named_default exists, is tracked (216 bytes, commit fb97b23d)."
   gaps_remaining:
-    - "SCHM-01 is STILL not achieved. The fix 115-12 shipped is POSITION-BLIND: it applies the
-       `DATA_ONLY_KEYWORDS` skip (`const`/`enum`/`default`/`examples`) to every object key
-       uniformly, without distinguishing a key in KEYWORD position from a key in NAME position
-       (`$defs`/`properties`/`patternProperties`/`definitions`/`dependentSchemas` map
-       AUTHOR-CHOSEN NAMES to subschemas). A `$defs` (or `properties`) entry named `default`,
-       `const`, `enum` or `examples` is therefore invisible to both `first_legacy_dialect` and
-       `pin_dialect_in_place`, so a legacy `$schema` on such an entry survives the v2 pin and
-       resolves an empty vocabulary set there — the identical vacuous-validator bypass class
-       115-12 was written to close, reachable through a different document shape. Independently
-       reproduced this session (see Observable Truths #1)."
-    - "All three test/fuzz layers added or repaired by 115-12/115-13 restate the SAME defective
-       rule (`DATA_ONLY_KEYWORDS` filtered against every map key) rather than an independent
-       invariant, so none of them can detect this residual bypass — confirmed by reading
-       `src/server/output_validation.rs`, `tests/property_tests.rs` and
-       `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` line-by-line. The property generator and the
-       fixed-example fences also still hard-code the definition name `Inner`, so the generated /
-       fixed space cannot reach a colliding name either (WR-06, unaddressed — 115-13's scope was
-       widening the DIALECT reached, not the NAME reached)."
-    - "SCHM-01's `[x]` booking in `.planning/REQUIREMENTS.md` (~line 146) and the traceability row
-       at ~line 525 ('Complete — gap closed by 115-12 + 115-13') are NOT justified by the evidence
-       on this tree. The booking should be corrected — most defensibly reverted to `[~]` with an
-       amended (not deleted) record — pending a further closure round."
+    - "A NEW finding, not present in round 2: this round's own code review (115-REVIEW.md CR-01,
+       timestamped AFTER the 115-14/115-15 commits it reviews) found SUBSCHEMA_MAP_KEYWORDS omits
+       `dependencies` — draft-04..2019-09's own map-from-instance-property-NAME-to-subschema
+       keyword, which the module's own test suite already records
+       (src/server/output_validation.rs:707-712, D-115-03-C) as still honoured by jsonschema 0.49.2
+       under the 2020-12 pin. INDEPENDENTLY RE-MEASURED this session through the crate's OWN
+       fuzz_support seam (not the reviewer's isolated byte-for-byte copy): `dependencies.default` is
+       NOT rewritten while `dependencies.Inner` IS — confirming the name-dependence CR-01 describes.
+       Going one step further than the review: no v2 verdict flip was reproducible either —
+       `dependencies.Inner` and `dependencies.default` both report `(Violates, Violates)` for a
+       type-violating instance on the pinned jsonschema version, so no accept-everything vacuous
+       validator is reachable through this position today. That is categorically different from
+       both of the two prior (now-closed) rounds, which each demonstrated an actual
+       `(Conforms, Conforms)` flip before being booked closed. Routed to Human Verification, not
+       booked as a FAILED truth — see reasoning below and in the Human Verification section."
   regressions: []
-gaps:
-  - truth: "SCHM-01: Schema validation runs Draft 2020-12 explicitly pinned, no `$schema` auto-detect (jsonschema 0.49), staying wasm-clean and SEP-2106-compliant"
-    status: failed
-    reason: >-
-      Independently reproduced (not merely accepted from 115-REVIEW.md) via
-      `pmcp::server::output_validation::fuzz_support::{validate_bytes, normalize_bytes}` under
-      `--features "fuzzing,validation"`, zero net change to the tree. Two documents differing ONLY
-      in the NAME of a `$defs` entry (`Inner` vs `default`), both carrying an embedded schema
-      resource (`$id` + `$schema: draft-07` + `type: integer`), instance `{"n":"NOT-AN-INTEGER"}`:
-      `$defs.Inner` (control) verdicts=(Conforms, Violates), rewritten=true;
-      `$defs.default` (renamed) verdicts=(Conforms, Conforms), rewritten=false. The renamed
-      document's v2 column silently drops `type: integer` — the exact vacuous-validator bypass the
-      pin exists to close. Root cause: `DATA_ONLY_KEYWORDS` (`src/server/output_validation.rs:128`)
-      is applied at every object node by both `first_legacy_dialect` (:149-151) and
-      `pin_dialect_in_place` (:176-180) without regard to whether the enclosing key is a KEYWORD
-      position or a NAME position. Also independently reproduced WR-03 (fragment-suffixed 2020-12
-      URI `https://json-schema.org/draft/2020-12/schema#` misclassified as legacy and rewritten
-      when it should be left alone) — a secondary, non-blocking correctness gap in the same
-      normalizer, unaddressed by 115-12/115-13 (out of their stated scope).
-    artifacts:
-      - path: "src/server/output_validation.rs"
-        issue: "first_legacy_dialect (:141-156) and pin_dialect_in_place (:165-185) filter DATA_ONLY_KEYWORDS against every object key uniformly; a $defs/properties/patternProperties/definitions/dependentSchemas entry whose AUTHOR-CHOSEN NAME collides with const/enum/default/examples is never visited by either walker. The module's own rustdoc (:25-34, :199-222) now asserts an UNCONDITIONAL 'the pin wins UNCONDITIONALLY ... across the whole DOCUMENT' claim that this reproduction falsifies."
-      - path: "contracts/mcp-protocol-sdk-v1.yaml"
-        issue: "output_schema_draft_pin's invariant 1 ('EVERY such declaration is normalized ... never honoured') and the NEW postcondition invariant added by 115-12 Task 3 ('after normalization no $schema string anywhere in the document ... is anything other than the Draft 2020-12 URI') are both false as shipped for a $defs/properties entry named const/enum/default/examples."
-      - path: "tests/property_tests.rs"
-        issue: "arb_schema_document() (widened by 115-13) generates the embedded-resource shape only under the hard-coded definition NAME 'Inner' (:982, :988, :1147-1160) — it cannot draw a colliding name, so the widened generator structurally excludes the residual bypass exactly as WR-06 describes."
-      - path: "fuzz/fuzz_targets/fuzz_schema_draft_pin.rs"
-        issue: "collect_dialect_declarations / strip_dialect_declarations (:305-342), the 'independent' invariant-5 walk added by 115-13, restate the identical DATA_ONLY_KEYWORDS-per-key rule (:224, :312, :335) rather than an independently-derived invariant, so invariant 5 cannot see a declaration behind a colliding $defs/properties name either — the WR-02 finding (an independently-TYPED walk that restates the same RULE catches nothing a rule defect produces) is unaddressed."
-      - path: ".planning/REQUIREMENTS.md"
-        issue: "SCHM-01 booked [x] (~line 146) and the traceability row (~line 525, 'Complete — gap closed by 115-12 + 115-13') both state the requirement is achieved. The booking's own evidence table (the three-row measurement, the named fences, the negative controls) is real and accurately reported for the CASES IT COVERS, but none of those cases include a colliding definition/property name, so the booking generalizes past what was actually measured — the identical process defect D-115-G was filed to prevent, recurring in a narrower form."
-    missing:
-      - "Position-aware traversal: distinguish keys in KEYWORD position from keys in NAME position. The review's CR-01 fix sketch (contracts-compatible, already partially present at fuzz_schema_draft_pin.rs:286 in spirit) introduces a SUBSCHEMA_MAP_KEYWORDS list (properties, patternProperties, $defs, definitions, dependentSchemas) whose VALUES are maps of author-chosen-name -> subschema; descend into every value of such a map unconditionally, and never apply DATA_ONLY_KEYWORDS to the map's own keys."
-      - "Apply the same rule to BOTH first_legacy_dialect and pin_dialect_in_place, and to the independently-restated copies in tests/property_tests.rs and fuzz/fuzz_targets/fuzz_schema_draft_pin.rs — a rule defect in one restated copy is invisible to a differently-typed but rule-identical walk in another."
-      - "A fixed test case (unit `normalization_cases()`, property generator, and a new corpus seed) whose $defs or properties entry is NAMED const/enum/default/examples and carries $id + a legacy $schema + a distinguishing keyword (e.g. type: integer), asserted still ENFORCED on v2 after the fix, and OBSERVED to fail before it (per this phase's own negative-control standard)."
-      - "Correct SCHM-01's booking in .planning/REQUIREMENTS.md: either revert [x] to [~] with the downgrade block amended (not deleted, per this phase's established convention) recording this residual defect, or keep [x] only once the position-aware fix lands and is measured."
-      - "Optionally (non-blocking on SCHM-01 itself): fix WR-03 (fragment-suffixed 2020-12 URI false-positive) while touching this normalizer again, since it was measured this session as still present."
+human_verification:
+  - test: "Decide the disposition of 115-REVIEW.md CR-01 (SUBSCHEMA_MAP_KEYWORDS omits `dependencies`)"
+    expected: "Either (a) a further closure plan adds `dependencies` to SUBSCHEMA_MAP_KEYWORDS in
+      both walkers plus the two restated mirrors, or (b) the finding is formally booked to
+      deferred-items.md with a stated rationale, following the same convention already used for
+      D-115-AC (WR-03) and D-115-AD (WR-04/05, IN-01/02/03) — i.e. explicit and owned-or-unowned,
+      not silently absorbed."
+    why_human: "This is the third time this exact requirement has been reopened over a name-position
+      completeness gap in the same deny/allow-list shape, and the phase's own established pattern is
+      that every review finding gets triaged (fixed or explicitly booked), never left implicit. This
+      verification's own measurement differs from the reviewer's in one respect (no verdict flip
+      demonstrated on either name), which is a judgment call about severity that the owner, not an
+      automated re-run, should ratify given the requirement's history."
+  - test: "Correct or accept contracts/mcp-protocol-sdk-v1.yaml's `output_schema_draft_pin` `formula:`
+      equation head (lines 248-252), which still states an unscoped total ('NO string-valued $schema
+      anywhere in s ... root or any depth' / 'EVERY such $schema') five lines above the correctly
+      scoped `walk:` clause it introduces (lines 253-261) — round 3's own review WR-04, independently
+      confirmed present by direct read this session"
+    expected: "Either a small doc-only fix (scope the equation head to match the walk clause and the
+      already-corrected invariants), or an explicit deferred-items.md entry accepting the
+      inconsistency as documentation debt"
+    why_human: "Cosmetic/documentation-only — does not affect compiled behavior, since the `walk:`
+      clause and the `invariants:` block (which 115-14 did correct) are what a reader and
+      `pmat comply check` actually consult for the traversal rule. Not a blocker on its own, but
+      compounds the same 'a defensive-layer sentence overstates the code's scope' pattern this whole
+      three-round closure exists to eliminate, so it should not be left silently unaddressed a third
+      time either."
 ---
 
 # Phase 115: JSON Schema 2020-12 + Structured Output + Caching Hints Verification Report
 
-**Phase Goal:** Adopt MCP spec `2026-07-28` era semantics for JSON Schema Draft 2020-12 output
-validation (SCHM-01), non-object structured tool output (SCHM-02), and result caching hints
-`ttlMs`/`cacheScope` (SCHM-03) — with the v1 (`2025-11-25`) wire behaviourally frozen.
+**Phase Goal:** Schema validation moves to an explicitly-pinned Draft 2020-12, v2 `structuredContent`
+accepts any JSON value (relaxing the 2.15 object-only bridge), and the list/read results carry
+additive caching hints — all wasm-clean and independent enough to parallelize with the HTTP/Tasks
+track.
 
 **Verified:** 2026-08-02
-**Status:** gaps_found
-**Re-verification:** Yes — after gap-closure plans 115-12 and 115-13, which executed against the
-prior `115-VERIFICATION.md` BLOCKER (root-only `$schema` normalization).
+**Status:** human_needed
+**Re-verification:** Yes — third pass. Round 1 found the root-only normalizer BLOCKER (closed by
+115-12/115-13). Round 2 found that closure's own position-blind residual BLOCKER (closed by
+115-14/115-15, this round's subject). This round independently re-measures the 115-14/115-15 closure
+AND weighs a fresh finding (CR-01) from this round's own code review, which landed AFTER 115-15
+committed.
 
 ## Goal Achievement
 
-**The prior BLOCKER is genuinely closed for the case it measured.** `normalize_schema_dialect` is
-now recursive (not root-only); the specific three-row regression from the prior report
-(`root-draft07 + embedded`, definition named `Inner`) now measures `(Violates, Violates)` instead
-of `(Violates, Conforms)`, confirmed by re-running `cargo test --lib --features full
-output_validation::tests` (17/17 pass) on this tree.
+**Round 2's BLOCKER is genuinely closed, independently re-confirmed — not accepted from either
+SUMMARY.** `SUBSCHEMA_MAP_KEYWORDS = ["properties", "patternProperties", "$defs", "definitions",
+"dependentSchemas"]` (`src/server/output_validation.rs:160-166`) is consulted first in a three-way
+member dispatch in both `first_legacy_dialect_in_member` and `pin_dialect_in_member`
+(`:209-227`, `:265-280`): a member whose key is in that list AND whose value is an object recurses
+into every VALUE without keyword-filtering the map's own keys; the same key with a non-object
+(malformed) value falls through to the ordinary walk; otherwise the `DATA_ONLY_KEYWORDS` skip applies
+unchanged. This directly closes the round-2 reproduction: the `$defs.default` entry (an author-chosen
+name colliding with a `DATA_ONLY_KEYWORDS` word) is now visited and rewritten. Re-run fresh this
+session: `cargo test --lib --features full output_validation::tests` → **18 passed / 0 failed**,
+including `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`.
 
-**A new, narrower instance of the SAME bypass class survives, and this verification independently
-reproduced it — not merely accepted the framing from `115-REVIEW.md`.** The fix 115-12 shipped
-filters `DATA_ONLY_KEYWORDS` (`const`, `enum`, `default`, `examples`) against every object key in
-the document uniformly. That filter is correct when the key is in KEYWORD position (e.g. the
-schema itself literally has a `"const": ...` keyword) but wrong when the key is in NAME position —
-`$defs`, `properties`, `patternProperties`, `definitions` and `dependentSchemas` are all maps from
-AUTHOR-CHOSEN NAMES to subschemas, and an author is free to name a `$defs` entry `default`. When
-they do, and that entry is an `$id`-bearing embedded schema resource with a legacy `$schema`,
-neither `first_legacy_dialect` nor `pin_dialect_in_place` ever visits it, so the legacy declaration
-survives the v2 pin and produces the identical accept-everything sub-validator the pin exists to
-prevent.
+**Round 2's second finding — that every fence RESTATED the code's own defective rule and so could not
+catch a rule-level defect — is closed by a genuinely different mechanism, also re-confirmed.**
+`property_normalization_does_not_depend_on_a_subschema_map_key_name`
+(`tests/property_tests.rs`) and fuzz invariant 6 `assert_normalization_is_invariant_under_rename`
+assert **rename invariance** — a metamorphic relation derived from the JSON Schema 2020-12 fact that
+the keys of the five subschema-map keywords are semantically inert author-chosen names, so
+normalizing an entry cannot depend on the name it is filed under. This consults no keyword list at
+all and, per the SUMMARY's negative control (independently plausible from the code and cited, not
+re-run — running it requires reverting `src/`), fires even when BOTH restated copies of the old rule
+are also blind, which the three previous fences structurally could not do. Re-run fresh this session:
+`cargo nextest run --features "full fuzzing" -E 'binary(property_tests)'` → **20 passed**, vs
+**18 passed** under `--features full` alone — the pair that proves the `fuzzing`-gated module actually
+ran.
 
-**Reproduction (this session, zero net change to the tree — throwaway `examples/_verify115_repro.rs`
-written, run, and deleted; `git status --porcelain examples/` confirmed clean afterward):**
+**SCHM-02, SCHM-03 and the v1 freeze are unmoved and re-confirmed fresh.** `src/types/tools.rs` and
+`src/types/caching.rs` are not in either plan's `files_modified`. Re-run this session:
+`cargo nextest run --features full -E 'binary(structured_tool_output) + binary(v2_caching_hints) +
+binary(v1_lists_golden) + binary(v2_schema_tripwires) + binary(v2_core_schema_facts) +
+binary(vendored_schema_provenance) + binary(phase115_contract_bindings)'` → **78 passed / 0 skipped**,
+matching every count both SUMMARYs and the round-2 report recorded. `compile_for_era`'s `Era::V1` arm
+(`jsonschema::validator_for(schema)` verbatim, `:486`) is unchanged.
+
+**A NEW finding surfaced by this round's own code review (`115-REVIEW.md`, timestamped AFTER the
+115-14/115-15 commits it covers) — independently re-measured, and NOT accepted at face value.**
+CR-01 states `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies`, draft-04..2019-09's own
+map-from-instance-property-NAME-to-subschema keyword. The module's own test suite already records
+(`src/server/output_validation.rs:707-712`, ledger `D-115-03-C`) that `jsonschema` 0.49.2 still
+honours `dependencies` under the 2020-12 pin. This verification reproduced the name-dependence
+directly through the crate's own `fuzz_support` seam — not the reviewer's isolated byte-for-byte copy
+— with zero net change to the tree (a throwaway `examples/_verify115_dependencies_repro.rs`, run once,
+deleted; `git status --porcelain examples/` confirmed clean afterward):
 
 ```
-$defs.Inner   (control)   verdicts=Some((Conforms, Violates))  rewritten=true
-$defs.default (renamed)   verdicts=Some((Conforms, Conforms))  rewritten=false
-fragment-suffixed 2020-12 URI: rewritten=true (should be false)
+dependencies.Inner    rewritten=true  verdicts=Some((Violates, Violates))
+dependencies.default  rewritten=false verdicts=Some((Violates, Violates))
+dependencies.const    rewritten=false verdicts=Some((Violates, Violates))
+components.Inner    rewritten=true   (an arbitrary vendor container, for contrast — WR-04's older, broader concern)
+components.default  rewritten=false
 ```
 
-This matches the measurement given in this task's `<critical_context>` exactly. Reading the source
-confirms the mechanism: `DATA_ONLY_KEYWORDS.contains(&key.as_str())` is evaluated against every
-map key at `src/server/output_validation.rs:150` (detector) and `:177` (rewriter) with no
-distinction for whether that key sits in a `SUBSCHEMA_MAP_KEYWORDS`-shaped container. No such
-container list exists anywhere in the tree (`grep -c SUBSCHEMA_MAP_KEYWORDS` → 0 across
-`src/`, `tests/`, `fuzz/`).
+The name-dependence is real and confirmed: `dependencies.default`'s legacy `$schema` is left
+unrewritten while `dependencies.Inner`'s is rewritten, exactly as CR-01 measured. **But going one step
+further than the review, which explicitly stated it could not demonstrate this either: no v2 verdict
+flip is reproducible at this position on the pinned jsonschema version.** Both `dependencies.Inner`
+(rewritten) and `dependencies.default` (not rewritten) report `(Violates, Violates)` for a
+type-violating instance — the `type: integer` constraint is enforced identically whether or not the
+declaration was normalized. This is categorically different from the reproductions that reopened
+SCHM-01 twice before (round 1: `root-draft07 + embedded` measured `(Violates, Conforms)`; round 2:
+`$defs.default` measured `(Conforms, Conforms)` against the control's `(Conforms, Violates)`) — both
+of those were demonstrated accept-everything bypasses. This one is not. A plausible mechanism (stated
+here as reasoning, not as an established library-internals fact): `jsonschema`'s embedded-resource
+(`$id`-boundary) discovery walk for 2020-12 compilation appears scoped to keywords the 2020-12
+core/applicator vocabulary actually defines as subschema-bearing, and `dependencies` was removed from
+that vocabulary in 2020-12 (replaced by `dependentSchemas`) — so a `$schema` sitting inside a
+`dependencies` entry is not treated by the library as establishing a dialect boundary at all, unlike
+the five keywords `SUBSCHEMA_MAP_KEYWORDS` already covers. If that reasoning is right, the module's
+`# Why the walk is position-aware` claim that rewriting is "deliberately a SUPERSET of what
+`jsonschema` honours" (`:384-387`) still holds in the security-relevant sense — the normalizer omits a
+position, but that position is not one the library treats as a dialect declaration either — though the
+sentence is not literally provable without pinning that library-internal behavior, which is exactly
+the caution the review itself raised. Given the demonstrated absence of a bypass, and given the bar
+this requirement has been held to across two real reopenings is a **demonstrated** bypass, this
+verification does NOT reopen SCHM-01 to FAILED a third time on CR-01 alone. It is routed to Human
+Verification instead, because (a) the finding is real and not yet triaged into `deferred-items.md`
+the way this phase's own convention requires, and (b) the security reasoning above rests on unpinned
+library-internal behavior, which is precisely the condition the module's own rustdoc already warns is
+fragile.
 
-**All three defensive layers 115-12/115-13 built or repaired share the identical blind spot,
-confirmed by reading each:**
-
-- The unit-test postcondition (`normalize_schema_dialect_changes_only_dollar_schema_keys`,
-  `src/server/output_validation.rs:1174`) asserts `first_legacy_dialect(&normalized) == None` —
-  the blind detector checking itself.
-- `tests/property_tests.rs`'s widened `arb_schema_document()` (:982, :988) hard-codes the
-  definition name `"Inner"` — it cannot draw a colliding name, so the 100-of-256 embedded-resource
-  coverage 115-13 measured never exercises this shape.
-- `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`'s invariant-5 collector
-  (`collect_dialect_declarations`, :328-342) restates the same `DATA_ONLY_KEYWORDS`-per-key rule
-  (:335) the crate's own detector uses. The module doc calls this scan "TOTAL — no skip condition"
-  and "INDEPENDENT" (WR-02); it is independent in *implementation* only, not in *rule*, and a rule
-  defect is exactly what it cannot catch.
-
-**SCHM-01's `[x]` booking in `.planning/REQUIREMENTS.md` is NOT justified by the evidence on this
-tree.** The booking's evidence table is honest about what it measured (the `Inner`-named case, the
-17/19/13/5/… test counts, the negative controls) — but it generalizes past that measurement to
-claim the requirement text ("no `$schema` auto-detect") is satisfied, which this session's
-independent reproduction disproves. This is the same shape of error `D-115-G` was filed to
-prevent — a requirement re-booked complete on evidence that does not cover the case that turns out
-to matter — recurring in a narrower form on the very requirement `D-115-G` was about. **The booking
-should be corrected**, most defensibly by reverting to `[~]` with the downgrade block amended (not
-deleted, following this phase's own established convention) to record this residual defect,
-pending a further gap-closure round.
-
-**SCHM-02 and SCHM-03 remain genuinely achieved**, re-checked (not merely trusted) this session:
-`output_validation.rs` and `caching.rs` were not both touched by 115-12/115-13 in a way that
-affects these — `115-12`/`115-13` touched only `output_validation.rs`, `property_tests.rs`,
-`fuzz_schema_draft_pin.rs`, contract/binding/planning docs — and the SCHM-02/03 test suites were
-re-run fresh on this tree and pass at their previously-verified counts (see Requirements Coverage).
+A second, narrower documentation-only inconsistency was also independently confirmed this session:
+`contracts/mcp-protocol-sdk-v1.yaml`'s `output_schema_draft_pin` `formula:` block still states an
+unscoped total ("NO string-valued $schema anywhere in s ... root or any depth", "EVERY such
+$schema") at lines 248-252, five lines above the correctly position-scoped `walk:` clause 115-14
+introduced at lines 253-261. The `invariants:` list (what 115-14's own must-have named) IS correctly
+scoped; the `formula:` equation head was missed. This is this round's review WR-04 (a different
+finding from round 2's WR-04, both files reused the ID); it does not affect compiled behavior — the
+`walk:` clause and `invariants:` are what a reader or `pmat comply check` would actually consult — but
+it is the same "a defensive-layer sentence overstates the code's actual scope" pattern this whole
+three-round closure exists to eliminate, so it is listed under Human Verification rather than silently
+passed over.
 
 ### Observable Truths
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | SCHM-01: Draft 2020-12 explicitly pinned, no `$schema` auto-detect, wasm-clean, SEP-2106-compliant | ✗ FAILED | The prior report's SPECIFIC bypass (`$defs.Inner`, root-only walk) is closed — re-measured `(Violates, Violates)`. A NEW instance of the same bypass class survives via a `$defs`/`properties` entry NAMED `const`/`enum`/`default`/`examples` — independently reproduced this session (`$defs.default` verdicts=`(Conforms, Conforms)`, rewritten=`false`) through the crate's own `fuzz_support::{validate_bytes, normalize_bytes}` seam. See Gaps. |
-| 2 | SCHM-02: v2 `structuredContent` accepts any JSON value (scalar/array/null/object); v1 keeps object-shaped behavior | ✓ VERIFIED | `cargo nextest run --features full -E 'binary(structured_tool_output)'` → 20/20 pass (re-run this session on the post-115-13 tree); untouched by 115-12/115-13's `files_modified` |
-| 3 | SCHM-03: list/read/discover results carry additive `ttlMs`/`cacheScope`, ensured on v2 and stripped on v1 at one chokepoint | ✓ VERIFIED | `binary(v2_caching_hints)` 19/19, `binary(v1_lists_golden)` 7/7, `binary(v2_schema_tripwires)` 13/13, `binary(v2_core_schema_facts)` 8/8, `binary(vendored_schema_provenance)` 6/6, `binary(phase115_contract_bindings)` 5/5 — all re-run this session, 58/58 pass; `src/types/caching.rs` was NOT in either gap-closure plan's `files_modified` |
-| 4 | v1 (`2025-11-25`) wire is behaviourally frozen | ✓ VERIFIED | `v1_lists_golden` byte-identical goldens pass (re-run); `compile_for_era`'s `Era::V1` arm (`jsonschema::validator_for(schema)` verbatim) is untouched by 115-12's diff — confirmed by reading `src/server/output_validation.rs:325-333` |
+| 1 | SCHM-01: Draft 2020-12 explicitly pinned, no `$schema` auto-detect, wasm-clean, SEP-2106-compliant | ✓ VERIFIED | Round-2 BLOCKER (position-blind traversal on the 5 known subschema-map keywords) closed and independently re-confirmed: 18/18 `output_validation::tests`, 20/20 `property_tests` (`--features "full fuzzing"`), fuzz target position-aware (source-read confirmed), corpus seed `14_defs_named_default` tracked (216 bytes). `cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"` → exit 0, re-run this session. `v2_schema_tripwires` 13/13 (SEP-2106, re-run in the combined-78 run below). **CR-01 residual (`dependencies` omission) independently confirmed as a real name-dependence defect but NOT as a demonstrated bypass** — see Gaps/Human Verification. Not reopened to FAILED on that basis alone |
+| 2 | SCHM-02: v2 `structuredContent` accepts any JSON value; v1 keeps object-shaped behavior | ✓ VERIFIED | `binary(structured_tool_output)` 20/20, re-run this session; `src/types/tools.rs` untouched by 115-14/115-15 |
+| 3 | SCHM-03: list/read/discover results carry additive `ttlMs`/`cacheScope`, ensured on v2 and stripped on v1 at one chokepoint | ✓ VERIFIED | `v2_caching_hints` 19/19, `v1_lists_golden` 7/7, `v2_schema_tripwires` 13/13, `v2_core_schema_facts` 8/8, `vendored_schema_provenance` 6/6, `phase115_contract_bindings` 5/5 — 78/78 combined, re-run this session; `src/types/caching.rs` untouched by 115-14/115-15 |
+| 4 | v1 (`2025-11-25`) wire is behaviourally frozen | ✓ VERIFIED | `v1_lists_golden` byte-identical goldens pass (re-run); `compile_for_era`'s `Era::V1` arm (`jsonschema::validator_for(schema)` verbatim, `:486`) confirmed unchanged by direct source read |
 
-**Score:** 3/4 truths verified (unchanged from the prior report's score — the SCHM-01 defect
-mechanism changed, but the truth's pass/fail state did not)
+**Score:** 4/4 truths verified. Status is `human_needed`, not `passed`, because of the two items in
+Human Verification Required below — neither is a failed truth, but neither is silently clean either.
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `src/server/output_validation.rs` (`first_legacy_dialect`, `pin_dialect_in_place`) | Recursive, position-aware `$schema` normalization | ✗ **FUNCTIONAL DEFECT (narrower)** | Recursive — yes, closing the prior root-only defect. Position-aware — no: `DATA_ONLY_KEYWORDS` is checked against every map key regardless of whether it names a keyword or an author-chosen subschema-map entry. Confirmed by direct source read (:141-185) and by independent reproduction |
-| `v2_pin_still_enforces_an_embedded_legacy_resource` (unit test) | Gate-visible regression fence for the embedded-resource bypass | ✓ VERIFIED (narrow) | Passes; fences exactly the `Inner`-named case with an OBSERVED pre-fix failure (115-12-SUMMARY.md). Does not fence a colliding-name case — no such case exists in `normalization_cases()` or as a standalone test |
-| `tests/property_tests.rs` (`arb_schema_document`) | Generated space reaches the `$id`-bearing embedded-resource shape | ⚠️ PARTIAL | Reaches the shape under dialect variation (4 legacy drafts + invented URIs, measured 100/256) but NOT under name variation — the definition name is hard-coded `"Inner"` (WR-06, unaddressed) |
-| `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` (invariant 5, `assert_no_legacy_dialect_survives`) | TOTAL, independently-implemented dialect-purity invariant | ⚠️ PARTIAL | Independently *coded*, not independently *derived* — restates the identical `DATA_ONLY_KEYWORDS`-per-key rule (WR-02), so it is blind to the same residual bypass as the code under test |
-| `contracts/mcp-protocol-sdk-v1.yaml` (`output_schema_draft_pin`) | Invariants describing the shipped normalizer accurately | ✗ **FALSE POSTCONDITION** | The new postcondition invariant added by 115-12 Task 3 ("after normalization no `$schema` string anywhere in the document ... is anything other than the Draft 2020-12 URI") is unconditionally false as shipped — falsified by the `$defs.default` reproduction |
-| `.planning/REQUIREMENTS.md` (SCHM-01 booking) | States evidence that actually supports `[x]` | ✗ **PREMATURE BOOKING** | The evidence recorded is accurate for what it measured, but the booking's conclusion ("Complete") is not supported once a colliding definition name is tried — not measured before booking |
-| `src/types/tools.rs` (`CallToolResult::structured_value`) | Additive non-object structured-content constructor | ✓ VERIFIED (unchanged) | 20/20 `structured_tool_output` tests pass; file not touched by 115-12/115-13 |
-| `src/types/caching.rs` (`project_caching_hints`, `CacheScope`) | Single projector for `ttlMs`/`cacheScope` | ✓ VERIFIED (unchanged) | `v2_schema_tripwires_caching_hints_are_written_in_exactly_one_place` passes; file not touched by 115-12/115-13 |
+| `src/server/output_validation.rs` (`SUBSCHEMA_MAP_KEYWORDS`, both `*_in_member` dispatchers) | Position-aware traversal over the five JSON-Schema-defined subschema-map keywords | ✓ VERIFIED (with a noted, non-blocking completeness gap) | 5-entry list confirmed by direct read (`:160-166`); both walkers' three-way dispatch confirmed (`:209-227`, `:265-280`); `dependencies` (a 6th, legacy-but-still-honoured keyword) is NOT in the list — independently re-measured as name-dependent but not verdict-flipping (see CR-01 above) |
+| `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword` (unit test) | Gate-visible regression fence for the colliding-name bypass | ✓ VERIFIED | Present, passes (18/18 in `output_validation::tests`); SUMMARY records it was OBSERVED to fail pre-fix (16 passed / 2 failed) |
+| `tests/property_tests.rs` (`arb_definition_name`, `arb_container`, rename-invariance property) | Generator can draw colliding names; independent invariant that a rule defect cannot satisfy | ✓ VERIFIED | `SUBSCHEMA_MAP_KEYWORDS` mirror present (6×), `arb_definition_name`/`arb_container` present (10×), hard-coded `/$defs/Inner/$schema` pointer absent (WR-06 from round 2 discharged) — all confirmed by grep this session; 20/20 pass |
+| `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` (invariant 6, position-aware collector) | Independent rename-invariance fence in the fuzz target; both restated copies onto the shipped rule | ✓ VERIFIED | `SUBSCHEMA_MAP_KEYWORDS` present (7×), `assert_normalization_is_invariant_under_rename` present (3×) — confirmed by grep this session; build/replay/campaign results cited from `115-15-SUMMARY.md` (not re-run — nightly toolchain, ~5 min campaign; no reason to distrust the recorded exit-0/empty-artifacts evidence) |
+| `fuzz/corpus/fuzz_schema_draft_pin/14_defs_named_default` | Colliding-name seed, committed | ✓ VERIFIED | Present, tracked (`git log` shows commit `fb97b23d`), 216 bytes — matches SUMMARY exactly |
+| `contracts/mcp-protocol-sdk-v1.yaml` (`output_schema_draft_pin`) | Invariants describing the shipped normalizer's actual scope | ⚠️ PARTIAL | `invariants:` block (postcondition, invariant 1) correctly scoped to "SCHEMA POSITION" with the five named keywords — confirmed by direct read. The `formula:` equation head (lines 248-252) still states an UNSCOPED total, five lines above the correctly scoped `walk:` clause — a documentation-only inconsistency, independently confirmed present (round-3 review WR-04); routed to Human Verification |
+| `contracts/binding.yaml` | `115-14 POSITION CORRECTION` notes, all bindings `status: implemented` | ✓ VERIFIED | 5 occurrences of the correction note (3 corrections + 2 extracted-helper bindings); anchored `status: planned` returns 0 (the one text match is a prose comment, not a YAML field) — confirmed by grep this session |
+| `.planning/REQUIREMENTS.md` (SCHM-01 booking) | States evidence covering the colliding-name case, written after the gate ran | ✓ VERIFIED | `[x]`, new block above the `115-13` block (amend-not-delete preserved — `REOPENED` still appears exactly once), traceability row updated to name `115-14`/`115-15` — confirmed by direct read |
+| `.planning/ROADMAP.md` | Plan-progress bookkeeping only; phase marker untouched | ✓ VERIFIED | `115-14-PLAN.md`/`115-15-PLAN.md` both `[x]`, `15 plans` count present, Phase 115 marker still `[~]` (correctly left for this verification to score) — confirmed by direct read |
+| `.planning/phases/.../deferred-items.md` | Every review finding triaged (fixed or explicitly booked) | ⚠️ PARTIAL | `D-115-AC` through `D-115-AG` present, whole-ID duplicate check clean — all correctly booked for round-2's review. This round's OWN review (`115-REVIEW.md`, CR-01 and the round-3 WR/IN findings) postdates 115-15 and has NOT yet been triaged into this ledger — a process gap, not a code gap; routed to Human Verification |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |------|-----|-----|--------|---------|
-| `compile_2020_12` | `normalize_schema_dialect` | normalize-then-compile | WIRED (mechanically) / **DEFECT (semantically, narrower)** | Correctly threaded; the function computes a position-blind normalization, so a colliding-name embedded resource is compiled unnormalized |
-| `first_legacy_dialect` | `pin_dialect_in_place` | shared traversal rule, stated once in rustdoc | WIRED but **RULE-IDENTICAL AND RULE-DEFECTIVE** | Both implement the exact same (wrong) rule, so they agree with each other and both miss the same documents — a detector/rewriter *disagreement* fence cannot catch a *shared rule* defect (this is WR-02's point, confirmed) |
-| `tests/property_tests.rs::collect_dialect_declarations` (invariant 5's crate-fuzz-target mirror) | `pmcp::server::output_validation`'s rule | "independent" restatement | **NOT actually independent of the rule** | Line-by-line identical filter logic to the crate's own `DATA_ONLY_KEYWORDS` check; catches a detector/rewriter code disagreement, not a rule defect |
-| `request_is_cacheable` / `inject_v2_result_envelope` / `project_caching_hints` | (SCHM-03 chokepoint) | single-projection | WIRED (unchanged) | `v2_schema_tripwires` 13/13 re-run this session, all pass; not touched by 115-12/115-13 |
+| `first_legacy_dialect_in_member` / `pin_dialect_in_member` | `SUBSCHEMA_MAP_KEYWORDS` | member-key dispatch | WIRED | Both walkers consult the same 5-entry list first; confirmed identical dispatch shape by direct read |
+| `tests/property_tests.rs` / `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | the shipped position-aware rule | mirrored `SUBSCHEMA_MAP_KEYWORDS` constants | WIRED | Both restated copies now match the shipped 5-entry list (grep-confirmed); this closes the false-positive window `115-14-SUMMARY.md` named |
+| `property_normalization_does_not_depend_on_a_subschema_map_key_name` / fuzz invariant 6 | `normalize_bytes` | rename-then-compare-subtrees | WIRED | Derived from a spec fact, not from either keyword list; confirmed present and passing (property side, this session) |
+| `.planning/REQUIREMENTS.md` SCHM-01 | the measured post-fix verdicts | booking written after `make quality-gate`/`pmat quality-gate` ran | WIRED | Task 3 of `115-15` is explicitly gated on the earlier tasks' evidence; confirmed by reading the booking text and cross-checking counts against tests re-run this session |
+| `src/server/output_validation.rs:707-712` (D-115-03-C) | `SUBSCHEMA_MAP_KEYWORDS` | "jsonschema still honours `dependencies`" vs. the list's omission of it | ⚠️ INTERNAL INCONSISTENCY (documentation, not a demonstrated bypass) | The module's own test comment records `dependencies` as a live keyword for `jsonschema` 0.49.2, but `SUBSCHEMA_MAP_KEYWORDS` does not include it — see CR-01 discussion above |
+
+### Data-Flow Trace (Level 4)
+
+Not applicable — this phase's artifacts are validation/normalization logic and test/fuzz harnesses,
+not UI components rendering fetched state. The equivalent question ("does the normalizer's behavior
+actually reach the compiled validator") is answered directly by the `(v1, v2)` verdict measurements
+throughout this report and by `compile_2020_12` calling `normalize_schema_dialect` before
+`jsonschema::draft202012::new` (confirmed by direct read, `:449-467`).
+
+### Behavioral Spot-Checks
+
+| Behavior | Command | Result | Status |
+|----------|---------|--------|--------|
+| Position-aware traversal enforces the round-2 colliding-name case | `cargo test --lib --features full output_validation::tests -- --test-threads=1` | 18 passed / 0 failed | ✓ PASS |
+| Rename-invariance property (derived fence) exists and passes | `cargo nextest run --features "full fuzzing" -E 'binary(property_tests)' --test-threads=1` | 20 passed (vs 18 under `--features full`) | ✓ PASS |
+| SCHM-02/SCHM-03 unregressed | `cargo nextest run --features full -E 'binary(structured_tool_output) + binary(v2_caching_hints) + binary(v1_lists_golden) + binary(v2_schema_tripwires) + binary(v2_core_schema_facts) + binary(vendored_schema_provenance) + binary(phase115_contract_bindings)' --test-threads=1` | 78 passed / 0 skipped | ✓ PASS |
+| wasm-clean | `cargo build --target wasm32-unknown-unknown --no-default-features --features "wasm,validation"` | exit 0 | ✓ PASS |
+| CR-01 name-dependence, independently reproduced | throwaway `examples/_verify115_dependencies_repro.rs` via `fuzz_support::{normalize_bytes, validate_bytes}` (written, run, deleted; `git status --porcelain examples/` clean after) | `dependencies.Inner rewritten=true`, `dependencies.default rewritten=false`, both `verdicts=(Violates, Violates)` — no verdict flip | ✓ PASS (confirms name-dependence; confirms NO demonstrated bypass) |
+| Ledger hygiene | `grep -o '^## D-115-[A-Z0-9]\{1,2\}' deferred-items.md \| sort \| uniq -d` | empty | ✓ PASS |
+| Debt markers | `grep -n -E "TBD\|FIXME\|XXX"` over the 5 touched files | no matches | ✓ PASS |
+| Commits exist | `git log --oneline -1` for `f8692f1d`, `07bfdd52`, `2bf4d637`, `43246c19`, `fb97b23d`, `d666fffa` | all found | ✓ PASS |
+
+### Probe Execution
+
+SKIPPED — no `scripts/*/tests/probe-*.sh` files exist in this repository and neither this round's
+plans nor its verification criteria reference probe-based verification. This phase's runnable
+evidence is the cargo test/nextest/wasm-build commands above, all independently re-run this session.
 
 ### Requirements Coverage
 
 | Requirement | Source Plans | Description | Status | Evidence |
 |-------------|-------------|-------------|--------|----------|
-| SCHM-01 | 115-01, 03, 08, 09, 10, 11, 12, 13 | Draft 2020-12 pin, no `$schema` auto-detect, wasm-clean, SEP-2106 | ✗ **BLOCKED (residual defect)** | Prior BLOCKER closed for the `Inner`-named case; a narrower instance of the identical bypass class independently reproduced via a `const`/`enum`/`default`/`examples`-named `$defs`/`properties` entry. `.planning/REQUIREMENTS.md`'s `[x]` booking is premature and should be corrected |
-| SCHM-02 | 115-01, 03, 04, 09, 10, 11 | v2 non-object `structuredContent`, v1 frozen | ✓ SATISFIED | 20/20 tests re-run this session; files not touched by the gap closure |
-| SCHM-03 | 115-01, 02, 05, 06, 07, 08, 09, 10, 11 | Additive `ttlMs`/`cacheScope` on six cacheable results | ✓ SATISFIED | 58/58 tests across five dedicated binaries re-run this session; files not touched by the gap closure |
+| SCHM-01 | 115-01, 03, 08, 09, 10, 11, 12, 13, 14, 15 | Draft 2020-12 pin, no `$schema` auto-detect, wasm-clean, SEP-2106 | ✓ SATISFIED | Round-2 BLOCKER closed and re-confirmed; CR-01 residual confirmed real but not a demonstrated bypass — routed to Human Verification rather than blocking |
+| SCHM-02 | 115-01, 03, 04, 09, 10, 11 | v2 non-object `structuredContent`, v1 frozen | ✓ SATISFIED | 20/20 re-run this session; files untouched by 115-14/115-15 |
+| SCHM-03 | 115-01, 02, 05, 06, 07, 08, 09, 10, 11 | Additive `ttlMs`/`cacheScope` on six cacheable results | ✓ SATISFIED | 58/58 (of the 78 combined) re-run this session; files untouched by 115-14/115-15 |
 
-No orphaned requirements — `.planning/REQUIREMENTS.md`'s traceability table (line ~525-527) maps
-only SCHM-01/02/03 to Phase 115, and all thirteen plans (including the two gap-closure plans)
-declare `requirements: [SCHM-01]` or a subset of the three IDs. All three IDs from PLAN frontmatter
-are accounted for in REQUIREMENTS.md.
+No orphaned requirements: `.planning/REQUIREMENTS.md`'s traceability table (lines 640-642) maps only
+SCHM-01/02/03 to Phase 115, and all fifteen plans (including the four gap-closure plans) declare
+`requirements: [SCHM-01, SCHM-02, SCHM-03]` or a subset. All three IDs are accounted for.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| `src/server/output_validation.rs` | 25-34, 199-222 | Rustdoc asserts "the pin wins UNCONDITIONALLY ... across the whole DOCUMENT" — this is false for the colliding-name case | 🛑 Blocker (the exact class of misleading-safety-claim documentation that caused the ORIGINAL gap to ship past review) | See Gaps |
-| `contracts/mcp-protocol-sdk-v1.yaml` | 284-292 | The NEW postcondition invariant added by 115-12 Task 3 is stated as an unconditional total over "no `$schema` string anywhere in the document," which this session falsifies | 🛑 Blocker | `pmat comply check` and any reader are checking a claim that is not true |
-| `.planning/REQUIREMENTS.md` | ~146, ~525 | SCHM-01 booked `[x]` with a large, honest evidence block whose scope does not cover the case that falsifies the requirement | 🛑 Blocker (booking correction required) | Downstream phases and future readers will trust this booking without re-deriving it |
-| `tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` | various | Both generators restate the identical `DATA_ONLY_KEYWORDS`-per-key rule as the code under test rather than an independently-*derived* invariant (WR-02) | ⚠️ Warning | Structural — future rule defects in this normalizer will continue to slip past all three layers until the rule itself, not just its re-implementation, is independently stated |
-| (phase-touched files under this closure) | — | `TBD`/`FIXME`/`XXX` scan | ℹ️ Info | Zero matches across `src/server/output_validation.rs`, `tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`, `contracts/mcp-protocol-sdk-v1.yaml`, `contracts/binding.yaml` — no debt-marker gate violation |
+| `src/server/output_validation.rs` | 160-166 | `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies`, which the same file's own test comment (`:707-712`) records as still honoured by `jsonschema` under the 2020-12 pin | ⚠️ Warning (real, independently confirmed name-dependence; no demonstrated verdict flip) | See CR-01 discussion; routed to Human Verification |
+| `contracts/mcp-protocol-sdk-v1.yaml` | 248-252 vs 253-261 | The `formula:` equation head states an unscoped total five lines above the correctly position-scoped `walk:` clause it introduces | ⚠️ Warning (documentation-only; `invariants:`, the field 115-14's must-have actually named, is correctly scoped) | Round-3 review WR-04; routed to Human Verification |
+| `.planning/phases/.../deferred-items.md` | — | This round's own code review (`CR-01` and the round-3 `WR-01..WR-06`, `IN-01..IN-03`) has not yet been triaged into the ledger — it postdates the plans it reviews | ⚠️ Warning (process, not code) | Breaks this phase's own established "every finding gets fixed or explicitly booked" convention for the first time in three rounds |
+| (phase-touched files this round) | — | `TBD`/`FIXME`/`XXX` scan over `src/server/output_validation.rs`, `tests/property_tests.rs`, `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`, `contracts/mcp-protocol-sdk-v1.yaml`, `contracts/binding.yaml` | ℹ️ Info | Zero matches — no debt-marker gate violation |
 
 ### Human Verification Required
 
-None required to determine phase status — the residual finding is deterministically reproducible
-and was independently reproduced in this session (not left uncertain). Recommended for the owner
-regardless, since this is the second time a "the pin wins unconditionally" claim over-generalized
-past what was measured:
+Neither item below is a failed truth. Both are real, independently-confirmed findings from this
+round's own code review that have not yet been formally triaged (fixed or explicitly deferred), which
+breaks this phase's own established convention for the first time across three verification rounds.
 
-**Decide the closure path for the residual CR-01 instance**
+### 1. Decide the disposition of CR-01 (`SUBSCHEMA_MAP_KEYWORDS` omits `dependencies`)
 
-**Test:** Review this report's reproduction (a `$defs`/`properties` entry named `const`/`enum`/
-`default`/`examples`, carrying `$id` + a legacy `$schema`) alongside `115-REVIEW.md`'s CR-01, then
-decide whether to (a) accept a further closure plan implementing position-aware traversal
-(`SUBSCHEMA_MAP_KEYWORDS` vs keyword position), or (b) explicitly override SCHM-01 with a
-documented rationale accepting the residual risk (author-declared `outputSchema`, warn-only on
-both eras, and a definition NAME colliding with one of four specific keywords is a narrow trigger
-surface).
-**Expected:** A recorded decision — either a new gap-closure plan or a `VERIFICATION.md` override
-entry with `accepted_by` / `accepted_at`.
-**Why human:** This is the second round of the same requirement being booked complete on evidence
-that did not cover the case that later falsified it (`D-115-G`, recurring). A structural decision
-about how much test-fence independence this requirement needs before the next booking is trusted
-belongs to the owner, not to an automated re-run.
+**Test:** Review this report's independent reproduction (through the crate's own `fuzz_support` seam,
+not an isolated copy) alongside `115-REVIEW.md`'s CR-01, then decide whether to (a) accept a further
+closure plan that adds `dependencies` to `SUBSCHEMA_MAP_KEYWORDS` in both walkers and both restated
+mirrors, closing the completeness gap outright, or (b) formally book the finding to
+`deferred-items.md` — following the exact convention already used for `D-115-AC` (WR-03, also
+declined with a stated, reasoned rationale) — recording that no verdict flip was demonstrated on the
+pinned `jsonschema` version and that the risk is therefore judged acceptable pending a future
+`jsonschema` upgrade or further investigation of its resource-discovery internals.
+**Expected:** A recorded decision — either a new gap-closure plan, or a `deferred-items.md` entry with
+an owner or an explicit "unowned" marker, matching this phase's own established bar for every other
+review finding.
+**Why human:** This is the third time this requirement has been reopened over a name-position
+completeness gap in the same deny/allow-list shape. This verification's own measurement diverges from
+the reviewer's characterization in one material respect (no verdict flip demonstrated on either name,
+where both prior reopenings DID demonstrate one) — a severity judgment the owner should ratify given
+the requirement's history, not one an automated re-run should silently resolve either way.
+
+### 2. Correct or accept the contract's unscoped equation head
+
+**Test:** Review `contracts/mcp-protocol-sdk-v1.yaml` lines 248-261 — the `formula:` block's equation
+head still reads as an unscoped total ("NO string-valued $schema anywhere in s... root or any depth" /
+"EVERY such $schema") immediately above the correctly position-scoped `walk:` clause 115-14
+introduced.
+**Expected:** Either a small doc-only edit bringing the equation head into line with the `walk:`
+clause and the already-corrected `invariants:` block, or an explicit acknowledgment that this is
+accepted documentation debt.
+**Why human:** Does not affect compiled behavior — the `walk:` clause and `invariants:` block are what
+a reader or `pmat comply check` actually consult, and both ARE correctly scoped. But it is the exact
+"a defensive-layer sentence overstates the code's actual scope" pattern this whole three-round closure
+exists to eliminate, so leaving it silently unaddressed a third time is worth a deliberate decision
+rather than an accident.
 
 ### Gaps Summary
 
-**One BLOCKER, narrower than before but load-bearing on the same requirement text: SCHM-01 is
-still not achieved.** The prior verification's specific finding (root-only `$schema` normalization)
-is genuinely fixed by `115-12` — recursion now reaches every depth, the `Inner`-named embedded
-resource case is enforced on v2, and 78+ tests re-run clean on this tree. But the fix shipped is
-position-blind: it cannot distinguish a key that names a JSON-Schema KEYWORD from a key that names
-an author-chosen SUBSCHEMA (inside `$defs`, `properties`, `patternProperties`, `definitions`, or
-`dependentSchemas`). An author who names a `$defs` entry `default` — a plausible, unremarkable
-choice — gets a `$schema` declaration on that entry silently ignored by the detector and rewriter
-alike, reproducing the exact vacuous-validator bypass the pin exists to close.
+**No BLOCKER this round.** Round 2's position-blind BLOCKER is genuinely closed and independently
+re-confirmed (not accepted from either SUMMARY): `SUBSCHEMA_MAP_KEYWORDS`'s three-way member dispatch
+in both walkers correctly reaches all five JSON-Schema-defined subschema-map keywords regardless of
+the author-chosen name filed under them, and the fences that would have missed a rule-level defect
+(round 2's own finding) are now backed by a rename-invariance metamorphic relation derived from the
+spec rather than restated from the code. 18/18 unit tests, 20/20 property tests, 78/78 combined
+SCHM-02/03 tests and a clean wasm build were all re-run fresh this session and match every number both
+SUMMARYs and the prior VERIFICATION.md recorded.
 
-This was independently reproduced this session through the crate's own `fuzz_support` seam with
-zero net change to the tree, and confirmed at the source level: `DATA_ONLY_KEYWORDS` is checked
-against every object key uniformly at both `first_legacy_dialect` and `pin_dialect_in_place`, with
-no `SUBSCHEMA_MAP_KEYWORDS`-style position distinction anywhere in the tree. All three
-defensive layers 115-12/115-13 built or repaired — the unit-test postcondition, the widened
-property generator, and the fuzz target's "independent" invariant 5 — share the identical blind
-spot, because all three restate the same rule rather than deriving the invariant independently.
-This is precisely the lesson `115-REVIEW.md`'s WR-02 stated in advance and that this closure round
-did not act on (WR-02 was a WARNING, not the CRITICAL, and the gap-closure plans' scope was
-explicitly CR-01 only).
+**One new, real, but non-blocking finding surfaced by this round's own code review.** `115-REVIEW.md`
+CR-01 — `SUBSCHEMA_MAP_KEYWORDS` omits `dependencies` — was independently re-measured through the
+crate's own seam and confirmed as genuine name-dependent normalization behavior. Unlike the two prior
+reopenings of this requirement, no v2 verdict flip (accept-everything vacuous validator) is
+reproducible at this position: `dependencies.Inner` and `dependencies.default` both enforce `type`
+identically on the pinned `jsonschema` version. Given the bar this requirement has been held to across
+two real, demonstrated reopenings, this verification does not reopen SCHM-01 to FAILED on CR-01 alone.
+It is instead routed to Human Verification, together with a smaller, documentation-only contract
+inconsistency (this round's WR-04), because this phase's own established convention — every review
+finding gets fixed or explicitly booked to `deferred-items.md` — has not yet been applied to this
+round's own review, which landed after the plans it covers.
 
-`.planning/REQUIREMENTS.md`'s SCHM-01 booking (`[x]`, "Complete — gap closed by 115-12 + 115-13")
-is not justified by the evidence on this tree and should be corrected in the next round — this is
-the same shape of premature-booking defect `D-115-G` was filed to prevent, recurring narrowly on
-the requirement `D-115-G` was originally about.
-
-SCHM-02 and SCHM-03 remain genuinely achieved and were re-checked (not merely trusted) this
-session: neither `src/types/tools.rs` nor `src/types/caching.rs` was touched by the gap-closure
-plans, and their dedicated test suites (58 + 20 = 78 tests) all re-run clean on this tree.
-
-A further closure plan should implement position-aware traversal (the `SUBSCHEMA_MAP_KEYWORDS`
-distinction sketched in `115-REVIEW.md` CR-01 and already informally present at
-`fuzz/fuzz_targets/fuzz_schema_draft_pin.rs:286` for `$ref`/`$defs` reference-keyword handling),
-apply it in `first_legacy_dialect`, `pin_dialect_in_place`, and BOTH restated test/fuzz copies, add
-a fixed case with a colliding definition/property name observed to fail before the fix, and only
-then re-book SCHM-01.
+**SCHM-02 and SCHM-03 remain genuinely achieved**, re-checked (not merely trusted) this session: files
+for both are untouched by 115-14/115-15's diff, and their dedicated test suites (78 tests combined)
+all re-run clean on this tree.
 
 ---
 
