@@ -156,6 +156,33 @@ const DATA_ONLY_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
 /// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`'s `is_neutral_subschema`, which
 /// does descend into `$defs` / `properties` values BY NAME. It was simply never
 /// applied on this side.
+///
+/// # The sixth entry, and why the list is a DERIVATION rather than a patch
+///
+/// `dependencies` — draft-04 / -06 / -07 and 2019-09's own
+/// map-from-INSTANCE-PROPERTY-NAME-to-subschema keyword, still declared
+/// (deprecated) by the 2020-12 meta-schema — was MISSING from this list until
+/// 115-16, which is `115-REVIEW.md` CR-01. Its omission made normalization
+/// name-dependent through that position: measured through this crate's own
+/// `fuzz_support` seam, `dependencies.Inner` -> `rewritten=true` against
+/// `dependencies.default` -> `rewritten=false`, so the legacy declaration
+/// survived and `compile_2020_12`'s `tracing::warn!` — the only D-02 diagnostic
+/// an author gets — silently did not fire.
+///
+/// This module's own `fuzz_support_tests` had recorded the very measurement that
+/// makes the keyword's VALUES live schema positions: `D-115-03-C`, that
+/// `jsonschema` 0.49.2 STILL HONOURS `dependencies` under the 2020-12 pin. The
+/// two statements contradicted each other for two plans.
+///
+/// Because this was the third round in which the same allow-list shape was found
+/// incomplete, the entry was established by ENUMERATION rather than by patching
+/// the one case a reviewer found. See
+/// [`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`]
+/// for the fence, and 115-16's SUMMARY for the derivation table.
+///
+/// The entry is ordered LAST deliberately: the restated mirrors in
+/// `tests/property_tests.rs` and `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`,
+/// and 115-19's drift gate, compare the three copies as ORDERED slices.
 #[cfg(feature = "validation")]
 const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
     "properties",
@@ -163,6 +190,7 @@ const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &[
     "$defs",
     "definitions",
     "dependentSchemas",
+    "dependencies", // draft-04..2019-09; values keyed by INSTANCE PROPERTY NAME (D-115-03-C)
 ];
 
 /// The first dialect declaration in `node` that is not already
@@ -415,15 +443,21 @@ fn pin_dialect_in_member(member_key: &str, member_value: &mut Value) {
 ///
 /// The rule changes behaviour on exactly ONE other, malformed shape, and it is
 /// worth naming:
-/// `{"properties": {"$schema": "http://json-schema.org/draft-07/schema#"}}`.
-/// The old walk descended into the `properties` MAP as though the map were
-/// itself a schema, saw a string-valued `$schema` there and rewrote it. Under
-/// the position rule that key is an instance-property NAME bound to a
+/// `{"<container>": {"$schema": "http://json-schema.org/draft-07/schema#"}}`
+/// for each of the six containers — the shape was first measured on
+/// `properties`, and 115-16 extended it to `dependencies` by adding the sixth
+/// entry, so it is stated over the set rather than re-enumerated in a way that
+/// will rot. The old walk descended into the container MAP as though the map
+/// were itself a schema, saw a string-valued `$schema` there and rewrote it.
+/// Under the position rule that key is an author-chosen NAME bound to a
 /// non-schema value, and it is left alone — which is correct, and is precisely
 /// why the two RESTATED copies of this rule (`tests/property_tests.rs` and
-/// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) MUST be updated by 115-15:
-/// until they are, such an input makes their surviving-declaration scan report
-/// a FALSE positive.
+/// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs`) MUST be updated in lockstep:
+/// until they are, such an input makes their surviving-declaration SCAN report
+/// a FALSE positive. 115-15 did that for the five-keyword list; **115-17 and
+/// 115-18 own it for the sixth (`dependencies`), and until they land the two
+/// mirrors are stale by construction — do not run the fuzz target to judge a
+/// tree in that window.**
 #[cfg(feature = "validation")]
 fn normalize_schema_dialect(schema: &Value) -> std::borrow::Cow<'_, Value> {
     use std::borrow::Cow;
@@ -907,6 +941,31 @@ mod tests {
         embedded_legacy_resource_named("Inner")
     }
 
+    /// The collision, parameterised over BOTH axes: an `$id`-bearing embedded
+    /// schema resource carrying a legacy `$schema`, filed under an entry of an
+    /// arbitrary subschema-map CONTAINER under an arbitrary author-chosen NAME.
+    ///
+    /// One shape, two variables, so a fence can sweep the whole grid and a
+    /// failure names the exact (container, name) cell rather than a document.
+    ///
+    /// There is deliberately NO `$ref` here and the document is never compiled:
+    /// the fences that use it assert the NORMALIZATION, not a verdict. The `$id`
+    /// host is the reserved, non-resolvable `example.test` for the SEP-2106
+    /// reason the sibling fixtures already state — an `$id` alone establishes a
+    /// base URI without any fetch.
+    fn embedded_legacy_resource_in_container(container: &str, name: &str) -> Value {
+        json!({
+            "type": "object",
+            container: {
+                name: {
+                    "$id": "https://example.test/inner",
+                    "$schema": DRAFT_07,
+                    "type": "integer"
+                }
+            }
+        })
+    }
+
     /// The same collision one keyword over: an `$id`-bearing embedded resource
     /// carrying a legacy `$schema`, filed under a `properties` entry the CALLER
     /// names rather than under a `$defs` entry.
@@ -914,17 +973,11 @@ mod tests {
     /// `properties` keys are instance-property names — author-chosen, exactly
     /// like `$defs` keys — so the position rule has to hold here too. This half
     /// is fenced STRUCTURALLY rather than behaviourally; see the test for why.
+    ///
+    /// Delegates to [`embedded_legacy_resource_in_container`] so there is ONE
+    /// shape and only the container and the name vary.
     fn properties_embedded_legacy_resource_named(property_name: &str) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                property_name: {
-                    "$id": "https://example.test/inner",
-                    "$schema": DRAFT_07,
-                    "type": "integer"
-                }
-            }
-        })
+        embedded_legacy_resource_in_container("properties", property_name)
     }
 
     /// The control: identical, minus the embedded declaration. Enforcement is
@@ -1153,6 +1206,117 @@ mod tests {
                  the author's schema and not a normalization"
             );
         }
+    }
+
+    /// THE fence for `115-REVIEW.md` CR-01: an `$id`-bearing EMBEDDED SCHEMA
+    /// RESOURCE is rewritten in EVERY spec-defined subschema-map container,
+    /// whatever author-chosen NAME it is filed under.
+    ///
+    /// # The container list below is deliberately NOT `SUBSCHEMA_MAP_KEYWORDS`
+    ///
+    /// It is this test's OWN literal, written out by hand, and that is the
+    /// entire point. Every fence added before this one enumerated
+    /// [`SUBSCHEMA_MAP_KEYWORDS`], so an OMISSION FROM that list was invisible
+    /// to all of them — CR-01's sharpest sentence is that the one instrument
+    /// advertised as consulting no crate-derived list "is in fact gated by a
+    /// crate-derived list one line earlier". **A fence parameterised by the list
+    /// whose incompleteness is the defect cannot fire on that defect.** The
+    /// list membership is asserted separately, at the bottom, as a guard.
+    ///
+    /// The six containers are not a guess: they are the keywords the pinned
+    /// `jsonschema` 0.49.2 meta-schemas (draft-04 / -06 / -07, 2019-09, 2020-12)
+    /// themselves define as OBJECT-typed keywords whose `additionalProperties`
+    /// references the meta-schema itself (`{"$ref":"#"}`, `{"$recursiveRef":"#"}`,
+    /// `{"$dynamicRef":"#meta"}`, or an `anyOf` with such a branch). `$vocabulary`
+    /// (values are booleans) and `dependentRequired` (values are string arrays)
+    /// are excluded by that same criterion. See [`SUBSCHEMA_MAP_KEYWORDS`].
+    ///
+    /// # Why this fence is STRUCTURAL and not behavioural
+    ///
+    /// Both `dependencies.Inner` and `dependencies.default` measure
+    /// `(Violates, Violates)` on the pinned `jsonschema` 0.49.2 — the library
+    /// still enforces `type` through a surviving legacy declaration at that
+    /// position today. **A verdict assertion would therefore PASS against the
+    /// defective code**: a fence that cannot fire, which is the exact failure
+    /// mode this phase shipped three times. The observable that distinguishes
+    /// fixed from broken is the NORMALIZATION — the `Cow` borrow/own decision,
+    /// which is also precisely what gates `compile_2020_12`'s `tracing::warn!`,
+    /// the only D-02 diagnostic an author gets. With `Cow::Borrowed` the author
+    /// is told nothing at all. The rewritten-pointer assertion is what ties the
+    /// rewrite to the position under test, since `Owned` alone would be
+    /// satisfied by a clone made for some other declaration.
+    #[test]
+    fn v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map() {
+        use std::borrow::Cow;
+
+        // This test's OWN literal — NOT SUBSCHEMA_MAP_KEYWORDS. See the rustdoc.
+        let containers = [
+            "properties",
+            "patternProperties",
+            "$defs",
+            "definitions",
+            "dependentSchemas",
+            "dependencies",
+        ];
+
+        let mut examined = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+
+        for container in containers {
+            for &name in DATA_ONLY_KEYWORDS {
+                examined += 1;
+                let schema = embedded_legacy_resource_in_container(container, name);
+                let normalized = normalize_schema_dialect(&schema);
+                let rewritten = matches!(normalized, Cow::Owned(_));
+                let declared = normalized
+                    .pointer(&format!("/{container}/{name}/$schema"))
+                    .and_then(Value::as_str);
+                if !rewritten || declared != Some(DRAFT_2020_12) {
+                    violations.push(format!(
+                        "{container}/{name}: rewritten={rewritten}, \
+                         /{container}/{name}/$schema={declared:?}"
+                    ));
+                }
+            }
+        }
+
+        // Anti-vacuity: the grid was actually swept.
+        assert_eq!(
+            examined,
+            containers.len() * DATA_ONLY_KEYWORDS.len(),
+            "the fence must examine every (container, name) pair — {} containers x {} \
+             data-only names",
+            containers.len(),
+            DATA_ONLY_KEYWORDS.len()
+        );
+
+        // Collected, never asserted in-loop: a first-failure abort would report
+        // ONE pair and hide which of the six containers are actually broken.
+        // The complete broken set is the evidence this fence exists to produce.
+        assert!(
+            violations.is_empty(),
+            "an $id-bearing embedded schema resource carrying a legacy $schema was NOT rewritten \
+             in {} of {examined} (container, name) positions:\n{violations:#?}\nEach of the six \
+             containers above is a spec-defined map from AUTHOR-CHOSEN NAMES to subschemas, so \
+             DATA_ONLY_KEYWORDS must never be tested against its keys. This assertion is \
+             STRUCTURAL, not behavioural, on purpose: on jsonschema 0.49.2 both \
+             `dependencies.Inner` and `dependencies.default` report (Violates, Violates), so a \
+             verdict assertion would pass against the defective code. The observable is the \
+             borrow/own decision — which is also what gates compile_2020_12's tracing::warn!, so \
+             with Cow::Borrowed the author is told nothing at all. See SUBSCHEMA_MAP_KEYWORDS.",
+            violations.len()
+        );
+
+        // The list-membership guard, asserted SEPARATELY from the sweep above so
+        // the sweep stays independent of the list it is checking.
+        assert!(
+            SUBSCHEMA_MAP_KEYWORDS.contains(&"dependencies"),
+            "SUBSCHEMA_MAP_KEYWORDS omits `dependencies` — 115-REVIEW.md CR-01. It is \
+             draft-04..2019-09's own map-from-instance-property-NAME-to-subschema keyword, and \
+             `jsonschema` 0.49.2 still honours it under the 2020-12 pin (D-115-03-C, measured by \
+             this module's own fuzz_support_tests), which is what makes its VALUES live schema \
+             positions."
+        );
     }
 
     /// D-01's freeze, asserted rather than assumed: the same draft-07 document
@@ -1386,8 +1550,8 @@ mod tests {
         }
     }
 
-    /// The seven `normalize_schema_dialect` cases, as a set, so both the
-    /// structural test and the idempotence test cover the same ground.
+    /// The `normalize_schema_dialect` cases, as a set, so both the structural
+    /// test and the idempotence test cover the same ground.
     ///
     /// Each entry is `(schema, expected_owned)` — `true` means the normalizer
     /// must have rewritten the document.
@@ -1431,6 +1595,37 @@ mod tests {
             // there today), so it is fenced STRUCTURALLY, here and in
             // `v2_pin_still_enforces_an_embedded_resource_named_like_a_data_keyword`.
             (properties_embedded_legacy_resource_named("examples"), true),
+            // (h) NAME POSITION, `dependencies` — `115-REVIEW.md` CR-01. The
+            // sixth spec-defined subschema map, omitted from
+            // SUBSCHEMA_MAP_KEYWORDS until 115-16. Measured before the fix:
+            // `dependencies.default` -> rewritten=FALSE against the control
+            // `dependencies.Inner` -> rewritten=true, with BOTH names reporting
+            // the same (Violates, Violates) verdict pair — which is why this row
+            // is here, in the borrow/own case list, rather than in a behavioural
+            // fence that could not have fired.
+            (
+                embedded_legacy_resource_in_container("dependencies", "default"),
+                true,
+            ),
+            // (i)/(j)/(k) `115-REVIEW.md` WR-02: `patternProperties`,
+            // `dependentSchemas` and `definitions` have been in
+            // SUBSCHEMA_MAP_KEYWORDS since 115-14 and were exercised by no test,
+            // no property draw and no corpus seed — deleting all three from every
+            // copy passed the entire suite. These rows close that.
+            // `patternProperties` keys are REGEXES and `default` is a valid one,
+            // so no escaping is needed.
+            (
+                embedded_legacy_resource_in_container("patternProperties", "default"),
+                true,
+            ),
+            (
+                embedded_legacy_resource_in_container("dependentSchemas", "default"),
+                true,
+            ),
+            (
+                embedded_legacy_resource_in_container("definitions", "default"),
+                true,
+            ),
         ]
     }
 
@@ -1634,9 +1829,9 @@ mod tests {
         );
     }
 
-    /// Normalizing twice equals normalizing once, for all seven cases — the
-    /// fixed-example half of the idempotence property 115-09 holds over
-    /// arbitrary generated input.
+    /// Normalizing twice equals normalizing once, for every case in
+    /// [`normalization_cases`] — the fixed-example half of the idempotence
+    /// property 115-09 holds over arbitrary generated input.
     #[test]
     fn normalize_schema_dialect_is_idempotent() {
         for (schema, _) in normalization_cases() {
