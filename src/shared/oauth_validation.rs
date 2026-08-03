@@ -17,7 +17,12 @@
 //! and the failure matrix every probe loop shares
 //! ([`classify_discovery_failure`](crate::shared::oauth_validation::classify_discovery_failure)).
 //! The PROBING — and therefore the network — belongs to the callers; that split
-//! is what makes a MUST-ordered probe sequence testable offline.
+//! is what makes a MUST-ordered probe sequence testable offline. The same
+//! module derives OpenID Connect's `application_type` from a client's
+//! `redirect_uris`
+//! ([`derive_application_type`](crate::shared::oauth_validation::derive_application_type)),
+//! which is the value SEP-837 makes an MCP client MUST send at Dynamic Client
+//! Registration.
 //!
 //! # Why it is ungated
 //!
@@ -984,6 +989,192 @@ pub fn classify_discovery_failure(failure: DiscoveryFailure) -> DiscoveryOutcome
     }
 }
 
+/// `OpenID` Connect's `application_type` client metadata value.
+///
+/// SEP-837 makes an MCP client MUST specify this at Dynamic Client
+/// Registration: "Omitting it defaults to `web` under OIDC, which can conflict
+/// with native-style redirect URIs; non-OIDC servers safely ignore the
+/// parameter."
+///
+/// `#[non_exhaustive]` because `OpenID` Connect permits an authorization server
+/// to define further values, and adding a variant to an exhaustive public enum
+/// is a MAJOR semver break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ApplicationType {
+    /// Desktop applications, mobile apps, CLI tools, and locally-hosted web
+    /// applications reached over loopback. Registered as `"native"`.
+    Native,
+    /// Remote, browser-based applications served from a non-local host.
+    /// Registered as `"web"`.
+    Web,
+}
+
+impl ApplicationType {
+    /// The exact wire value, from `OpenID` Connect Dynamic Client Registration
+    /// §2.
+    ///
+    /// These two strings are **compatibility surface**, not an implementation
+    /// detail. An authorization server that receives an unrecognised value
+    /// treats it as absent and silently falls back to the OIDC `web` default,
+    /// so a change from `"native"` to `"Native"` would break registration for
+    /// every native client while failing no round trip and no serialization
+    /// test. They are pinned by hand in `tests/oauth_application_type.rs`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp::shared::oauth_validation::ApplicationType;
+    ///
+    /// assert_eq!(ApplicationType::Native.as_str(), "native");
+    /// assert_eq!(ApplicationType::Web.as_str(), "web");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Web => "web",
+        }
+    }
+}
+
+/// Derive [`ApplicationType`] from the `redirect_uris` a client is about to
+/// register, requiring UNANIMITY.
+///
+/// | Redirect URI shape | Classification |
+/// |---|---|
+/// | loopback host (`127.0.0.1`, `::1` including the bracketed `[::1]` form, `localhost`) | `Native` |
+/// | a scheme that is neither `http` nor `https` (a private-use scheme) | `Native` |
+/// | `https` with a non-loopback host | `Web` |
+/// | `http` with a non-loopback host | **error** |
+///
+/// # This is a heuristic for the common case, not the specification's rule
+///
+/// SEP-837 classifies by application NATURE — "desktop applications, mobile
+/// apps, CLI tools, and locally-hosted web applications accessed via
+/// `localhost`" are native; "remote browser-based applications served from a
+/// non-local host" are web. This function instead derives from
+/// `redirect_uris`, because that is the value a caller has in hand at the
+/// registration site.
+///
+/// The two agree for every case pmcp produces: pmcp's own DCR call hardcodes
+/// `http://127.0.0.1:{port}/callback` (RFC 8252 §7.3) and therefore derives
+/// `native`, while a platform `oauth-proxy` with an https redirect derives
+/// `web`. Where they disagree, `DcrRequest::set_application_type` remains the
+/// authoritative override — it deliberately performs no validation precisely so
+/// that it can override this derivation.
+///
+/// # Why a mixed vector is an error rather than a pick
+///
+/// Picking one classification for a vector that contains both would register a
+/// client whose declared type contradicts some of its own redirect URIs. An
+/// authorization server enforcing OIDC's redirect-URI constraints per type will
+/// then either reject the registration (best case) or accept a redirect URI it
+/// should have refused — which is an open-redirect primitive. The refusal names
+/// both offending URIs and both classifications, because the operator's next
+/// action is to decide which one the client actually is.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for an empty `redirect_uris`, an unparseable
+/// redirect URI, a cleartext `http` redirect to a non-loopback host, and a
+/// mixed classification. Never a silent default: every one of those is a case
+/// where guessing decides where an authorization code is delivered.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::{derive_application_type, ApplicationType};
+///
+/// // What pmcp's own Dynamic Client Registration call registers.
+/// let native = vec!["http://127.0.0.1:8080/callback".to_string()];
+/// assert_eq!(derive_application_type(&native)?, ApplicationType::Native);
+/// assert_eq!(derive_application_type(&native)?.as_str(), "native");
+///
+/// // A remote, browser-based deployment.
+/// let web = vec!["https://app.example.com/callback".to_string()];
+/// assert_eq!(derive_application_type(&web)?, ApplicationType::Web);
+///
+/// // A mixed vector is refused, and the refusal names both offenders.
+/// let mixed = vec![native[0].clone(), web[0].clone()];
+/// let err = derive_application_type(&mixed).unwrap_err();
+/// assert!(err.to_string().contains("app.example.com"));
+/// # Ok::<(), pmcp::Error>(())
+/// ```
+pub fn derive_application_type(redirect_uris: &[String]) -> Result<ApplicationType> {
+    let mut native: Option<&str> = None;
+    let mut web: Option<&str> = None;
+
+    for uri in redirect_uris {
+        match classify_redirect_uri(uri)? {
+            ApplicationType::Native => native = native.or(Some(uri.as_str())),
+            ApplicationType::Web => web = web.or(Some(uri.as_str())),
+        }
+    }
+
+    match (native, web) {
+        (Some(native_uri), Some(web_uri)) => Err(mixed_application_types(native_uri, web_uri)),
+        (Some(_), None) => Ok(ApplicationType::Native),
+        (None, Some(_)) => Ok(ApplicationType::Web),
+        (None, None) => Err(empty_redirect_uris()),
+    }
+}
+
+/// Classify one redirect URI, in the rule order documented on
+/// [`derive_application_type`].
+fn classify_redirect_uri(uri: &str) -> Result<ApplicationType> {
+    let parsed = Url::parse(uri).map_err(|source| unparseable_redirect_uri(uri, source))?;
+    if is_loopback_host(&parsed) {
+        return Ok(ApplicationType::Native);
+    }
+    match parsed.scheme() {
+        "https" => Ok(ApplicationType::Web),
+        "http" => Err(cleartext_remote_redirect_uri(uri)),
+        // A private-use / custom scheme is the other RFC 8252 native shape.
+        _ => Ok(ApplicationType::Native),
+    }
+}
+
+/// The refusal for `redirect_uris: []`.
+fn empty_redirect_uris() -> Error {
+    Error::validation(
+        "cannot derive `application_type`: the `redirect_uris` vector is empty, so there is \
+         nothing to classify. Supply at least one redirect URI, or set the value explicitly with \
+         `DcrRequest::set_application_type`",
+    )
+}
+
+/// The refusal for a redirect URI that is not a URI.
+fn unparseable_redirect_uri(uri: &str, source: url::ParseError) -> Error {
+    Error::validation(format!(
+        "cannot derive `application_type`: redirect URI `{uri}` is not a parseable absolute URI \
+         ({source}). Classifying an unparseable redirect would be guessing where the \
+         authorization code is delivered"
+    ))
+}
+
+/// The refusal for cleartext `http` to a host that is not loopback.
+fn cleartext_remote_redirect_uri(uri: &str) -> Error {
+    Error::validation(format!(
+        "cannot derive `application_type`: redirect URI `{uri}` uses cleartext `http` with a \
+         non-loopback host. That is neither a permitted native loopback redirect (RFC 8252 \
+         section 7.3) nor a valid web redirect, and it would deliver the authorization code to \
+         anyone on the network path"
+    ))
+}
+
+/// The refusal for a `redirect_uris` vector that classifies both ways.
+fn mixed_application_types(native_uri: &str, web_uri: &str) -> Error {
+    Error::validation(format!(
+        "cannot derive `application_type`: `redirect_uris` mixes classifications. `{native_uri}` \
+         classifies as `native` (a loopback or private-use redirect) while `{web_uri}` classifies \
+         as `web` (a remote https redirect). This is refused rather than resolved by picking one, \
+         because the wrong pick registers a client whose declared type contradicts its own \
+         redirect URIs. Register one client per application type, or set the value explicitly \
+         with `DcrRequest::set_application_type`"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1148,6 +1339,26 @@ mod tests {
             well_known_inserted(&root, WELL_KNOWN_OPENID_CONFIGURATION, "").as_str(),
             well_known_appended(&root, "").as_str()
         );
+    }
+
+    /// `https` on a loopback host is the one row the integration suite cannot
+    /// reach through a natural pmcp flow, and it is the row where the two
+    /// classification rules could disagree: the loopback rule must win over the
+    /// `https`-means-web rule, because a locally-hosted application serving TLS
+    /// over loopback is still a native application.
+    #[test]
+    fn loopback_wins_over_the_https_rule() {
+        for uri in [
+            "https://localhost:8443/callback",
+            "https://127.0.0.1:8443/callback",
+            "https://[::1]:8443/callback",
+        ] {
+            assert_eq!(
+                classify_redirect_uri(uri).expect("a loopback redirect classifies"),
+                ApplicationType::Native,
+                "{uri}"
+            );
+        }
     }
 
     /// A percent-encoded path segment must survive candidate construction
