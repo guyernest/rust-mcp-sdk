@@ -105,6 +105,15 @@ pub use shared::StdioTransport;
 /// wasm-gated transport re-exports below).
 pub use shared::pkce::{code_challenge_s256, generate_code_verifier, generate_state};
 
+/// Target-agnostic OAuth authorization-RESPONSE validation (RFC 9207 `iss` +
+/// CSRF `state`) — re-exported UNGATED for the same reason as the PKCE helper
+/// above: a Workers/Lambda redirect handler must be able to reach it without
+/// the `oauth` feature. `iss_presence_from` and `parse_iss_env_value` stay on
+/// the module path, since only a client builder resolves precedence.
+pub use shared::oauth_validation::{
+    validate_authorization_response, AuthorizationRequestRecord, IssPresence,
+};
+
 /// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::peer::PeerHandle;

@@ -7,6 +7,19 @@ pub mod http_utils;
 pub mod logging;
 pub mod middleware;
 pub mod middleware_presets;
+/// Target-agnostic OAuth authorization-RESPONSE validation (RFC 9207 `iss`,
+/// CSRF `state`).
+///
+/// Ungated on purpose — it must be callable from a Cloudflare Workers or
+/// Lambda redirect handler, where the `oauth` feature (and its `webbrowser` /
+/// `dirs` / `rand` dependencies) does not exist and does not build. Its only
+/// imports are this crate's error type and the non-optional `url` crate, so it
+/// compiles on host AND wasm32. Do NOT "tidy" a `cfg` onto it: a second copy of
+/// the RFC 9207 decision table is how a platform handler and the CLI come to
+/// disagree about what "valid" means. (Contrast the
+/// `#[cfg(not(target_arch = "wasm32"))]` peer/stdio entries elsewhere in this
+/// file, and note `pkce` below carries the same rationale for the same reason.)
+pub mod oauth_validation;
 /// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
