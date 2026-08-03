@@ -207,3 +207,371 @@ yaml ok        # exit 0
 exit is informational per CLAUDE.md D-07 (the repo is intentionally mid-migration at the project
 level) — and then enforces team-servers binding drift deterministically. **`make comply` exits 0.**
 A plan citing "comply passed" is citing exactly this, and nothing stronger.
+
+---
+
+## Phase-Base Measurements
+
+Seven measurements, each with its exact command, its exit code, and the number a later plan diffs
+against. Every command that takes a baseline names `b2bf9157`. Pipelines are preceded by
+`set -o pipefail`, because a bare `cmd | tail` reports the `tail`'s status and can mask a failing
+`cmd` (RESEARCH Pitfall / Codex MEDIUM). Raw logs: `target/116-verify/`.
+
+### 1. semver baseline
+
+```
+$ cargo semver-checks check-release -p pmcp --baseline-rev b2bf9157
+     Cloning b2bf9157
+    Checking pmcp v2.17.0 -> v2.17.0 (no change; assume patch)
+     Checked [0.192s] 223 checks: 223 pass, 30 skip
+     Summary no semver update required
+    Finished [30.876s] pmcp
+exit=0
+```
+
+| Metric | Value |
+|---|---|
+| exit code | **0** |
+| pass | **223** |
+| fail | **0** |
+| skip | 30 |
+
+**This is the PHASE-BASE baseline, NOT the crates.io 2.17.0 baseline.** RESEARCH Pitfall 9: run
+against the published 2.17.0, `cargo semver-checks` reports a pre-existing `#[deprecated]` failure on
+`OptimizedSseTransport` that predates this phase and is not this phase's to clear. Every semver claim
+in Phase 116 must name `--baseline-rev b2bf9157`; a plan that quietly drops the flag is answering a
+different question. `cargo-semver-checks` is PRESENT on this machine, and (RESEARCH A3) is wired into
+neither CI nor the Makefile — it fires only when a plan runs it explicitly.
+
+### 2. doc-check ACCEPTED BASELINE DELTA ANCHOR
+
+```
+$ make doc-check          # Makefile:400-430
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps \
+  --features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,\
+resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket
+...
+error: could not document `pmcp`
+make: *** [doc-check] Error 101
+exit=2
+$ grep -c '^error' target/116-verify/doc-check.log
+28
+```
+
+| Metric | Value |
+|---|---|
+| `make doc-check` exit code | **2** (make's code; rustdoc exits 101) |
+| `^error` lines | **28** |
+| errors in this phase's four auth files | **0** |
+
+**This is the anchor. `116-15`'s acceptance policy is defined against 28 and against the per-file
+table below — never against zero.** Codex raised the contradiction directly (HIGH — "It cannot claim
+both 'every gate green' and 'doc-check remains red'"): the resolution is that `doc-check` is an
+ACCEPTED BASELINE DELTA gate, not a required-green gate. The bookable claim is
+`^error count <= 28 AND no error attributed to a file this phase touched`.
+
+`make doc-check` is the ONLY gate whose feature list includes `oauth`, so it is the only gate that
+compiles this phase's rustdoc at all. **`make quality-gate` (`Makefile:673-694`) does NOT chain
+`doc-check`** — it chains `fmt-check`, `lint`, `build`, `test-all`, `pmcp-package-gate`, `audit`,
+`unused-deps`, `check-todos`, `check-unwraps`, `validate-always`, `purity-check`, `comply`. The two
+are independent gates and a plan must run both.
+
+Per-file distribution (23 of the 28 carry a `-->` span; 5 do not):
+
+| File | `^error` count |
+|---|---|
+| `src/types/mrtr.rs` | 4 |
+| `src/types/protocol/context.rs` | 4 |
+| `src/types/subscriptions.rs` | 3 |
+| `src/shared/sse_parser.rs` | 2 |
+| `src/shared/streamable_http.rs` | 2 |
+| `src/types/caching.rs` | 2 |
+| `src/types/protocol/mod.rs` | 2 |
+| `src/client/mod.rs` | 1 |
+| `src/shared/protocol_helpers.rs` | 1 |
+| `src/shared/http.rs` | 1 |
+| `src/error/mod.rs` | 1 |
+| **attributed subtotal** | **23** |
+| *unattributed* — rustdoc emits no `-->` span for these: `unresolved link to ServerNotification`, `ACKNOWLEDGED_METHOD`, `SUBSCRIPTION_ID_META_KEY`, `SseParser` | 4 |
+| *terminal aggregate* — `error: could not document pmcp` | 1 |
+| **TOTAL** | **28** |
+
+```
+$ grep -cE 'src/client/auth\.rs|src/client/oauth\.rs|generic_oidc\.rs|cognito\.rs' \
+    target/116-verify/doc-check.log
+0
+```
+
+**None of the 28 is in `src/client/auth.rs`, `src/client/oauth.rs`,
+`src/server/auth/providers/generic_oidc.rs` or `src/server/auth/providers/cognito.rs`.** So any error
+that appears in one of those files during this phase is NEW and is this phase's to fix. Note
+`src/error/mod.rs` already carries 1 (`Error` is both an enum and a derive macro) and `116-02` edits
+that file — its acceptance criterion is `<= 28` overall, and it must not add a second.
+
+This measurement confirms RESEARCH assumption A1 (28 errors, pre-existing) at the phase base rather
+than only at branch HEAD.
+
+### 3. The `full,oauth` A/B — the gate proves nothing for this phase
+
+| # | Command | Tests selected | RESEARCH predicted |
+|---|---|---|---|
+| a | `cargo nextest list --features full -E 'binary(oauth_dcr_integration)'` | **0** | 0 ✅ |
+| b | `cargo nextest list --features full,oauth -E 'binary(oauth_dcr_integration)'` | **5** | 5 ✅ |
+| c | `cargo nextest list --features full -E 'binary(/oauth/)'` | **8** | 0 ❌ |
+
+All three exit **0** — including (a), which selected nothing. That is the whole point of item 7.
+
+The five tests selected under `--features full,oauth` (b):
+
+```
+pmcp::oauth_dcr_integration:
+    dcr_body_matches_rfc7591
+    dcr_fires_when_eligible
+    dcr_not_fired_when_client_id_present
+    dcr_rejects_http_non_localhost_registration_endpoint_against_live_mock
+    dcr_rejects_response_larger_than_1mib
+```
+
+**Correction to RESEARCH on row (c): the measured number is 8, not 0.** The eight come from three
+binaries that are NOT `oauth_dcr_integration` and are NOT gated on the `oauth` feature:
+
+```
+pmcp::streamable_http_oauth_integration:   5 tests
+pmcp::streamable_http_oauth_properties:    2 tests
+pmcp::web_channel_oauth_route_merge_spike: 1 test
+```
+
+The correction does not weaken the conclusion — it sharpens it. Row (c) is a TRAP: a plan that ran
+`binary(/oauth/)` under `--features full` would see 8 tests run and 8 pass, and could reasonably
+report "the oauth suite is green" having compiled **zero lines** of `oauth_dcr_integration` and zero
+lines of anything this phase writes. **`make quality-gate` uses `--features "full"`; `full` does NOT
+contain `oauth` (`Cargo.toml`: `oauth = ["http-client", "dep:webbrowser", "dep:dirs", "dep:rand"]`).
+Every plan in this phase must additionally run `--features full,oauth`.**
+
+### 4. `--features oauth` alone still does not build
+
+```
+$ cargo build --features oauth --all-targets
+exit=101
+$ grep -c '^error' target/116-verify/oauth-alone.log
+13
+```
+
+13 `^error` lines = 9 real diagnostics + 4 `could not compile` aggregates. Four targets fail:
+
+| Target | Diagnostics | Cause |
+|---|---|---|
+| example `s51_v2_tasks_agent` | 4 | `pmcp::testing`, `pmcp::shared::streamable_http`, `pmcp::shared::StreamableHttpTransport` unresolved; one `E0308` |
+| test `tool_as_task_lifecycle` | 3 | `cannot find testing in pmcp` |
+| example `s50_v2_tasks_server` | 1 | `pmcp::server::streamable_http_server` is gated behind `streamable-http` |
+| test `v2_reserved_fields_tasks` | 1 | `unresolved import pmcp::testing` |
+
+RESEARCH measured "4 errors in `examples/s51_v2_tasks_agent.rs`" — that is exactly this table's first
+row; the broader picture here is a consequence of `--all-targets`, which is the command recorded.
+**It still does not build**, so the reason the plans use `--features full,oauth` rather than
+`--features oauth` is unchanged: `oauth` alone omits `streamable-http` and the `testing` module that
+unrelated examples and tests import. None of the failures is in `src/`.
+
+### 5. wasm32 target — closing RESEARCH assumption A5
+
+```
+$ rustup target add wasm32-unknown-unknown
+info: component rust-std for target wasm32-unknown-unknown is up to date
+exit=0
+$ make wasm-build
+cargo build --target wasm32-unknown-unknown --no-default-features --features wasm
+warning: `pmcp` (lib) generated 92 warnings (run `cargo fix --lib -p pmcp` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.58s
+✓ WASM build complete
+exit=0
+```
+
+| Metric | Value |
+|---|---|
+| `rustup target add` exit | **0** (already installed) |
+| `make wasm-build` exit | **0** |
+| warnings | **92** (all `never used` / `never read` dead-code under `--no-default-features`) |
+| errors | **0** |
+
+**A5 is closed: the target is available and the wasm build is green at the phase base.** This matters
+because `116-02` and `116-05` both create UNGATED modules under `src/shared/` that must stay
+wasm-clean; 92 is the number a later plan compares against, and a new warning attributable to
+`oauth_validation.rs` or `credential_store.rs` is this phase's.
+
+### 6. Dependency fence — the phase installs nothing
+
+```
+$ git diff --exit-code b2bf9157..HEAD -- Cargo.toml Cargo.lock
+exit=0                       # byte-identical to the phase base
+$ grep -rnE '^oauth2\s*=|^openidconnect\s*=' Cargo.toml
+exit=1                       # no hits
+$ grep -rn 'oauth2::' cargo-pmcp/src/commands/
+exit=1                       # no hits
+```
+
+**Exact scope of the "no oauth2/openidconnect crate" claim, which AUTH-03's booking must not
+overstate** (RESEARCH Pitfall 6): the `pmcp` core crate has NO direct dependency on the `oauth2` or
+`openidconnect` crates and adds none; the six `oauth2::` paths under `src/` all resolve to the
+INTERNAL module `crate::server::auth::oauth2`, not to an external crate; the single external
+`oauth2 = "5.0"` in this repository is PRE-EXISTING at `cargo-pmcp/Cargo.toml:84` and its use is
+confined to `cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs` — nothing under
+`cargo-pmcp/src/commands/`, which is where `116-13` works. `openidconnect` appears in no `Cargo.toml`
+anywhere in the repo.
+
+Internal-only `oauth2::` sites in `src/` (for the reader who greps and panics):
+
+```
+src/server/auth/mod.rs:96        pub use oauth2::{...}          # self::oauth2 submodule
+src/server/auth/middleware.rs:4  use crate::server::auth::oauth2::OAuthProvider;
+src/server/auth/middleware.rs:341
+src/client/oauth.rs:36           use crate::server::auth::oauth2::OidcDiscoveryMetadata;
+src/client/oauth.rs:1134
+src/client/auth.rs:7
+```
+
+**`Cargo.lock` is NOT tracked by git** — it is gitignored at `.gitignore:3`:
+
+```
+$ git ls-files --error-unmatch Cargo.lock
+error: pathspec 'Cargo.lock' did not match any file(s) known to git
+$ grep -n 'Cargo.lock' .gitignore
+3:Cargo.lock
+```
+
+**Correction to Codex MEDIUM ("Version changes omit `Cargo.lock`"): `116-13` must NOT list
+`Cargo.lock` among its modified files.** The review's reasoning is right in general and wrong for
+this repo — bumping a workspace package version does change the lockfile, but the lockfile is not
+under version control here, so listing it would create a file the plan can never commit. (This is
+also the mechanism behind the recorded CI purity-gate drift: an untracked lockfile lets transitive
+versions move between runs.)
+
+### 7. The standard verification form every plan in this phase cites
+
+```bash
+mkdir -p target/116-verify && set -o pipefail && \
+cargo nextest run --features full,oauth -E 'binary(NAME)' 2>&1 \
+  | tee target/116-verify/NAME.log && \
+grep -qE 'Summary \[.*\] [1-9][0-9]* tests? run' target/116-verify/NAME.log
+```
+
+Two failure modes it closes, both measured, not theorised:
+
+1. **A selector that matches nothing exits 0 having run nothing.** Item 3 row (a) is the proof:
+   `cargo nextest list --features full -E 'binary(oauth_dcr_integration)'` selected zero tests and
+   exited **0**. The same is true of the `test(/name/)` selector form, which silently selects zero
+   tests against a binary whose test names lack the stem — the Phase 114 defect, seven occurrences in
+   one phase. **Use `binary(NAME)`, and parse the count.**
+2. **`cmd | tail` reports the `tail`'s status.** `set -o pipefail` before the pipeline; `&&` (never
+   `;`) between commands.
+
+Observed `Summary` line, pasted verbatim from a real run of
+`cargo nextest run --features full,oauth -E 'binary(oauth_dcr_integration)'`, confirming the format
+the `grep -qE` matches:
+
+```
+     Summary [   0.046s] 5 tests run: 5 passed, 0 skipped
+```
+
+(The regex tolerates the leading whitespace and the variable duration, and requires a leading
+non-zero digit in the count, so `0 tests run` does not match.)
+
+### Open item carried, not re-measured: RESEARCH assumption A2
+
+Verbatim from `116-RESEARCH.md` § Assumptions Log:
+
+> | A2 | `make quality-gate` currently exits 0 at this branch HEAD. **Not re-measured this session** —
+> carried from Phase 114's recorded result (4899 passed / 0 failed). | Pitfall 3, Validation |
+> Medium. If it is already red, the phase inherits a blocker. The planner should measure it at the
+> phase base before Wave 1. |
+
+`116-01` did NOT run the full `make quality-gate` — it exceeds this plan's time budget, and
+`quality-gate` chains `test-all`, `audit`, `unused-deps`, `mutants`-adjacent work and the
+`pmcp-package` standalone gate. **A2 remains OPEN and plan `116-15` must close it.** What `116-01`
+DID measure, and what a later plan may cite without re-running:
+
+| Sub-gate | Command | Result |
+|---|---|---|
+| `lint` | `make lint` (`Makefile:150-...`, `--features "full" --lib --tests` + pedantic/nursery, then `cargo check --features full --examples`) | **exit 0, "✓ No lint issues"** |
+| `fmt-check` | `cargo fmt --all -- --check` | **exit 0** |
+| `comply` | `make comply` (`Makefile:841-849`) | **exit 0** |
+
+`build`, `test-all`, `audit`, `unused-deps`, `check-todos`, `check-unwraps`, `validate-always`,
+`purity-check` and `pmcp-package-gate` are NOT measured here.
+
+---
+
+## PMAT Quality-Proxy Write Workflow
+
+CLAUDE.md § "PMAT Quality-Gate Proxy Mode (REQUIRED DURING DEVELOPMENT)" mandates that all code
+changes go through the pmat quality-gate proxy. Codex flagged that the Phase 116 plans do not
+incorporate it. This section is the phase's single written write-workflow; **every source-touching
+plan references it by name rather than restating it.**
+
+### Availability probe — the proxy is NOT available on this toolchain
+
+```
+$ command -v pmat
+/Users/guy/.cargo/bin/pmat
+$ pmat --version
+pmat 3.15.0
+$ pmat mcp-server --help 2>&1 | grep -c 'enable-quality-proxy'
+0
+$ pmat mcp-server --help
+error: unrecognized subcommand 'mcp-server'
+  tip: some similar subcommands exist: 's', 'p', 'c', 'm', 'spec', 'ps', 'serve', 'server'
+$ pmat serve --help 2>&1 | grep -ci 'quality.proxy'
+0
+```
+
+**`pmat` IS installed at 3.15.0 — the version CLAUDE.md pins for CI — but 3.15.0 has no `mcp-server`
+subcommand and no `--enable-quality-proxy` flag anywhere in its CLI.** The `quality_proxy` MCP tool
+therefore cannot be started here. This is a measured environment fact, not a decision to skip the
+mandate; the mandate's INTENT (no source is written without complexity, SATD and lint enforcement) is
+discharged by clause (b) below.
+
+What pmat 3.15.0 *does* offer, and what clause (b) uses:
+
+```
+$ pmat quality-gate --help
+      --fail-on-violation   Exit with non-zero code if quality gate fails
+      --checks <CHECKS>     [possible values: dead-code, complexity, coverage, sections,
+                             provability, satd, entropy, security, duplicates, all]
+```
+
+### Binding policy for every source-touching plan in Phase 116
+
+**(a) Proxy mode — when available.** All `write` / `edit` / `append` operations on `src/` go through
+the `quality_proxy` MCP tool in **strict** mode (reject, do not merely warn). Per the probe above
+this clause is INACTIVE for Phase 116 on this toolchain; it becomes active the moment a `pmat`
+exposing the proxy is installed, and a plan that finds one must use it.
+
+**(b) Equivalent enforcement — the active clause.** Every task in a source-touching plan already ends
+with, and may not be marked done without:
+
+```bash
+pmat quality-gate --fail-on-violation --checks complexity     # 0 violations
+cargo clippy --features full,oauth --lib --tests -- \
+  -D clippy::all -W clippy::pedantic -W clippy::nursery       # make lint's flag set,
+                                                              # plus the oauth feature
+```
+
+The clippy invocation is `make lint`'s pedantic + nursery flag set (`Makefile:150-...`) with
+`--features full,oauth` substituted for `--features full`, because — item 3 — `full` alone compiles
+none of this phase's code. **A task whose complexity check reports a violation, or whose clippy run
+reports a new warning attributable to a file the task touched, is NOT done.** Pre-existing warnings
+in untouched files are out of scope and go to `deferred-items.md`.
+
+**(c) Non-negotiable in either mode.**
+
+- Cognitive complexity **<= 25** per function (CLAUDE.md; CI's `quality-gate` job runs
+  `pmat quality-gate --fail-on-violation --checks complexity` and is PR-blocking through the `gate`
+  aggregate job).
+- **Zero SATD.** `make check-todos` (`Makefile:762-766`) greps `src/` for `TODO|FIXME|HACK|XXX` and
+  fails on any hit. No exceptions, including inside a `// Why:` annotation.
+- A new `#[allow(clippy::cognitive_complexity)]` requires the `// Why:` annotation CLAUDE.md
+  specifies, with a hard cap of cog 50 (D-03). **No plan in Phase 116 is expected to need one** — the
+  phase's new functions are small pure validators. A plan that reaches for one should first apply one
+  of the six refactor techniques (P1-P6) in `75-RESEARCH.md`, and if it still needs the allow, that is
+  a signal the function was decomposed wrongly.
+- `make lint` must stay at exit 0. It is measured green at the phase base (item: A2 table above), so
+  any redness is attributable.
