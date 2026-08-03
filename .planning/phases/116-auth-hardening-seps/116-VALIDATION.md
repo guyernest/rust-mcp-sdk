@@ -41,8 +41,15 @@ mkdir -p target/116-verify && set -o pipefail && \
 
 Three rules, each closing a measured failure mode:
 
-1. **`binary(...)`, never `test(/.../)`.** A `test(...)` selector silently selects ZERO tests and
-   exits 0. This bit Phase 114 seven times.
+1. **`binary(...)`, never a bare `test(...)`.** A `test(...)` selector can silently select ZERO tests
+   and exit 0 — this bit Phase 114 seven times — and it also mis-selects on substrings. Measured in
+   this repo: an unbounded substring selector on the word "auth" skips 4 of
+   `cargo-pmcp/tests/auth_integration.rs`'s 7 tests (including `logout_no_args_errors_via_cli`, the
+   load-bearing `auth logout` semantic) while sweeping in `workbook_explain.rs` and
+   `deploy_post_deploy_flags.rs`, so a non-zero count passes with the regression-critical tests never
+   run. A substring predicate is permitted ONLY in the compound form `binary(X) and test(Y)`, where
+   `binary(X)` bounds the selection to one target. Every `-E` expression in this phase therefore
+   contains `binary(`.
 2. **The count is PARSED, not tailed.** `cargo nextest` with a filter matching nothing exits 0
    having run nothing, so a green exit code proves nothing on its own. The `Summary [...] N tests
    run` grep asserts N is non-zero.
@@ -68,18 +75,18 @@ commands, all in the form above).
 | Plan | Wave | Requirement | Test Binaries | Status |
 |------|------|-------------|---------------|--------|
 | 116-01 | 1 | AUTH-01/02/03 | `v2_bounded_reads_tripwire` (observation only, reverted); plus `make comply` and a YAML parse over both contract files | ⬜ pending |
-| 116-02 | 2 | AUTH-01 | `oauth_iss_validation` (also ungated under `--features full`), `pmcp` lib tests for the three error markers, `--doc error` | ⬜ pending |
-| 116-03 | 2 | AUTH-02 | `pmcp` lib tests `test(application_type)` | ⬜ pending |
+| 116-02 | 2 | AUTH-01 | `binary(oauth_iss_validation)` (also ungated under `--features full`), `binary(pmcp) and (test(iss_mismatch) + test(state_mismatch) + test(reauth_required))`, `--doc error` | ⬜ pending |
+| 116-03 | 2 | AUTH-02 | `binary(pmcp) and test(application_type)` | ⬜ pending |
 | 116-04 | 3 | AUTH-02/03 | `oauth_discovery_urls` (also ungated), `oauth_application_type` | ⬜ pending |
 | 116-05 | 3 | AUTH-03 | `oauth_credential_store` (also ungated) + wasm32 CI fence | ⬜ pending |
-| 116-06 | 4 | AUTH-01/03 | `oauth_discovery_validation`, `pmcp` lib tests `test(within_cap)` + `test(hardened_discovery_client)` | ⬜ pending |
+| 116-06 | 4 | AUTH-01/03 | `binary(oauth_discovery_validation)`, `binary(pmcp) and (test(within_cap) + test(hardened_discovery_client))` | ⬜ pending |
 | 116-07 | 5 | AUTH-03 | `oauth_provider_discovery` | ⬜ pending |
 | 116-08 | 4 | AUTH-01/02/03 | fuzz targets `oauth_authorization_response` AND `oauth_credential_and_dcr` + `cargo run --example c11_oauth_iss_state_validation` (ALWAYS reqs; no nextest binary) | ⬜ pending |
 | 116-09 | 5 | AUTH-01 | `oauth_iss_integration`, `oauth_state_csrf` | ⬜ pending |
-| 116-10 | 6 | AUTH-02/03 | `oauth_dcr_integration` (count must exceed the baseline 5, asserted numerically), `pmcp` lib tests `test(application_type_divergence)` | ⬜ pending |
+| 116-10 | 6 | AUTH-02/03 | `binary(oauth_dcr_integration)` (count must exceed the baseline 5, asserted numerically), `binary(pmcp) and test(application_type_divergence)` | ⬜ pending |
 | 116-11 | 7 | AUTH-03 | `oauth_store_wiring` | ⬜ pending |
 | 116-12 | 8 | AUTH-03 | `oauth_refresh`, plus the five-binary regression sweep (`oauth_dcr_integration`, `oauth_iss_integration`, `oauth_state_csrf`, `oauth_store_wiring`, `oauth_refresh`) | ⬜ pending |
-| 116-13 | 9 | AUTH-03 | `cargo-pmcp` workspace tests + `-E 'test(auth)'`; `cargo check --workspace --locked` | ⬜ pending |
+| 116-13 | 9 | AUTH-03 | `cargo-pmcp` workspace tests + `binary(auth_integration)` (and `binary(cargo_pmcp) and test(auth_cmd)` if inline unit tests land); `cargo check --workspace --locked` | ⬜ pending |
 | 116-14 | 9 | AUTH-03 | `v2_bounded_reads_tripwire` (green under `full,oauth` AND under `full` alone) | ⬜ pending |
 | 116-15 | 10 | AUTH-01/02/03 | all 14 binaries (closing full-sweep, every count parsed and non-zero) | ⬜ pending |
 | 116-16 | 5 | AUTH-03 | `oauth_credential_file` | ⬜ pending |
@@ -90,7 +97,7 @@ commands, all in the form above).
 `oauth_application_type`, `oauth_credential_store`, `oauth_credential_file`,
 `oauth_discovery_validation`, `oauth_provider_discovery`, `oauth_state_csrf`,
 `oauth_iss_integration`, `oauth_dcr_integration`, `oauth_store_wiring`, `oauth_refresh`,
-`v2_bounded_reads_tripwire`, plus cargo-pmcp's `test(auth)` selection.
+`v2_bounded_reads_tripwire`, plus cargo-pmcp's `binary(auth_integration)` selection.
 
 ---
 
