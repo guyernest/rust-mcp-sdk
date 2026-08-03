@@ -659,9 +659,30 @@ checkboxes a verifier can fail on.
 
 ### Auth Hardening (AUTH)
 
-- [ ] **AUTH-01**: OAuth callback validates RFC 9207 `iss` (strict on v2, lenient on v1 to protect existing deployments)
+- [ ] **AUTH-01**: OAuth callback validates RFC 9207 `iss` — validation is **strict whenever the
+  authorization server advertises `authorization_response_iss_parameter_supported` or emits `iss`**,
+  and a present-but-mismatched `iss` is rejected on every era. The v1 leniency is narrower than
+  "lenient" implies: it tolerates only an **absent** `iss` from a v1 authorization server that never
+  emitted one. *(Amended 2026-08-03 per cross-AI review `d6e6d194` (Codex HIGH #4): the original
+  "strict on v2, lenient on v1 to protect existing deployments" could not be booked honestly —
+  `IssPresence::Optional` still rejects a mismatch, so a v1 deployment behind a rewriting proxy
+  breaks regardless of era. `Client::era()` does not exist pre-connection; the flag-keyed rule above
+  is what the code can actually implement, and is strictly safer for v1 than the original text asked
+  for.)*
 - [ ] **AUTH-02**: Dynamic client registration sends/accepts `application_type`
-- [ ] **AUTH-03**: The remaining auth-hardening SEPs (issuer-keyed credential storage + the three clarifications) are applied without breaking existing v1 OAuth deployments (Lambda `oauth_passthrough`, documented proxy exceptions)
+- [ ] **AUTH-03**: The remaining auth-hardening SEPs — credential storage keyed by
+  `(issuer, account, server)` per SEP-2352's "MUST NOT reuse across authorization servers", plus the
+  **two adopted clarifications** SEP-2351 (`.well-known` discovery probe sequence) and SEP-2207
+  (refresh-token/`offline_access` handling) — are applied without breaking existing v1 OAuth
+  deployments (Lambda `oauth_passthrough`, documented proxy exceptions), and no
+  `oauth2`/`openidconnect` crates are added to the core SDK. **SEP-2350 (step-up scope accumulation)
+  is explicitly OUT OF SCOPE**, deferred whole with both halves so it ships as one coherent feature
+  in its own phase. *(Amended 2026-08-03 per cross-AI review `d6e6d194` (Codex HIGH #1, #5): the
+  original text said "the three clarifications", which includes the deferred SEP-2350 and therefore
+  could not be booked `[x]`; the key was also widened from `(issuer, account)` to
+  `(issuer, account, server)` because two MCP servers sharing one authorization server and account
+  would otherwise collide, and the deferral of RFC 8707 (`b2bf9157`) removed the audience binding
+  that would have mitigated it.)*
 
 ### Client & Agents on v2 (CLNT)
 
