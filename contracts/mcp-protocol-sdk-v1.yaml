@@ -481,6 +481,231 @@ equations:
     - No v1 response carries either key; v1 bytes match the pre-change goldens
     lean_theorem: Theorems.ResultCachingHints
 
+  # === OAuth Client Hardening (Phase 116) ===
+  # Authored in wave 1 (plan 116-01) BEFORE any src/ line of this phase was
+  # written, per CLAUDE.md § "Contract-First Development". Every invariant below
+  # is derived from the cited RFC / SEP clause, not transcribed back out of an
+  # implementation -- there is no implementation yet. The bindings for these three
+  # equations land in contracts/binding.yaml as `status: planned` and are flipped
+  # to `implemented` by plan 116-15 once each `function:` resolves to real source.
+
+  oauth_authorization_response_validation:
+    formula: |
+      validate_authorization_response: (raw_query, AuthorizationRequestRecord)
+                                       -> Result<authorization_code>
+
+        SECURITY_PARAMS = {state, iss, code, error, error_description}
+
+        |raw_query| > MAX_CALLBACK_QUERY_BYTES        => Err(Validation)
+                                                         (bound BEFORE any parse)
+        duplicate(k) for any k in SECURITY_PARAMS     => Err(Validation)
+                                                         (no "first wins")
+
+        FIXED evaluation order -- authenticity before actionability:
+          1. state : decode(state) absent or != record.state() => Err(StateMismatch)
+          2. iss   : rfc9207(iss, record)                      => Err(IssMismatch)
+          3. error : `error` present                           => Err(Authentication)
+          4. code  : `code` absent                             => Err(Validation)
+                     otherwise                                 => Ok(code)
+
+      rfc9207: (Option<iss>, expected_issuer, IssPresence) -> Result<()>
+        row 1  Some(i), i == expected  x  {Required, Optional}  -> Ok(())
+        row 2  Some(i), i != expected  x  {Required, Optional}  -> Err(IssMismatch)
+        row 3  None                    x  {Required}            -> Err(IssMismatch)
+        row 4  None                    x  {Optional}            -> Ok(())
+
+      comparison: byte-exact `==` over the percent-DECODED parameter value.
+        NO trailing-slash trimming, NO scheme/host case folding, NO default-port
+        elision, NO percent-encoding normalization, NO unicode normalization --
+        applied identically to `iss` and to `state`.
+
+      iss_presence_from: (env_override, builder, discovery_flag) -> IssPresence
+        Some(e), _,       _             -> e         (operator override wins)
+        None,    Some(b), _             -> b         (builder next)
+        None,    None,    Some(true)    -> Required  (AS advertised RFC 9207)
+        None,    None,    Some(false)   -> Optional
+        None,    None,    None          -> Optional  (no metadata at all)
+
+      parse_iss_env_value: &str -> Option<IssPresence>
+        "strict"  (trimmed, case-insensitive) -> Some(Required)
+        "lenient" (trimmed, case-insensitive) -> Some(Optional)
+        anything else                         -> None (the caller warns; never
+                                                 silently equivalent to unset)
+    domain: >-
+      Percent-encoded OAuth redirect-callback query strings, paired with the
+      AuthorizationRequestRecord retained from the authorization request
+    codomain: The authorization code, or a typed Error identity
+    invariants:
+    - >-
+      A present `iss` that differs from the record's expected issuer is rejected under EVERY
+      `IssPresence` value. RFC 9207 §2.4 makes a mismatching issuer identifier fatal regardless of
+      whether the AS advertised `authorization_response_iss_parameter_supported`; the leniency in
+      row 4 covers ABSENCE only, never disagreement
+    - >-
+      Under `IssPresence::Required`, an absent `iss` is rejected. RFC 9207 §3 makes the parameter
+      mandatory once the AS advertises support, so its absence in that era is itself the mix-up
+      signal the parameter exists to raise
+    - >-
+      Under `IssPresence::Optional`, an absent `iss` is accepted -- the ONLY leniency anywhere in
+      the table, and the reason the table has four rows rather than two
+    - >-
+      `Ok` implies the decoded `state` equalled the record's state. There is no path to a returned
+      authorization code that skipped the state comparison
+    - >-
+      No AS-supplied `error`, `error_description` or `error_uri` is surfaced when `state` or `iss`
+      failed. Those strings are attacker-influenceable on an unauthenticated response, so they are
+      actionable only AFTER the response has been bound to this client's own request
+    - >-
+      A duplicate occurrence of any of `state`, `iss`, `code`, `error` is rejected. A "first wins"
+      parse lets an attacker append a second copy of a security parameter that a differently-ordered
+      reader (a proxy, a log, a browser) resolves the other way
+    - >-
+      Comparison is byte-exact on the percent-decoded value. RFC 3986 §6.2.2-6.2.3 normalizations
+      (case folding, default-port elision, trailing slash, percent-encoding) are each an attacker
+      degree of freedom, so none is applied
+    - >-
+      The raw callback query is bounded by `MAX_CALLBACK_QUERY_BYTES` before parsing; it arrives on
+      a loopback socket from a peer this client has not yet authenticated
+    - >-
+      Rejection messages carry no byte of the offending input for the state and size cases -- a
+      state value is a capability, and an oversized query is unbounded attacker text
+    - >-
+      An unrecognized `PMCP_OAUTH_ISS_VALIDATION` value is NOT silently equivalent to unset:
+      `parse_iss_env_value` returns `None` so the call site can warn, keeping a typo from quietly
+      relaxing the policy the operator meant to tighten
+    preconditions:
+    - The record was created by this client when it built the authorization request
+    - The record's `state` was generated with a CSPRNG (`generate_state`)
+    postconditions:
+    - Every `Ok(code)` is bound to this client's own authorization request by both `state` and `iss`
+    - Every `Err` carries a typed identity (`is_state_mismatch` / `is_iss_mismatch`), not prose
+    lean_theorem: Theorems.OAuthAuthorizationResponseValidation
+
+  oauth_discovery_anchor:
+    formula: |
+      discovery_url_candidates: issuer -> Result<[Url]>       (SEP-2351 probe order)
+        issuer with a non-empty path P:
+          1. {origin}/.well-known/oauth-authorization-server{P}
+          2. {origin}/.well-known/openid-configuration{P}
+          3. {origin}{P}/.well-known/openid-configuration      (OIDC APPENDED form)
+        issuer with an empty path (with or without a trailing slash):
+          1. {origin}/.well-known/oauth-authorization-server
+          2. {origin}/.well-known/openid-configuration
+        origin = (scheme, host, effective port) of the issuer, preserved verbatim
+
+      validate_issuer_url: &str -> Result<Url>
+        scheme != https AND host not in {127.0.0.1, ::1, localhost}  => Err
+        userinfo present | query present | fragment present | no host => Err
+
+      issuer_matches_metadata: (issuer_used_to_build_url, document.issuer) -> bool
+        byte-exact `==`, no normalization                     (RFC 8414 §3.3)
+
+      classify_discovery_failure: DiscoveryFailure -> DiscoveryOutcome
+        NotFound                   -> Fallback   (try the next candidate)
+        HttpStatus(4xx != 404)     -> Fallback
+        InvalidJson                -> Fallback
+        HttpStatus(5xx)            -> Retry      (same candidate, backoff budget)
+        Transport                  -> Retry
+        IssuerMismatch             -> Terminal   (abort the whole probe)
+        BodyOverCap                -> Terminal
+        MalformedSecurityMetadata  -> Terminal
+
+      same_origin: (a, b) -> bool
+        scheme(a) == scheme(b) AND host(a) == host(b)
+          AND effective_port(a) == effective_port(b)          (path is not origin)
+    domain: Issuer identifier strings and the authorization-server metadata documents fetched for them
+    codomain: An ordered candidate URL list, and a fetch outcome that is either an anchored document or a classified failure
+    invariants:
+    - >-
+      The OIDC appended form `{issuer}/.well-known/openid-configuration` is present in EVERY
+      candidate list. It is today's only shipped behaviour and the only form measured to answer 200
+      for a path-carrying issuer, so a probe that replaced it rather than reordered around it would
+      be a regression, not a fix
+    - >-
+      Every candidate preserves the issuer's scheme, host and effective port. A candidate that
+      changed the origin would probe a different authority than the one the user named
+    - >-
+      Metadata never escapes the fetch boundary unless its `issuer` member string-equals the issuer
+      used to build the URL. RFC 8414 §3.3 makes this comparison the anchor that stops a
+      well-known document served by one authority from describing another
+    - >-
+      `IssuerMismatch`, `BodyOverCap` and `MalformedSecurityMetadata` are TERMINAL and never trigger
+      candidate fallback. Each is evidence about the AUTHORITY rather than about the URL shape, so
+      trying the next URL against the same authority would launder a security signal into a retry
+    - >-
+      `Retry` re-attempts the SAME candidate within a bounded budget and degrades to `Fallback` when
+      that budget is exhausted; it never advances the candidate index on its own
+    - >-
+      `validate_issuer_url` admits `http` only for loopback hosts, and rejects userinfo, query and
+      fragment. RFC 8414 §2 forbids query and fragment in an issuer identifier, and userinfo in an
+      https URL is a classic authority-spoofing device
+    - >-
+      A discovery redirect that leaves the issuer's origin is not followed silently; `same_origin`
+      is the predicate the fetch sites apply
+    preconditions:
+    - The issuer string came from configuration or from a protected-resource metadata document, not from an unauthenticated redirect
+    postconditions:
+    - A returned candidate list is non-empty, duplicate-free, and every element is an absolute URL
+    - A returned metadata document is anchored to the issuer that was probed
+    lean_theorem: Theorems.OAuthDiscoveryAnchor
+
+  oauth_credential_binding:
+    formula: |
+      CredentialKey = (issuer, account, server)               (SEP-2352, AUTH-03)
+        lookup(k) hits iff  issuer(k) == issuer(k')
+                       AND  account(k) == account(k')
+                       AND  server(k)  == server(k')
+
+      CREDENTIAL_SCHEMA_VERSION = 2
+
+      parse_credential_snapshot: &[u8] -> Result<(CredentialSnapshot, MigrationReport)>
+        schema_version == 2 => (snapshot, MigrationReport::noop)
+        schema_version == 1 =>
+          for each v1 entry (server_key -> record):
+            record.issuer == Some(iss) => insert(CredentialKey(iss, "", server_key),
+                                                 record)                     ; migrated += 1
+            record.issuer == None      => drop(DroppedEntry{server_key, reason}) ; dropped += 1
+        schema_version otherwise => Err naming BOTH the observed and the supported version
+        non-JSON | empty          => Err carrying no byte of the input
+
+      to_bytes: CredentialSnapshot -> Result<Vec<u8>>
+        emits "schema_version": 2 and is BYTE-STABLE across repeated serialization
+    domain: On-disk and platform-store credential snapshots, and the (issuer, account, server) lookups made against them
+    codomain: The credentials registered for exactly one (issuer, account, server) triple, plus a migration report
+    invariants:
+    - >-
+      A lookup differing in ANY of the three key components is a miss. Two MCP servers can share one
+      authorization server and one user account while holding different DCR registrations, different
+      client IDs and different granted scopes; under a narrower key one server's logout deletes the
+      other's credentials
+    - >-
+      Credentials are never re-keyed to an issuer that was not recorded with them. A v1 entry with no
+      `issuer` member is DROPPED with a reason rather than adopted under an inferred issuer, because
+      inferring one would bind a token to an authority that never minted it
+    - >-
+      The DCR-issued `client_id` lives in the same record as the credentials it belongs to. A client
+      identifier registered with one authority is not a property of the machine or of the user, and a
+      record that separated them could present one authority's client_id to another
+    - >-
+      The migration reports BOTH a migrated count and a dropped list. A silent migration cannot be
+      distinguished from a no-op, and a silently dropped credential looks to the user exactly like a
+      logout nobody performed
+    - >-
+      The `server` component is taken from the v1 map key, which already recorded the normalized
+      server URL -- this is what makes the widening a LOSSLESS migration rather than a lossy re-key
+    - >-
+      `to_bytes` is byte-stable for a given snapshot, so an unchanged store rewrites identical bytes
+      and a diff is evidence of a real change
+    - >-
+      `parse_credential_snapshot` is total over arbitrary bytes: it returns `Err`, never a panic, for
+      any input, and its error message contains no byte of that input
+    preconditions:
+    - The account component is opaque to the SDK and is stored and returned verbatim
+    postconditions:
+    - Every stored credential is addressable by exactly the triple it was saved under
+    - A schema-1 file is either migrated entry-by-entry or reported as dropped, never partially adopted
+    lean_theorem: Theorems.OAuthCredentialBinding
+
 proof_obligations:
 - type: state_machine
   property: Session lifecycle enforces initialization

@@ -825,6 +825,132 @@ bindings:
     requests and `No` for everything else, written so a NEW `ClientRequest` variant lands in
     the fail-closed `No` arm. SCHM-03 / D-07.
 
+# === OAuth Client Hardening (Phase 116) ===
+# Authored by plan 116-01 (wave 1), BEFORE a single `src/` line of this phase was
+# written, discharging CLAUDE.md § "Contract-First Development". Every `signature:`
+# below is the DESIGNED interface taken from the owning plan's `<interfaces>` block
+# (116-02, 116-04, 116-05) — not a transcription of shipped code, because no code
+# exists yet. That is the whole point: the signature is committed before the body.
+#
+# All eight entries carry `status: planned`. Two gates read this file and both were
+# checked before the value was introduced:
+#   * `make comply` -> `comply-bindings-check` (Makefile:818-834) resolves `function:`
+#     values ONLY in contracts/team-servers/binding.yaml, so it is unaffected; and
+#     `pmat comply check --path .` is informational per CLAUDE.md D-07.
+#   * tests/phase115_contract_bindings.rs DOES read this file, and its test
+#     `phase115_contract_bindings_planned_entries_are_scoped_to_phase_115` confines
+#     `planned` to a named equation list. Its own failure message says a future phase
+#     needing contract-first `planned` bindings must "extend PHASE_115_EQUATIONS
+#     deliberately in this file — that edit is the conversation this test exists to
+#     force." 116-01 had that conversation: the failure was OBSERVED first, then the
+#     test grew a separate `PHASE_116_EQUATIONS` list so Phase 116's three equations
+#     are the ONLY additional equations on which `planned` is tolerated.
+#
+# HAND-OFF: plan 116-15 flips all eight entries to `status: implemented`, but ONLY
+# after resolving each `function:` against a real declaration in `src/`. At that
+# point tests/phase115_contract_bindings.rs's ghost-binding check becomes
+# load-bearing over them. 116-15 must also remove the three equations from
+# PHASE_116_EQUATIONS, or leave them with a written reason, so `planned` cannot
+# outlive the phase that justified it.
+#
+# NOTE for 116-15: `CredentialKey::new` resolves through the shared `fn new` needle,
+# which is not unique to that type. When flipping it to `implemented`, verify the
+# declaration by hand in src/shared/credential_store.rs rather than trusting the
+# resolver's word.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_authorization_response_validation
+  function: validate_authorization_response
+  module_path: pmcp::shared::oauth_validation
+  signature: 'pub fn validate_authorization_response(raw_query: &str, record: &AuthorizationRequestRecord) -> Result<String>'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-01 (D-12). Written by 116-02 Task 2. THE fixed-order validator:
+    state, then iss, then the AS error, then the code. Returns the authorization code.
+    Ungated and wasm-clean — it lives in src/shared/ precisely so no feature flag can
+    make the check optional.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_authorization_response_validation
+  function: iss_presence_from
+  module_path: pmcp::shared::oauth_validation
+  signature: 'pub fn iss_presence_from(env_override: Option<IssPresence>, builder: Option<IssPresence>, discovery_flag: Option<bool>) -> IssPresence'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-01 (D-04). Written by 116-02 Task 2. Precedence env > builder >
+    discovery flag. Takes an ALREADY-PARSED env override so an unrecognized value can
+    be warned about at the call site (116-09) instead of silently reading as unset.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_discovery_anchor
+  function: discovery_url_candidates
+  module_path: pmcp::shared::oauth_validation
+  signature: 'pub fn discovery_url_candidates(issuer: &str) -> Result<Vec<url::Url>>'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-01 + AUTH-03 (D-13, SEP-2351). Written by 116-04 Task 1. Three
+    candidates for a path-carrying issuer, two for a path-less one. The OIDC APPENDED
+    form is present in every list — today's only shipped behaviour and the regression
+    fence for RESEARCH Pitfall 2.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_discovery_anchor
+  function: issuer_matches_metadata
+  module_path: pmcp::shared::oauth_validation
+  signature: 'pub fn issuer_matches_metadata(issuer_used_to_build_url: &str, document_issuer: &str) -> bool'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-03 (RFC 8414 §3.3). Written by 116-04 Task 1. Byte-exact, no
+    normalization — the same rule the `iss` comparison follows, for the same reason.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_discovery_anchor
+  function: classify_discovery_failure
+  module_path: pmcp::shared::oauth_validation
+  signature: '#[must_use] pub fn classify_discovery_failure(failure: DiscoveryFailure) -> DiscoveryOutcome'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-03. Written by 116-04 Task 2. The explicit outcome matrix Codex
+    asked for. IssuerMismatch, BodyOverCap and MalformedSecurityMetadata are TERMINAL:
+    each is evidence about the AUTHORITY, so falling back to the next candidate would
+    launder a security signal into a retry.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_discovery_anchor
+  function: derive_application_type
+  module_path: pmcp::shared::oauth_validation
+  signature: 'pub fn derive_application_type(redirect_uris: &[String]) -> Result<ApplicationType>'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-03 (SEP-2351 DCR). Written by 116-04 Task 3. Loopback and custom
+    schemes derive `native`; https derives `web`. Consumed at the DCR construction site
+    in 116-10.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_credential_binding
+  function: parse_credential_snapshot
+  module_path: pmcp::shared::credential_store
+  signature: 'pub fn parse_credential_snapshot(bytes: &[u8]) -> Result<(CredentialSnapshot, MigrationReport)>'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-03 (SEP-2352). Written by 116-05 Task 1. The whole schema 1 -> 2
+    migration, kept PURE so the same bytes migrate identically in a file, in DynamoDB
+    and in a KV store — and so 116-08 can fuzz it. Total over arbitrary bytes: Err,
+    never a panic, and the message carries no byte of the input.
+
+- contract: mcp-protocol-sdk-v1.yaml
+  equation: oauth_credential_binding
+  function: CredentialKey::new
+  module_path: pmcp::shared::credential_store
+  signature: 'pub fn new(issuer: impl Into<String>, account: impl Into<String>, server: impl Into<String>) -> Self'
+  status: planned
+  notes: >-
+    Phase 116 / AUTH-03 (D-116-R1). Written by 116-05 Task 1. The key is THREE-part.
+    Two MCP servers can share one authorization server and one account while holding
+    different DCR registrations; under a narrower key one server's logout deletes the
+    other's credentials. RFC 8707 `resource` would have bound the audience instead and
+    is deferred by owner decision (b2bf9157), so the key carries the binding.
+
 critical_path:
 - jsonrpc_framing
 - protocol_version_negotiation

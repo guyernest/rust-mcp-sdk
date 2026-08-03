@@ -40,6 +40,24 @@
 //! Phase 115 SECTION is still present and still parses — `planned` is a transient
 //! property of it, not an invariant.
 //!
+//! # Phase 116 extended the permission, on purpose and after observing the failure
+//!
+//! The `planned` scope test's own failure message says a later phase needing
+//! contract-first `planned` bindings must extend the permitted list "deliberately in
+//! this file — that edit is the conversation this test exists to force". Phase 116
+//! (OAuth client hardening) is that phase: its wave-1 plan 116-01 authored three
+//! OAuth equations and eight `status: planned` bindings BEFORE any of its `src/`
+//! code existed. The plan predicted `make comply` would be unaffected — correctly,
+//! `comply-bindings-check` reads only the team-servers binding file — but did not
+//! know THIS file existed. So the test fired, named all eight entries, and the fix
+//! was made with that failure in hand rather than in anticipation of it.
+//!
+//! [`PHASE_116_EQUATIONS`] is a second ENUMERATION, not a widening of the first: two
+//! named lists, joined by [`planned_is_permitted`]. A phase that wants the same
+//! permission adds a third list and one `||`, which is a reviewable diff; nothing
+//! here derives the permitted set from the binding file itself, which would make the
+//! check circular.
+//!
 //! # The two legacy ledgers
 //!
 //! Both files are read at RUNTIME — never baked in at compile time with the
@@ -71,13 +89,38 @@ const BINDING_FILE: &str = "contracts/binding.yaml";
 /// The contract file whose `equations:` map the bindings must reference.
 const CONTRACT_FILE: &str = "contracts/mcp-protocol-sdk-v1.yaml";
 
-/// The three equations Phase 115 adds, and the only equations on which a
-/// `planned` binding is permitted.
+/// The three equations Phase 115 adds.
 const PHASE_115_EQUATIONS: &[&str] = &[
     "output_schema_draft_pin",
     "structured_content_shape",
     "result_caching_hints",
 ];
+
+/// The three equations Phase 116 adds, authored in its wave 1 (plan 116-01)
+/// before any of its `src/` code existed.
+///
+/// This list is the deliberate edit the failure message of
+/// [`phase115_contract_bindings_planned_entries_are_scoped_to_phase_115`] demands
+/// of a phase that genuinely needs contract-first `planned` bindings — "that edit
+/// is the conversation this test exists to force". The conversation happened:
+/// 116-01 authored `contracts/binding.yaml`'s eight OAuth bindings, RAN this test,
+/// OBSERVED it name all eight, and only then added this constant. It is an
+/// enumeration of three named equations, never a predicate over a `contract:` or a
+/// filename, so a fourth equation cannot join it by accident.
+///
+/// Plan 116-15 flips those eight bindings to `implemented` after resolving each
+/// `function:` against real source, at which point every entry here is expected to
+/// carry ZERO `planned` bindings — the same end state Phase 115 reached.
+const PHASE_116_EQUATIONS: &[&str] = &[
+    "oauth_authorization_response_validation",
+    "oauth_discovery_anchor",
+    "oauth_credential_binding",
+];
+
+/// Every equation on which a `planned` binding is permitted, and nothing else.
+fn planned_is_permitted(equation: &str) -> bool {
+    PHASE_115_EQUATIONS.contains(&equation) || PHASE_116_EQUATIONS.contains(&equation)
+}
 
 /// How many bindings each Phase 115 equation must carry, as a MINIMUM.
 ///
@@ -495,7 +538,7 @@ fn phase115_contract_bindings_planned_entries_are_scoped_to_phase_115() {
             continue;
         }
         planned += 1;
-        if PHASE_115_EQUATIONS.contains(&record.equation.as_str()) {
+        if planned_is_permitted(&record.equation) {
             continue;
         }
         writeln!(
@@ -508,13 +551,14 @@ fn phase115_contract_bindings_planned_entries_are_scoped_to_phase_115() {
 
     assert!(
         offenders.is_empty(),
-        "FAILURE MODE: `status: planned` was used outside Phase 115. `planned` exempts a binding \
-         from the ghost-binding check, so on any other equation it is a way to silence real \
-         drift.\n\n{offenders}\n\
+        "FAILURE MODE: `status: planned` was used outside the enumerated contract-first phases. \
+         `planned` exempts a binding from the ghost-binding check, so on any other equation it is \
+         a way to silence real drift.\n\n{offenders}\n\
          WHAT TO DO: either write the function and mark the binding `implemented`, or remove the \
-         binding. If a future phase genuinely needs contract-first `planned` bindings, extend \
-         PHASE_115_EQUATIONS deliberately in this file — that edit is the conversation this test \
-         exists to force."
+         binding. If a future phase genuinely needs contract-first `planned` bindings, add its \
+         equations as a NEW named constant in this file and extend `planned_is_permitted` — that \
+         edit is the conversation this test exists to force. Phase 116 had it; see \
+         PHASE_116_EQUATIONS."
     );
 
     // Anti-vacuity. Wave 1 wrote this as `planned > 0`, which held only while the
@@ -536,6 +580,24 @@ fn phase115_contract_bindings_planned_entries_are_scoped_to_phase_115() {
          Phase 115 binding to `implemented`. Do not restore a `planned` entry to satisfy an \
          anti-vacuity check.\n\
          WHAT TO DO: restore the section or fix the parser; do not delete this assertion."
+    );
+
+    // The same anti-vacuity guard for Phase 116, written the same way and for the
+    // same reason: the presence of the SECTION is the invariant, not the transient
+    // `planned` status of its entries. Without this, deleting the whole Phase 116
+    // section would make the permission above cover nothing and pass silently.
+    let phase_116_records = records
+        .iter()
+        .filter(|record| PHASE_116_EQUATIONS.contains(&record.equation.as_str()))
+        .count();
+    assert!(
+        phase_116_records >= 8,
+        "FAILURE MODE: only {phase_116_records} Phase 116 bindings parsed (expected at least 8). \
+         Either the parser is broken or the Phase 116 section was removed from \
+         {BINDING_FILE}.\n\
+         WHAT TO DO: restore the section or fix the parser. If Phase 116's bindings were \
+         deliberately dropped, delete PHASE_116_EQUATIONS in the same edit so `planned` stops \
+         being permitted on those equations."
     );
 }
 
