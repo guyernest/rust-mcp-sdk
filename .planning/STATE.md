@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-02-PLAN.md
-last_updated: "2026-08-03T17:23:24.143Z"
+stopped_at: Completed 116-03-PLAN.md
+last_updated: "2026-08-03T19:14:50.043Z"
 last_activity: 2026-08-03
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 360
+  completed_plans: 361
   percent: 85
 ---
 
@@ -26,8 +26,49 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 3 of 16
+Plan: 4 of 16
 Status: Ready to execute
+
+**116-03 HAS LANDED — the DCR types carry `application_type` WITHOUT a semver break.** Commit
+`1b0e2f75` (+328/-0 in `src/server/auth/provider.rs`). `DcrRequest`/`DcrResponse` are public,
+all-pub-field, NOT `#[non_exhaustive]`, with ten struct-literal construction sites in-repo — adding a
+field would trip `constructible_struct_adds_field` = MAJOR. Three inherent accessors over the
+existing `#[serde(flatten)] extra` carrier plus one exported `DCR_APPLICATION_TYPE_KEY` deliver the
+same capability: `cargo semver-checks --baseline-rev b2bf9157` → **223 pass / 0 fail**.
+`grep 'pub application_type'` and `grep 'non_exhaustive'` over the file both return nothing.
+10 unit tests + 3 doctests; `make quality-gate` **exit 0**; doc-check **28** = anchor, 0 attributable.
+
+**⚠ D-116-LINT — THE PHASE'S OWN CLAUSE-(b) CLIPPY COMMAND REPORTED EXIT 0 ON GATE-RED CODE.**
+Measured, not reasoned. Clause (b) (`cargo clippy … -W clippy::pedantic -W clippy::nursery`) passed
+clean on a two-arm `match` that `make lint` rejected with `error: clippy::single_match_else` →
+`make[1]: *** [lint] Error 101`. Cause: `make lint` sets `RUSTFLAGS="-D warnings"`, which promotes
+those same `-W` pedantic lints to hard errors. Adding `-D warnings` to clause (b) alone is NOT the
+fix — it then produces **11 FALSE positives** in `pmcp-widget-utils`/`pmcp-code-mode-derive`, every
+one a lint `make lint`'s 28-entry `-A` list explicitly allows. The two diverge in OPPOSITE
+directions, so neither dominates. **`make lint` / `make quality-gate` is the authoritative clippy
+evidence for every remaining source-touching plan; clause (b) is an inner-loop check only.**
+
+**⚠ D-116-DISK — A NEAR-FULL DISK FAKED 12 DOCTEST LINKER REGRESSIONS.** `make quality-gate`'s
+`test-doc` reported `416 passed; 12 failed` with `linking with 'cc' failed` in twelve files 116-03
+never touched, under thousands of red-herring `ld: warning: object file … built for newer 'macOS'
+version (26.5)` lines. The real error, recoverable only by filtering those out:
+`12 × ld: write() failed, errno=28 (No space left on device)` — `df -h /` showed **1.3 GiB free at
+91%**, `target/` at **84 GB**. After `rm -rf target/debug/incremental target/semver-checks
+target/wasm32-unknown-unknown` (37 GiB free): **428 passed; 0 failed** = 416 + 12, gate **exit 0**.
+Run `df -h /` BEFORE attributing any `cc` link failure to code; reclaim `debug/incremental` (33 GB),
+do not `cargo clean`.
+
+**The collision rule is covered by tests PROVEN to fail independently.** Under a first-write-wins
+break (`insert` → `entry().or_insert_with()`), ONLY `raw_then_setter_last_write_wins` failed — its
+symmetric sibling `setter_then_raw_last_write_wins` still PASSED, because a raw `insert` overwrites
+regardless. Two tests, two detectors. A second simultaneous break (getter defaulting a non-string to
+`"web"`) failed ONLY `non_string_value_is_none`. Source restored byte-for-byte. Log:
+`target/116-verify/116-03-application_type.NEGATIVE-CONTROL.log`.
+
+**AUTH-02 remains Pending on purpose** — 116-03 supplies the CARRIER only. `116-04` derives the
+value (`derive_application_type`), `116-10` wires the `src/client/oauth.rs:241-257` construction
+site. `T-116-07` (redirect-URI/application-type mismatch → open redirect) is **transferred, not
+discharged**, and is still unmitigated in the tree.
 
 **116-02 HAS LANDED — AUTH-01's semantics now exist as ONE pure function.** Commits `72a83b10`
 (three marker-const error identities on `Error::Protocol`) and `373e9c09`
@@ -658,6 +699,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: 116-02: RESEARCH A2 is CLOSED — make quality-gate exits 0 at this HEAD (116-01 carried it open for 116-15). Caveat: the captured log is rtk-filtered with a literal '7027 lines truncated' marker, so per-binary counts are NOT recoverable; use /usr/bin/make to bypass the proxy when counts are needed
 - [Phase 116]: 116-02: AUTH-01 deliberately NOT booked complete — 116-04/06/08/09/15 also claim it; this plan lands the semantics, not the wiring, fuzzing or conformance fixtures
 - [Phase 116]: 116-02: an inner //! module doc in a module whose pub mod ALSO carries an outer /// resolves intra-doc links in the DECLARING module's scope — bare links fail make doc-check's -D warnings. 116-04 and 116-05 create src/shared/ modules the same way (D-116-DOC)
+- [Phase ?]: 116-03: DcrRequest/DcrResponse gain application_type via inherent accessors over the existing serde(flatten) extra map — no new public field, no non_exhaustive; semver-checks 223 pass / 0 fail vs b2bf9157
+- [Phase ?]: 116-03: D-116-LINT — the PMAT clause-(b) clippy command is MEASURABLY weaker than 'make lint' (it omits RUSTFLAGS=-D warnings); every source-touching plan must run make lint or make quality-gate before booking a task done
 
 ### Pending Todos
 
@@ -708,7 +751,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-03T17:23:24.131Z
+Last session: 2026-08-03T19:14:44.895Z
 Stopped at: Completed 116-02-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -815,3 +858,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P19 | ~150m | 3 tasks | 5 files |
 | Phase 116 P01 | 78min | 3 tasks | 4 files |
 | Phase 116 P02 | 116min | 2 tasks | 7 files |
+| Phase 116 P03 | 100min | 1 tasks | 2 files |

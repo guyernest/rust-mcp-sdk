@@ -77,3 +77,88 @@ and diff the `^error` count against 28 **before** committing, not after.
 
 **Proposed owner:** informational; no fix required. `116-15` may wish to fold the rule into the
 phase's written conventions.
+
+---
+
+## D-116-LINT — the PMAT write-workflow clause (b) clippy command is WEAKER than `make lint`
+
+**Found during:** `116-03` (Task 1). Measured, not reasoned: clause (b) reported **exit 0** on code
+that `make lint` — and therefore `make quality-gate` — rejected with a hard error.
+
+**Finding.** `116-BASELINES.md` § "PMAT Quality-Proxy Write Workflow" clause (b) prescribes:
+
+```
+cargo clippy --features full,oauth --lib --tests -- -D clippy::all -W clippy::pedantic -W clippy::nursery
+```
+
+`make lint` (`Makefile`) prescribes something materially different:
+
+```
+RUSTFLAGS="-D warnings" cargo clippy --features "full" --lib --tests -- -D clippy::all \
+    -W clippy::pedantic -W clippy::nursery -W clippy::cargo  <28 × -A clippy::…>
+```
+
+Two divergences, pulling in **opposite** directions, so neither command dominates the other:
+
+1. **`RUSTFLAGS="-D warnings"`** promotes every `-W` pedantic/nursery lint to a hard error. Clause (b)
+   omits it, so those lints only *warn* and clippy still exits 0. This is the direction that bites:
+   `116-03`'s first pass wrote a two-arm `match` in a test whose `Err` arm was empty. Clause (b):
+   exit 0, zero hits in the file. `make lint`: `error: clippy::single_match_else`, `make[1]: ***
+   [lint] Error 101`, gate red.
+2. **`make lint`'s 28-entry `-A` allow-list** (`must_use_candidate`, `uninlined_format_args`,
+   `option_if_let_else`, `too_many_lines`, `redundant_closure_for_method_calls`, …). Adding
+   `RUSTFLAGS="-D warnings"` to clause (b) *without* that allow-list produces **11 errors in
+   `crates/pmcp-widget-utils/src/lib.rs` and `crates/pmcp-code-mode-derive/src/lib.rs`** — every one
+   of them a lint `make lint` explicitly allows, in workspace crates the real gate does not lint at
+   pedantic strength. Measured at `target/116-verify/116-03-clippy-strict.log`
+   (`STRICT_CLIPPY_EXIT=101`, **0** hits in `pmcp` and **0** in any file `116-03` touched). This is
+   the pre-existing condition already recorded in project memory: a bare `-D warnings` run over the
+   non-root workspace crates is stricter than the gate and does **not** block CI.
+
+**Consequence for the remaining plans.** A plan that runs only clause (b) and books "clippy clean"
+can still be rejected by the pre-commit hook and by CI. Clause (b) is a fast *inner-loop* check, not
+the gate. **`make lint` (or the full `make quality-gate`) is the authoritative clippy evidence and
+must be run before any source-touching task is booked done.** `116-03` did run it, which is the only
+reason the defect was found before push.
+
+**Proposed owner:** `116-15`, when it reconciles the phase's evidence. Two options: amend the clause
+in `116-BASELINES.md` to name `make lint` as the authoritative form with clause (b) demoted to an
+inner-loop convenience, or leave clause (b) as written and add a standing "then run `make lint`"
+step. Do **not** "fix" this by adding `RUSTFLAGS="-D warnings"` to clause (b) alone — divergence 2
+shows that produces 11 false positives in crates this phase does not own.
+
+---
+
+## D-116-DISK — `make quality-gate`'s doctest stage fails 12 tests when the disk is near-full
+
+**Found during:** `116-03` (Task 1), running the plan's `make quality-gate` verification.
+
+**Finding.** `make quality-gate` reported `test-doc` **FAILED: 416 passed; 12 failed** with
+`error: linking with 'cc' failed: exit status: 1` in **twelve files `116-03` never touched**
+(`src/server/mod.rs`, `observability/types.rs`, `preset.rs`, `resource_watcher.rs`,
+`simple_resources.rs`). The visible output is thousands of lines of
+`ld: warning: object file … was built for newer 'macOS' version (26.5) than being linked (11.0)`,
+which reads exactly like a toolchain/code regression and is not the cause.
+
+The actual error, recoverable only by filtering the warnings out
+(`grep -oE 'ld: [a-z].*' … | grep -v '^ld: warning'`):
+
+```
+12 × ld: write() failed, errno=28 (No space left on device)
+```
+
+`df -h /` at that moment: **1.3 GiB available, 91% capacity**, with `target/` at **84 GB**
+(`target/debug/deps` 34 GB, `target/debug/incremental` 33 GB, `target/debug/examples` 14 GB).
+
+**Resolution applied (not a code change):** `rm -rf target/debug/incremental target/semver-checks
+target/wasm32-unknown-unknown` → 37 GiB free. Re-run: `test-doc` **428 passed; 0 failed; 79
+ignored** — exactly `416 + 12` — and `make quality-gate` **exit 0**.
+
+**Guidance for every later plan in this phase.** `make quality-gate` links ~430 doctest binaries
+against a ~180 MB rlib set, so it is the single most disk-hungry step in the repo. **Run
+`df -h /` before treating any `linking with 'cc' failed` as a code defect**, and filter
+`ld: warning` lines out before reading the diagnostic. `target/debug/incremental` is the cheapest
+33 GB to reclaim; do not `cargo clean` (it discards the whole 84 GB and costs a full rebuild).
+
+**Proposed owner:** informational; no fix required. This is the project-memory
+"disk exhaustion fakes code regressions" hazard, hit again and now measured inside Phase 116.
