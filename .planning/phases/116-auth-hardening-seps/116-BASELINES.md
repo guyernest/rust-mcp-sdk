@@ -575,3 +575,243 @@ in untouched files are out of scope and go to `deferred-items.md`.
   a signal the function was decomposed wrongly.
 - `make lint` must stay at exit 0. It is measured green at the phase base (item: A2 table above), so
   any redness is attributable.
+
+---
+
+## D-15 Pre-Fix Violation Baseline
+
+Phase 115's discipline: **a fence that was never observed to fail is not evidence.** This section is
+the pre-fix violation list plan `116-14` has to drive to zero. It was produced by OBSERVATION — the
+scanner was pointed at the four auth files and its output captured verbatim — not by transcribing
+`D-113-V`'s table.
+
+### Method
+
+`src/client/auth.rs`, `src/client/oauth.rs`, `src/server/auth/providers/generic_oidc.rs` and
+`src/server/auth/providers/cognito.rs` were TEMPORARILY appended to `EXTRA_SCOPE`
+(`tests/v2_bounded_reads_tripwire.rs:67-70`). Nothing else was touched: not `REQUIRED_FILES`, not
+`WHOLE_BODY_ALLOWLIST`, not the module doc, not the scanner, not the needle set. **This was a
+measurement, not the fix.**
+
+```bash
+mkdir -p target/116-verify && set -o pipefail && \
+cargo nextest run --features full,oauth -E 'binary(v2_bounded_reads_tripwire)' 2>&1 \
+  | tee target/116-verify/d15-prefix-baseline.log && \
+grep -qE 'Summary \[.*\] [1-9][0-9]* tests? run' target/116-verify/d15-prefix-baseline.log
+```
+
+```
+     Summary [   0.077s] 13 tests run: 11 passed, 2 failed, 0 skipped
+        FAIL  every_peer_byte_accumulation_is_reviewed
+        FAIL  no_unbounded_whole_body_read_over_peer_supplied_bytes
+exit=100
+```
+
+**Two tests fail, not one.** Full log: `target/116-verify/d15-prefix-baseline.log`.
+
+### Failure 1 — `no_unbounded_whole_body_read_over_peer_supplied_bytes`: 33 sites
+
+Panic at `tests/v2_bounded_reads_tripwire.rs:655`. Verbatim, grouped by file, each entry carrying its
+`file:line` and the needle that matched:
+
+**`src/client/auth.rs` — 5**
+
+| Line | Needle | Statement fragment |
+|---|---|---|
+| 362 | `.text().await` | `...leterror_text=response` |
+| 414 | `.text().await` | `...leterror_text=response` |
+| 191 | `.json::<` | `...response` |
+| 369 | `.json::<` | `...response` |
+| 421 | `.json::<` | `...response` |
+
+**`src/client/oauth.rs` — 8**
+
+| Line | Needle | Statement fragment |
+|---|---|---|
+| 953 | `read_to_string` | `...letcontent=tokio::fs::` |
+| 269 | `.text().await` | `...letbody=response` |
+| 825 | `.text().await` | `...returnErr(Error::internal(format!("",response` |
+| 873 | `.text().await` | `...letbody=response` |
+| 941 | `.text().await` | `...returnErr(Error::internal(format!("",response` |
+| 282 | `.bytes().await` | `...letbytes=response` |
+| 829 | `.json().await` | `...letdevice_auth:DeviceAuthResponse=response` |
+| 946 | `.json().await` | `...response` |
+
+**`src/server/auth/providers/cognito.rs` — 9**
+
+| Line | Needle | Statement fragment |
+|---|---|---|
+| 399 | `.text().await` | `...leterror_text=response` |
+| 440 | `.text().await` | `...leterror_text=response` |
+| 484 | `.text().await` | `...leterror_text=response` |
+| 513 | `.text().await` | `...leterror_text=response` |
+| 288 | `.json().await` | `...letdiscovery:OidcDiscovery=response` |
+| 326 | `.json().await` | `...response` |
+| 407 | `.json().await` | `...response` |
+| 448 | `.json().await` | `...response` |
+| 521 | `.json().await` | `...response` |
+
+**`src/server/auth/providers/generic_oidc.rs` — 11**
+
+| Line | Needle | Statement fragment |
+|---|---|---|
+| 576 | `.text().await` | `...leterror_text=response` |
+| 620 | `.text().await` | `...leterror_text=response` |
+| 664 | `.text().await` | `...leterror_text=response` |
+| 709 | `.text().await` | `...leterror_text=response` |
+| 747 | `.text().await` | `...leterror_text=response` |
+| 413 | `.json().await` | `...response` |
+| 491 | `.json().await` | `...response` |
+| 584 | `.json().await` | `...response` |
+| 628 | `.json().await` | `...response` |
+| 672 | `.json().await` | `...response` |
+| 755 | `.json().await` | `...response` |
+
+| File | Count |
+|---|---|
+| `src/server/auth/providers/generic_oidc.rs` | 11 |
+| `src/server/auth/providers/cognito.rs` | 9 |
+| `src/client/oauth.rs` | 8 |
+| `src/client/auth.rs` | 5 |
+| **GRAND TOTAL** | **33** |
+
+### Failure 2 — `every_peer_byte_accumulation_is_reviewed`: 7 NEW accumulation sites
+
+Panic at `tests/v2_bounded_reads_tripwire.rs:958`, verbatim:
+
+```
+HTTP-09: the reviewed accumulation population changed:
+  NEW accumulation site(s): src/client/oauth.rs `push_str(` at line(s) [358]
+  NEW accumulation site(s): src/server/auth/providers/cognito.rs `push_str(` at line(s) [352, 356, 364]
+  NEW accumulation site(s): src/server/auth/providers/generic_oidc.rs `push_str(` at line(s) [518, 522, 530]
+```
+
+| File | `push_str(` sites | Lines |
+|---|---|---|
+| `src/server/auth/providers/cognito.rs` | 3 | 352, 356, 364 |
+| `src/server/auth/providers/generic_oidc.rs` | 3 | 518, 522, 530 |
+| `src/client/oauth.rs` | 1 | 358 |
+| `src/client/auth.rs` | 0 | — |
+| **TOTAL** | **7** | |
+
+**`116-14` must not miss this: `D-113-V` does not mention the accumulation population at all.** Its
+own note says "widening the fence is SUFFICIENT — the needle set needs no change", which is true of
+the READS; it does not say that widening also drags 7 `push_str(` sites into the CHANGE DETECTOR,
+each of which must then be bounded or enumerated with a written justification naming the mechanism
+that bounds it. Closure is 33 + 7 = **40 reported sites**, not 33.
+
+`the_two_known_capped_whole_body_reads_are_found_and_classified_bounded` PASSED under the widened
+scope — the four auth files add no `.collect().await` site, so that anti-vacuity pin is unaffected.
+
+### The counting-method caveat, and what the closure condition actually is
+
+`D-113-V` (`.planning/phases/113-.../deferred-items.md:1301-1420`) records THREE numbers, and the
+distinction matters:
+
+| `D-113-V` column | Value | What it counts |
+|---|---|---|
+| raw needle matches | 19 | a NAIVE per-LINE grep of `WHOLE_BODY_NEEDLES` |
+| split-chain matches a naive grep MISSES | 14 | `.json()`/`.text()`/`.bytes()` chains rustfmt broke across lines |
+| reviewed-unbounded | **31** | per read-SITE, after opening every match, minus two exclusions |
+
+The tripwire strips all whitespace before matching (`strip()` at `:324`, pinned by
+`scanner::a_rustfmt_broken_chain_is_matched_and_reports_its_first_line` at `:1050`), so it sees both
+columns: **19 + 14 = 33**, exactly what was observed. `D-113-V`'s 31 is 33 minus its two recorded
+exclusions, both in `src/client/oauth.rs`:
+
+- **`:282`** (`.bytes().await`) is already bounded by `MAX_DCR_RESPONSE_BYTES = 1_048_576` (`:280`,
+  checked at `:285`) — but it is a POST-HOC check: the body is allocated whole and then measured, so
+  it bounds what is ACCEPTED, not what is ALLOCATED.
+- **`:953`** (`tokio::fs::read_to_string`) reads the SDK's own token-cache file off local disk. Not
+  an IdP read, not a network read, not this defect class.
+
+The observed per-file counts reconcile exactly with `D-113-V`'s reviewed column: generic_oidc 11 = 11,
+auth.rs 5 = 5, cognito 9 = 9, oauth.rs 8 = 6 + the 2 exclusions. **The transcription and the
+observation agree; the observation is now the citable one.**
+
+**Neither 19, nor 31, nor 33, nor 40 is the closure condition.** The closure condition is that
+`cargo nextest run --features full,oauth -E 'binary(v2_bounded_reads_tripwire)'` reports **zero**
+violations after `116-14` widens the fence PERMANENTLY. A count is a progress indicator; the fence
+reporting clean is the proof. `116-14` must show a Summary line with a non-zero test count and no
+failures — a run that selected zero tests is not evidence of anything (see § Phase-Base Measurements
+item 7).
+
+### `WHOLE_BODY_ALLOWLIST` was NOT touched, and growing it is forbidden
+
+The list is at `tests/v2_bounded_reads_tripwire.rs:591`, and it is `&[]`. Its own doc states the
+floor: *"This list should shrink, never grow. It is now EMPTY, which is its floor"* — the last entry,
+the `reqwest` whole-body read in `OptimizedSseTransport::connect_sse` that this tripwire itself found,
+was BOUNDED by plan 113.1-03 rather than re-exempted. `every_whole_body_exemption_carries_a_substantive_justification`
+asserts `WHOLE_BODY_ALLOWLIST.len() == 0` and says any entry at all "means a new unbounded read was
+exempted rather than fixed, and that is a decision a human has to make on the record".
+
+**`116-14` bounds the 33 reads; it does not exempt them.** The fix shape is already worked:
+`collect_sse_text_within_cap` (`src/shared/sse_optimized.rs`) is the `reqwest` example — a
+`Content-Length` early refusal as an advisory optimisation plus `Response::chunk()` accumulated
+against an overflow-safe running total checked BEFORE each append, needing no new reqwest feature;
+`collect_body_within_cap` (`src/shared/streamable_http.rs:528`) is the `hyper` analogue.
+
+### `REQUIRED_FILES` is base-name-only, and `auth.rs` is ambiguous — data for 116-14
+
+Current form (`tests/v2_bounded_reads_tripwire.rs:76-82`): **BASE NAMES**, matched with
+`p.file_name().is_some_and(|n| n == *required)` at `:128-130`.
+
+```rust
+const REQUIRED_FILES: &[&str] = &[
+    "http.rs", "sse_parser.rs", "streamable_http.rs",
+    "streamable_http_server.rs", "subscriptions.rs",
+];
+```
+
+Base-name collisions for the four files `116-14` adds:
+
+| Base name | Tracked repo paths ending in it | Ambiguous? |
+|---|---|---|
+| `auth.rs` | **9** | **YES** |
+| `oauth.rs` | 2 (`src/client/oauth.rs`, `examples/26-server-tester/src/oauth.rs`) | YES |
+| `generic_oidc.rs` | 1 | no |
+| `cognito.rs` | 1 | no |
+
+The nine `auth.rs` paths (`git ls-files | grep -E '/auth\.rs$'`):
+
+```
+cargo-pmcp/src/commands/auth.rs
+cargo-pmcp/src/deployment/targets/azure_container_apps/auth.rs
+cargo-pmcp/src/deployment/targets/google_cloud_run/auth.rs
+cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs
+crates/mcp-preview/src/handlers/auth.rs
+crates/pmcp-server-toolkit/src/auth.rs
+crates/pmcp-server-toolkit/src/http/auth.rs
+src/client/auth.rs        <- the one 116-14 means
+src/types/auth.rs
+```
+
+**This is the ambiguity Codex flagged, and it is real: two of the nine are under `src/`, so a
+base-name `"auth.rs"` entry would be satisfied by `src/types/auth.rs` entering scope instead of
+`src/client/auth.rs`, and the anti-vacuity guard would pass while the intended file was silently
+absent.** `116-14` converts `REQUIRED_FILES` to FULL RELATIVE PATHS on the strength of this
+measurement, and must update the `:128-130` matcher from `file_name()` to a suffix/`rel()` comparison
+in the same edit — changing the constant without changing the matcher would make every entry fail.
+
+Related, and also from Codex (MEDIUM — "The tripwire anti-vacuity control is logically reversed"):
+the meaningful negative control for `116-14` is to remove a path from `EXTRA_SCOPE` while KEEPING its
+full path in `REQUIRED_FILES` — that must fail. Removing an entry from `REQUIRED_FILES` only weakens
+the guard and is expected to pass silently, so it proves nothing.
+
+### The measurement was reverted, byte-for-byte
+
+```
+$ git checkout -- tests/v2_bounded_reads_tripwire.rs
+$ shasum -a 256 -c tripwire.sha
+tests/v2_bounded_reads_tripwire.rs: OK
+$ git diff --exit-code -- tests/v2_bounded_reads_tripwire.rs
+exit=0
+$ git status --porcelain tests/
+(empty)
+$ cargo nextest run --features full,oauth -E 'binary(v2_bounded_reads_tripwire)'
+     Summary [   0.070s] 13 tests run: 13 passed, 0 skipped
+```
+
+**Plan `116-01` commits ZERO bytes of change to `tests/v2_bounded_reads_tripwire.rs`.** The one
+`tests/` change it does commit is `tests/phase115_contract_bindings.rs`, for the unrelated reason
+recorded in [Contract-First Finding](#contract-first-finding).
