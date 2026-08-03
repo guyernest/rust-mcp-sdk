@@ -2633,7 +2633,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 116-02-PLAN.md — Wave 2. AUTH-01's semantics: three marker-const error identities (`ISS_MISMATCH_MARKER`, `STATE_MISMATCH_MARKER`, `REAUTH_REQUIRED_MARKER`) on `Error::Protocol` per amendment A2 — `Error::Authentication` is a bare-String tuple variant with no `data` member, so a marker there would make its own predicate return false — plus the ungated, wasm-clean `src/shared/oauth_validation.rs` holding `AuthorizationRequestRecord`, `IssPresence`, `validate_authorization_response` (the spec's normative 4-row table, state-then-iss-then-error ordering) and the pure D-04 precedence resolver. Property tests derive the no-normalization invariant from RFC 3986 §6.2.2-6.2.3 rather than restating the comparison operator
+- [x] 116-02-PLAN.md — Wave 2. AUTH-01's semantics: three marker-const error identities (`ISS_MISMATCH_MARKER`, `STATE_MISMATCH_MARKER`, `REAUTH_REQUIRED_MARKER`) on `Error::Protocol` per amendment A2 — `Error::Authentication` is a bare-String tuple variant with no `data` member, so a marker there would make its own predicate return false — plus the ungated, wasm-clean `src/shared/oauth_validation.rs` holding `AuthorizationRequestRecord`, `IssPresence`, `validate_authorization_response` (the spec's normative 4-row table, state-then-iss-then-error ordering) and the pure D-04 precedence resolver. Property tests derive the no-normalization invariant from RFC 3986 §6.2.2-6.2.3 rather than restating the comparison operator
 - [ ] 116-03-PLAN.md — Wave 2. AUTH-02's carrier: `application_type` inherent accessors over `DcrRequest`/`DcrResponse`'s existing `#[serde(flatten)] extra` map (D-09), never a field — `DcrRequest` is public, all-pub-field and not `#[non_exhaustive]` with ten in-repo literal sites, so a field is `constructible_struct_adds_field` = MAJOR. Documented last-write-wins precedence with collision tests in both orders, and a wire-shape test proving the flatten carrier emits a top-level key
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 1/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 2/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

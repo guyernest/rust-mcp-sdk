@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-01-PLAN.md
-last_updated: "2026-08-03T15:17:37.663Z"
+stopped_at: Completed 116-02-PLAN.md
+last_updated: "2026-08-03T17:23:24.143Z"
 last_activity: 2026-08-03
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 359
+  completed_plans: 360
   percent: 85
 ---
 
@@ -26,8 +26,56 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 2 of 16
+Plan: 3 of 16
 Status: Ready to execute
+
+**116-02 HAS LANDED — AUTH-01's semantics now exist as ONE pure function.** Commits `72a83b10`
+(three marker-const error identities on `Error::Protocol`) and `373e9c09`
+(`src/shared/oauth_validation.rs`, the RFC 9207 four-row `iss` table + the CSRF `state` check,
+ungated and wasm32-clean). +1661/-0 across 7 files, **zero** dependencies added
+(`git diff --exit-code b2bf9157..HEAD -- Cargo.toml` exits 0).
+
+**⚠ "27 tests passed" WOULD HAVE MEANT NOTHING WITHOUT THE NEGATIVE CONTROLS.** Three deliberate
+breaks were applied to the implementation AT ONCE and the resulting **7** failures partition
+cleanly, each attributable: `==`→`eq_ignore_ascii_case` on `iss` failed ONLY
+`no_scheme_or_host_case_folding` (the other three normalization properties held, proving each
+targets its own RFC 3986 clause rather than sharing one detector); first-wins duplicates failed all
+**five** `a_duplicated_*` tests while the unknown-parameter control still PASSED (so the rule is not
+"reject anything repeated"); surfacing `error` before `iss` failed the non-disclosure test while its
+valid-`iss` complement PASSED. Source restored byte-for-byte (`shasum -a 256 -c` → OK). Log:
+`target/116-verify/oauth_iss_validation.NEGATIVE-CONTROL.log`.
+
+**RESEARCH A2 IS CLOSED, ahead of its 116-15 owner: `make quality-gate` exits 0 at this HEAD.**
+Caveat a later plan must respect — the captured log is **rtk-filtered**, 692 lines with a literal
+`... (7027 lines truncated)` marker, so the exit status is citable but per-binary counts are NOT
+recoverable from it. Use `/usr/bin/make quality-gate > log 2>&1` when counts are needed.
+
+**The ungated claim is measured in BOTH directions:** `binary(oauth_iss_validation)` reports 27 run
+/ 27 passed under `--features full,oauth` AND 27 run / 27 passed under plain `--features full`. The
+second is the one that matters — it is what puts this tier inside `make quality-gate`, which 116-01
+measured compiles none of the phase's `oauth`-gated code. Note this coexists with
+`binary(oauth_dcr_integration)` selecting **0** under `full`; both are true and neither corrects the
+other.
+
+**Two obligations 116-01 wrote for this plan were both live, and one BROKE.** `src/error/mod.rs`
+kept exactly its 1 pre-existing doc-check error — but the new module added **four** more (28 → 32)
+before they were fixed: three unqualified `IssPresence` links plus one path that does not exist.
+Root cause generalizes and is now `D-116-DOC`: a module whose `pub mod` carries an outer `///`
+rationale AND an inner `//!` block has the merged docs resolved in the **declaring** module's scope,
+so bare intra-doc links fail under `RUSTDOCFLAGS="-D warnings"`. **`116-04` and `116-05` create
+`src/shared/` modules exactly this way** — fully qualify links and diff `doc-check` against 28
+BEFORE committing. Re-measured after the fix: **28**, zero attributable.
+
+**⚠ NO PLAN IN PHASE 116 OWNS CLAUDE.md's ALWAYS-EXAMPLE REQUIREMENT (`D-116-EX`).** FUZZ has an
+owner (116-08 names `validate_authorization_response` explicitly), PROPERTY and UNIT are discharged,
+but `grep 'cargo run --example\|examples/oauth'` across all sixteen plans returns **zero** hits and
+no plan's `files_modified` touches `examples/`. Both findings are written up in
+`.planning/phases/116-auth-hardening-seps/deferred-items.md`. **Do not book "ALWAYS requirements
+satisfied" for this phase until it is closed or waived in writing.**
+
+**AUTH-01 remains Pending on purpose** — 116-04, 116-06, 116-08, 116-09 and 116-15 also claim it;
+116-02 landed the semantics, not the wiring, the fuzzing or the conformance fixtures.
+`requirements-completed: []`, as in 116-01.
 
 **116-01 HAS LANDED — the phase now has an evidence anchor and an authored contract.** Commits
 `ea1d2d68` (three OAuth equations + eight `status: planned` bindings + the contract-first finding),
@@ -606,6 +654,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: OAuth contracts are authored into the in-repo contracts/ tree, not ../provable-contracts/contracts/pmcp/ — the path CLAUDE.md names does not exist on this machine and no gate resolves it; make comply (Makefile:842-849) resolves the in-repo tree (116-01)
 - [Phase 116]: 116-13 must NOT list Cargo.lock among its modified files — Cargo.lock is gitignored at .gitignore:3 and untracked, correcting a Codex MEDIUM that is right in general and wrong for this repo (116-01)
 - [Phase 116]: D-15 closure is 40 reported sites (33 unbounded reads + 7 unreviewed push_str accumulations), not 33 — widening EXTRA_SCOPE trips the accumulation change detector too, which D-113-V never mentions; observed, not transcribed (116-01)
+- [Phase 116]: 116-02: the three OAuth error markers ride Error::Protocol, NOT Error::Authentication — RESEARCH A2 re-verified against source and pinned by a test that builds an Authentication whose STRING contains the marker JSON and asserts all three predicates stay false
+- [Phase 116]: 116-02: RESEARCH A2 is CLOSED — make quality-gate exits 0 at this HEAD (116-01 carried it open for 116-15). Caveat: the captured log is rtk-filtered with a literal '7027 lines truncated' marker, so per-binary counts are NOT recoverable; use /usr/bin/make to bypass the proxy when counts are needed
+- [Phase 116]: 116-02: AUTH-01 deliberately NOT booked complete — 116-04/06/08/09/15 also claim it; this plan lands the semantics, not the wiring, fuzzing or conformance fixtures
+- [Phase 116]: 116-02: an inner //! module doc in a module whose pub mod ALSO carries an outer /// resolves intra-doc links in the DECLARING module's scope — bare links fail make doc-check's -D warnings. 116-04 and 116-05 create src/shared/ modules the same way (D-116-DOC)
 
 ### Pending Todos
 
@@ -656,8 +708,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-03T15:17:37.649Z
-Stopped at: Completed 116-01-PLAN.md
+Last session: 2026-08-03T17:23:24.131Z
+Stopped at: Completed 116-02-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -762,3 +814,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 115 P18 | ~75m | 2 tasks | 3 files |
 | Phase 115 P19 | ~150m | 3 tasks | 5 files |
 | Phase 116 P01 | 78min | 3 tasks | 4 files |
+| Phase 116 P02 | 116min | 2 tasks | 7 files |
