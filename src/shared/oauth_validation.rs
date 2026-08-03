@@ -1,10 +1,23 @@
-//! Target-agnostic validation of an OAuth 2.0 authorization RESPONSE
-//! (RFC 9207 `iss`, plus the CSRF `state` comparison).
+//! Target-agnostic validation of OAuth 2.0 authorization SERVER DISCOVERY and
+//! of the authorization RESPONSE (RFC 9207 `iss`, plus the CSRF `state`
+//! comparison).
 //!
 //! This module provides the pure decision logic a client must run on the query
 //! string it receives at its redirect URI, before it exchanges anything. It
 //! performs no I/O: no socket, no browser, no environment read, no clock. It is
 //! a function from `(query string, per-request record)` to `Result<code>`.
+//!
+//! It also holds the pure half of authorization server metadata discovery: the
+//! hardened issuer parse
+//! ([`validate_issuer_url`](crate::shared::oauth_validation::validate_issuer_url)),
+//! SEP-2351's ORDERED candidate list
+//! ([`discovery_url_candidates`](crate::shared::oauth_validation::discovery_url_candidates)),
+//! RFC 8414 §3.3's anchor comparison
+//! ([`issuer_matches_metadata`](crate::shared::oauth_validation::issuer_matches_metadata))
+//! and the failure matrix every probe loop shares
+//! ([`classify_discovery_failure`](crate::shared::oauth_validation::classify_discovery_failure)).
+//! The PROBING — and therefore the network — belongs to the callers; that split
+//! is what makes a MUST-ordered probe sequence testable offline.
 //!
 //! # Why it is ungated
 //!
@@ -84,7 +97,7 @@
 //! ```
 
 use crate::error::{Error, ErrorCode, Result};
-use url::form_urlencoded;
+use url::{form_urlencoded, Url};
 
 /// The largest authorization-callback query this module will parse, in bytes.
 ///
@@ -527,6 +540,450 @@ pub fn iss_presence_from(
     }
 }
 
+/// RFC 8414 §3.1's default well-known URI suffix, which MCP adopts explicitly
+/// and which pmcp does not try today.
+const WELL_KNOWN_OAUTH_AUTHORIZATION_SERVER: &str = "oauth-authorization-server";
+
+/// `OpenID` Connect Discovery 1.0 §4.1's well-known URI suffix.
+const WELL_KNOWN_OPENID_CONFIGURATION: &str = "openid-configuration";
+
+/// Parse an authorization server issuer identifier, enforcing RFC 8414 §2.
+///
+/// Parsing as an absolute [`Url`] is **not** sufficient, which is why this
+/// function exists rather than a bare `Url::parse` at each call site. Every
+/// rule below is enforced, and every rejection names the rule it enforced:
+///
+/// | Rule | Reason |
+/// |---|---|
+/// | scheme MUST be `https` | an issuer identified over cleartext can be swapped in transit |
+/// | except `http` on a loopback host | pmcp's own development and test flows use loopback, and RFC 8252 §7.3 blesses it |
+/// | userinfo MUST be absent | `https://honest.example@evil.example` reads as the honest host to a human and resolves to the attacker's; no legitimate issuer has userinfo |
+/// | fragment MUST be absent | RFC 8414 §2 |
+/// | query MUST be absent | RFC 8414 §2, and a query would survive into the built candidate URL |
+/// | host MUST be present and non-empty | there is nothing to connect to otherwise |
+///
+/// The loopback exception accepts the three spellings a real flow produces: an
+/// IPv4 loopback literal (canonically `127.0.0.1`), the IPv6 literal `::1` in
+/// its bracketed authority form `[::1]`, and the name `localhost`. A listener
+/// that binds IPv4 while a browser resolves `localhost` to `::1` is precisely
+/// why all three must be accepted.
+///
+/// The parsed [`Url`] is returned so callers do not re-parse. Every other
+/// function in this family calls this one first.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] naming the specific rule violated — never a
+/// generic "invalid URL". The refusal deliberately does **not** reproduce the
+/// offending issuer string: an issuer can carry a userinfo password, and an
+/// error message ends up in logs. The scheme and host are named instead, since
+/// neither is a credential.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::validate_issuer_url;
+///
+/// let parsed = validate_issuer_url("https://auth.example.com/tenant1")?;
+/// assert_eq!(parsed.host_str(), Some("auth.example.com"));
+///
+/// // The loopback development exception is the ONLY permitted `http`.
+/// assert!(validate_issuer_url("http://127.0.0.1:8080").is_ok());
+/// assert!(validate_issuer_url("http://auth.example.com").is_err());
+///
+/// // Userinfo is authority confusion, and is refused outright.
+/// assert!(validate_issuer_url("https://honest.example@evil.example").is_err());
+/// # Ok::<(), pmcp::Error>(())
+/// ```
+pub fn validate_issuer_url(issuer: &str) -> Result<Url> {
+    let parsed = Url::parse(issuer).map_err(unparseable_issuer)?;
+
+    if !issuer_scheme_permitted(&parsed) {
+        return Err(forbidden_issuer_scheme(&parsed));
+    }
+    // Defense in depth. With today's `url` crate this branch is unreachable
+    // from an accepted scheme: `https://` fails to parse with `EmptyHost`, and
+    // `https:///path` is NOT host-less — WHATWG's "special authority ignore
+    // slashes" state consumes the third slash, so it parses as `https://path/`
+    // (measured; pinned by a test). The check stays because an issuer with no
+    // authority must fail closed rather than build a candidate against nothing.
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err(Error::validation(
+            "an authorization server issuer MUST have a non-empty host; the offending value is \
+             not reproduced here because an issuer string can carry userinfo credentials",
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(issuer_carries_userinfo(&parsed));
+    }
+    if parsed.fragment().is_some() {
+        return Err(issuer_carries_component(&parsed, "fragment"));
+    }
+    if parsed.query().is_some() {
+        return Err(issuer_carries_component(&parsed, "query"));
+    }
+
+    Ok(parsed)
+}
+
+/// `https` always, `http` only on a loopback host.
+fn issuer_scheme_permitted(parsed: &Url) -> bool {
+    match parsed.scheme() {
+        "https" => true,
+        "http" => is_loopback_host(parsed),
+        _ => false,
+    }
+}
+
+/// Whether the authority is one of the loopback spellings RFC 8252 §7.3 blesses.
+fn is_loopback_host(parsed: &Url) -> bool {
+    match parsed.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
+}
+
+/// The refusal for a string that is not an absolute URL at all.
+fn unparseable_issuer(source: url::ParseError) -> Error {
+    Error::validation(format!(
+        "an authorization server issuer MUST be an absolute URL with a non-empty host \
+         ({source}); the offending value is not reproduced here because an issuer string can \
+         carry userinfo credentials"
+    ))
+}
+
+/// The refusal for a scheme outside the `https` rule and its loopback exception.
+fn forbidden_issuer_scheme(parsed: &Url) -> Error {
+    Error::validation(format!(
+        "an authorization server issuer uses scheme `{}` (host `{}`), but the scheme MUST be \
+         `https`. The single exception is `http` on a loopback host (`127.0.0.1`, `::1`, \
+         `localhost`), per RFC 8252 section 7.3",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or("<none>"),
+    ))
+}
+
+/// The refusal for a userinfo component, which never names the value.
+fn issuer_carries_userinfo(parsed: &Url) -> Error {
+    Error::validation(format!(
+        "an authorization server issuer for host `{}` carries a userinfo component. RFC 8414 \
+         issuers have no userinfo, and `https://honest.example@evil.example` reads as the honest \
+         host to a human while resolving to the attacker's. The value is not reproduced here \
+         because userinfo can carry a password",
+        parsed.host_str().unwrap_or("<none>"),
+    ))
+}
+
+/// The refusal for a fragment or a query, both forbidden by RFC 8414 §2.
+fn issuer_carries_component(parsed: &Url, component: &str) -> Error {
+    Error::validation(format!(
+        "an authorization server issuer for host `{}` carries a {component}. RFC 8414 section 2 \
+         forbids a query and a fragment on the issuer identifier, and either would survive into \
+         the discovery URL built from it",
+        parsed.host_str().unwrap_or("<none>"),
+    ))
+}
+
+/// Derive SEP-2351's ORDERED list of authorization server metadata endpoints.
+///
+/// # This is an ordered probe sequence, not a replacement
+///
+/// RFC 8414 §3.1 specifies **insertion** of the well-known segment for the
+/// `oauth-authorization-server` suffix; `OpenID` Connect Discovery 1.0 §4.1
+/// specifies **appending** for `openid-configuration`; RFC 8414 §5 reconciles
+/// the two with a fallback order, and the MCP specification makes that order a
+/// client MUST. The caller probes the candidates in the order returned and uses
+/// the first that yields a valid document.
+///
+/// The appended form — candidate 3 for a path-bearing issuer, candidate 2 for a
+/// path-less one — is today's only pmcp behaviour and it MUST remain in the
+/// list. Measured 2026-08-02 against Microsoft Entra ID, whose URL appears in
+/// this SDK's own doctests: the appended form returns **200**, and both
+/// inserted forms return **404**. An implementation that "fixed" discovery by
+/// replacing append with insert would break every authorization server of that
+/// shape.
+///
+/// For an issuer WITH a path component, e.g. `https://auth.example.com/tenant1`:
+///
+/// 1. `https://auth.example.com/.well-known/oauth-authorization-server/tenant1`
+/// 2. `https://auth.example.com/.well-known/openid-configuration/tenant1`
+/// 3. `https://auth.example.com/tenant1/.well-known/openid-configuration`
+///
+/// For an issuer WITHOUT one, e.g. `https://auth.example.com`, candidates 2 and
+/// 3 coincide, so the list is exactly two:
+///
+/// 1. `https://auth.example.com/.well-known/oauth-authorization-server`
+/// 2. `https://auth.example.com/.well-known/openid-configuration`
+///
+/// # Why the probing is NOT here
+///
+/// This function derives candidates only. The network belongs to the callers,
+/// and that split is what makes a MUST-ordered sequence testable offline and in
+/// a `wasm32` build. The failure-handling half of the probe loop is
+/// [`classify_discovery_failure`].
+///
+/// # Errors
+///
+/// Returns whatever
+/// [`validate_issuer_url`]
+/// rejects. A hostile issuer never reaches candidate construction, so no
+/// partially-formed URL is ever produced.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::discovery_url_candidates;
+///
+/// let candidates = discovery_url_candidates("https://auth.example.com/tenant1")?;
+/// let rendered: Vec<&str> = candidates.iter().map(|url| url.as_str()).collect();
+/// assert_eq!(
+///     rendered,
+///     vec![
+///         "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
+///         "https://auth.example.com/.well-known/openid-configuration/tenant1",
+///         "https://auth.example.com/tenant1/.well-known/openid-configuration",
+///     ],
+/// );
+///
+/// // A path-less issuer has exactly two candidates, and a trailing slash is
+/// // a formatting difference rather than a path component.
+/// assert_eq!(
+///     discovery_url_candidates("https://auth.example.com/")?,
+///     discovery_url_candidates("https://auth.example.com")?,
+/// );
+/// # Ok::<(), pmcp::Error>(())
+/// ```
+pub fn discovery_url_candidates(issuer: &str) -> Result<Vec<Url>> {
+    let base = validate_issuer_url(issuer)?;
+    // A trailing slash is a formatting difference, not a path component:
+    // `https://as.example/` and `https://as.example` must derive the same list,
+    // with no doubled slash anywhere in it.
+    let path = base.path().trim_end_matches('/').to_owned();
+
+    let mut candidates = vec![
+        well_known_inserted(&base, WELL_KNOWN_OAUTH_AUTHORIZATION_SERVER, &path),
+        well_known_inserted(&base, WELL_KNOWN_OPENID_CONFIGURATION, &path),
+    ];
+    if !path.is_empty() {
+        // For a path-less issuer the appended form IS candidate 2, so pushing
+        // it again would duplicate an entry and waste a round trip.
+        candidates.push(well_known_appended(&base, &path));
+    }
+    Ok(candidates)
+}
+
+/// RFC 8414 §3.1's insertion form: the well-known segment goes between the host
+/// and the issuer's path.
+fn well_known_inserted(base: &Url, suffix: &str, trimmed_path: &str) -> Url {
+    let mut candidate = base.clone();
+    candidate.set_path(&format!("/.well-known/{suffix}{trimmed_path}"));
+    candidate
+}
+
+/// `OpenID` Connect Discovery 1.0 §4.1's appended form, and pmcp's only form
+/// before SEP-2351.
+fn well_known_appended(base: &Url, trimmed_path: &str) -> Url {
+    let mut candidate = base.clone();
+    candidate.set_path(&format!(
+        "{trimmed_path}/.well-known/{WELL_KNOWN_OPENID_CONFIGURATION}"
+    ));
+    candidate
+}
+
+/// Compare a discovery document's `issuer` against the issuer used to build the
+/// URL it came from — RFC 8414 §3.3 / `OpenID` Connect Discovery §4.3.
+///
+/// The comparison is a simple string comparison with **no normalization**: the
+/// same rule, from the same family of specifications, as the RFC 9207 `iss`
+/// comparison in
+/// [`validate_authorization_response`].
+///
+/// # Why this function exists at all
+///
+/// The specification's own worked example: a document fetched from
+/// `https://attacker.example/.well-known/oauth-authorization-server` that
+/// contains `"issuer": "https://honest.example"` MUST be rejected.
+///
+/// Without this check, the `iss` validation is anchored on a value the
+/// authorization server chose for itself, so an attacker who can influence
+/// discovery serves a document naming any issuer they like and the RFC 9207
+/// comparison then trivially succeeds against it. The authorization
+/// specification says so directly: the `iss` validation "provides no protection
+/// if the expected issuer was obtained from an unvalidated source".
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::issuer_matches_metadata;
+///
+/// assert!(issuer_matches_metadata("https://as.example", "https://as.example"));
+///
+/// // The specification's worked attack.
+/// assert!(!issuer_matches_metadata("https://attacker.example", "https://honest.example"));
+///
+/// // No normalization of any kind — a trailing slash is a different issuer.
+/// assert!(!issuer_matches_metadata("https://as.example", "https://as.example/"));
+/// ```
+#[must_use]
+pub fn issuer_matches_metadata(issuer_used_to_build_url: &str, document_issuer: &str) -> bool {
+    issuer_used_to_build_url == document_issuer
+}
+
+/// Whether two URLs share an origin: scheme, host and EFFECTIVE port.
+///
+/// The effective port is what makes `https://as.example` and
+/// `https://as.example:443` the same origin. The path is deliberately not part
+/// of the comparison, because an origin is not a location.
+///
+/// Callers use this to judge a discovery HTTP redirect: a redirect that stays
+/// within the issuer's origin is ordinary server routing, while one that leaves
+/// it hands document authorship to a different host and must be refused.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::same_origin;
+/// use url::Url;
+///
+/// let a = Url::parse("https://as.example/.well-known/openid-configuration")?;
+/// let b = Url::parse("https://as.example:443/elsewhere")?;
+/// assert!(same_origin(&a, &b));
+///
+/// let elsewhere = Url::parse("https://cdn.example/.well-known/openid-configuration")?;
+/// assert!(!same_origin(&a, &elsewhere));
+/// # Ok::<(), url::ParseError>(())
+/// ```
+#[must_use]
+pub fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// Why one discovery candidate did not yield a usable metadata document.
+///
+/// The distinction the enum draws is not "which error" but "what the failure
+/// says about the endpoint": whether nothing usable ARRIVED, or whether bytes
+/// arrived and cannot be trusted. That is the distinction
+/// [`classify_discovery_failure`]
+/// turns into an outcome.
+///
+/// `#[non_exhaustive]` because a future revision may name a failure class this
+/// one does not, and adding a variant to an exhaustive public enum is a MAJOR
+/// semver break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DiscoveryFailure {
+    /// The endpoint returned HTTP 404 — the ordinary "this authorization server
+    /// does not serve this well-known form" answer the probe exists to handle.
+    NotFound,
+    /// The endpoint returned some other HTTP status. Carries the raw status so
+    /// the 5xx/other split is made in one place rather than at each call site.
+    HttpStatus(u16),
+    /// The request never completed: connection refused, DNS failure, TLS
+    /// failure, timeout.
+    Transport,
+    /// A response arrived but its body is not the JSON document this endpoint
+    /// is defined to serve.
+    InvalidJson,
+    /// The document's `issuer` differs from the issuer used to build the URL —
+    /// RFC 8414 §3.3. See
+    /// [`issuer_matches_metadata`].
+    IssuerMismatch,
+    /// The response body exceeded the caller's read cap. A discovery document
+    /// is a few kilobytes; anything larger is either hostile or broken.
+    BodyOverCap,
+    /// The document parsed, but a security-relevant member is malformed — for
+    /// example a non-`https` `token_endpoint`, or an `issuer` that is not a
+    /// string.
+    MalformedSecurityMetadata,
+}
+
+/// What a caller does about a [`DiscoveryFailure`].
+///
+/// # How the three compose in a probe loop
+///
+/// `Retry` means "re-attempt **this** candidate within the existing
+/// `max_retries` budget, and once that budget is exhausted treat it as
+/// `Fallback`". `Fallback` means "move to the next candidate; if there is none,
+/// discovery has failed". `Terminal` means "abort discovery outright — do not
+/// retry, do not try another candidate, and do not use any document".
+///
+/// Both discovery call sites implement that same loop, which is why the rule is
+/// written here rather than in either of them.
+///
+/// `#[non_exhaustive]` for the same semver reason as
+/// [`DiscoveryFailure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DiscoveryOutcome {
+    /// Try the next candidate in the ordered list.
+    Fallback,
+    /// Re-attempt this candidate within the existing retry budget, then fall
+    /// back.
+    Retry,
+    /// Abort discovery. Never fall through to another candidate.
+    Terminal,
+}
+
+/// The discovery outcome matrix, as one pure function.
+///
+/// | Failure | Outcome | Why |
+/// |---|---|---|
+/// | `NotFound` (404) | `Fallback` | the ordinary "not this form" answer; the whole reason there is an ordered list |
+/// | `HttpStatus(4xx)` other than 404 | `Fallback` | the endpoint answered and refused; another form may still serve |
+/// | `HttpStatus(5xx)` | `Retry` | the endpoint is the right one and is temporarily unwell |
+/// | `Transport` | `Retry` | nothing arrived; a retry is the only way to distinguish transient from permanent |
+/// | `InvalidJson` | `Fallback` | this endpoint does not serve the document; another form may |
+/// | `IssuerMismatch` | `Terminal` | a document ARRIVED and lied about its issuer |
+/// | `BodyOverCap` | `Terminal` | a peer sent more than a metadata document can legitimately be |
+/// | `MalformedSecurityMetadata` | `Terminal` | a document ARRIVED with a broken security member |
+///
+/// # Why three of the rows are terminal
+///
+/// Falling through to a later candidate on "any" failure turns an issuer
+/// mismatch, malformed metadata or an oversized body into a silent DOWNGRADE:
+/// an attacker who can make candidate 1 fail in a security-relevant way gets
+/// the client to accept candidate 3 instead. The three terminal rows are the
+/// whole point of the matrix — they are never a fallback trigger, and no
+/// peer-chosen status code can make an availability failure terminal either.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::shared::oauth_validation::{
+///     classify_discovery_failure, DiscoveryFailure, DiscoveryOutcome,
+/// };
+///
+/// // A 404 is what the ordered probe is FOR.
+/// assert_eq!(
+///     classify_discovery_failure(DiscoveryFailure::NotFound),
+///     DiscoveryOutcome::Fallback,
+/// );
+/// // A document that lied about its issuer aborts discovery; it never causes
+/// // the client to quietly accept a later candidate instead.
+/// assert_eq!(
+///     classify_discovery_failure(DiscoveryFailure::IssuerMismatch),
+///     DiscoveryOutcome::Terminal,
+/// );
+/// ```
+#[must_use]
+pub fn classify_discovery_failure(failure: DiscoveryFailure) -> DiscoveryOutcome {
+    match failure {
+        DiscoveryFailure::NotFound | DiscoveryFailure::InvalidJson => DiscoveryOutcome::Fallback,
+        DiscoveryFailure::HttpStatus(status) if (500..=599).contains(&status) => {
+            DiscoveryOutcome::Retry
+        },
+        DiscoveryFailure::HttpStatus(_) => DiscoveryOutcome::Fallback,
+        DiscoveryFailure::Transport => DiscoveryOutcome::Retry,
+        DiscoveryFailure::IssuerMismatch
+        | DiscoveryFailure::BodyOverCap
+        | DiscoveryFailure::MalformedSecurityMetadata => DiscoveryOutcome::Terminal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,5 +1102,64 @@ mod tests {
         let err = validate_authorization_response("state=st4te", &record(IssPresence::Optional))
             .expect_err("nothing to exchange");
         assert!(err.to_string().contains("code"), "{err}");
+    }
+
+    /// The loopback predicate is shared by the issuer parse and (in the same
+    /// module) by the `application_type` derivation, so it is pinned directly
+    /// rather than only through its two callers.
+    #[test]
+    fn the_loopback_predicate_covers_all_three_spellings_and_nothing_else() {
+        for loopback in [
+            "http://127.0.0.1:8080",
+            "http://localhost",
+            "http://LOCALHOST",
+            "http://[::1]:9000",
+        ] {
+            let parsed = Url::parse(loopback).expect("a well-formed URL");
+            assert!(is_loopback_host(&parsed), "{loopback}");
+        }
+        for remote in [
+            "https://auth.example.com",
+            "https://127.0.0.1.example.com",
+            "https://localhost.example.com",
+        ] {
+            let parsed = Url::parse(remote).expect("a well-formed URL");
+            assert!(!is_loopback_host(&parsed), "{remote}");
+        }
+    }
+
+    /// The two path arithmetics, exercised directly so a change to either is
+    /// visible without reading the ordered list that composes them.
+    #[test]
+    fn the_two_well_known_forms_place_the_segment_on_opposite_sides() {
+        let base = Url::parse("https://as.example/tenant1").expect("a well-formed issuer");
+        assert_eq!(
+            well_known_inserted(&base, WELL_KNOWN_OAUTH_AUTHORIZATION_SERVER, "/tenant1").as_str(),
+            "https://as.example/.well-known/oauth-authorization-server/tenant1"
+        );
+        assert_eq!(
+            well_known_appended(&base, "/tenant1").as_str(),
+            "https://as.example/tenant1/.well-known/openid-configuration"
+        );
+        // A path-less issuer collapses both `openid-configuration` forms onto
+        // the same URL — which is why the returned list is two, not three.
+        let root = Url::parse("https://as.example").expect("a well-formed issuer");
+        assert_eq!(
+            well_known_inserted(&root, WELL_KNOWN_OPENID_CONFIGURATION, "").as_str(),
+            well_known_appended(&root, "").as_str()
+        );
+    }
+
+    /// A percent-encoded path segment must survive candidate construction
+    /// unchanged: re-encoding it would silently change the issuer's identity,
+    /// and decoding it would apply exactly the RFC 3986 §6.2.2.2 normalization
+    /// the anchor comparison forbids.
+    #[test]
+    fn a_percent_encoded_path_is_neither_decoded_nor_double_encoded() {
+        let candidates = discovery_url_candidates("https://as.example/%74enant")
+            .expect("a well-formed issuer with an encoded path");
+        for candidate in &candidates {
+            assert!(candidate.as_str().contains("%74enant"), "{candidate}");
+        }
     }
 }
