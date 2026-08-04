@@ -32,9 +32,33 @@
 //! # Why it is gated, and `pub(crate)`
 //!
 //! Every item here takes or returns a `reqwest` type, so the module is gated on
-//! `feature = "http-client"` and never reaches the `wasm32` build. It stays
-//! `pub(crate)` because the auth files that consume it are all in-crate; this
-//! hardening adds no public surface it does not need.
+//! `feature = "http-client"` and never reaches the `wasm32` build.
+//!
+//! `src/shared/mod.rs` declares the MODULE `pub(crate)`, and every item in it
+//! is `pub(crate)` too: the auth files that consume them are all in-crate, and
+//! this hardening adds no public API it does not need.
+//!
+//! # Why `redundant_pub_crate` is allowed here
+//!
+//! Two lints `make lint` runs CONTRADICT each other for an item inside a
+//! `pub(crate)` module, and only one of them can be satisfied:
+//!
+//! - `clippy::redundant_pub_crate` (nursery) says a `pub(crate)` item inside an
+//!   already-private module should be plain `pub`;
+//! - `unreachable_pub`, which `src/lib.rs` turns on crate-wide with `#![warn]`,
+//!   says a `pub` item that nothing outside the crate can reach should be
+//!   `pub(crate)`.
+//!
+//! Measured, not reasoned: switching all seven items to `pub` traded 7
+//! `redundant_pub_crate` errors for 7 `unreachable_pub` errors. `unreachable_pub`
+//! is this crate's own deliberate, crate-wide style choice, so it wins, and the
+//! nursery lint is allowed for this module ONLY, with the reason recorded here
+//! so nobody re-runs the same experiment.
+// Why: `clippy::redundant_pub_crate` (nursery) and the crate-wide `unreachable_pub`
+// warning in `src/lib.rs` give opposite instructions for every item in this
+// module, because the module itself is `pub(crate)`. See the module doc above —
+// `unreachable_pub` wins, so the nursery lint is allowed here and nowhere else.
+#![allow(clippy::redundant_pub_crate)]
 
 use crate::error::{Error, Result};
 use crate::shared::oauth_validation::same_origin;
