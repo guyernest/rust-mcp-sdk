@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 116-08-PLAN.md
-last_updated: "2026-08-04T16:56:58.877Z"
+last_updated: "2026-08-04T22:59:10.386Z"
 last_activity: 2026-08-04
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 366
+  completed_plans: 368
   percent: 85
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 9 of 16
+Plan: 11 of 16
 Status: Ready to execute
 
 **116-16 HAS LANDED — the default on-disk credential store, and `make quality-gate` is GREEN
@@ -757,6 +757,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 116-08: both seed corpora are COMMITTED with gitignore exceptions — measured, 200000 runs from an empty corpus found 0 of 9 deliberate breaks while the seeds found 9 of 9
 - [Phase ?]: 116-08: the discovery candidate list is NOT asserted distinct — an issuer whose own path is /.well-known/openid-configuration legitimately yields two identical candidates
 - [Phase ?]: 116-08: D-116-EX RESOLVED — examples/c11_oauth_iss_state_validation.rs was 116-08's own files_modified entry; ALWAYS EXAMPLE is discharged, exit 0 with no feature flags
+- [Phase ?]: 116-09: RFC 9207 iss is anchored on metadata.issuer (the AS's own published issuer), never config.issuer nor the effective issuer reported to cache consumers
+- [Phase ?]: 116-09: an iss/state refusal is TERMINAL — propagated verbatim, never downgraded to the generic 'no supported OAuth flow available' and never falling back to device code
+- [Phase ?]: 116-09: BrowserLauncher is a documented PLATFORM seam (headless CI, display-less containers), not doc(hidden) test scaffolding
 
 ### Pending Todos
 
@@ -783,6 +786,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - D-116-KEYCHAIN: make quality-gate exits 2 at test-unit — 14 shared::streamable_http tests panic on macOS keychain ioErr -36 at the pre-existing .expect in src/shared/streamable_http.rs:458. MEASURED pre-existing (identical failing set with 116-04 source reverted: 1826+14 vs 1830+14). Every other gate stage exits 0. 116-15 must not book a green full gate for this HEAD.
 - D-116-TRIPWIRE: v2_bounded_reads_tripwire::every_peer_byte_accumulation_is_reviewed has been RED since 116-05 (ec80e5b1) because of src/shared/credential_store.rs:742. make quality-gate runs test-integration, so this would fail CI. Fix is ONE reviewed ALLOWLIST entry naming the bound (port is a u16 = at most 6 bytes appended once), not a code change. Owner: 116-15 or a 116-05 follow-up
 - D-116-FUZZGATE: make test-fuzz runs ZERO fuzzing iterations and reports success on a stable default toolchain (21/21 targets died on the nightly-only -Z flag; gate exit 0). Do not close the ALWAYS-FUZZ row on make quality-gate's exit code. Owner: 116-15.
+- D-116-LINT-OAUTH test-side twin: make quality-gate runs 0 of 116-09's 25 oauth-gated security tests (25 run under full,oauth). Fix is PAIRED — clear the 24 pre-existing src/client/oauth.rs clippy errors, THEN enable oauth in make lint and the gate test stage. Owner 116-15.
 
 ## Deferred Items
 
@@ -810,7 +814,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T16:56:53.756Z
+Last session: 2026-08-04T22:55:25.307Z
 Stopped at: Completed 116-08-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -923,3 +927,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P06 | 268min | 2 tasks | 5 files |
 | Phase 116 P16 | 215min | 1 tasks | 5 files |
 | Phase 116 P08 | 51min | 3 tasks | 45 files |
+| Phase 116 P09 | 173min | 2 tasks | 4 files |

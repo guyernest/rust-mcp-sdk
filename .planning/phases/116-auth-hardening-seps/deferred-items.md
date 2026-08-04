@@ -599,3 +599,120 @@ All three are in **test** code, which reconfirms `116-04`'s note that `make lint
 `--lib --tests` and therefore gates new test files too. The gate-equivalent-with-`oauth` command
 (`D-116-LINT-OAUTH`) was also run: **29 errors, all 29 in `src/client/oauth.rs`**, exactly the
 recorded anchor, and **0** attributable to any file `116-07` touched.
+
+---
+
+## D-116-GREP — two of `116-09`'s own acceptance greps cannot pass as written, at any HEAD
+
+**Found during:** `116-09` (Tasks 1 and 2), running the plan's `<acceptance_criteria>` literally.
+The same shape as `116-07`'s trailing-slash finding: a check that *looks* like a detector and is
+not one.
+
+**Finding 1 — `grep -n 'pub iss' src/client/oauth.rs` "shows no new public field on OAuthConfig".**
+`OAuthConfig` has had `pub issuer: Option<String>` since the type existed, and `pub iss` is a
+PREFIX of `pub issuer`. The grep therefore matches at `b2bf9157`, at this HEAD, and at every commit
+in between. Taken as written the criterion is unsatisfiable; taken as a *reader's* check it is a
+false alarm.
+
+The invariant it reaches for is real and load-bearing (`OAuthConfig` is all-pub-field and not
+`#[non_exhaustive]`, so a new field is `constructible_struct_adds_field` = MAJOR). `116-09` therefore
+asserts **the exact eight-field set by name**, parsed out of the struct body, in
+`oauth_config_gained_no_public_iss_field` — plus a second assertion that no field name starts with
+`iss_`. That version FAILED on its first run against the plan's literal wording, which is how the
+defect was found rather than papered over.
+
+**Finding 2 — `grep -n 'validate_authorization_response' src/client/oauth.rs` "shows exactly one
+call site".** The count is **2**: line 38 is the `use` declaration, line 1064 is the call. A plan
+that greps for a bare symbol name will always also match its import. The measured, meaningful form
+is `grep -c '<symbol>(' ` or reading the hits — `116-09` reports both hits explicitly and names the
+line numbers so the claim is checkable.
+
+**Why this matters beyond two greps.** `116-06` already recorded that a module's own PROSE can trip
+an acceptance grep. This is the third and fourth instance in the phase of the same class:
+**a grep-based acceptance criterion that measures something other than what its sentence says.**
+`116-01`'s nextest-selector trap and `D-116-FAILFAST` are the same failure mode in a different tool.
+
+**Proposed owner:** `116-15`, when it reconciles the phase's evidence. The cheap systemic fix is a
+written convention: *an acceptance grep must be RUN against the pre-change tree when the plan is
+written, and its expected count recorded* — a grep whose baseline count is unknown cannot
+distinguish a regression from a prefix collision. No source change is owed.
+
+---
+
+## D-116-FALLBACK — a security refusal used to be downgraded into "no supported OAuth flow available"
+
+**Found during:** `116-09` (Task 2), writing the plan's eleven behaviour rows. Fixed there under
+Rule 2; recorded because the same shape may exist on other fallback paths this phase does not touch.
+
+**Finding.** Both callers of the authorization-code flow (`get_access_token` and
+`authorize_with_details`) wrapped ANY failure: they logged it, then either fell back to the
+device-code grant or replaced it with the fixed string *"No supported OAuth flow available."* Once
+`116-09` made the flow return `Error::iss_mismatch` / `Error::state_mismatch`, that wrapper
+did two harmful things at once:
+
+1. **It destroyed the stable programmatic identity.** `116-02` built the three marker-const error
+   identities precisely so callers branch on `err.is_iss_mismatch()` instead of on message text.
+   A caller of `authorize_with_details()` would have received a generic internal error and been
+   pushed straight back to substring matching — with a substring that does not even mention `iss`.
+2. **It re-attempted authentication after detecting an attack.** Falling back to device code after
+   a mix-up or CSRF refusal offers the same adversary a second attempt through a different grant.
+
+**Fix applied in `116-09`:** `OAuthHelper::is_terminal_authorization_refusal` — an `iss` or `state`
+mismatch propagates verbatim from both callers; every other failure keeps its existing fallback
+behaviour untouched.
+
+**What is deliberately NOT covered, and is the deferred half.** The refusals that do NOT carry one
+of the two markers — a duplicated security parameter, a query over `MAX_CALLBACK_QUERY_BYTES`, an
+oversize request line, an unparseable request target — are still wrapped by the generic message.
+They are all still *refusals* (the tests assert `is_err()` and `expect(0)` on `/token`, and both
+hold), but a caller cannot tell them apart from "the authorization endpoint was unreachable". The
+clean resolution is a fourth marker identity, or a `Error::callback_refused` wrapper, so that
+"the callback arrived and was refused" is programmatically distinguishable from "the flow never
+ran". `116-09` did not add one: a new public error identity is `116-02`'s subsystem, and inventing
+one here would fork the convention that plan established.
+
+**Proposed owner:** `116-15`, or a `116-02` follow-up. No behaviour is wrong today; the gap is in
+what a caller can *observe*.
+
+---
+
+## D-116-LINT-OAUTH — the TEST-side twin: `make quality-gate` runs ZERO of `116-09`'s 25 tests
+
+**Found during:** `116-09`, reading its own `make quality-gate` log and noticing a run of
+`0 passed; … N filtered out` lines. Appended to `D-116-LINT-OAUTH` rather than opening a new
+entry: it is the same root cause (`full` does not contain `oauth`) with a different, worse
+consequence.
+
+`D-116-LINT-OAUTH` established that `make lint` compiles none of this phase's `oauth`-gated code.
+The same is true of `make test-all`, and `116-09` is the first plan whose tests are affected.
+Measured at `c03cfe87`:
+
+| Suite | `--features full` | `--features full,oauth` | Gated on |
+|---|---|---|---|
+| `oauth_discovery_validation` + `oauth_provider_discovery` (`116-06`, `116-07`) | **34** | 34 | `http-client` |
+| `oauth_iss_integration` + `oauth_state_csrf` (**`116-09`**) | **0** | **25** | `oauth` |
+
+`116-06` and `116-07` could gate on `http-client` because their subjects (`OidcDiscoveryClient`,
+the two server-side providers) live behind that feature. `116-09`'s subject is `OAuthHelper`, which
+is behind `oauth`, and the tests construct one — the whole point is that they drive the REAL
+interactive flow through the `BrowserLauncher` seam. **There is no gating choice that makes them
+reachable by the current gate.** So `make quality-gate` exits 0 having run none of AUTH-01's
+end-to-end evidence, including every `expect(0)`-on-`/token` proof.
+
+This is the "command that reports success while measuring nothing" shape again — the sixth
+instance in this phase, and the first where the un-measured thing is a security proof rather than a
+lint.
+
+**Not fixed by `116-09`** because the fix is a `Makefile` change (a second test invocation with
+`--features full,oauth`) plus a CI job change, neither of which is in this plan's `files_modified`,
+and because turning `oauth` on in the gate would immediately surface the 24 pre-existing clippy
+errors in `src/client/oauth.rs` and turn the gate red — the exact interaction `D-116-LINT-OAUTH`
+already warns about. The two changes must land together.
+
+**Proposed owner:** `116-15`. The resolutions now have to be taken as a PAIR:
+1. clear the remaining pre-existing `src/client/oauth.rs` clippy errors (**24** at `c03cfe87`, down
+   from the 29 anchor — `116-09` removed 5 by rewriting the doc comments it touched and added
+   none), THEN
+2. add `--features "full,oauth"` invocations to both `make lint` and the gate's test stage.
+
+Doing (2) without (1) turns the gate red. Doing neither leaves 25 security tests outside CI.
