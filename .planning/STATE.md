@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-02-PLAN.md
-last_updated: "2026-08-04T05:22:38.608Z"
+stopped_at: Completed 116-06-PLAN.md
+last_updated: "2026-08-04T07:01:59.531Z"
 last_activity: 2026-08-04
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 363
+  completed_plans: 364
   percent: 85
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 6 of 16
+Plan: 7 of 16
 Status: Ready to execute
 
 **116-03 HAS LANDED — the DCR types carry `application_type` WITHOUT a semver break.** Commit
@@ -701,6 +701,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: 116-02: an inner //! module doc in a module whose pub mod ALSO carries an outer /// resolves intra-doc links in the DECLARING module's scope — bare links fail make doc-check's -D warnings. 116-04 and 116-05 create src/shared/ modules the same way (D-116-DOC)
 - [Phase ?]: 116-03: DcrRequest/DcrResponse gain application_type via inherent accessors over the existing serde(flatten) extra map — no new public field, no non_exhaustive; semver-checks 223 pass / 0 fail vs b2bf9157
 - [Phase ?]: 116-03: D-116-LINT — the PMAT clause-(b) clippy command is MEASURABLY weaker than 'make lint' (it omits RUSTFLAGS=-D warnings); every source-touching plan must run make lint or make quality-gate before booking a task done
+- [Phase 116]: 116-06: RFC 8414 3.3 anchor validated INSIDE fetch_discovery before the metadata escapes — the lying-document fence was OBSERVED failing pre-fix, returning Ok with issuer https://honest.example for a document served from 127.0.0.1 (the spec's own worked attack, succeeding)
+- [Phase 116]: 116-06: IssuerMismatch / BodyOverCap / MalformedSecurityMetadata are TERMINAL and abort the whole probe — each is fenced by a perfectly VALID candidate 3 behind expect(0)+assert_async(), so a fall-through fails the test rather than silently downgrading
+- [Phase 116]: 116-06: a present-but-non-boolean RFC 9207 flag aborts discovery, never Ok(None) — as_bool() on the string true yields None, None reads as Optional, and Optional makes an ABSENT callback iss acceptable (a fail-open). Same rule covers a missing or non-string issuer
+- [Phase 116]: 116-06: the RFC 9207 flag ships on a NEW non_exhaustive AuthorizationServerExtras plus discover_with_extras, NOT as a field on OidcDiscoveryMetadata (RESEARCH A1: all-pub-field and not non_exhaustive, so a new field is a MAJOR break). semver-checks 223 pass / 0 fail
+- [Phase 116]: 116-06: D-116-KEYCHAIN RESOLVED as an ENVIRONMENT artifact, not a tree defect — make test-unit on a CLEAN volume (71 GiB free) reports 1865 passed / 0 failed; 1849 + 16 new inline tests = 1865 exactly, and both keychain greps return 0. Do NOT change streamable_http.rs:458 on that evidence
 
 ### Pending Todos
 
@@ -725,6 +730,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - D-114-E: make test-feature-flags exits 2 (its cargo clippy -p pmcp-tasks --no-default-features -- -D warnings row exits 101) — PRE-EXISTING, proven identical at base commit 4327b246 via a detached worktree; 56 dead-code errors in the ROOT pmcp lib under a reduced feature set (mrtr 42, subscriptions 7, core 4, sse_parser 2, mod 1), 0 in crates/pmcp-tasks. Blocks the D-14 item-4 acceptance criterion for every remaining Phase 114 plan until an owner gates or allows them. NOT caught by make quality-gate or CI.
 - Phase 115 is CLOSED but D-114-S remains UNOWNED: nothing watches modelcontextprotocol/ext-tasks for publication. 115-01 closed only the CORE half of D-18's two-repository trigger (D-114-R is closed); the ext-tasks half is untouched, so Phase 114's hold stays engaged and TASK-01..06 stay [~]
 - D-116-KEYCHAIN: make quality-gate exits 2 at test-unit — 14 shared::streamable_http tests panic on macOS keychain ioErr -36 at the pre-existing .expect in src/shared/streamable_http.rs:458. MEASURED pre-existing (identical failing set with 116-04 source reverted: 1826+14 vs 1830+14). Every other gate stage exits 0. 116-15 must not book a green full gate for this HEAD.
+- D-116-TRIPWIRE: v2_bounded_reads_tripwire::every_peer_byte_accumulation_is_reviewed has been RED since 116-05 (ec80e5b1) because of src/shared/credential_store.rs:742. make quality-gate runs test-integration, so this would fail CI. Fix is ONE reviewed ALLOWLIST entry naming the bound (port is a u16 = at most 6 bytes appended once), not a code change. Owner: 116-15 or a 116-05 follow-up
 
 ## Deferred Items
 
@@ -752,8 +758,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T05:22:34.826Z
-Stopped at: Completed 116-02-PLAN.md
+Last session: 2026-08-04T07:01:45.574Z
+Stopped at: Completed 116-06-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -862,3 +868,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P03 | 100min | 1 tasks | 2 files |
 | Phase 116 P04 | 326min | 2 tasks | 5 files |
 | Phase 116 P05 | 310 | 3 tasks | 7 files |
+| Phase 116 P06 | 268min | 2 tasks | 5 files |
