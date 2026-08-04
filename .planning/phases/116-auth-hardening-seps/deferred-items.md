@@ -528,3 +528,74 @@ to miss.
    which is the standard `116-08` actually met.
 
 Do **not** close the ALWAYS-FUZZ row on `make quality-gate`'s exit code alone.
+
+---
+
+## D-116-SLASH — the trailing-slash rule is now DIFFERENT in the two halves of discovery, on purpose, and it is operator-visible
+
+**Found during:** `116-07` (Task 2), by a test that FAILED against a correct implementation — the
+same shape as `116-04`'s `https:///path` finding.
+
+**Finding.** The URL DERIVATION normalises a trailing slash away: `116-04` decided that
+`https://as.example/` and `https://as.example` must derive the same candidate list, because a
+trailing slash is a formatting difference and not a path component. The RFC 8414 §3.3 ANCHOR does
+**not** normalise, and must not — `116-04` pinned four normalisation rows as `false` precisely so a
+lenient comparison cannot be exploited.
+
+The two rules therefore disagree by design, and the consequence is visible to operators. Measured,
+against the implementation as shipped:
+
+```
+Discovery document fetched from http://…/us-east-1_TEST/.well-known/openid-configuration
+declares issuer `http://…/us-east-1_TEST`, but the URL was built from issuer
+`http://…/us-east-1_TEST/`. RFC 8414 section 3.3 … require these to be identical, so the
+metadata is NOT used and is NOT cached.
+```
+
+An operator who configures `https://as.example/pool/` against a provider whose document declares
+`https://as.example/pool` now gets a hard refusal where, before this plan, they got a working
+provider. This is what RFC 8414 §3.3 requires, and it is the whole point of `T-116-09`/`T-116-23` —
+but it is a BEHAVIOUR CHANGE, not merely a new check.
+
+**Why it is very unlikely to bite in practice.** Real trailing-slash issuers declare the slash.
+Auth0's issuer is `https://tenant.auth0.com/` and its discovery document declares
+`"issuer": "https://tenant.auth0.com/"`, so `GenericOidcConfig::auth0` — which builds
+`format!("https://{domain}/")` — matches byte-for-byte. `CognitoProvider::new`,
+`GenericOidcConfig::google`, `::okta` and `::entra` all produce slash-free issuers, matching their
+providers' documents. The exposure is a hand-written `GenericOidcConfig::new` whose issuer string
+carries a slash the provider does not declare.
+
+**Why `116-07` did not soften it.** Normalising the anchor would delete the fence this phase exists
+to install. Normalising the CONFIGURED issuer before comparing would be the same defect wearing a
+different hat: it would make `https://attacker.example/` and `https://attacker.example` equivalent
+anchors, and the specification's no-normalisation rule exists exactly to stop that reasoning.
+Instead the behaviour is pinned by a deliberate test —
+`a_trailing_slash_issuer_still_needs_a_byte_identical_document_issuer` in `cognito.rs` — so it is
+documented rather than discovered in production, and the refusal names BOTH values so the fix is a
+one-character config edit.
+
+**Proposed owner:** `116-13` (release notes / version bump). This needs one CHANGELOG line under
+"behaviour changes", not a code change: *"OIDC discovery now enforces RFC 8414 §3.3. If your
+configured issuer differs from the `issuer` your provider's discovery document declares — most
+commonly by a trailing slash — discovery will refuse it and name both values."*
+
+`116-15` may cite this entry rather than re-deriving it. No source change is owed.
+
+---
+
+## D-116-LINT — two more measurements from `116-07`, both in TEST code
+
+Appended here rather than opening a new entry, because it is the same finding for the seventh and
+eighth time. `116-07` ran `make lint` per the standing obligation and got **exit 101** twice on code
+the phase's clause-(b) command accepts:
+
+| Lint | Site | Why clause (b) missed it |
+|---|---|---|
+| `clippy::doc_markdown` | `IdP` unbackticked in `tests/oauth_provider_discovery.rs`'s module doc | pedantic; only a warning without `RUSTFLAGS="-D warnings"` |
+| `clippy::duration_suboptimal_units` | `Duration::from_secs(3600)` in a `cognito.rs` test helper — the fix is `Duration::from_hours(1)` | nursery; same reason |
+| `clippy::items_after_statements` | `const ATTEMPTS` declared mid-function in a `cognito.rs` test | pedantic; same reason |
+
+All three are in **test** code, which reconfirms `116-04`'s note that `make lint` covers
+`--lib --tests` and therefore gates new test files too. The gate-equivalent-with-`oauth` command
+(`D-116-LINT-OAUTH`) was also run: **29 errors, all 29 in `src/client/oauth.rs`**, exactly the
+recorded anchor, and **0** attributable to any file `116-07` touched.
