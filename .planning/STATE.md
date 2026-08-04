@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-06-PLAN.md
-last_updated: "2026-08-04T07:01:59.531Z"
+stopped_at: Completed 116-16-PLAN.md
+last_updated: "2026-08-04T15:45:33.850Z"
 last_activity: 2026-08-04
 progress:
   total_phases: 72
@@ -26,8 +26,49 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 7 of 16
+Plan: 8 of 16
 Status: Ready to execute
+
+**116-16 HAS LANDED — the default on-disk credential store, and `make quality-gate` is GREEN
+(exit 0) for the first time in this phase.** Commit `2d769409` (+1787/−1 across 5 files).
+`src/shared/credential_file.rs` (690 lines) holds `FileCredentialStore` implementing BOTH
+`CredentialStore` and `CredentialStoreAdmin`, gated
+`#[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]`. It knows **no JSON**:
+`grep 'serde::\|derive(.*Serialize\|derive(.*Deserialize\|schema_version'` over the file returns
+**nothing**, and the pure tier still carries exactly **1** `cfg(` (the `cfg(test)`), so 116-05's
+fence is intact. 29 integration tests + 5 inline + 3 doctests, all green.
+
+**⚠ AN ATOMIC RENAME PREVENTS A TORN FILE, NOT A LOST UPDATE — and the obvious test does not
+detect the difference.** Every mutation goes through one private `with_snapshot_mut`
+(`tokio::sync::Mutex` in-process + an `O_EXCL` advisory lock file across processes; reads take no
+lock). The negative control (**5 breaks at once, `--no-fail-fast`, 29 tests run: 20 passed,
+9 failed**) measured which tests are real detectors. Under the read-before-lock break,
+`two_concurrent_saves_on_one_store_both_survive` — the `tokio::join!` shape the plan specified —
+**still PASSED**, because one task has no await point between its read and its write.
+`a_waiter_reads_the_document_the_lock_holder_left_behind` (holder writes WHILE the waiter is
+blocked) and `two_instances_over_one_path_...` are the two that failed. A `join!` over two saves is
+not a lost-update detector.
+
+**⚠ "EXACTLY ONE WRITE" IS UNOBSERVABLE THROUGH THE FILESYSTEM — the plan's same-bytes criterion
+does NOT fail when the override is deleted.** Measured: removing the `save_with_issuer` override
+leaves `save_with_issuer_is_one_write_that_makes_both_observable` **passing** (the two-call default
+produces byte-identical output). A `tracing` DEBUG event per atomic write
+(`CREDENTIAL_WRITE_EVENT_TARGET`) plus a counting `Subscriber` in the test was added; it measures
+the two-call baseline as **2** before claiming **1**, and it is the only test the break fails.
+
+**⚠ D-116-LINT-OAUTH — `make lint` COMPILES NONE OF THIS PHASE'S `oauth`-GATED CODE.** `make lint`
+runs `--features "full"`, and `full` does not contain `oauth`. So the authoritative clippy gate
+never sees `src/client/oauth.rs`, `src/shared/credential_file.rs`, or anything 116-10/12/13 add.
+Running `make lint`'s command verbatim with `full,oauth` (same `RUSTFLAGS="-D warnings"`, same
+28-entry `-A` list): **exit 101, 29 errors — all 29 in `src/client/oauth.rs`, 0 in any file 116-16
+touched.** Clause (b) enables `oauth` but omits `-D warnings`, so it reports those same 29 as
+warnings and exits 0. **The union of the two documented commands is green on 29 hard errors.**
+`116-10` and `116-12` edit that file — measure the baseline BEFORE editing.
+
+**Zero dependencies added.** `write_atomic` ports `cargo-pmcp`'s sequence (`create_dir_all` →
+parent `0o700` → same-directory temporary → file `0o600` → rename) but creates the temporary with
+`OpenOptions::create_new` instead of the `tempfile` crate, which is dev-only in `pmcp`.
+`git diff --exit-code b2bf9157..HEAD -- Cargo.toml` exits **0**.
 
 **116-03 HAS LANDED — the DCR types carry `application_type` WITHOUT a semver break.** Commit
 `1b0e2f75` (+328/-0 in `src/server/auth/provider.rs`). `DcrRequest`/`DcrResponse` are public,
@@ -706,6 +747,12 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: 116-06: a present-but-non-boolean RFC 9207 flag aborts discovery, never Ok(None) — as_bool() on the string true yields None, None reads as Optional, and Optional makes an ABSENT callback iss acceptable (a fail-open). Same rule covers a missing or non-string issuer
 - [Phase 116]: 116-06: the RFC 9207 flag ships on a NEW non_exhaustive AuthorizationServerExtras plus discover_with_extras, NOT as a field on OidcDiscoveryMetadata (RESEARCH A1: all-pub-field and not non_exhaustive, so a new field is a MAJOR break). semver-checks 223 pass / 0 fail
 - [Phase 116]: 116-06: D-116-KEYCHAIN RESOLVED as an ENVIRONMENT artifact, not a tree defect — make test-unit on a CLEAN volume (71 GiB free) reports 1865 passed / 0 failed; 1849 + 16 new inline tests = 1865 exactly, and both keychain greps return 0. Do NOT change streamable_http.rs:458 on that evidence
+- [Phase 116]: 116-16: FileCredentialStore is a SEPARATE gated module (src/shared/credential_file.rs), NOT a gated half of credential_store.rs — measured: the pure tier still carries exactly 1 cfg( and that one is cfg(test), so 116-05's grep criterion is unbroken
+- [Phase 116]: 116-16: every mutation is ONE serialized read-modify-write through with_snapshot_mut (tokio::sync::Mutex in-process + an O_EXCL advisory lock file across processes). An atomic rename prevents a TORN file and never a LOST UPDATE — the two are different threats
+- [Phase 116]: 116-16: write_atomic ports cargo-pmcp's SEQUENCE but creates its temporary with OpenOptions::create_new rather than the tempfile crate, because tempfile is a dev-dependency in pmcp and the phase's Cargo.toml must stay byte-identical to b2bf9157 (git diff --exit-code: 0)
+- [Phase 116]: 116-16: CREDENTIAL_WRITE_EVENT_TARGET (one tracing DEBUG event per atomic write) was ADDED because "exactly one write" is otherwise unobservable — MEASURED: deleting the save_with_issuer override leaves the same-bytes criterion the plan offered PASSING, and only the counter test fails
+- [Phase 116]: 116-16: CredentialSnapshot::forget_issuer widened private -> pub(crate) so the file store's delete_by_server has the SAME logout semantics as InMemoryCredentialStore instead of a second implementation. No public surface added; semver-checks 223 pass / 0 fail
+- [Phase 116]: 116-16: the in-process tokio::join! concurrency test is NOT a lost-update detector (no await point between read and write in one task) — it SURVIVED the read-before-lock break. a_waiter_reads_the_document_the_lock_holder_left_behind is the deterministic one
 
 ### Pending Todos
 
@@ -758,7 +805,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T07:01:45.574Z
+Last session: 2026-08-04T15:44:28.898Z
 Stopped at: Completed 116-06-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -869,3 +916,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P04 | 326min | 2 tasks | 5 files |
 | Phase 116 P05 | 310 | 3 tasks | 7 files |
 | Phase 116 P06 | 268min | 2 tasks | 5 files |
+| Phase 116 P16 | 215min | 1 tasks | 5 files |

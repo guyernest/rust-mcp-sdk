@@ -375,3 +375,66 @@ exemption the file's own doc warns against.
 **Proposed owner:** `116-15`, or an immediate `116-05` follow-up. Do not let it ride to the end of
 the phase — every later plan that touches `src/shared/` will now inherit a red tripwire it did not
 cause.
+
+### RESOLVED — the orchestrator made the reviewed entry in `5f1474e2`
+
+`116-16` re-ran `binary(v2_bounded_reads_tripwire)` at `5f1474e2` and after adding
+`src/shared/credential_file.rs` to the same scanned directory: **13 tests run, 13 passed**, both
+times. The new module introduces **zero** accumulation sites (no `extend_from_slice(`, no
+`push_str(`, no `.extend(`, no `.append(`), so the population is unchanged and no further allowlist
+entry is owed. No action remains.
+
+---
+
+## D-116-LINT-OAUTH — the authoritative lint compiles NONE of this phase's `oauth`-gated code
+
+**Found during:** `116-16` (Task 1). The third distinct shape of `D-116-LINT`, and the one that
+matters most for the plans still to come.
+
+**Finding.** `make lint` — which `D-116-LINT` correctly established as the authoritative clippy
+evidence — runs `cargo clippy --features "full" --lib --tests`. **`full` does not contain `oauth`**
+(`Cargo.toml:205` lists fifteen features; `oauth` is not among them, and `116-05` deliberately
+declined to add it). So `make lint` does not compile, and therefore does not lint, ANY item behind
+`#[cfg(feature = "oauth")]` — including all of `src/client/oauth.rs`, all of
+`src/shared/credential_file.rs`, and whatever `116-10`/`116-12`/`116-13` add next.
+
+`116-16` ran `make lint`'s command verbatim with `--features "full,oauth"` substituted — same
+`RUSTFLAGS="-D warnings"`, same 28-entry `-A` allow-list, same lint groups
+(`target/116-verify/116-16-clippy-oauth.raw.log`, exit **101**):
+
+```
+29 errors — every one of them in src/client/oauth.rs
+ 0 errors in src/shared/credential_file.rs
+ 0 errors in any file 116-16 touched
+```
+
+Distribution (`grep -A2 '^error' | grep -oE '^\s*--> [^:]+'`): **29 / 29 in
+`src/client/oauth.rs`**. Categories include `doc_markdown` (23×), `needless_continue` (2×),
+`map_unwrap_or`, `unnested_or_patterns` and `items_after_statements`.
+
+**Why this is not the same finding as `D-116-LINT`.** That entry is about clause (b) being WEAKER
+than `make lint` on the code both compile. This one is about a body of code **neither** command
+covers by default: clause (b) does enable `oauth`, but omits `RUSTFLAGS="-D warnings"`, so the
+29 errors above appear there only as warnings and clause (b) exits 0. The union of the two
+documented commands therefore reports green on 29 hard errors.
+
+**Consequence for `116-10`, `116-12` and `116-13`.** `src/client/oauth.rs` is the file `116-10`
+wires `application_type` into and `116-12` changes refresh-scope behaviour in. The first plan to
+turn the gate-equivalent command on over that file will inherit 29 pre-existing errors that are
+**not** its own. Measure the baseline BEFORE editing, exactly as `116-16` did, or the attribution
+argument will be unavailable.
+
+**What `116-16` did instead of fixing it.** Ran both commands and asserted **zero errors
+attributable to files this plan touched**, which is the same standard `D-116-DOC`'s 28-error anchor
+uses. Fixing 29 lints in `src/client/oauth.rs` is an edit to a file this plan does not own, under
+the executor's scope boundary.
+
+**Proposed owner:** `116-15`, with two candidate resolutions:
+1. Add a second lint invocation (`--features full,oauth`) to `make lint`, after clearing the 29
+   pre-existing errors in `src/client/oauth.rs` — otherwise the gate turns red immediately.
+2. Leave `make lint` alone and record the gate-equivalent-with-`oauth` command in
+   `116-BASELINES.md` as a per-plan obligation for any plan touching gated code, with the 29-error
+   figure as its anchor.
+
+Do **not** simply add `oauth` to the `full` feature: `116-05` declined that on purpose (Pitfall 3),
+and it would pull `webbrowser`, `dirs` and `rand` into every `full` build.
