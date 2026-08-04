@@ -236,6 +236,63 @@ both of which are edits to subsystems this phase does not own.
 **Until then: run `df -h /`, then re-run the failing subset in isolation before treating a
 `streamable_http` keychain panic as a regression.**
 
+### RESOLVED by measurement — `116-06`, on a CLEAN volume: 0 failures
+
+`116-06` was the first plan in this phase to run after the orchestrator deleted `target/`
+entirely, with **71 GiB free at 15% capacity**. `/usr/bin/make quality-gate` reported:
+
+```
+running 1865 tests
+test result: ok. 1865 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s
+✓ Unit tests passed
+```
+
+Two independent greps over the whole gate log confirm the mechanism did not merely go quiet:
+`grep -c "streamable_http.rs:4"` → **0**, and
+`grep -c "Failed to load native root certificates"` → **0**.
+
+**The arithmetic closes exactly, which is what makes this attributable rather than lucky.**
+
+| Plan | Volume state when measured | Total | Passed | Failed |
+|---|---|---|---|---|
+| `116-04` | filling (29 GiB → 132 Mi across the session) | 1844 | 1830 | **14** |
+| `116-05` | full twice (132 Mi, then 532 Mi at 96–99%) | 1849 | 1836 | **13** |
+| `116-06` | **clean: 71 GiB free at 15%** | 1865 | **1865** | **0** |
+
+`1849 + 16 = 1865`, and 16 is exactly this plan's new inline test count (10 in
+`src/shared/http_body_cap.rs`, plus `src/client/auth.rs` going from 5 inline tests to 11). So the
+population grew by precisely this plan's contribution and the 13 failures **disappeared** — they
+were not renamed, filtered or skipped.
+
+**Conclusion: `D-116-KEYCHAIN` is an ENVIRONMENT ARTIFACT, not a defect in the tree.** It belongs
+with `D-116-DISK`, not beside it: macOS `ioErr (-36)` reading keychain trust settings is a generic
+I/O failure, and a volume at 96–99% is an I/O failure waiting to be reported by whichever syscall
+asks first. `116-04`'s note that "disk was not the trigger this time (29 GiB free at 29%)" measured
+the volume at ONE instant during a session in which `make quality-gate` links ~430 doctest binaries
+and `target/debug/incremental` regrew 21–33 GB; `116-05` then measured 132 Mi twice in the same
+session. The apparent flakiness (observed passing 3× in `116-04`) is what an intermittent
+disk-pressure condition looks like.
+
+**Revised guidance, replacing the two candidate resolutions above.** Neither is required:
+
+1. Do **NOT** change `src/shared/streamable_http.rs:458` on this evidence. The `.expect()` on
+   `load_native_certs` is still worth revisiting on its own merits — an `.expect()` on an OS
+   trust-store read is a panic in library code — but it is not the cause of the red gate this
+   phase kept seeing, and "fixing" it would have masked the real one.
+2. The `--test-threads=1` divergence between `CLAUDE.md` and `make test-unit` is real and still
+   worth closing, but it is **not** what was failing: the full 1865-test binary ran with the
+   default thread count here and passed.
+3. **Run `df -h /` before every `make quality-gate`, and again before believing any failure in a
+   subsystem the plan did not touch.** This is the same rule `D-116-DISK` already states; this
+   entry is now its second, differently-shaped symptom.
+
+Note for `116-15`: the gate consumed **42 GiB** during this single run (71 GiB free → 29 GiB free).
+A plan that runs it two or three times will re-enter the failure regime, so the finding is
+reproducible in both directions.
+
+**Owner:** `116-15` may close this entry citing the measurement above, or fold it into
+`D-116-DISK`. No source change is owed.
+
 ---
 
 ## D-116-FAILFAST — `cargo nextest run` truncates a negative control, and the truncation looks like a result
@@ -276,3 +333,45 @@ that did not do what the reader thinks.
 
 **Proposed owner:** informational; no fix required. `116-15` may wish to fold `--no-fail-fast`
 into the phase's written conventions alongside the `binary(...)` selector rule.
+
+---
+
+## D-116-TRIPWIRE — `116-05` left `v2_bounded_reads_tripwire` RED, and nothing in that plan ran it
+
+**Found during:** `116-06` (Task 1), running `binary(v2_bounded_reads_tripwire)` as a regression
+check after adding a file to `src/shared/` — which is the directory that tripwire scans.
+
+**Finding.** `every_peer_byte_accumulation_is_reviewed` FAILS at `b573fca2` and at every commit
+since `ec80e5b1`:
+
+```
+HTTP-09: the reviewed accumulation population changed:
+  NEW accumulation site(s): src/shared/credential_store.rs `push_str(` at line(s) [742]
+    Bound it, or add an ALLOWLIST entry naming the mechanism that bounds it.
+```
+
+`src/shared/credential_store.rs:742` is `key.push_str(&format!(":{port}"))` inside
+`normalize_server_key`, added by `116-05` Task 1 (`d03e6be4` / `ec80e5b1`). The other 12 tests in
+that binary pass, **including** `no_unbounded_whole_body_read_over_peer_supplied_bytes` — so
+`116-06`'s new `src/shared/http_body_cap.rs` is clean and is not named by the failure.
+
+**Attribution.** The tripwire's failure message enumerates every NEW site; it names exactly one,
+and that file is entirely `116-05`'s. `116-06` adds a file to the same scanned directory and is
+not reported, so removing `116-06`'s file cannot make the `credential_store.rs` entry disappear.
+
+**Why it matters more than one red test.** `make quality-gate` runs `test-all`, which includes the
+integration binaries — so this is a **gate-red condition introduced inside this phase**, distinct
+from `D-116-KEYCHAIN` (environmental) and `D-116-DISK` (environmental). `116-05`'s summary states
+"every OTHER gate stage exits 0", which was measured stage-by-stage and did not include this
+binary. It would fail CI.
+
+**The fix is one reviewed exemption, not a code change.** The accumulation is bounded by
+construction: `port` is a `u16` rendered by `format!`, so at most six bytes are appended, once.
+The tripwire asks for exactly this — "add an ALLOWLIST entry naming the mechanism that bounds it".
+`116-06` did **not** make that entry, because the allowlist is a REVIEWED-EXEMPTION register and
+adding an entry on behalf of another plan's code, without that plan's author, is the silent
+exemption the file's own doc warns against.
+
+**Proposed owner:** `116-15`, or an immediate `116-05` follow-up. Do not let it ride to the end of
+the phase — every later plan that touches `src/shared/` will now inherit a red tripwire it did not
+cause.
