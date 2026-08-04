@@ -23,17 +23,114 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use url::Url;
 
-use crate::client::auth::{OidcDiscoveryClient, TokenExchangeClient};
+use crate::client::auth::{AuthorizationServerExtras, OidcDiscoveryClient, TokenExchangeClient};
 use crate::client::http_middleware::HttpMiddlewareChain;
 use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
+use crate::shared::oauth_validation::{
+    iss_presence_from, parse_iss_env_value, validate_authorization_response,
+    AuthorizationRequestRecord, IssPresence,
+};
+use crate::shared::pkce::generate_state;
+
+/// The environment variable an operator sets to override RFC 9207 `iss`
+/// strictness without a redeploy or a code change.
+///
+/// Accepted values are `strict` and `lenient`, parsed case-insensitively after
+/// trimming by
+/// [`parse_iss_env_value`](crate::shared::oauth_validation::parse_iss_env_value).
+/// A value the SDK does not recognise is **announced** with a `tracing::warn!`
+/// naming this variable and its two accepted values, then ignored — it never
+/// silently leaves validation lenient.
+const ISS_VALIDATION_ENV_VAR: &str = "PMCP_OAUTH_ISS_VALIDATION";
+
+/// The largest HTTP request line the loopback callback listener will read.
+///
+/// Any process on the local machine can connect to the callback port and send
+/// an unbounded request line. The authorization response is a query string —
+/// a `code`, a `state` and possibly an `iss`, each well under 100 bytes — never
+/// a payload, so refusing at 16 `KiB` costs nothing legitimate. The read is
+/// bounded at the socket, so an oversized line is refused without the whole
+/// line ever being allocated.
+///
+/// This is the transport-level twin of
+/// [`MAX_CALLBACK_QUERY_BYTES`](crate::shared::oauth_validation::MAX_CALLBACK_QUERY_BYTES),
+/// which bounds the query the pure validator will parse.
+pub const MAX_CALLBACK_REQUEST_LINE_BYTES: usize = 16_384;
+
+/// The response served when the callback validated. Byte-identical to the page
+/// this module has always served on success.
+const CALLBACK_SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+     <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
+     <h1 style='color: green;'>Authentication Successful!</h1>\
+     <p>You can close this window and return to the terminal.</p>\
+     </body></html>";
+
+/// The response served when the callback did NOT validate. Byte-identical to
+/// the page this module has always served on failure, and deliberately so: it
+/// carries no authorization-server-supplied text. RFC 9207 forbids acting on or
+/// displaying an `error_description` that arrived behind a failing `iss`, so the
+/// failure page must stay fixed bytes.
+const CALLBACK_FAILURE_RESPONSE: &str =
+    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n\
+     <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
+     <h1 style='color: red;'>Authentication Failed</h1>\
+     <p>No authorization code received. Please try again.</p>\
+     </body></html>";
+
+/// How the interactive authorization URL reaches a human.
+///
+/// **This is a platform seam, not test scaffolding.** The interactive CLI flow
+/// is one caller and not the only caller: a headless CI runner, a container
+/// without a display, an SSH or remote-desktop session, or a hosting platform
+/// that relays the URL through its own UI all want to PRINT or forward the URL
+/// rather than open a window on whatever machine the process happens to be on.
+/// Implement this trait to do that. It must not be hidden behind
+/// `#[doc(hidden)]`.
+///
+/// A useful consequence is that the flow becomes testable end to end: a test
+/// launcher can read the `state` and `code_challenge` out of the URL it
+/// receives and deliver a callback, with no browser window and no human.
+///
+/// # Errors
+///
+/// [`BrowserLauncher::open`] returns `Err` only when the URL could not be
+/// delivered to a human **at all**. The flow then aborts rather than waiting
+/// five minutes for a callback nobody will deliver. A launcher that has a
+/// fallback — as [`SystemBrowserLauncher`] does, because the flow already
+/// logged the URL for manual entry — should return `Ok(())`.
+pub trait BrowserLauncher: Send + Sync + std::fmt::Debug {
+    /// Deliver the authorization URL to the human completing the flow.
+    fn open(&self, url: &str) -> Result<()>;
+}
+
+/// The default [`BrowserLauncher`]: opens the platform's browser.
+///
+/// Returns `Ok(())` even when the platform browser cannot be opened, matching
+/// this module's long-standing behaviour — the flow has already logged the URL
+/// with "If the browser doesn't open, visit: …", so a human can still complete
+/// the flow by pasting it. Aborting there would remove a working manual path.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemBrowserLauncher;
+
+impl BrowserLauncher for SystemBrowserLauncher {
+    fn open(&self, url: &str) -> Result<()> {
+        if let Err(e) = webbrowser::open(url) {
+            tracing::warn!(
+                "Failed to open browser: {}. Please open the URL manually.",
+                e
+            );
+        }
+        Ok(())
+    }
+}
 
 // Re-export RFC 7591 DCR types from the authoritative server-side definitions
 // so library users can construct DCR requests via `pmcp::client::oauth::DcrRequest`.
@@ -183,10 +280,57 @@ struct TokenResponse {
 ///
 /// Supports both Authorization Code Flow with PKCE and Device Code Flow,
 /// with automatic discovery of OAuth endpoints from the MCP server URL.
+///
+/// # RFC 9207 `iss` validation and the `PMCP_OAUTH_ISS_VALIDATION` override
+///
+/// Every authorization response is validated before its `code` can be
+/// exchanged: the CSRF `state` must match the value this flow generated, and an
+/// `iss` that is PRESENT is always compared — byte for byte, with no
+/// normalisation — against the issuer the authorization server published in its
+/// own discovery document. That floor is unconditional. The only configurable
+/// question is whether an ABSENT `iss` is fatal, and it is resolved from three
+/// tiers, highest first:
+///
+/// | Tier | Source | Wins over |
+/// |---|---|---|
+/// | 1 | the `PMCP_OAUTH_ISS_VALIDATION` environment variable | everything below |
+/// | 2 | [`OAuthHelper::with_iss_validation`] | the discovery flag |
+/// | 3 | the discovery document's `authorization_response_iss_parameter_supported` | — |
+///
+/// `PMCP_OAUTH_ISS_VALIDATION` accepts exactly two values, compared
+/// case-insensitively after trimming:
+///
+/// - `strict` — an authorization response with no `iss` is REJECTED.
+/// - `lenient` — an absent `iss` proceeds (a present one is still compared).
+///
+/// **An unrecognised value is announced, not swallowed.** `true`, `1` and `yes`
+/// are all plausible things to type and none of them is accepted; setting one
+/// emits a `tracing::warn!` naming the variable, the value observed and the two
+/// accepted values, and the next tier decides. **With the variable unset and no
+/// builder call the behaviour is exactly the discovery flag's**, so an existing
+/// deployment sees no change.
+///
+/// The variable is read at the point the flow needs it, never in a constructor,
+/// so a hosting platform can supply the policy as a parameter through
+/// [`OAuthHelper::with_iss_validation`] instead of through a process
+/// environment.
 #[derive(Debug)]
 pub struct OAuthHelper {
     config: OAuthConfig,
     client: reqwest::Client,
+    /// Tier 2 of the `iss` precedence chain. `None` means "not set by the
+    /// builder", which is distinct from `Some(IssPresence::Optional)`.
+    ///
+    /// A PRIVATE field rather than an [`OAuthConfig`] field on purpose:
+    /// `OAuthConfig` is public, all-pub-field and not `#[non_exhaustive]`, so a
+    /// new field there is `constructible_struct_adds_field` — a MAJOR break that
+    /// would invalidate every struct literal, including three in this
+    /// repository. `OAuthHelper`'s fields are all private, so adding one here is
+    /// semver-free.
+    iss_validation: Option<IssPresence>,
+    /// How the interactive authorization URL reaches a human. Defaults to
+    /// [`SystemBrowserLauncher`], i.e. unchanged behaviour.
+    browser_launcher: Arc<dyn BrowserLauncher>,
 }
 
 impl OAuthHelper {
@@ -197,7 +341,116 @@ impl OAuthHelper {
             .build()
             .map_err(|e| Error::internal(format!("Failed to create HTTP client: {e}")))?;
 
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            iss_validation: None,
+            browser_launcher: Arc::new(SystemBrowserLauncher),
+        })
+    }
+
+    /// Set tier 2 of the RFC 9207 `iss` precedence chain.
+    ///
+    /// See the [type-level documentation](Self) for the full chain. In short:
+    /// `PMCP_OAUTH_ISS_VALIDATION` still wins over whatever is set here, and
+    /// whatever is set here wins over the authorization server's own
+    /// `authorization_response_iss_parameter_supported` flag. Passing
+    /// [`IssPresence::Required`] makes an authorization response with no `iss`
+    /// fatal even against a server that advertises nothing.
+    ///
+    /// This is an inherent builder method rather than an [`OAuthConfig`] field
+    /// because that struct is exhaustively constructible downstream and gaining
+    /// a field would be a MAJOR semver break.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
+    /// use pmcp::IssPresence;
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let helper = OAuthHelper::new(OAuthConfig::default())?
+    ///     .with_iss_validation(IssPresence::Required);
+    /// # let _ = helper;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_iss_validation(mut self, presence: IssPresence) -> Self {
+        self.iss_validation = Some(presence);
+        self
+    }
+
+    /// Route the interactive authorization URL through a custom
+    /// [`BrowserLauncher`] instead of the platform browser.
+    ///
+    /// Use this on a headless runner, in a container without a display, or from
+    /// a hosting platform that relays the URL through its own UI. With no call
+    /// to this method the flow uses [`SystemBrowserLauncher`], i.e. today's
+    /// behaviour, unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use pmcp::client::oauth::{BrowserLauncher, OAuthConfig, OAuthHelper};
+    ///
+    /// #[derive(Debug)]
+    /// struct PrintTheUrl;
+    /// impl BrowserLauncher for PrintTheUrl {
+    ///     fn open(&self, url: &str) -> pmcp::Result<()> {
+    ///         println!("Open this URL to continue: {url}");
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let helper = OAuthHelper::new(OAuthConfig::default())?
+    ///     .with_browser_launcher(Arc::new(PrintTheUrl));
+    /// # let _ = helper;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_browser_launcher(mut self, launcher: Arc<dyn BrowserLauncher>) -> Self {
+        self.browser_launcher = launcher;
+        self
+    }
+
+    /// Resolve the effective [`IssPresence`] for one flow, reading the
+    /// `PMCP_OAUTH_ISS_VALIDATION` override at the CALL SITE.
+    ///
+    /// The read lives here rather than in [`OAuthHelper::new`] so construction
+    /// stays I/O-free and a platform can supply the policy as a parameter. An
+    /// unrecognised value warns and falls through; the precedence arithmetic
+    /// itself is [`iss_presence_from`]'s, never re-implemented here.
+    fn resolve_iss_presence(&self, discovery_flag: Option<bool>) -> IssPresence {
+        let env_override = match std::env::var("PMCP_OAUTH_ISS_VALIDATION") {
+            Ok(raw) => {
+                let parsed = parse_iss_env_value(&raw);
+                if parsed.is_none() {
+                    tracing::warn!(
+                        "{} is set to `{}`, which is not one of its two accepted values \
+                         `strict` or `lenient`. The variable is IGNORED; the builder setting \
+                         or the authorization server's discovery flag decides instead.",
+                        ISS_VALIDATION_ENV_VAR,
+                        raw
+                    );
+                }
+                parsed
+            },
+            Err(std::env::VarError::NotUnicode(_)) => {
+                tracing::warn!(
+                    "{} is set to a value that is not valid Unicode, so it cannot be one of \
+                     the two accepted values `strict` or `lenient`. The variable is IGNORED.",
+                    ISS_VALIDATION_ENV_VAR
+                );
+                None
+            },
+            Err(std::env::VarError::NotPresent) => None,
+        };
+
+        iss_presence_from(env_override, self.iss_validation, discovery_flag)
     }
 
     /// Perform RFC 7591 Dynamic Client Registration against `registration_endpoint`.
@@ -363,21 +616,24 @@ impl OAuthHelper {
     }
 
     /// Discover OAuth metadata from MCP server URL using OIDC discovery.
-    async fn discover_metadata(&self, mcp_url: &str) -> Result<OidcDiscoveryMetadata> {
+    async fn discover_metadata_with_extras(
+        &self,
+        mcp_url: &str,
+    ) -> Result<(OidcDiscoveryMetadata, AuthorizationServerExtras)> {
         let base_url = Self::extract_base_url(mcp_url)?;
 
         tracing::info!("Discovering OAuth configuration from {}...", base_url);
 
         let discovery_client = OidcDiscoveryClient::new();
 
-        match discovery_client.discover(&base_url).await {
-            Ok(metadata) => {
+        match discovery_client.discover_with_extras(&base_url).await {
+            Ok((metadata, extras)) => {
                 tracing::info!("OAuth discovery successful");
                 tracing::debug!("Issuer: {}", metadata.issuer);
                 if let Some(ref device_endpoint) = metadata.device_authorization_endpoint {
                     tracing::debug!("Device endpoint: {}", device_endpoint);
                 }
-                Ok(metadata)
+                Ok((metadata, extras))
             },
             Err(e) => Err(Error::internal(format!(
                 "Failed to discover OAuth configuration at {}: {}\n\
@@ -390,19 +646,34 @@ impl OAuthHelper {
     }
 
     /// Get OAuth metadata (either by discovering or constructing from issuer).
+    ///
+    /// Delegates to [`Self::get_metadata_with_extras`] and discards the RFC 9207
+    /// flag, so callers that do not resolve `iss` policy are untouched.
     async fn get_metadata(&self) -> Result<OidcDiscoveryMetadata> {
+        self.get_metadata_with_extras()
+            .await
+            .map(|(metadata, _)| metadata)
+    }
+
+    /// Get OAuth metadata together with the discovery-only values that do not
+    /// fit on [`OidcDiscoveryMetadata`] — in particular RFC 9207's
+    /// `authorization_response_iss_parameter_supported`, which is tier 3 of the
+    /// `iss` precedence chain.
+    async fn get_metadata_with_extras(
+        &self,
+    ) -> Result<(OidcDiscoveryMetadata, AuthorizationServerExtras)> {
         if let Some(ref mcp_url) = self.config.mcp_server_url {
             // Discover from MCP server URL
-            self.discover_metadata(mcp_url).await
+            self.discover_metadata_with_extras(mcp_url).await
         } else if let Some(ref issuer) = self.config.issuer {
             // Manually provided issuer - try to discover from it
             tracing::info!("Discovering OAuth configuration from {}...", issuer);
 
             let discovery_client = OidcDiscoveryClient::new();
-            match discovery_client.discover(issuer).await {
-                Ok(metadata) => {
+            match discovery_client.discover_with_extras(issuer).await {
+                Ok(found) => {
                     tracing::info!("OAuth discovery successful");
-                    Ok(metadata)
+                    Ok(found)
                 },
                 Err(e) => Err(Error::internal(format!(
                     "Failed to discover OAuth configuration from issuer {}: {}\n\
@@ -455,11 +726,13 @@ impl OAuthHelper {
         // No valid cached token, try authorization code flow first
         tracing::info!("No cached token found, starting OAuth flow...");
 
-        // Get metadata to see what flows are supported
-        let metadata = self.get_metadata().await?;
+        // Get metadata to see what flows are supported. The extras carry the
+        // RFC 9207 flag, which is tier 3 of the `iss` precedence chain.
+        let (metadata, extras) = self.get_metadata_with_extras().await?;
+        let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
 
         // Try authorization code flow first (more common, works with MCP Inspector-like servers)
-        match self.authorization_code_flow(&metadata).await {
+        match self.authorization_code_flow(&metadata, iss_presence).await {
             Ok(token) => Ok(token),
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
@@ -500,11 +773,16 @@ impl OAuthHelper {
     /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
     /// requested scopes when the token response does not echo them.
     pub async fn authorize_with_details(&self) -> Result<AuthorizationResult> {
-        let metadata = self.get_metadata().await?;
+        let (metadata, extras) = self.get_metadata_with_extras().await?;
+        let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
 
         // Effective issuer: prefer the caller-provided config.issuer; fall back
         // to discovery metadata.issuer. metadata.issuer is always populated by
         // OIDC-compliant servers.
+        //
+        // NOTE: this is the value REPORTED to the caller for cache persistence,
+        // and it is deliberately NOT the RFC 9207 comparison anchor. The anchor
+        // is `metadata.issuer` alone — see `authorization_code_flow_inner`.
         let effective_issuer = self
             .config
             .issuer
@@ -512,7 +790,10 @@ impl OAuthHelper {
             .or_else(|| Some(metadata.issuer.clone()));
 
         // Try authorization code flow first (returns the full TokenResponse).
-        match self.authorization_code_flow_inner(&metadata).await {
+        match self
+            .authorization_code_flow_inner(&metadata, iss_presence)
+            .await
+        {
             Ok((token_response, resolved_client_id)) => Ok(Self::build_auth_result(
                 token_response,
                 resolved_client_id,
@@ -608,33 +889,24 @@ impl OAuthHelper {
     /// Returns just the access token for the simple `get_access_token` caller.
     /// Full artifacts (refresh_token, expires_at, scopes, issuer, client_id) are
     /// available through `authorize_with_details()` via `authorization_code_flow_inner`.
-    async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
-        let (token_response, _client_id) = self.authorization_code_flow_inner(metadata).await?;
+    async fn authorization_code_flow(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        iss_presence: IssPresence,
+    ) -> Result<String> {
+        let (token_response, _client_id) = self
+            .authorization_code_flow_inner(metadata, iss_presence)
+            .await?;
         Ok(token_response.access_token)
     }
 
-    /// Inner PKCE authorization code flow returning the full token response.
+    /// Bind the loopback callback listener and return it with the redirect URI
+    /// that must be advertised to the authorization server.
     ///
-    /// Returns (TokenResponse, resolved_client_id) so `authorize_with_details`
-    /// can populate `AuthorizationResult` fields including refresh_token,
-    /// expires_at, scopes, and the effective client_id.
-    async fn authorization_code_flow_inner(
-        &self,
-        metadata: &OidcDiscoveryMetadata,
-    ) -> Result<(crate::client::auth::TokenResponse, String)> {
-        tracing::info!("Starting OAuth authorization code flow...");
-
-        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
-
-        // Generate PKCE challenge
-        let code_verifier = Self::generate_code_verifier();
-        let code_challenge = Self::generate_code_challenge(&code_verifier);
-
-        // Start local callback server on configured port.
-        // The advertised URL and the bind address MUST be literal `127.0.0.1`
-        // (not `localhost`), otherwise browsers can resolve `localhost` to `::1`
-        // (IPv6) and hit ERR_CONNECTION_REFUSED on our IPv4-only listener.
-        let redirect_port = self.config.redirect_port;
+    /// The advertised URL and the bind address MUST be the literal `127.0.0.1`
+    /// (not `localhost`), otherwise browsers can resolve `localhost` to `::1`
+    /// (IPv6) and hit `ERR_CONNECTION_REFUSED` on our IPv4-only listener.
+    async fn bind_callback_listener(redirect_port: u16) -> Result<(TcpListener, String)> {
         let redirect_uri = format!("http://127.0.0.1:{}/callback", redirect_port);
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", redirect_port))
@@ -657,79 +929,152 @@ impl OAuthHelper {
             redirect_uri
         );
 
-        // Build authorization URL
+        Ok((listener, redirect_uri))
+    }
+
+    /// Build the authorization URL from the per-request record.
+    ///
+    /// `state` and `code_challenge` both come from the record, so the value in
+    /// the URL and the value that will be compared on the callback cannot
+    /// diverge.
+    fn build_authorization_url(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        client_id: &str,
+        redirect_uri: &str,
+        record: &AuthorizationRequestRecord,
+    ) -> Result<Url> {
         let mut auth_url = Url::parse(&metadata.authorization_endpoint)
             .map_err(|e| Error::internal(format!("Invalid authorization endpoint: {e}")))?;
 
         auth_url
             .query_pairs_mut()
-            .append_pair("client_id", &resolved_client_id)
+            .append_pair("client_id", client_id)
             .append_pair("response_type", "code")
-            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("redirect_uri", redirect_uri)
             .append_pair("scope", &self.config.scopes.join(" "))
-            .append_pair("code_challenge", &code_challenge)
+            .append_pair(
+                "code_challenge",
+                &Self::generate_code_challenge(record.code_verifier()),
+            )
             .append_pair("code_challenge_method", "S256")
-            .append_pair("state", &Self::generate_code_verifier()); // Random state for CSRF protection
+            // The CSRF `state` is the record's — a BOUND value, comparable on
+            // the callback. It is produced by `generate_state()`, never by the
+            // PKCE verifier generator: RFC 7636's verifier and RFC 6749 §10.12's
+            // `state` are distinct roles and conflating their generators hides
+            // that one of them is never checked.
+            .append_pair("state", record.state());
 
-        tracing::info!("OAuth Authentication Required");
-        tracing::info!("Opening browser for authentication...");
-        tracing::info!("If the browser doesn't open, visit: {}", auth_url.as_str());
+        Ok(auth_url)
+    }
 
-        // Open browser
-        if let Err(e) = webbrowser::open(auth_url.as_str()) {
-            tracing::warn!(
-                "Failed to open browser: {}. Please open the URL manually.",
-                e
-            );
+    /// Read one HTTP request line, refusing anything over
+    /// [`MAX_CALLBACK_REQUEST_LINE_BYTES`].
+    ///
+    /// The cap is applied at the socket by a limited reader, so an oversized
+    /// line is refused without ever being allocated in full. There is
+    /// deliberately no unbounded read here: any local process can connect to
+    /// this port.
+    async fn read_request_line_within_cap(stream: &mut TcpStream) -> Result<String> {
+        let mut limited = BufReader::new(stream).take(MAX_CALLBACK_REQUEST_LINE_BYTES as u64 + 1);
+        let mut raw = Vec::with_capacity(256);
+
+        limited
+            .read_until(b'\n', &mut raw)
+            .await
+            .map_err(|e| Error::internal(format!("Failed to read OAuth callback request: {e}")))?;
+
+        if raw.len() > MAX_CALLBACK_REQUEST_LINE_BYTES {
+            return Err(Error::internal(format!(
+                "OAuth callback request line exceeds the \
+                 MAX_CALLBACK_REQUEST_LINE_BYTES limit of {MAX_CALLBACK_REQUEST_LINE_BYTES} \
+                 bytes; refused at the socket, and none of it is reproduced here"
+            )));
         }
 
-        // Wait for OAuth callback
-        let (tx, rx) = oneshot::channel();
+        String::from_utf8(raw)
+            .map_err(|_| Error::internal("OAuth callback request line is not UTF-8".to_string()))
+    }
+
+    /// Isolate the query component of a callback request line.
+    ///
+    /// The request line is `GET /callback?<query> HTTP/1.1`; parsing it against
+    /// a dummy origin is a convenient way to split the path from the query. The
+    /// raw query is handed on undecoded — the percent-decode belongs to the
+    /// validator, which performs the `application/x-www-form-urlencoded` decode
+    /// RFC 9207 §2.4 requires. Never hand-roll it here.
+    fn callback_query_from_request_line(request_line: &str) -> Result<String> {
+        let path = request_line.split_whitespace().nth(1).ok_or_else(|| {
+            Error::internal("OAuth callback request line has no request target".to_string())
+        })?;
+
+        let callback_url = Url::parse(&format!("http://localhost{}", path)).map_err(|e| {
+            Error::internal(format!("OAuth callback request target is unparseable: {e}"))
+        })?;
+
+        Ok(callback_url.query().unwrap_or_default().to_string())
+    }
+
+    /// Accept ONE loopback callback, validate it, and only then write a
+    /// response.
+    ///
+    /// The ordering is the security property, not a style choice. Reading,
+    /// isolating the query and validating all happen BEFORE any response byte is
+    /// committed, so the page the human sees and the code the caller receives are
+    /// consequences of the SAME `Result`. Serving a success page first and
+    /// validating afterwards would teach a user to trust a login that was about
+    /// to be rejected, and would make the failure page unselectable — the task
+    /// cannot know the outcome at the moment it must choose which page to write.
+    async fn serve_one_callback(
+        listener: TcpListener,
+        record: &AuthorizationRequestRecord,
+    ) -> Result<String> {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| Error::internal(format!("Failed to accept OAuth callback: {e}")))?;
+
+        // Steps 1-3: bounded read, isolate the query, validate through the pure
+        // tier. Not one byte has been written to the socket yet.
+        let outcome = match Self::read_request_line_within_cap(&mut stream).await {
+            Ok(request_line) => Self::callback_query_from_request_line(&request_line)
+                .and_then(|raw_query| validate_authorization_response(&raw_query, record)),
+            Err(e) => Err(e),
+        };
+
+        // Step 4: the page is chosen by the outcome that already exists. Neither
+        // page carries authorization-server-supplied text.
+        let response = if outcome.is_ok() {
+            CALLBACK_SUCCESS_RESPONSE
+        } else {
+            CALLBACK_FAILURE_RESPONSE
+        };
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.flush().await;
+
+        outcome
+    }
+
+    /// Wait for a validated authorization code, or the typed refusal that says
+    /// why there will not be one.
+    ///
+    /// The channel carries a `Result`, so the caller's only route to the token
+    /// exchange is the `Ok` branch. The record is CLONED into the listener task
+    /// rather than shared behind an `Arc`: it is a small owned struct of two
+    /// short strings, an issuer and a copy enum, and cloning keeps the task
+    /// `'static` without adding a second ownership story.
+    async fn await_validated_authorization_code(
+        listener: TcpListener,
+        record: AuthorizationRequestRecord,
+    ) -> Result<String> {
+        let (tx, rx) = oneshot::channel::<Result<String>>();
         let callback_task = tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut reader = BufReader::new(&mut stream);
-                let mut request_line = String::new();
-
-                if reader.read_line(&mut request_line).await.is_ok() {
-                    // Parse the request line to extract the authorization code
-                    if let Some(path) = request_line.split_whitespace().nth(1) {
-                        if let Ok(callback_url) = Url::parse(&format!("http://localhost{}", path)) {
-                            let code = callback_url
-                                .query_pairs()
-                                .find(|(key, _)| key == "code")
-                                .map(|(_, value)| value.to_string());
-
-                            // Send success response to browser
-                            let response = if code.is_some() {
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-                                 <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
-                                 <h1 style='color: green;'>Authentication Successful!</h1>\
-                                 <p>You can close this window and return to the terminal.</p>\
-                                 </body></html>"
-                            } else {
-                                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n\
-                                 <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
-                                 <h1 style='color: red;'>Authentication Failed</h1>\
-                                 <p>No authorization code received. Please try again.</p>\
-                                 </body></html>"
-                            };
-
-                            let _ = stream.write_all(response.as_bytes()).await;
-                            let _ = stream.flush().await;
-
-                            if let Some(code) = code {
-                                let _ = tx.send(code);
-                            }
-                        }
-                    }
-                }
-            }
+            let _ = tx.send(Self::serve_one_callback(listener, &record).await);
         });
 
         tracing::info!("Waiting for authorization...");
 
-        // Wait for callback with timeout
-        let authorization_code = tokio::time::timeout(Duration::from_mins(5), rx)
+        let received = tokio::time::timeout(Duration::from_mins(5), rx)
             .await
             .map_err(|_| {
                 Error::internal("Timeout waiting for OAuth callback (5 minutes)".to_string())
@@ -737,6 +1082,67 @@ impl OAuthHelper {
             .map_err(|e| Error::internal(format!("OAuth callback channel error: {e}")))?;
 
         callback_task.abort();
+
+        received
+    }
+
+    /// Inner PKCE authorization code flow returning the full token response.
+    ///
+    /// Returns (`TokenResponse`, `resolved_client_id`) so `authorize_with_details`
+    /// can populate `AuthorizationResult` fields including `refresh_token`,
+    /// `expires_at`, `scopes`, and the effective `client_id`.
+    ///
+    /// `iss_presence` is resolved by the caller through
+    /// [`Self::resolve_iss_presence`] and passed in, so the environment is read
+    /// once per flow rather than once per layer.
+    async fn authorization_code_flow_inner(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        iss_presence: IssPresence,
+    ) -> Result<(crate::client::auth::TokenResponse, String)> {
+        tracing::info!("Starting OAuth authorization code flow...");
+
+        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
+
+        // The specification's mandated per-request record: the expected issuer,
+        // the PKCE verifier, the CSRF `state` and the `iss` policy, bound into
+        // ONE value. Three separate locals is exactly how `state` came to be an
+        // unnamed temporary that nothing could compare.
+        //
+        // The anchor is `metadata.issuer` — the value the authorization server
+        // published in its OWN discovery document, validated against the issuer
+        // used to build the discovery URL at fetch time. It is deliberately NOT
+        // `config.issuer` (a user-typed discovery seed) and not the effective
+        // issuer reported to cache consumers: the attack being defended against
+        // is "this response came from a different authorization server than the
+        // one whose metadata I fetched".
+        let record = AuthorizationRequestRecord::new(
+            metadata.issuer.clone(),
+            Self::generate_code_verifier(),
+            generate_state()?,
+            iss_presence,
+        );
+
+        let (listener, redirect_uri) =
+            Self::bind_callback_listener(self.config.redirect_port).await?;
+
+        let auth_url =
+            self.build_authorization_url(metadata, &resolved_client_id, &redirect_uri, &record)?;
+
+        tracing::info!("OAuth Authentication Required");
+        tracing::info!("Opening browser for authentication...");
+        tracing::info!("If the browser doesn't open, visit: {}", auth_url.as_str());
+
+        // A launcher that cannot deliver the URL to a human at all aborts here,
+        // rather than leaving the flow waiting five minutes for a callback
+        // nobody will deliver.
+        self.browser_launcher.open(auth_url.as_str())?;
+
+        // Validation happens INSIDE the listener, before any response byte is
+        // written. An `Err` here is unreachable-from-redemption by construction:
+        // the token exchange below is only reachable on the `Ok` branch.
+        let authorization_code =
+            Self::await_validated_authorization_code(listener, record.clone()).await?;
 
         tracing::info!("Authorization code received");
 
@@ -751,7 +1157,7 @@ impl OAuthHelper {
                 &resolved_client_id,
                 None, // No client secret for public clients
                 &redirect_uri,
-                Some(&code_verifier), // PKCE verifier
+                Some(record.code_verifier()), // PKCE verifier, from the record
             )
             .await
             .map_err(|e| {
