@@ -788,6 +788,17 @@ const ALLOWLIST: &[Accumulation] = &[
               of that String.",
     },
     Accumulation {
+        path: "src/shared/credential_store.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "normalize_server_key appends a decimal port to a key it has just built from an \
+              ALREADY-PARSED authority, not from a peer byte stream. Url::port() is an \
+              Option<u16>, so the appended text is a colon plus at most five digits, and the \
+              branch is a single `if let Some(port)` rather than a loop, so it runs at most once \
+              per call. The bound here is the TYPE, not a drain downstream — this String is a \
+              cache key, and nothing streams into it.",
+    },
+    Accumulation {
         path: "src/shared/http.rs",
         needle: "extend_from_slice(",
         count: 1,
@@ -797,6 +808,19 @@ const ALLOWLIST: &[Accumulation] = &[
               retained-plus-chunk pre-check under this transport's configurable \
               DEFAULT_HTTP_SSE_BUFFERED_BYTES ceiling (16 MiB, movable via \
               with_sse_buffered_bytes).",
+    },
+    Accumulation {
+        path: "src/shared/http_body_cap.rs",
+        needle: "extend_from_slice(",
+        count: 1,
+        why: "collect_reqwest_body_within_cap IS a bound rather than a consumer of one. It \
+              evaluates `chunk.len() > max_bytes - accumulated.len()` and returns Err BEFORE this \
+              append, so an over-cap body is never held whole, and `accumulated.len() <= \
+              max_bytes` is the loop invariant that keeps that subtraction from underflowing. \
+              All three production call sites (src/client/auth.rs discovery, token and \
+              registration reads) pass DEFAULT_AUTH_RESPONSE_BYTES, a 1 MiB ceiling. A declared \
+              Content-Length over the cap short-circuits earlier, but that header is ADVISORY \
+              only — the delivered-byte total is the authority.",
     },
     Accumulation {
         path: "src/shared/simd_parsing.rs",
