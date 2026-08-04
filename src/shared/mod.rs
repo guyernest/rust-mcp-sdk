@@ -2,6 +2,18 @@
 
 pub mod batch;
 pub mod context;
+/// The DEFAULT on-disk credential store — the gated I/O counterpart to
+/// [`credential_store`] below.
+///
+/// Gated on `not(wasm32)` AND `feature = "oauth"` because every item in it needs
+/// a filesystem, and `default_credential_path` needs the `oauth` feature's
+/// `dirs` dependency. It is a SEPARATE module rather than a gated half of
+/// `credential_store` so that the pure tier keeps its "no `#[cfg]` other than
+/// `cfg(test)`" property, which is what makes its wasm32 cleanliness reviewable
+/// at a glance. It knows nothing about the credential document's shape: the
+/// format, the schema migration and the migration report all stay next door.
+#[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]
+pub mod credential_file;
 /// Target-agnostic OAuth credential storage: the three-part key, the record,
 /// the document format, the schema 1 to 2 migration and the platform seam.
 ///

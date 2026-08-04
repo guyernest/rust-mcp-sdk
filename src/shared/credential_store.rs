@@ -460,7 +460,15 @@ impl CredentialSnapshot {
     }
 
     /// Forget the last-seen issuer for one server, without touching any other.
-    fn forget_issuer(&mut self, server_key: &str) {
+    ///
+    /// `pub(crate)` rather than private so the gated file store in
+    /// `crate::shared::credential_file` gives `delete_by_server` the SAME
+    /// semantics as [`InMemoryCredentialStore`] instead of reimplementing them —
+    /// a per-server logout must not leave behind a record of which
+    /// authorization server the user visited. Deliberately not `pub`: the
+    /// operation only makes sense as part of a delete, and exposing it would
+    /// invite a caller to desynchronize the two maps.
+    pub(crate) fn forget_issuer(&mut self, server_key: &str) {
         self.issuers.remove(server_key);
     }
 
