@@ -55,6 +55,14 @@ setup-full: setup setup-pre-commit
 	@echo "$(GREEN)🏭 Toyota Way development environment fully configured$(NC)"
 
 # WASM build targets
+#
+# `wasm-build` is CI-LOAD-BEARING as of Phase 116 (D-06): the `wasm32-purity`
+# job in .github/workflows/ci.yml invokes this exact target, and that job is
+# listed in the org-required `gate` aggregate's `needs:`. It fences the ungated
+# OAuth tier — src/shared/oauth_validation.rs and src/shared/credential_store.rs
+# must keep compiling with none of the `oauth` feature's native-only deps, on
+# host AND wasm32, or a Workers/Lambda platform loses the seam. Changing this
+# target's flags changes what CI enforces; do not narrow it.
 .PHONY: wasm-build
 wasm-build:
 	@echo "$(BLUE)Building for WASM target (wasm32-unknown-unknown)...$(NC)"
