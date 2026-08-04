@@ -235,3 +235,44 @@ both of which are edits to subsystems this phase does not own.
 
 **Until then: run `df -h /`, then re-run the failing subset in isolation before treating a
 `streamable_http` keychain panic as a regression.**
+
+---
+
+## D-116-FAILFAST — `cargo nextest run` truncates a negative control, and the truncation looks like a result
+
+**Found during:** `116-05` (Task 2), running the plan's three-break negative control.
+
+**Finding.** `cargo nextest run` **fail-fast is ON by default**. The first negative-control run
+reported:
+
+```
+Summary [0.025s] 15/54 tests run: 10 passed, 5 failed, 0 skipped
+```
+
+Read quickly, that is a five-failure partition. It is not — nextest stopped after the fifth
+failure, having run **15 of 54** tests. Re-running the identical command with `--no-fail-fast`
+gave the real partition:
+
+```
+Summary [0.075s] 54 tests run: 37 passed, 17 failed, 0 skipped
+```
+
+**Why it matters more than a cosmetic difference.** A negative control is only evidence when a
+named SIBLING still passes — that is what distinguishes an attributable detector from a suite
+that fails wholesale. Under fail-fast, the tests that would have demonstrated attribution may
+never run at all, so the surviving-sibling argument is unsupported by the log while *looking*
+supported. In this case the three D-116-R1 path tests (live / migration / trait) and 12 of the
+17 detectors were outside the truncated window; the `15/54` line is the only marker that the
+run was partial, and it is easy to skim past.
+
+Note the `15/54` prefix appears ONLY when the run is truncated — a complete run prints
+`54 tests run`, with no fraction. That prefix is the tell.
+
+**Guidance for every later plan in this phase.** Run negative controls with
+`cargo nextest run --no-fail-fast …`, and assert the reported denominator equals the suite's full
+count before reading the partition. This composes with `116-01`'s selector trap (`test(/foo/)`
+silently selects zero): both failure modes produce a plausible-looking summary line from a run
+that did not do what the reader thinks.
+
+**Proposed owner:** informational; no fix required. `116-15` may wish to fold `--no-fail-fast`
+into the phase's written conventions alongside the `binary(...)` selector rule.

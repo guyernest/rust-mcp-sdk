@@ -2639,7 +2639,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 116-04-PLAN.md — Wave 3. The remaining pure primitives: SEP-2351's ORDERED candidate list (amendment A3 — the spec requires a probe sequence, and RESEARCH measured that D-13's literal append-to-insert swap 404s Microsoft Entra ID, whose URL is in this SDK's own doctest), the RFC 8414 §3.3 `issuer_matches_metadata` anchor comparison, and D-10's `derive_application_type` where a mixed `redirect_uris` vector is an explicit error. A property test asserts the appended form survives in every candidate list
-- [ ] 116-05-PLAN.md — Wave 3. AUTH-03's PURE storage tier: `CredentialKey` keyed by `(issuer, account, server)` per D-116-R1 — so SEP-2352's "MUST NOT reuse across authorization servers" AND the two-MCP-servers-one-authorization-server collision both hold by key shape rather than by enforcement code — plus `StoredCredentials`, `CredentialSnapshot`, `parse_credential_snapshot` and the schema 1→2 migration with its `MigrationReport`, all ungated and wasm-clean so a DynamoDB-backed platform store gets identical migration behavior to the CLI and the parser is fuzzable. Declares the narrow `CredentialStore` seam (with an atomic `save_with_issuer`, and still no refresh — Open Question 4) alongside `CredentialStoreAdmin` (D-116-R2: enumeration, delete-by-server, clear-all, migration report — without which 116-13's subcommands could not be thin wrappers). Ships `InMemoryCredentialStore` and wires a wasm32 build fence into the org-required `gate`
+- [x] 116-05-PLAN.md — Wave 3. AUTH-03's PURE storage tier: `CredentialKey` keyed by `(issuer, account, server)` per D-116-R1 — so SEP-2352's "MUST NOT reuse across authorization servers" AND the two-MCP-servers-one-authorization-server collision both hold by key shape rather than by enforcement code — plus `StoredCredentials`, `CredentialSnapshot`, `parse_credential_snapshot` and the schema 1→2 migration with its `MigrationReport`, all ungated and wasm-clean so a DynamoDB-backed platform store gets identical migration behavior to the CLI and the parser is fuzzable. Declares the narrow `CredentialStore` seam (with an atomic `save_with_issuer`, and still no refresh — Open Question 4) alongside `CredentialStoreAdmin` (D-116-R2: enumeration, delete-by-server, clear-all, migration report — without which 116-13's subcommands could not be thin wrappers). Ships `InMemoryCredentialStore` and wires a wasm32 build fence into the org-required `gate`
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 4/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 5/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 116-02-PLAN.md
-last_updated: "2026-08-04T01:03:07.099Z"
+last_updated: "2026-08-04T05:22:38.608Z"
 last_activity: 2026-08-04
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 362
+  completed_plans: 363
   percent: 85
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 5 of 16
+Plan: 6 of 16
 Status: Ready to execute
 
 **116-03 HAS LANDED — the DCR types carry `application_type` WITHOUT a semver break.** Commit
@@ -752,7 +752,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T01:01:35.012Z
+Last session: 2026-08-04T05:22:34.826Z
 Stopped at: Completed 116-02-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -861,3 +861,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P02 | 116min | 2 tasks | 7 files |
 | Phase 116 P03 | 100min | 1 tasks | 2 files |
 | Phase 116 P04 | 326min | 2 tasks | 5 files |
+| Phase 116 P05 | 310 | 3 tasks | 7 files |
