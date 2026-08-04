@@ -162,3 +162,76 @@ against a ~180 MB rlib set, so it is the single most disk-hungry step in the rep
 
 **Proposed owner:** informational; no fix required. This is the project-memory
 "disk exhaustion fakes code regressions" hazard, hit again and now measured inside Phase 116.
+
+---
+
+## D-116-KEYCHAIN — `make test-unit` fails 14 `streamable_http` tests on a macOS keychain error, at HEAD and before it
+
+**Found during:** `116-04` (Task 2), running the plan's `<verification>` requirement
+`make quality-gate`. **Attributed by measurement, not by argument** — see below.
+
+**Finding.** `make test-unit` (`Makefile:216-219`, plain `cargo test --lib --features "full"`)
+reports **14 failed** out of 1844. Every one is in `shared::streamable_http::tests`, every one
+panics at the *same* pre-existing line, and every one carries the *same* cause:
+
+```
+thread '…' panicked at src/shared/streamable_http.rs:458:18:
+Failed to load native root certificates: Custom { kind: NotFound, error:
+  "no native root CA certificates found (errors: [
+     Error { context: \"failed to load user trust settings\",   kind: Os(Error { code: -36, message: \"I/O error.\" }) },
+     Error { context: \"failed to load admin trust settings\",  kind: Os(Error { code: -36, message: \"I/O error.\" }) },
+     Error { context: \"failed to load system trust settings\", kind: Os(Error { code: -36, message: \"I/O error.\" }) }])" }
+```
+
+`src/shared/streamable_http.rs:458` is an `.expect()` on `rustls-native-certs`' `load_native_certs`.
+macOS `ioErr` (`-36`) is a generic I/O failure reading the keychain trust settings.
+
+**The decisive measurement.** `116-04`'s own source change was reverted in place
+(`git checkout 119eeaea~1 -- src/shared/oauth_validation.rs`) and the identical command re-run:
+
+| Tree | Result |
+|---|---|
+| with `116-04` Task 1 + Task 2 | `1830 passed; 14 failed` |
+| **`src/shared/oauth_validation.rs` reverted to its pre-plan (116-02) content** | **`1826 passed; 14 failed`** |
+
+The passing count differs by exactly **4** — this plan's four new inline tests — and the failing
+set is **identical**. The 14 failures therefore predate `116-04` and are not attributable to it.
+Log: `target/116-verify/116-04-preplan-testunit.log`. Source restored byte-for-byte afterwards
+(`shasum -a 256 -c` → `OK`).
+
+**It is also flaky, not deterministic.** The same 14 tests were observed passing twice in the same
+session with the same source: `cargo test --lib --features full shared::streamable_http` →
+**33 passed, 0 failed**, and one full `make test-unit` run → **1844 passed; 0 failed** (= 1830 + 14).
+Two consecutive unfiltered runs then reproduced the failure
+(`target/116-verify/116-04-keychain-repro.log`). Disk was **not** the trigger this time
+(29 GiB free at 29% capacity when it reproduced), and `ulimit -n` is **1048576**, so neither
+`D-116-DISK` nor descriptor exhaustion explains it. The remaining correlate is concurrency: the
+failure appears when the whole 1844-test `--lib` binary runs with the default thread count and
+not when a 33-test subset does.
+
+**Why this matters beyond one red run.** `CLAUDE.md` § *Development Workflow* states that
+"Tests run with `--test-threads=1` (race condition prevention)" — but `make test-unit` does **not**
+pass that flag. So the documented CI invariant and the Makefile disagree, and a developer running
+`make quality-gate` locally can get a red gate from a pre-existing, environment-dependent panic in
+code they never touched. That is the same class of false signal as `D-116-DISK`, with a different
+symptom.
+
+**Why `116-04` did not fix it.** It is outside the executor's scope boundary: not a defect in this
+plan's output, not missing functionality for its correctness or security, and not a blocker to
+completing its tasks — the plan's own suites, `make lint`, `make doc-check`, `pmat quality-gate`,
+`cargo semver-checks`, the `wasm32` build and **every other `make quality-gate` stage**
+(`fmt-check`, `lint`, `build`, `pmcp-package-gate`, `audit`, `unused-deps`, `check-todos`,
+`check-unwraps`, `purity-check`, `comply`) all pass. Fixing it means either changing
+`streamable_http.rs`'s `.expect()` into a fallible path or changing the Makefile's test invocation,
+both of which are edits to subsystems this phase does not own.
+
+**Proposed owner:** `116-15`, with two candidate resolutions:
+1. Align `make test-unit` with the documented CI behaviour by adding `-- --test-threads=1`, which
+   would also close the CLAUDE.md/Makefile divergence; or
+2. Make `src/shared/streamable_http.rs:458` fall back to a bundled root store (or skip the
+   affected tests) instead of `.expect()`-ing on the platform keychain — an `.expect()` on an OS
+   trust-store read is a panic in library code reachable from any consumer on a machine whose
+   keychain is momentarily unreadable.
+
+**Until then: run `df -h /`, then re-run the failing subset in isolation before treating a
+`streamable_http` keychain panic as a regression.**
