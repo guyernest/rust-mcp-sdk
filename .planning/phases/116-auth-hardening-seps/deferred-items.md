@@ -51,6 +51,41 @@ snippet.
 **Do not book "ALWAYS requirements satisfied" for Phase 116 until this is closed or explicitly
 waived in writing.**
 
+### RESOLVED — `116-08` owned it all along, and has now discharged it
+
+The finding's own table names `116-08` as the FUZZ owner but reads its `files_modified` only for
+`fuzz/`. That plan's fourth entry is **`examples/c11_oauth_iss_state_validation.rs`**, and its
+Task 3 requires the file to be RUNNABLE, not merely to compile. So the EXAMPLE row was owned; the
+`grep -n 'cargo run --example'` that returned zero hits missed it because `116-08`'s Task 3 phrases
+the command inside the artifact's own module doc rather than in the plan's prose, and the
+`grep -n 'examples/'` in this entry was run against `116-*-PLAN.md` *bodies* — the hit is in
+`116-08`'s YAML **frontmatter**.
+
+Discharged by `8b41f7b0`, and measured rather than asserted:
+
+| Obligation | Evidence |
+|---|---|
+| `cargo run --example c11_oauth_iss_state_validation` | **exit 0**, with NO feature flags |
+| the same with `--features full,oauth` | **exit 0**, byte-identical stdout |
+| "real-world usage scenario" | four labelled scenarios that EXECUTE the shipped logic: accept, `iss` mismatch, `state` mismatch, and the D-04 precedence resolution including the advertised-but-absent fatal row |
+| reachable by `make validate-always`'s `test-examples` step | the file is under `examples/`, so the step's `ls examples/*.rs` loop picks it up |
+
+The ALWAYS table for Phase 116 now reads:
+
+| ALWAYS requirement | Owner | Status |
+|---|---|---|
+| PROPERTY | `116-02`, `116-04`, `116-05` | done |
+| UNIT | `116-02` and every later source plan | in progress |
+| FUZZ | `116-08` — `oauth_authorization_response` (AUTH-01/AUTH-03) + `oauth_credential_and_dcr` (AUTH-02/AUTH-03), plus the `dcr_response_parser` extension | **done** |
+| **EXAMPLE** | **`116-08` — `examples/c11_oauth_iss_state_validation.rs`** | **done** |
+
+**One ALWAYS gap remains, and it is deliberately NOT this one:** the bounded-read cap BOUNDARY
+cannot be fuzzed purely, because it needs a `reqwest::Response`. It is covered instead by the
+exactly-at-cap / one-under / one-over mockito triple in `116-06` Task 1. Recorded here so the
+ALWAYS audit has one place to look.
+
+**Owner:** closed by `116-08`. `116-15` may cite this section rather than re-deriving it.
+
 ---
 
 ## D-116-DOC — `make doc-check`'s 28-error baseline is fragile against outer-doc'd modules
@@ -438,3 +473,58 @@ the executor's scope boundary.
 
 Do **not** simply add `oauth` to the `full` feature: `116-05` declined that on purpose (Pitfall 3),
 and it would pull `webbrowser`, `dirs` and `rand` into every `full` build.
+
+---
+
+## D-116-FUZZGATE — `make test-fuzz` runs NOTHING and reports success, on a stable default toolchain
+
+**Found during:** `116-08` (Tasks 1 and 2). Measured inside this plan's own
+`make quality-gate` run, not inferred.
+
+**Finding.** `Makefile:241-252`'s `test-fuzz` target — the FUZZ row of
+`make validate-always`, and therefore of `make quality-gate` — is:
+
+```make
+cd fuzz && $(CARGO) fuzz list | while read target; do \
+    timeout 30s $(CARGO) fuzz run $$target || echo "Fuzz target $$target completed"; \
+done
+```
+
+`CARGO = cargo` (`Makefile:10`), with no `+nightly`. `cargo fuzz` passes `-Zsanitizer=address`, so
+on a machine whose **default toolchain is stable** every invocation dies immediately:
+
+```
+error: the option `Z` is only accepted on the nightly compiler
+```
+
+In this plan's gate run that happened **21 times out of 21 targets**, and each one printed
+`Fuzz target <name> completed` — because the `|| echo` swallows the failure — followed by
+`✓ Fuzz testing completed` and, ultimately, `QUALITY_GATE_EXIT=0`.
+
+So the ALWAYS-FUZZ gate is green over a stage that executed **zero fuzzing iterations**. It is not
+merely weak: it cannot fail. A target that does not compile, or one that crashes on its first
+input, produces exactly the same output as one that ran clean.
+
+**Why this is not `116-08`'s to fix.** The `Makefile` is not in this plan's `files_modified`, and
+the plan's own verification is explicit that `fuzz/` is workspace-EXCLUDED (`D-115-AB`) and must be
+built and run EXPLICITLY — which is what this plan did, with `cargo +nightly fuzz`, recording run
+counts and an empty artifacts directory. Changing the shared gate for the whole repo is a different
+decision, and one with a CI dimension this plan cannot measure.
+
+**Note the interaction with `fuzz/README.md`,** which already states "Rust nightly toolchain:
+`rustup install nightly`" as a REQUIREMENT. The repo therefore documents that nightly is needed and
+then invokes `cargo` without it. Both `pkce_helper.rs` and the two targets `116-08` adds give the
+plain `cargo fuzz run <name>` form in their module docs, matching the Makefile — that convention is
+correct for a machine whose default toolchain IS nightly, and is the reason the discrepancy is easy
+to miss.
+
+**Proposed owner:** `116-15`, with three candidate resolutions:
+1. Use `cargo +nightly fuzz` in `test-fuzz` and drop the `|| echo`, so a failing target is a red
+   gate. Measure first: this will surface any target that no longer builds.
+2. Keep the `|| echo` but detect the nightly error explicitly and fail with a clear message, so the
+   stage is honest about being unable to run.
+3. Leave the Makefile alone and record in `116-BASELINES.md` that `make test-fuzz` is a smoke
+   target, with per-plan explicit `cargo +nightly fuzz build` / `run` as the real FUZZ obligation —
+   which is the standard `116-08` actually met.
+
+Do **not** close the ALWAYS-FUZZ row on `make quality-gate`'s exit code alone.
