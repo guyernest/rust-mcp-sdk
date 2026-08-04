@@ -594,6 +594,27 @@ impl OAuthHelper {
         self.resolve_client_id_for_flow(&metadata).await
     }
 
+    /// Whether an authorization-code-flow failure is a validation REFUSAL that
+    /// must be surfaced verbatim rather than downgraded.
+    ///
+    /// Both callers of the authorization-code flow fall back to device code (or
+    /// to a generic "no supported OAuth flow available" message) when it fails.
+    /// That is right for "this flow was not available" and WRONG for "this flow
+    /// detected an attack", for two reasons:
+    ///
+    /// - It destroys the stable programmatic identity. A caller that branches on
+    ///   `err.is_iss_mismatch()` — the whole reason those markers exist — would
+    ///   see a generic internal error instead, and message-substring matching is
+    ///   exactly what the markers replaced.
+    /// - It re-attempts authentication against an authorization server whose
+    ///   response just failed a mix-up or CSRF check, handing the same attacker
+    ///   a second attempt through a different grant.
+    ///
+    /// Every other failure keeps its existing fallback behaviour untouched.
+    fn is_terminal_authorization_refusal(error: &Error) -> bool {
+        error.is_iss_mismatch() || error.is_state_mismatch()
+    }
+
     /// Extract base URL from MCP server URL.
     ///
     /// For example, `https://api.example.com/mcp` becomes `https://api.example.com`.
@@ -734,6 +755,7 @@ impl OAuthHelper {
         // Try authorization code flow first (more common, works with MCP Inspector-like servers)
         match self.authorization_code_flow(&metadata, iss_presence).await {
             Ok(token) => Ok(token),
+            Err(e) if Self::is_terminal_authorization_refusal(&e) => Err(e),
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
 
@@ -800,6 +822,7 @@ impl OAuthHelper {
                 effective_issuer,
                 &self.config.scopes,
             )),
+            Err(e) if Self::is_terminal_authorization_refusal(&e) => Err(e),
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
 
