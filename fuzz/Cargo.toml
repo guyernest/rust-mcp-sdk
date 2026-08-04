@@ -200,6 +200,20 @@ test = false
 doc = false
 bench = false
 
+# Phase 116-08 (AUTH-02 / AUTH-03): the credential document that reaches
+# `parse_credential_snapshot` comes off DISK before any authentication has
+# happened, so a corrupt or attacker-planted `~/.pmcp/oauth-cache.json` is
+# untrusted input with nothing in front of it; and a DCR response is bytes from a
+# registration endpoint the client has, by construction, not yet authenticated.
+# Registration only: this target adds NO dependency. All three entry points are
+# pure ungated functions reached through the `pmcp` dependency above.
+[[bin]]
+name = "oauth_credential_and_dcr"
+path = "fuzz_targets/oauth_credential_and_dcr.rs"
+test = false
+doc = false
+bench = false
+
 # Phase 115-09 (SCHM-01): the era-branched `outputSchema` validation path. A tool
 # author's declared schema and a handler's emitted value are both arbitrary JSON,
 # and emit-time validation runs on every structured result — a panic there is a

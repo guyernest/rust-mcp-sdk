@@ -39,3 +39,22 @@ corpus/fuzz_schema_draft_pin/*
 corpus/oauth_authorization_response/*
 !corpus/oauth_authorization_response/README.md
 !corpus/oauth_authorization_response/seed_*
+
+# EXCEPTION (Phase 116-08, AUTH-02/AUTH-03): the hand-written SEED corpus for
+# `oauth_credential_and_dcr`. The credential document, the DCR response and the
+# `redirect_uris` vector are all STRUCTURED inputs — a schema-1 document needs a
+# `schema_version`, an `entries` object and a per-entry `access_token` and
+# `client_id` before it parses at all — so random bytes degenerate into a JSON
+# tokenizer fuzz that never reaches the migration, the round trip or the
+# `application_type` accessor.
+#
+# MEASURED, not reasoned: with five deliberate breaks applied across
+# `credential_store.rs`, `oauth_validation.rs` and `provider.rs` at once, a
+# 200000-run campaign from an EMPTY corpus found ZERO of them, while these seeds
+# caught all five with a clean per-seed partition.
+#
+# Only the README and the `seed_*` files are tracked.
+!corpus/oauth_credential_and_dcr/
+corpus/oauth_credential_and_dcr/*
+!corpus/oauth_credential_and_dcr/README.md
+!corpus/oauth_credential_and_dcr/seed_*
