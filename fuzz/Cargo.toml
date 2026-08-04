@@ -186,6 +186,20 @@ test = false
 doc = false
 bench = false
 
+# Phase 116-08 (AUTH-01 / AUTH-03): the authorization-response callback query and
+# the issuer identifier are BOTH fully attacker-controlled — a hostile
+# authorization server picks every byte of the callback URL, and a hostile
+# `mcp_server_url` picks every byte of the issuer that reaches the discovery URL
+# arithmetic. Registration only: this target adds NO dependency. Both entry points
+# live in the UNGATED pure tier `src/shared/oauth_validation.rs`, so it reaches
+# them through the `pmcp` dependency above with no feature flag at all.
+[[bin]]
+name = "oauth_authorization_response"
+path = "fuzz_targets/oauth_authorization_response.rs"
+test = false
+doc = false
+bench = false
+
 # Phase 115-09 (SCHM-01): the era-branched `outputSchema` validation path. A tool
 # author's declared schema and a handler's emitted value are both arbitrary JSON,
 # and emit-time validation runs on every structured result — a panic there is a
