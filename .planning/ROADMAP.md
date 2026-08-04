@@ -2644,7 +2644,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 116-06-PLAN.md — Wave 4. Pitfall 1, the phase's most consequential finding: `fetch_discovery` validates the document's `issuer` against the issuer used to build the URL BEFORE the metadata escapes, because without it AUTH-01's whole comparison is anchored on an attacker-chosen value. Plus the ordered candidate probe, a new `AuthorizationServerExtras` sibling type carrying the RFC 9207 flag (amendment A1 — a field on `OidcDiscoveryMetadata` would be MAJOR), and a streaming two-refusal reqwest bounded-read helper. The lying-document fixture must be OBSERVED failing pre-fix
-- [ ] 116-08-PLAN.md — Wave 4. House ALWAYS requirements: a fuzz target over `validate_authorization_response` and `discovery_url_candidates` whose Ok-invariant is decoded INDEPENDENTLY inside the target, so it can see a rule defect the crate shares with a restating mirror; and `examples/c11_oauth_iss_state_validation.rs`, which actually RUNS the accept and both reject paths with no network, no browser and no `oauth` feature
+- [x] 116-08-PLAN.md — Wave 4. House ALWAYS requirements: a fuzz target over `validate_authorization_response` and `discovery_url_candidates` whose Ok-invariant is decoded INDEPENDENTLY inside the target, so it can see a rule defect the crate shares with a restating mirror; and `examples/c11_oauth_iss_state_validation.rs`, which actually RUNS the accept and both reject paths with no network, no browser and no `oauth` feature
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 6/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 8/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

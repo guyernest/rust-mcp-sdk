@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-16-PLAN.md
-last_updated: "2026-08-04T15:45:33.850Z"
+stopped_at: Completed 116-08-PLAN.md
+last_updated: "2026-08-04T16:56:58.877Z"
 last_activity: 2026-08-04
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 364
+  completed_plans: 366
   percent: 85
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 8 of 16
+Plan: 9 of 16
 Status: Ready to execute
 
 **116-16 HAS LANDED — the default on-disk credential store, and `make quality-gate` is GREEN
@@ -753,6 +753,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: 116-16: CREDENTIAL_WRITE_EVENT_TARGET (one tracing DEBUG event per atomic write) was ADDED because "exactly one write" is otherwise unobservable — MEASURED: deleting the save_with_issuer override leaves the same-bytes criterion the plan offered PASSING, and only the counter test fails
 - [Phase 116]: 116-16: CredentialSnapshot::forget_issuer widened private -> pub(crate) so the file store's delete_by_server has the SAME logout semantics as InMemoryCredentialStore instead of a second implementation. No public surface added; semver-checks 223 pass / 0 fail
 - [Phase 116]: 116-16: the in-process tokio::join! concurrency test is NOT a lost-update detector (no await point between read and write in one task) — it SURVIVED the read-before-lock break. a_waiter_reads_the_document_the_lock_holder_left_behind is the deterministic one
+- [Phase ?]: 116-08: fuzz targets decode their input with a HAND-ROLLED x-www-form-urlencoded decoder rather than the url crate the implementation uses, so the fence shares neither the rule nor the decoder (T-116-29), and no fuzz dependency is added
+- [Phase ?]: 116-08: both seed corpora are COMMITTED with gitignore exceptions — measured, 200000 runs from an empty corpus found 0 of 9 deliberate breaks while the seeds found 9 of 9
+- [Phase ?]: 116-08: the discovery candidate list is NOT asserted distinct — an issuer whose own path is /.well-known/openid-configuration legitimately yields two identical candidates
+- [Phase ?]: 116-08: D-116-EX RESOLVED — examples/c11_oauth_iss_state_validation.rs was 116-08's own files_modified entry; ALWAYS EXAMPLE is discharged, exit 0 with no feature flags
 
 ### Pending Todos
 
@@ -778,6 +782,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - Phase 115 is CLOSED but D-114-S remains UNOWNED: nothing watches modelcontextprotocol/ext-tasks for publication. 115-01 closed only the CORE half of D-18's two-repository trigger (D-114-R is closed); the ext-tasks half is untouched, so Phase 114's hold stays engaged and TASK-01..06 stay [~]
 - D-116-KEYCHAIN: make quality-gate exits 2 at test-unit — 14 shared::streamable_http tests panic on macOS keychain ioErr -36 at the pre-existing .expect in src/shared/streamable_http.rs:458. MEASURED pre-existing (identical failing set with 116-04 source reverted: 1826+14 vs 1830+14). Every other gate stage exits 0. 116-15 must not book a green full gate for this HEAD.
 - D-116-TRIPWIRE: v2_bounded_reads_tripwire::every_peer_byte_accumulation_is_reviewed has been RED since 116-05 (ec80e5b1) because of src/shared/credential_store.rs:742. make quality-gate runs test-integration, so this would fail CI. Fix is ONE reviewed ALLOWLIST entry naming the bound (port is a u16 = at most 6 bytes appended once), not a code change. Owner: 116-15 or a 116-05 follow-up
+- D-116-FUZZGATE: make test-fuzz runs ZERO fuzzing iterations and reports success on a stable default toolchain (21/21 targets died on the nightly-only -Z flag; gate exit 0). Do not close the ALWAYS-FUZZ row on make quality-gate's exit code. Owner: 116-15.
 
 ## Deferred Items
 
@@ -805,8 +810,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T15:44:28.898Z
-Stopped at: Completed 116-06-PLAN.md
+Last session: 2026-08-04T16:56:53.756Z
+Stopped at: Completed 116-08-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -917,3 +922,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P05 | 310 | 3 tasks | 7 files |
 | Phase 116 P06 | 268min | 2 tasks | 5 files |
 | Phase 116 P16 | 215min | 1 tasks | 5 files |
+| Phase 116 P08 | 51min | 3 tasks | 45 files |
