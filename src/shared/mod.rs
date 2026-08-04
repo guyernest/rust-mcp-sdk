@@ -2,6 +2,22 @@
 
 pub mod batch;
 pub mod context;
+/// Target-agnostic OAuth credential storage: the three-part key, the record,
+/// the document format, the schema 1 to 2 migration and the platform seam.
+///
+/// Ungated on purpose — a file under the user's home directory is unusable on
+/// AWS Lambda and per-container on Cloudflare Workers and Cloud Run, so
+/// credential storage lands behind a trait and everything a platform needs in
+/// order to implement that trait must compile where the `oauth` feature does
+/// not exist, on host AND wasm32. Its only imports are this crate's error type,
+/// `serde`, `async_trait`, `parking_lot` and the non-optional `url` crate. Do
+/// NOT "tidy" a target or feature gate onto it: a second copy of the document
+/// format and its migration is how a platform store and the CLI come to
+/// disagree about what a stored credential means. A gated FILE implementation
+/// is the deliberate counterpart and belongs in its own module. (Contrast the
+/// `#[cfg(not(target_arch = "wasm32"))]` peer/stdio entries elsewhere in this
+/// file; `oauth_validation` and `pkce` below carry the same rationale.)
+pub mod credential_store;
 pub mod event_store;
 pub mod http_utils;
 pub mod logging;
