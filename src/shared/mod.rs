@@ -19,6 +19,18 @@ pub mod context;
 /// file; `oauth_validation` and `pkce` below carry the same rationale.)
 pub mod credential_store;
 pub mod event_store;
+/// Hardened HTTP plumbing for this crate's OAuth/OIDC surfaces: the streaming
+/// bounded whole-body read every auth response is read through, and the
+/// discovery HTTP client whose redirect policy cannot be steered off the
+/// issuer's origin.
+///
+/// Gated on `feature = "http-client"` because every item in it takes or returns
+/// a `reqwest` type; the wasm32 build does not enable that feature and must not
+/// see this module. `pub(crate)` on purpose — the four auth files that consume
+/// it are all in-crate, and this hardening adds no public surface it does not
+/// need.
+#[cfg(feature = "http-client")]
+pub(crate) mod http_body_cap;
 pub mod http_utils;
 pub mod logging;
 pub mod middleware;
