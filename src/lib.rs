@@ -120,11 +120,9 @@ pub use shared::oauth_validation::{
 /// hosting platform must be able to implement the store without the `oauth`
 /// feature. `normalize_server_key`, `DroppedEntry` and
 /// `CREDENTIAL_SCHEMA_VERSION` stay on the module path.
-///
-/// The two traits and the in-memory implementation land in the next task.
 pub use shared::credential_store::{
-    parse_credential_snapshot, CredentialKey, CredentialSnapshot, MigrationReport,
-    StoredCredentials,
+    parse_credential_snapshot, CredentialKey, CredentialSnapshot, CredentialStore,
+    CredentialStoreAdmin, InMemoryCredentialStore, MigrationReport, StoredCredentials,
 };
 
 /// Peer back-channel trait for server-to-client RPCs from inside request handlers.

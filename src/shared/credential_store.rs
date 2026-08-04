@@ -1,5 +1,6 @@
 //! Target-agnostic OAuth credential storage: the key, the record, the document
-//! format and the schema 1 → 2 migration.
+//! format, the schema 1 → 2 migration, the platform seam and its administrative
+//! sibling.
 //!
 //! # Why this tier is ungated
 //!
@@ -10,7 +11,7 @@
 //! that trait lives here: outside the `oauth` feature and outside any target
 //! gate. This module has no `#[cfg]` attribute other than the one over its own
 //! unit tests, performs no I/O of any kind, and imports nothing beyond this
-//! crate's error type, `serde` and `url`.
+//! crate's error type, `serde`, `async_trait`, `parking_lot` and `url`.
 //!
 //! The practical consequence: a platform that keeps the same JSON document in
 //! `DynamoDB` or a KV store gets byte-identical parsing, migration and
@@ -70,6 +71,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use async_trait::async_trait;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -456,6 +459,11 @@ impl CredentialSnapshot {
             .map_err(|e| Error::internal(format!("failed to serialize credentials: {e}")))
     }
 
+    /// Forget the last-seen issuer for one server, without touching any other.
+    fn forget_issuer(&mut self, server_key: &str) {
+        self.issuers.remove(server_key);
+    }
+
     /// How many credentials are stored, across every issuer and server.
     fn credential_count(&self) -> usize {
         self.credentials
@@ -737,6 +745,256 @@ pub fn normalize_server_key(server_url: &str) -> Result<String> {
     Ok(key)
 }
 
+// ---------------------------------------------------------------------------
+// The platform seam
+// ---------------------------------------------------------------------------
+
+/// The narrow seam an OAuth flow needs from credential storage.
+///
+/// This is the trait a HOSTING PLATFORM implements — for `DynamoDB`, a KV
+/// store, a secrets manager — and the one `OAuthHelper` holds. It is
+/// deliberately small: three required methods plus three that default. A store
+/// that vends one user's credentials for one server can implement it in a few
+/// lines and has no business being asked to enumerate or wipe anything; the
+/// administrative operations a command-line tool needs live on
+/// [`CredentialStoreAdmin`] instead.
+///
+/// # What is deliberately NOT here
+///
+/// Token refresh. A trait that owned refresh would need an HTTP client, which
+/// would break both I/O-free construction and this tier's target-cleanliness in
+/// one move. Refresh stays with the OAuth helper, which READS this store for the
+/// client id and the granted scopes it needs.
+///
+/// Construction is likewise I/O-free by contract: an implementor takes every
+/// value it needs as a constructor parameter and reads no environment, no disk
+/// and no network while being built.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::{CredentialKey, CredentialStore, InMemoryCredentialStore, StoredCredentials};
+///
+/// # async fn demo() -> pmcp::Result<()> {
+/// let store = InMemoryCredentialStore::new();
+/// let key = CredentialKey::new("https://as.example", "", "https://mcp.example");
+///
+/// store.save(&key, &StoredCredentials::new("at", "cid")).await?;
+/// assert!(store.load(&key).await?.is_some());
+///
+/// store.delete(&key).await?;
+/// assert!(store.load(&key).await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
+#[async_trait]
+pub trait CredentialStore: Send + Sync + fmt::Debug {
+    /// Load the credentials stored under `key`, if any.
+    async fn load(&self, key: &CredentialKey) -> Result<Option<StoredCredentials>>;
+
+    /// Store `credentials` under `key`, replacing anything already there.
+    async fn save(&self, key: &CredentialKey, credentials: &StoredCredentials) -> Result<()>;
+
+    /// Remove `key`. Removing a key that is not present is NOT an error.
+    async fn delete(&self, key: &CredentialKey) -> Result<()>;
+
+    /// Save credentials and record the server's issuer in ONE operation.
+    ///
+    /// Doing the two separately leaves a window in which a crash or a lost
+    /// update makes the store claim one issuer while holding another's
+    /// credentials. The DEFAULT implementation here is NOT atomic — it simply
+    /// calls [`CredentialStore::save`] and then
+    /// [`CredentialStore::record_issuer`]. An implementor whose storage can do
+    /// both under one lock or in one transaction SHOULD override it.
+    async fn save_with_issuer(
+        &self,
+        key: &CredentialKey,
+        credentials: &StoredCredentials,
+        server_key: &str,
+        issuer: &str,
+    ) -> Result<()> {
+        self.save(key, credentials).await?;
+        self.record_issuer(server_key, issuer).await
+    }
+
+    /// The issuer last seen for `server_key`.
+    ///
+    /// Defaults to `Ok(None)` so an implementor that does not want last-seen
+    /// issuer tracking is not broken by it. A store that returns `None` here
+    /// simply never triggers an issuer-change warning.
+    async fn last_issuer(&self, _server_key: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Record the issuer currently in use for `server_key`.
+    ///
+    /// Defaults to `Ok(())` — a successful no-op — for the same reason
+    /// [`CredentialStore::last_issuer`] defaults to `None`.
+    async fn record_issuer(&self, _server_key: &str, _issuer: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The operations an administrative tool needs, kept OFF the platform seam.
+///
+/// [`CredentialStore`] is what an OAuth flow needs and what a hosting platform
+/// implements. This trait is what a command-line tool needs in order to list,
+/// remove by server, wipe with an accurate count, and report on a migration —
+/// and a minimal platform store has no business implementing any of it. Giving
+/// those methods default bodies on the narrow seam would be worse than omitting
+/// them: a default `Ok(0)` is a lie that a tool would then print as a count.
+///
+/// So: `OAuthHelper` holds a [`CredentialStore`]; an administrative tool holds
+/// something that also implements this. A type that implements only
+/// [`CredentialStore`] does NOT satisfy this trait, which is the point — the
+/// platform seam stays narrow.
+///
+/// ```compile_fail
+/// use pmcp::CredentialStore;
+///
+/// // The narrow bound cannot reach the administrative operations.
+/// async fn wipe<S: CredentialStore>(store: &S) -> pmcp::Result<usize> {
+///     store.clear_all().await
+/// }
+/// ```
+#[async_trait]
+pub trait CredentialStoreAdmin: CredentialStore {
+    /// Every stored key, in a deterministic order.
+    async fn list_keys(&self) -> Result<Vec<CredentialKey>>;
+
+    /// Remove every credential whose key names `server_key`, returning how many
+    /// were removed. Removing zero is NOT an error.
+    async fn delete_by_server(&self, server_key: &str) -> Result<usize>;
+
+    /// Remove everything, returning how many credentials were removed.
+    async fn clear_all(&self) -> Result<usize>;
+
+    /// The report from the most recent load that performed a migration, if
+    /// there was one. Taking it CLEARS it, so an operator is told once.
+    async fn take_migration_report(&self) -> Result<Option<MigrationReport>>;
+}
+
+// ---------------------------------------------------------------------------
+// In-memory implementation
+// ---------------------------------------------------------------------------
+
+/// An in-memory [`CredentialStore`] and [`CredentialStoreAdmin`].
+///
+/// Everything is delegated to a [`CredentialSnapshot`] behind a lock, so this
+/// store and any document-backed store share ONE set of semantics and cannot
+/// drift apart.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp::{CredentialStoreAdmin, InMemoryCredentialStore};
+///
+/// # async fn demo() -> pmcp::Result<()> {
+/// let legacy = br#"{"schema_version": 1, "entries": {}}"#;
+/// let store = InMemoryCredentialStore::from_bytes(legacy)?;
+/// assert_eq!(store.list_keys().await?.len(), 0);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Default)]
+pub struct InMemoryCredentialStore {
+    snapshot: RwLock<CredentialSnapshot>,
+    migration_report: RwLock<Option<MigrationReport>>,
+}
+
+impl InMemoryCredentialStore {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed a store from a serialized credential document, migrating it if
+    /// needed. Any resulting migration report is retained until it is taken via
+    /// [`CredentialStoreAdmin::take_migration_report`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let (snapshot, report) = parse_credential_snapshot(bytes)?;
+        let retained = if report.is_noop() { None } else { Some(report) };
+        Ok(Self {
+            snapshot: RwLock::new(snapshot),
+            migration_report: RwLock::new(retained),
+        })
+    }
+}
+
+#[async_trait]
+impl CredentialStore for InMemoryCredentialStore {
+    async fn load(&self, key: &CredentialKey) -> Result<Option<StoredCredentials>> {
+        Ok(self.snapshot.read().get(key).cloned())
+    }
+
+    async fn save(&self, key: &CredentialKey, credentials: &StoredCredentials) -> Result<()> {
+        self.snapshot
+            .write()
+            .insert(key.clone(), credentials.clone());
+        Ok(())
+    }
+
+    async fn delete(&self, key: &CredentialKey) -> Result<()> {
+        self.snapshot.write().remove(key);
+        Ok(())
+    }
+
+    /// Overridden to be atomic: both mutations happen under one write lock, so
+    /// no reader ever observes the credentials without the issuer record.
+    async fn save_with_issuer(
+        &self,
+        key: &CredentialKey,
+        credentials: &StoredCredentials,
+        server_key: &str,
+        issuer: &str,
+    ) -> Result<()> {
+        let mut snapshot = self.snapshot.write();
+        snapshot.insert(key.clone(), credentials.clone());
+        snapshot.record_issuer(server_key, issuer);
+        Ok(())
+    }
+
+    async fn last_issuer(&self, server_key: &str) -> Result<Option<String>> {
+        Ok(self
+            .snapshot
+            .read()
+            .last_issuer(server_key)
+            .map(str::to_owned))
+    }
+
+    async fn record_issuer(&self, server_key: &str, issuer: &str) -> Result<()> {
+        self.snapshot.write().record_issuer(server_key, issuer);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CredentialStoreAdmin for InMemoryCredentialStore {
+    async fn list_keys(&self) -> Result<Vec<CredentialKey>> {
+        Ok(self.snapshot.read().keys())
+    }
+
+    async fn delete_by_server(&self, server_key: &str) -> Result<usize> {
+        let mut snapshot = self.snapshot.write();
+        let mut removed = 0usize;
+        for key in snapshot.keys_for_server(server_key) {
+            if snapshot.remove(&key) {
+                removed += 1;
+            }
+        }
+        snapshot.forget_issuer(server_key);
+        Ok(removed)
+    }
+
+    async fn clear_all(&self) -> Result<usize> {
+        Ok(self.snapshot.write().clear())
+    }
+
+    async fn take_migration_report(&self) -> Result<Option<MigrationReport>> {
+        Ok(self.migration_report.write().take())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,6 +1043,16 @@ mod tests {
         assert!(snapshot.remove(&key));
         assert!(snapshot.credentials.is_empty(), "empty maps must be pruned");
         assert_eq!(snapshot.credential_count(), 0);
+    }
+
+    #[test]
+    fn forget_issuer_touches_only_the_named_server() {
+        let mut snapshot = CredentialSnapshot::new();
+        snapshot.record_issuer("https://a.example", "https://as.example");
+        snapshot.record_issuer("https://b.example", "https://as.example");
+        snapshot.forget_issuer("https://a.example");
+        assert!(snapshot.last_issuer("https://a.example").is_none());
+        assert!(snapshot.last_issuer("https://b.example").is_some());
     }
 
     #[test]

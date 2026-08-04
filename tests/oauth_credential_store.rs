@@ -1,5 +1,5 @@
 //! SEP-2352 credential storage — the three-part key, the record, the document
-//! format and the schema 1 → 2 migration.
+//! format, the schema 1 → 2 migration and the two traits.
 //!
 //! This file is deliberately NOT `#![cfg(feature = "oauth")]`. The tier under
 //! test is ungated on purpose so a Cloudflare Workers / AWS Lambda platform can
@@ -14,14 +14,19 @@
 //! 4. Format — `schema_version` 2, byte stability, round trip
 //! 5. Migration — schema 1 → 2, the drop-and-report rule, hostile bytes
 //! 6. Helper — `normalize_server_key`
-//! 7. Properties
+//! 7. `CredentialStore` — the narrow platform seam and its default impls
+//! 8. `CredentialStoreAdmin` — the four `auth` subcommand semantics
+//! 9. Properties
 
 use std::collections::BTreeSet;
 
 use pmcp::shared::credential_store::{
     normalize_server_key, DroppedEntry, CREDENTIAL_SCHEMA_VERSION,
 };
-use pmcp::{parse_credential_snapshot, CredentialKey, CredentialSnapshot, StoredCredentials};
+use pmcp::{
+    parse_credential_snapshot, CredentialKey, CredentialSnapshot, CredentialStore,
+    CredentialStoreAdmin, InMemoryCredentialStore, MigrationReport, StoredCredentials,
+};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -647,7 +652,336 @@ fn normalize_server_key_rejects_a_url_with_no_host() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Properties
+// 7. CredentialStore — the narrow platform seam
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn save_then_load_returns_the_same_credentials() {
+    let store = InMemoryCredentialStore::new();
+    let key = CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA);
+    let record = StoredCredentials::new("at", "cid").with_granted_scopes(["mcp:read"]);
+
+    store.save(&key, &record).await.expect("save");
+    assert_eq!(store.load(&key).await.expect("load"), Some(record));
+}
+
+/// SEP-2352 at the TRAIT level: a server that switches authorization server
+/// simply misses the cache, so the client re-registers.
+#[tokio::test]
+async fn load_with_a_different_issuer_is_a_miss() {
+    let store = InMemoryCredentialStore::new();
+    store
+        .save(
+            &CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA),
+            &creds("at", "cid"),
+        )
+        .await
+        .expect("save");
+
+    let other = CredentialKey::new(AS_BETA, "acct", MCP_ALPHA);
+    assert_eq!(store.load(&other).await.expect("load"), None);
+}
+
+/// **D-116-R1 at the trait level.**
+#[tokio::test]
+async fn load_with_a_different_server_is_a_miss() {
+    let store = InMemoryCredentialStore::new();
+    store
+        .save(
+            &CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA),
+            &creds("at", "cid"),
+        )
+        .await
+        .expect("save");
+
+    let other = CredentialKey::new(AS_ALPHA, "acct", MCP_BETA);
+    assert_eq!(store.load(&other).await.expect("load"), None);
+}
+
+#[tokio::test]
+async fn load_with_a_different_account_is_a_miss() {
+    let store = InMemoryCredentialStore::new();
+    store
+        .save(
+            &CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA),
+            &creds("at", "cid"),
+        )
+        .await
+        .expect("save");
+
+    let other = CredentialKey::new(AS_ALPHA, "other", MCP_ALPHA);
+    assert_eq!(store.load(&other).await.expect("load"), None);
+}
+
+#[tokio::test]
+async fn delete_removes_the_entry_and_a_missing_key_is_not_an_error() {
+    let store = InMemoryCredentialStore::new();
+    let key = CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA);
+    store.save(&key, &creds("at", "cid")).await.expect("save");
+
+    store.delete(&key).await.expect("delete");
+    assert_eq!(store.load(&key).await.expect("load"), None);
+
+    // The friendly missing-key no-op `auth logout <url>` depends on.
+    store
+        .delete(&key)
+        .await
+        .expect("deleting a missing key is Ok");
+}
+
+#[tokio::test]
+async fn record_issuer_then_last_issuer_returns_the_recorded_issuer() {
+    let store = InMemoryCredentialStore::new();
+    assert_eq!(store.last_issuer(MCP_ALPHA).await.expect("read"), None);
+
+    store
+        .record_issuer(MCP_ALPHA, AS_ALPHA)
+        .await
+        .expect("record");
+    assert_eq!(
+        store.last_issuer(MCP_ALPHA).await.expect("read"),
+        Some(AS_ALPHA.to_string())
+    );
+}
+
+/// Saving credentials and recording the server's last-seen issuer as two
+/// separate operations leaves a window in which the store claims one issuer
+/// while holding another's credentials. One call closes it.
+#[tokio::test]
+async fn save_with_issuer_makes_both_observable_in_one_call() {
+    let store = InMemoryCredentialStore::new();
+    let key = CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA);
+    let record = creds("at", "cid");
+
+    store
+        .save_with_issuer(&key, &record, MCP_ALPHA, AS_ALPHA)
+        .await
+        .expect("save_with_issuer");
+
+    assert_eq!(store.load(&key).await.expect("load"), Some(record));
+    assert_eq!(
+        store.last_issuer(MCP_ALPHA).await.expect("read"),
+        Some(AS_ALPHA.to_string())
+    );
+}
+
+/// A minimal platform implementor that overrides ONLY `load`/`save`/`delete`
+/// must compile and behave: the two D-18 tracking methods degrade to their
+/// defaults, and the default `save_with_issuer` still makes `load` observable
+/// rather than erroring.
+#[tokio::test]
+async fn a_minimal_implementor_gets_working_defaults() {
+    let store = minimal::MinimalStore::default();
+    let key = CredentialKey::new(AS_ALPHA, "acct", MCP_ALPHA);
+    let record = creds("at", "cid");
+
+    assert_eq!(store.last_issuer(MCP_ALPHA).await.expect("default"), None);
+    store
+        .record_issuer(MCP_ALPHA, AS_ALPHA)
+        .await
+        .expect("default record_issuer is Ok");
+    assert_eq!(
+        store.last_issuer(MCP_ALPHA).await.expect("default"),
+        None,
+        "the default record_issuer must not pretend to have stored anything"
+    );
+
+    store
+        .save_with_issuer(&key, &record, MCP_ALPHA, AS_ALPHA)
+        .await
+        .expect("the default save_with_issuer degrades to save, it does not error");
+    assert_eq!(store.load(&key).await.expect("load"), Some(record));
+}
+
+mod minimal {
+    use std::collections::BTreeMap;
+
+    use async_trait::async_trait;
+    use parking_lot::Mutex;
+    use pmcp::{CredentialKey, CredentialStore, Result, StoredCredentials};
+
+    /// The smallest thing that can be a `CredentialStore`: three methods.
+    #[derive(Debug, Default)]
+    pub struct MinimalStore {
+        entries: Mutex<BTreeMap<CredentialKey, StoredCredentials>>,
+    }
+
+    #[async_trait]
+    impl CredentialStore for MinimalStore {
+        async fn load(&self, key: &CredentialKey) -> Result<Option<StoredCredentials>> {
+            Ok(self.entries.lock().get(key).cloned())
+        }
+
+        async fn save(&self, key: &CredentialKey, credentials: &StoredCredentials) -> Result<()> {
+            self.entries.lock().insert(key.clone(), credentials.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &CredentialKey) -> Result<()> {
+            self.entries.lock().remove(key);
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8. CredentialStoreAdmin — the four `auth` subcommand semantics
+// ---------------------------------------------------------------------------
+
+async fn three_credential_store() -> InMemoryCredentialStore {
+    let store = InMemoryCredentialStore::new();
+    for (issuer, account, server, token) in [
+        (AS_ALPHA, "", MCP_ALPHA, "at-1"),
+        (AS_BETA, "sub-2", MCP_ALPHA, "at-2"),
+        (AS_ALPHA, "", MCP_BETA, "at-3"),
+    ] {
+        store
+            .save(
+                &CredentialKey::new(issuer, account, server),
+                &creds(token, "cid"),
+            )
+            .await
+            .expect("save");
+    }
+    store
+}
+
+#[tokio::test]
+async fn list_keys_is_empty_then_returns_exactly_the_saved_keys() {
+    let store = InMemoryCredentialStore::new();
+    assert_eq!(store.list_keys().await.expect("list").len(), 0);
+
+    let store = three_credential_store().await;
+    let listed = store.list_keys().await.expect("list");
+    assert_eq!(listed.len(), 3);
+
+    let unique: BTreeSet<CredentialKey> = listed.into_iter().collect();
+    assert_eq!(
+        unique,
+        [
+            CredentialKey::new(AS_ALPHA, "", MCP_ALPHA),
+            CredentialKey::new(AS_BETA, "sub-2", MCP_ALPHA),
+            CredentialKey::new(AS_ALPHA, "", MCP_BETA),
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+#[tokio::test]
+async fn list_keys_ordering_is_deterministic_across_calls() {
+    let store = three_credential_store().await;
+    let first = store.list_keys().await.expect("list");
+    let second = store.list_keys().await.expect("list");
+    assert_eq!(first, second);
+}
+
+/// `auth logout <url>` and its count message. Two credentials for the named
+/// server go, the third — a DIFFERENT server sharing an authorization server —
+/// stays. **T-116-13b.**
+#[tokio::test]
+async fn delete_by_server_removes_only_that_server_and_returns_the_count() {
+    let store = three_credential_store().await;
+
+    assert_eq!(store.delete_by_server(MCP_ALPHA).await.expect("delete"), 2);
+
+    let remaining = store.list_keys().await.expect("list");
+    assert_eq!(remaining, vec![CredentialKey::new(AS_ALPHA, "", MCP_BETA)]);
+    assert_eq!(
+        store
+            .load(&CredentialKey::new(AS_ALPHA, "", MCP_BETA))
+            .await
+            .expect("load")
+            .map(|record| record.access_token().to_string()),
+        Some("at-3".to_string())
+    );
+}
+
+/// The friendly missing-key no-op — `auth logout <unknown-url>` prints
+/// "nothing to do", it does not fail.
+#[tokio::test]
+async fn delete_by_server_for_an_unknown_server_returns_zero_and_is_not_an_error() {
+    let store = three_credential_store().await;
+    assert_eq!(
+        store
+            .delete_by_server("https://never-seen.example")
+            .await
+            .expect("delete"),
+        0
+    );
+    assert_eq!(store.list_keys().await.expect("list").len(), 3);
+}
+
+/// `auth logout --all` and its count message.
+#[tokio::test]
+async fn clear_all_returns_the_total_and_empties_the_store() {
+    let store = three_credential_store().await;
+    assert_eq!(store.clear_all().await.expect("clear"), 3);
+    assert_eq!(store.list_keys().await.expect("list").len(), 0);
+}
+
+#[tokio::test]
+async fn clear_all_on_an_empty_store_returns_zero() {
+    let store = InMemoryCredentialStore::new();
+    assert_eq!(store.clear_all().await.expect("clear"), 0);
+}
+
+#[tokio::test]
+async fn take_migration_report_is_none_on_a_store_that_never_migrated() {
+    let store = InMemoryCredentialStore::new();
+    assert!(store.take_migration_report().await.expect("take").is_none());
+
+    let bytes = populated_snapshot().to_bytes().expect("serialize");
+    let seeded = InMemoryCredentialStore::from_bytes(&bytes).expect("seed");
+    assert!(
+        seeded
+            .take_migration_report()
+            .await
+            .expect("take")
+            .is_none(),
+        "reading a current-version document is not a migration"
+    );
+}
+
+/// This is how 116-13 surfaces a dropped login to the operator — **T-116-16b**.
+#[tokio::test]
+async fn take_migration_report_yields_once_then_none() {
+    let store = InMemoryCredentialStore::from_bytes(V1_NO_ISSUER.as_bytes()).expect("seed");
+
+    let report: MigrationReport = store
+        .take_migration_report()
+        .await
+        .expect("take")
+        .expect("a migration that dropped an entry must report it");
+    assert_eq!(report.migrated(), 0);
+    assert_eq!(report.dropped().len(), 1);
+
+    assert!(
+        store.take_migration_report().await.expect("take").is_none(),
+        "taking the report must clear it"
+    );
+}
+
+#[tokio::test]
+async fn a_seeded_store_serves_the_migrated_credentials() {
+    let store =
+        InMemoryCredentialStore::from_bytes(V1_TWO_SERVERS_ONE_ISSUER.as_bytes()).expect("seed");
+
+    let record = store
+        .load(&CredentialKey::new(AS_ALPHA, "", MCP_BETA))
+        .await
+        .expect("load")
+        .expect("migrated");
+    assert_eq!(record.access_token(), "at-beta");
+    assert_eq!(record.client_id(), "cid-beta");
+    assert_eq!(
+        store.last_issuer(MCP_BETA).await.expect("read"),
+        Some(AS_ALPHA.to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 9. Properties
 // ---------------------------------------------------------------------------
 
 proptest! {
