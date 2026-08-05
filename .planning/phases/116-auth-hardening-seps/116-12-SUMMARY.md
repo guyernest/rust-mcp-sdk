@@ -147,7 +147,7 @@ rather than being counted as this plan's work.
 
 ## Files Created/Modified
 
-- **`src/client/oauth.rs`** (**modified**, 3272 → **3759** lines, **+567 / −79**). New public:
+- **`src/client/oauth.rs`** (**modified**, 3272 → **3760** lines, **+567 / −79**). New public:
   `Interactivity` (`#[non_exhaustive]`, `Interactive` = `#[default]`, `RefreshOnly`),
   `OAuthHelper::with_interactivity` — **one enum and one method, no new field on any public
   struct**. New private: `StoreOutcome`, `StoreMiss`, `token_fingerprint`,
@@ -304,6 +304,22 @@ Cargo.toml` exits **0**; `mockito` and `proptest` are pre-existing dev-dependenc
   `No supported OAuth flow available` rather than on their own assertions, because a mock that
   refuses the refresh also refuses the authorization-code exchange the fall-through then performs.
   Routing by `grant_type` keeps the two independent.
+
+- **The working tree was modified by something OUTSIDE this plan after the final task commit, and
+  those changes are deliberately NOT committed here.** At 00:01–00:02, after `464533ac` and after
+  every verification run below, `src/client/oauth.rs`, `src/error/mod.rs` and
+  `src/shared/credential_store.rs` acquired edits this executor did not make — including a new
+  `Error::marker_field` helper consolidating the marker families. They are plausible cleanups, they
+  are unverified by this plan, and they are left uncommitted for their author. **Consequence for a
+  verifier: run this plan's greps against `git show HEAD:src/client/oauth.rs`, not against the
+  working tree.** Every figure in *Gate Results* was either produced before 00:01 (timestamps in
+  `target/116-verify/`) or re-measured against the committed object; the acceptance greps were
+  re-run against `git show HEAD:` specifically for this reason.
+
+- **`wc -l` in this environment is wrapped and mis-reported `src/client/oauth.rs` by one line**
+  (3759 vs the git object's 3760 — its output carried a stray `Σ` total line). Line counts here are
+  taken from `git show <rev>:<path> | grep -c ''`. Same family as `D-116-GREP`: the tool that
+  reports the number is not neutral.
 
 - **`D-116-FUZZGATE` unchanged.** Not re-measured in this plan's own gate run, which aborted at
   `test-unit` before `test-fuzz`. No claim is made about it here.
@@ -526,7 +542,7 @@ Files claimed created/modified, verified on disk:
 
 ```
 FOUND: tests/oauth_refresh.rs                                     1447 lines (min_lines 160 ✓)
-FOUND: src/client/oauth.rs                                        3759 lines (was 3272, +567/−79)
+FOUND: src/client/oauth.rs                                        3760 lines (was 3272, +567/−79)
 FOUND: .planning/phases/116-auth-hardening-seps/deferred-items.md 1032 lines (was 918)
 ```
 
