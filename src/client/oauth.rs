@@ -34,7 +34,7 @@ use crate::client::http_middleware::HttpMiddlewareChain;
 use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
-use crate::shared::http_body_cap::DEFAULT_AUTH_RESPONSE_BYTES;
+use crate::shared::http_body_cap::{collect_reqwest_body_within_cap, DEFAULT_AUTH_RESPONSE_BYTES};
 use crate::shared::oauth_validation::{
     derive_application_type, iss_presence_from, parse_iss_env_value,
     validate_authorization_response, AuthorizationRequestRecord, IssPresence,
@@ -188,6 +188,179 @@ fn apply_application_type(request: &mut DcrRequest) -> Result<String> {
     let derived = derive_application_type(&request.redirect_uris)?;
     request.set_application_type(derived.as_str());
     Ok(derived.as_str().to_string())
+}
+
+/// Whether the authorization server registered this client under a DIFFERENT
+/// `application_type` than the one the registration request asked for.
+///
+/// Returns `Some((sent, echoed))` only for a genuine divergence. Both an EQUAL
+/// echo and an ABSENT echo return `None`, and the second of those is the rule
+/// worth stating: RFC 7591 § 3.2.1 does not require the server to echo the
+/// metadata it accepted, so an omission means "no answer", never "a different
+/// answer". Treating an omission as divergence would make every RFC-conformant
+/// terse registration server produce a warning about a disagreement that never
+/// happened.
+///
+/// A divergence is deliberately NOT an error anywhere it is used. The same
+/// RFC § 3.2.1 permits the server to modify any requested client metadata, so
+/// failing here would turn a legal server behaviour into an outage (T-116-36,
+/// disposition `accept`). The value of detecting it is diagnostic: the client
+/// is now registered under constraints it did not choose.
+///
+/// This is a pure function over two borrowed strings precisely so the RULE is
+/// testable without a network, without a log subscriber, and without adding a
+/// field to any public constructible type.
+fn application_type_divergence(sent: &str, echoed: Option<&str>) -> Option<(String, String)> {
+    match echoed {
+        Some(registered) if registered != sent => Some((sent.to_string(), registered.to_string())),
+        _ => None,
+    }
+}
+
+/// The most characters of an authorization-server-supplied `error` or
+/// `error_description` that a registration-rejection message will reproduce.
+///
+/// The body itself is already bounded by [`MAX_DCR_RESPONSE_BYTES`], but a
+/// 1 `MiB` `error_description` is still an echo channel wearing a
+/// specification-approved hat (T-116-37). Reproducing a short prefix keeps the
+/// message actionable while capping what a hostile registration endpoint can
+/// push into a developer's terminal and log aggregator.
+const MAX_DCR_ERROR_FIELD_CHARS: usize = 200;
+
+/// The RFC 7591 § 3.2.2 error fields of a rejected registration, projected out
+/// of an entirely authorization-server-controlled body.
+///
+/// Every field is `Option` because none of them is guaranteed: the body may be
+/// a conformant error object, an unrelated JSON document, an HTML error page or
+/// nothing at all. The projection never fails and never panics — an
+/// unrecognisable body simply yields two `None`s, and the rejection message
+/// then names the HTTP status and what the client sent, which is still
+/// actionable.
+#[derive(Debug, Default)]
+struct DcrRejectionFields {
+    /// RFC 7591 § 3.2.2 `error` — a single ASCII error code such as
+    /// `invalid_redirect_uri`.
+    error: Option<String>,
+    /// RFC 7591 § 3.2.2 `error_description` — human-readable detail.
+    error_description: Option<String>,
+}
+
+/// Project a rejected registration's body onto its RFC 7591 § 3.2.2 error
+/// fields, taking only string values and only a bounded prefix of each.
+///
+/// # Why `as_str` and not a stringification
+///
+/// The body is attacker-influenced input. A non-string `error` is `None`
+/// rather than a coerced `"42"`, exactly as `DcrResponse::application_type`
+/// treats the same class of value (116-03). This is the only place the
+/// rejection path reads server-supplied text at all, so it is the only place
+/// that rule has to hold.
+fn dcr_rejection_fields(body: &[u8]) -> DcrRejectionFields {
+    let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return DcrRejectionFields::default();
+    };
+
+    DcrRejectionFields {
+        error: bounded_error_field(parsed.get("error")),
+        error_description: bounded_error_field(parsed.get("error_description")),
+    }
+}
+
+/// Take a JSON value's string content, truncated to
+/// [`MAX_DCR_ERROR_FIELD_CHARS`] on a character boundary.
+///
+/// The truncation marker names how many characters were dropped and reproduces
+/// none of them, so the fact of truncation is visible without the truncated
+/// content leaking through the notice itself.
+fn bounded_error_field(value: Option<&serde_json::Value>) -> Option<String> {
+    let text = value.and_then(serde_json::Value::as_str)?;
+    let total = text.chars().count();
+    if total <= MAX_DCR_ERROR_FIELD_CHARS {
+        return Some(text.to_string());
+    }
+
+    let kept: String = text.chars().take(MAX_DCR_ERROR_FIELD_CHARS).collect();
+    Some(format!(
+        "{kept}… [truncated: {} of {total} characters withheld]",
+        total - MAX_DCR_ERROR_FIELD_CHARS
+    ))
+}
+
+/// Compose the error for a registration the authorization server REJECTED.
+///
+/// SEP-837 ¶3 obliges an MCP client to surface a MEANINGFUL error when
+/// registration is refused, because the most common cause is a redirect-URI
+/// constraint tied to the very `application_type` this module now sends. A bare
+/// status code does not tell a developer which of their two knobs to turn, so
+/// the message names FOUR things:
+///
+/// | Named | Why |
+/// |---|---|
+/// | the HTTP status | distinguishes a refusal from a transport failure |
+/// | the server's `error` / `error_description` | the server's own reason, when it gave one |
+/// | the `application_type` that was sent | half of the rejected pair |
+/// | the `redirect_uris` that were sent | the other half |
+///
+/// # What is deliberately absent
+///
+/// No raw body content beyond the two parsed, length-bounded fields above. The
+/// rejection path must not become the echo channel the bounded read exists to
+/// close (T-116-37).
+///
+/// SEP-837's OPTIONAL retry with an adjusted `application_type` is also
+/// deliberately not implemented. The specification says clients MAY retry; an
+/// automatic retry would silently register the client under a type its operator
+/// did not choose, which is the opposite of surfacing a meaningful error.
+fn registration_rejected(
+    status: reqwest::StatusCode,
+    fields: &DcrRejectionFields,
+    sent_application_type: &str,
+    sent_redirect_uris: &[String],
+) -> Error {
+    let server_reason = match (&fields.error, &fields.error_description) {
+        (Some(code), Some(description)) => {
+            format!("error={code}; error_description={description}")
+        },
+        (Some(code), None) => format!("error={code}"),
+        (None, Some(description)) => format!("error_description={description}"),
+        (None, None) => {
+            "the response body carried no RFC 7591 section 3.2.2 `error` field".to_string()
+        },
+    };
+
+    Error::internal(format!(
+        "DCR failed ({status}): the authorization server rejected this dynamic client \
+         registration. Server reason: {server_reason}\n\
+         \n\
+         The registration that was rejected declared application_type=\"{sent_application_type}\" \
+         with redirect_uris={sent_redirect_uris:?}. Those two are the pair an OIDC authorization \
+         server enforces its redirect-URI constraints over, so they are what to change.\n\
+         \n\
+         No other part of the response body is reproduced here. Pass a pre-registered client_id \
+         to skip DCR."
+    ))
+}
+
+/// What one completed Dynamic Client Registration produced.
+///
+/// Exists so `registered_application_type` can leave
+/// `OAuthHelper::do_dynamic_client_registration` at all. The obvious
+/// alternative — a new field on [`AuthorizationResult`] — was considered and
+/// REJECTED: that struct is public, all-`pub`-field and not
+/// `#[non_exhaustive]`, so adding a field is `cargo-semver-checks`'
+/// `constructible_struct_adds_field`, a MAJOR break, and avoiding exactly that
+/// class of break is what this whole phase is built around.
+/// `StoredCredentials` (116-05) has PRIVATE fields and an inherent
+/// `with_registered_application_type` builder for the same value, which is why
+/// the persistence hop 116-11 adds costs no semver event either.
+#[derive(Debug)]
+struct DcrOutcome {
+    /// The parsed RFC 7591 registration response.
+    response: crate::server::auth::provider::DcrResponse,
+    /// The `application_type` this client ended up registered under — the
+    /// server's echoed value when it echoed one, otherwise the value that was
+    /// sent.
+    registered_application_type: String,
 }
 
 /// How the interactive authorization URL reaches a human.
@@ -584,7 +757,7 @@ impl OAuthHelper {
         &self,
         registration_endpoint: &str,
         metadata: &OidcDiscoveryMetadata,
-    ) -> Result<crate::server::auth::provider::DcrResponse> {
+    ) -> Result<DcrOutcome> {
         let parsed = Url::parse(registration_endpoint)
             .map_err(|e| Error::internal(format!("Invalid registration_endpoint URL: {e}")))?;
         // `url::Url::host_str()` returns IPv6 literals WITH brackets (e.g.
@@ -651,7 +824,7 @@ impl OAuthHelper {
         // server ignores it, and era-gating would require plumbing a protocol
         // era into DCR that does not exist before an MCP connection is
         // established.
-        apply_application_type(&mut request)?;
+        let sent_application_type = apply_application_type(&mut request)?;
 
         let response = self
             .client
@@ -663,13 +836,20 @@ impl OAuthHelper {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::internal(format!(
-                "DCR failed ({}): {}\n\n\
-                 The server rejected dynamic client registration. Pass a \
-                 pre-registered client_id to skip DCR.",
-                status, body
-            )));
+            // The rejection body is as authorization-server-controlled as the
+            // success body, so it is read through the SAME bounded reader. Its
+            // over-cap refusal names the cap and reproduces no body content, and
+            // it propagates verbatim: a registration endpoint that answers a
+            // refusal with a gigabyte must not be able to spend a gigabyte of
+            // this client's memory on the way to being refused.
+            let body = collect_reqwest_body_within_cap(response, MAX_DCR_RESPONSE_BYTES).await?;
+            let fields = dcr_rejection_fields(&body);
+            return Err(registration_rejected(
+                status,
+                &fields,
+                &sent_application_type,
+                &request.redirect_uris,
+            ));
         }
 
         // reqwest has no direct bytes-limit API — read the body as bytes, enforce
@@ -689,7 +869,35 @@ impl OAuthHelper {
             serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(&bytes)
                 .map_err(|e| Error::internal(format!("Failed to parse DCR response: {e}")))?;
 
-        Ok(registration)
+        // D-11 — echo divergence WARNS and never fails. See
+        // `application_type_divergence` for why an omitted echo is not a
+        // divergence, and why a real one is not an error.
+        let echoed = registration.application_type();
+        if let Some((requested, registered)) =
+            application_type_divergence(&sent_application_type, echoed)
+        {
+            tracing::warn!(
+                "the registration endpoint at {} registered this client with \
+                 application_type=\"{}\" although \"{}\" was requested. RFC 7591 section 3.2.1 \
+                 permits an authorization server to modify requested client metadata, so the \
+                 registration STANDS and this is not an error — but this client is now registered \
+                 under redirect-URI constraints it did not choose.",
+                registration_endpoint,
+                registered,
+                requested
+            );
+        }
+        // The type this client is actually registered under: the server's answer
+        // when it gave one, otherwise the value that was sent, because RFC 7591
+        // does not require an echo and an un-echoed request is registered as
+        // requested.
+        let registered_application_type =
+            echoed.unwrap_or(sent_application_type.as_str()).to_string();
+
+        Ok(DcrOutcome {
+            response: registration,
+            registered_application_type,
+        })
     }
 
     /// Resolve the `client_id` for the current OAuth flow, performing DCR
@@ -717,11 +925,19 @@ impl OAuthHelper {
         match metadata.registration_endpoint.as_ref() {
             Some(endpoint) => {
                 tracing::info!("Performing Dynamic Client Registration at {}", endpoint);
-                let response = self
+                let outcome = self
                     .do_dynamic_client_registration(endpoint, metadata)
                     .await?;
-                tracing::info!("DCR succeeded — issued client_id");
-                Ok(response.client_id)
+                // The registered `application_type` is reported here rather than
+                // discarded: 116-11 persists it through
+                // `StoredCredentials::with_registered_application_type`, and
+                // until then a later diagnosis of a redirect-URI refusal can at
+                // least read it out of the flow's own log.
+                tracing::info!(
+                    "DCR succeeded — issued client_id, registered with application_type=\"{}\"",
+                    outcome.registered_application_type
+                );
+                Ok(outcome.response.client_id)
             },
             None => Err(Error::internal(
                 "server does not support DCR — pass a pre-registered client_id".to_string(),
@@ -2240,6 +2456,125 @@ mod sep837_sep2207_composition_tests {
             compose_scopes_with_offline_access(&configured, &[]),
             owned(&["openid", "profile"])
         );
+    }
+}
+
+/// D-11's divergence RULE, pinned where it is DECIDED.
+///
+/// The module name carries `application_type_divergence` so a
+/// `nextest -E 'test(application_type_divergence)'` selector reaches every row
+/// here — 116-01 measured that a selector which matches nothing reports success
+/// rather than failing, so the name is load-bearing rather than descriptive.
+///
+/// There is deliberately no log-capture assertion anywhere in this module.
+/// `tracing-subscriber` is an OPTIONAL dependency behind the `logging` feature
+/// in this repo and not a dev-dependency, so a test built on capturing the
+/// `tracing::warn!` would be unrunnable in the default configuration — and
+/// would be pinning the REPORTING rather than the rule. The four rows below
+/// pin the rule; `tests/oauth_dcr_integration.rs` pins the consequence that
+/// actually matters end to end, which is that registration SUCCEEDS anyway.
+#[cfg(test)]
+mod application_type_divergence_tests {
+    use super::*;
+    use crate::server::auth::provider::DcrResponse;
+    use serde_json::json;
+
+    /// Parse a `DcrResponse` from a body shaped exactly as an authorization
+    /// server would send it, so the `extra` carrier is exercised rather than
+    /// bypassed.
+    fn response_echoing(application_type: serde_json::Value) -> DcrResponse {
+        serde_json::from_value(json!({
+            "client_id": "issued-id",
+            "application_type": application_type,
+        }))
+        .expect("a DcrResponse parses from a client_id plus an extra key")
+    }
+
+    #[test]
+    fn an_equal_echo_is_not_a_divergence() {
+        let response = response_echoing(json!("native"));
+        assert_eq!(response.application_type(), Some("native"));
+        assert_eq!(
+            application_type_divergence("native", response.application_type()),
+            None,
+            "the server agreed; there is nothing to warn about"
+        );
+    }
+
+    #[test]
+    fn a_different_echo_is_a_divergence_naming_both_values() {
+        let response = response_echoing(json!("web"));
+        assert_eq!(
+            application_type_divergence("native", response.application_type()),
+            Some(("native".to_string(), "web".to_string())),
+            "the tuple is (sent, registered) in that order — a warning that named \
+             them the other way round would send a developer to change the wrong knob"
+        );
+    }
+
+    #[test]
+    fn an_absent_echo_is_not_a_divergence() {
+        // RFC 7591 § 3.2.1 does not require the server to echo accepted
+        // metadata, so silence is "no answer" and never "a different answer".
+        let response: DcrResponse =
+            serde_json::from_value(json!({ "client_id": "issued-id" })).expect("parses");
+        assert_eq!(response.application_type(), None);
+        assert_eq!(
+            application_type_divergence("native", response.application_type()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_non_string_echo_reaches_application_type_divergence_as_an_absence() {
+        // The accessor projects `Value::as_str` only (116-03), so a hostile
+        // non-string value is `None` rather than a coerced `"42"` — and this
+        // row proves the two halves compose: a non-string echo must not be
+        // reported as a divergence against the string `"native"`.
+        for hostile in [json!(42), json!(null), json!(true), json!(["native"])] {
+            let response = response_echoing(hostile.clone());
+            assert_eq!(
+                response.application_type(),
+                None,
+                "a non-string echo must project to None: {hostile}"
+            );
+            assert_eq!(
+                application_type_divergence("native", response.application_type()),
+                None,
+                "and must therefore not be reported as a divergence: {hostile}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oversized_error_field_is_truncated_without_reproducing_what_it_dropped() {
+        let long = "Z".repeat(MAX_DCR_ERROR_FIELD_CHARS + 500);
+        let body =
+            json!({ "error": "invalid_redirect_uri", "error_description": long }).to_string();
+        let fields = dcr_rejection_fields(body.as_bytes());
+
+        assert_eq!(fields.error.as_deref(), Some("invalid_redirect_uri"));
+        let description = fields.error_description.expect("a description");
+        assert!(
+            description.contains("500 of 700 characters withheld"),
+            "the notice must say how much was dropped: {description}"
+        );
+        assert!(
+            description.chars().count() < MAX_DCR_ERROR_FIELD_CHARS + 100,
+            "the bounded field must be far shorter than the input"
+        );
+    }
+
+    #[test]
+    fn a_non_string_or_unparseable_rejection_body_yields_no_fields() {
+        let coerced = json!({ "error": 42, "error_description": ["nope"] }).to_string();
+        let fields = dcr_rejection_fields(coerced.as_bytes());
+        assert_eq!(fields.error, None, "a non-string error is never coerced");
+        assert_eq!(fields.error_description, None);
+
+        let html = dcr_rejection_fields(b"<html><body>502 Bad Gateway</body></html>");
+        assert_eq!(html.error, None);
+        assert_eq!(html.error_description, None);
     }
 }
 

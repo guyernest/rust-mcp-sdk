@@ -853,3 +853,223 @@ fn an_https_non_loopback_registration_derives_web() {
     let wire = serde_json::to_value(&request).expect("serializes");
     assert_eq!(wire["application_type"], "web");
 }
+
+// ---------------------------------------------------------------------------
+// Group E — the RESPONSE half: echo divergence (never fatal) and an actionable
+// rejection
+// ---------------------------------------------------------------------------
+
+/// Drive DCR against a registration endpoint that answers with `status` and
+/// `body`, and return whatever the resolver produced.
+///
+/// The discovery document advertises a `registration_endpoint`, `client_id` is
+/// absent and `dcr_enabled` is on, so the resolver always reaches `/register`.
+async fn dcr_against(status: usize, body: String) -> pmcp::Result<String> {
+    let mut server = Server::new_async().await;
+    let base = server.url();
+
+    let _d = server
+        .mock("GET", "/.well-known/openid-configuration")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(discovery_advertising(&base, &["openid"], true))
+        .create_async()
+        .await;
+
+    let _r = server
+        .mock("POST", "/register")
+        .with_status(status)
+        .with_header("content-type", "application/json")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    OAuthHelper::new(OAuthConfig {
+        mcp_server_url: Some(base.clone()),
+        dcr_enabled: true,
+        client_id: None,
+        client_name: Some("dcr-response-half".into()),
+        ..OAuthConfig::default()
+    })
+    .expect("helper")
+    .test_resolve_client_id_from_discovery()
+    .await
+}
+
+#[tokio::test]
+async fn an_echoed_application_type_that_diverges_still_registers_the_client() {
+    // The load-bearing behaviour is "never fatal". RFC 7591 § 3.2.1 explicitly
+    // permits the authorization server to modify requested client metadata, so
+    // failing here would turn a legal server behaviour into an outage
+    // (T-116-36, disposition `accept`). `native` was sent; `web` comes back;
+    // registration must still SUCCEED.
+    //
+    // The warning itself is pinned by the inline unit tests of
+    // `application_type_divergence`, not by capturing a log line — see that
+    // module's doc for why.
+    let resolved = dcr_against(
+        201,
+        json!({ "client_id": "registered-as-web", "application_type": "web" }).to_string(),
+    )
+    .await
+    .expect("a divergent echo is a WARNING, never a registration failure");
+    assert_eq!(resolved, "registered-as-web");
+}
+
+#[tokio::test]
+async fn an_omitted_application_type_echo_is_not_divergence_and_registration_succeeds() {
+    // RFC 7591 does not require the server to echo accepted metadata, so an
+    // omission is "no answer" and must not be reported as a disagreement.
+    let resolved = dcr_against(201, json!({ "client_id": "terse-server" }).to_string())
+        .await
+        .expect("an absent echo is not divergence");
+    assert_eq!(resolved, "terse-server");
+}
+
+#[tokio::test]
+async fn an_identical_application_type_echo_registers_without_incident() {
+    let resolved = dcr_against(
+        201,
+        json!({ "client_id": "agreed", "application_type": "native" }).to_string(),
+    )
+    .await
+    .expect("an agreeing server is the ordinary case");
+    assert_eq!(resolved, "agreed");
+}
+
+#[tokio::test]
+async fn a_rejected_registration_names_the_status_the_sent_type_and_the_sent_redirect_uri() {
+    // SEP-837 ¶3: "When a registration request is rejected, clients SHOULD
+    // surface a meaningful error to the user or developer." A bare status does
+    // not tell a developer which knob to turn; the `application_type` and the
+    // `redirect_uris` are exactly the pair the server enforced its constraints
+    // over, so both are named.
+    let err = dcr_against(
+        400,
+        json!({
+            "error": "invalid_redirect_uri",
+            "error_description": "loopback redirect URIs are not permitted for this client",
+        })
+        .to_string(),
+    )
+    .await
+    .expect_err("a 400 is a rejection");
+    let msg = err.to_string();
+
+    for expected in [
+        "400",
+        "invalid_redirect_uri",
+        "loopback redirect URIs are not permitted",
+        "application_type=\"native\"",
+        "127.0.0.1",
+        "pre-registered client_id",
+    ] {
+        assert!(
+            msg.contains(expected),
+            "the rejection must name {expected:?}; got: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_rejected_registration_does_not_echo_unparsed_fields_of_the_body() {
+    // T-116-37: the rejection path must not become the echo channel the bounded
+    // read exists to close. Only `error` and `error_description` are reproduced;
+    // everything else in an entirely server-controlled body is dropped.
+    const CANARY: &str = "CANARY-9c2e41-DO-NOT-DISCLOSE";
+    let err = dcr_against(
+        422,
+        json!({
+            "error": "invalid_client_metadata",
+            "internal_trace": CANARY,
+            "stack": [CANARY, CANARY],
+        })
+        .to_string(),
+    )
+    .await
+    .expect_err("a 422 is a rejection");
+    let msg = err.to_string();
+
+    assert!(msg.contains("422"), "names the status: {msg}");
+    assert!(
+        msg.contains("invalid_client_metadata"),
+        "names the server's own reason: {msg}"
+    );
+    assert!(
+        !msg.contains(CANARY),
+        "no body content beyond the two parsed error fields may reach the message: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_registration_with_a_non_json_body_reproduces_none_of_it() {
+    const CANARY: &str = "CANARY-4b77f0-DO-NOT-DISCLOSE";
+    let err = dcr_against(
+        503,
+        format!("<html><body><h1>503</h1><p>{CANARY}</p></body></html>"),
+    )
+    .await
+    .expect_err("a 503 is a rejection");
+    let msg = err.to_string();
+
+    assert!(msg.contains("503"), "names the status: {msg}");
+    assert!(
+        !msg.contains(CANARY),
+        "an unparseable body is dropped entirely, not echoed: {msg}"
+    );
+    assert!(
+        msg.contains("application_type=\"native\"") && msg.contains("127.0.0.1"),
+        "and the message is still actionable without it: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_registration_truncates_an_oversized_error_description() {
+    // The body is capped at 1 MiB, but a 1 MiB `error_description` is still an
+    // echo channel wearing a specification-approved hat.
+    let long = "Q".repeat(5_000);
+    let err = dcr_against(
+        400,
+        json!({ "error": "invalid_redirect_uri", "error_description": long }).to_string(),
+    )
+    .await
+    .expect_err("a 400 is a rejection");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("characters withheld"),
+        "the truncation must be announced: {msg}"
+    );
+    assert!(
+        msg.len() < 2_000,
+        "a 5000-character description must not reach the message in full ({} bytes)",
+        msg.len()
+    );
+}
+
+#[tokio::test]
+async fn a_rejection_body_over_the_cap_is_refused_without_reproducing_it() {
+    // The rejection body is read through the SAME bounded reader as the success
+    // body. Before 116-10 this path called `response.text()` with no cap at all
+    // and then interpolated the whole thing into the error.
+    const CANARY: &str = "CANARY-e01d55-DO-NOT-DISCLOSE";
+    let mut huge = String::with_capacity(1_300_000);
+    huge.push_str(r#"{"error":"invalid_client_metadata","error_description":""#);
+    huge.push_str(CANARY);
+    huge.push_str(&"B".repeat(1_300_000));
+    huge.push_str(r#""}"#);
+
+    let err = dcr_against(400, huge)
+        .await
+        .expect_err("an over-cap rejection body is refused");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("1048576") && msg.contains("cap"),
+        "the refusal names the cap it enforced: {msg}"
+    );
+    assert!(
+        !msg.contains(CANARY),
+        "and reproduces no byte of the refused body: {msg}"
+    );
+}
