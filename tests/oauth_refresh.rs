@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mockito::{Mock, Server, ServerGuard};
-use pmcp::client::oauth::{BrowserLauncher, OAuthConfig, OAuthHelper};
+use pmcp::client::oauth::{BrowserLauncher, Interactivity, OAuthConfig, OAuthHelper};
 use pmcp::shared::credential_store::normalize_server_key;
 use pmcp::{CredentialKey, CredentialStore, InMemoryCredentialStore, StoredCredentials};
 use serde_json::json;
@@ -1119,4 +1119,329 @@ async fn a_rejected_refresh_falls_through_and_says_why() {
         "the authorization server's own reason must survive: {}",
         warnings[0]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Group E — D-08: `Interactivity::RefreshOnly`
+// ---------------------------------------------------------------------------
+//
+// What today's silent fall-through costs a headless caller, measured from the
+// source rather than guessed: `get_access_token` swallows a refresh failure,
+// calls `authorization_code_flow_inner`, which binds a loopback listener
+// nothing can reach, opens a browser nobody can see, and then waits on
+// `tokio::time::timeout(Duration::from_mins(5), ..)`. That is five minutes of
+// wall clock per attempt in a Lambda, ending in a timeout error that does not
+// say "a human is required".
+//
+// The rows below assert the mode's guarantee with TWO observables and never
+// with timing alone: a wall-clock assertion passes on a fast machine for the
+// wrong reason, and would keep passing if the listener were bound and closed.
+// The launcher count is the direct assertion; the port-bindability check is
+// the one that also catches a listener bound BEFORE the browser call.
+
+/// Build a `RefreshOnly` helper, returning the launcher count and the redirect
+/// port so a row can prove nothing was bound to it.
+fn refresh_only_helper_for(
+    spec: &HelperSpec<'_>,
+    store: &Arc<dyn CredentialStore>,
+) -> (OAuthHelper, Arc<AtomicUsize>, u16) {
+    let (helper, opened, port) = helper_for(spec, store);
+    (
+        helper.with_interactivity(Interactivity::RefreshOnly),
+        opened,
+        port,
+    )
+}
+
+/// Assert the full "nothing interactive happened" property: the browser
+/// launcher was never asked, and the redirect port is still free — which it
+/// would not be if a listener were still bound, and which together with the
+/// launcher count covers a listener bound and then dropped.
+fn assert_nothing_interactive_happened(opened: &Arc<AtomicUsize>, port: u16) {
+    assert_eq!(
+        opened.load(Ordering::SeqCst),
+        0,
+        "RefreshOnly must never invoke the browser launcher"
+    );
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+        "the redirect port {port} must still be bindable: RefreshOnly must bind no loopback \
+         listener"
+    );
+}
+
+/// The default is `Interactive`, and it is EXACTLY today's behaviour: a refresh
+/// failure still falls through to the browser flow. No existing caller changes.
+///
+/// This row is the reason the mode is opt-in rather than a behaviour change.
+#[tokio::test]
+async fn the_default_mode_still_falls_through_to_the_browser_flow() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::failure(400, json!({ "error": "invalid_grant" }).to_string()),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    seed_expired(&store, &base, &SeedSpec::new()).await;
+
+    // No `with_interactivity` call at all.
+    let (helper, opened, _) = helper_for(&HelperSpec::new(&base), &store);
+    let token = helper
+        .get_access_token()
+        .await
+        .expect("the default must still fall through");
+    settle().await;
+
+    assert_eq!(token, "interactive-access-token");
+    assert_eq!(wire.refreshes().len(), 1, "the refresh was still attempted");
+    assert_eq!(
+        opened.load(Ordering::SeqCst),
+        1,
+        "the default mode still opens a browser on a failed refresh"
+    );
+}
+
+/// A live cached token is served under `RefreshOnly` exactly as it is under
+/// `Interactive`: the mode narrows the FALL-BACK, not the cache.
+#[tokio::test]
+async fn refresh_only_with_a_live_cached_token_returns_it() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+
+    let key = key_for(&base);
+    store
+        .save(
+            &key,
+            &StoredCredentials::new("LIVE-ACCESS-TOKEN", "preset-client")
+                .with_refresh_token("stored-refresh-token")
+                .with_granted_scopes(vec!["openid".to_string()])
+                .with_expires_at(unix_now() + 9_000),
+        )
+        .await
+        .expect("seeding a live record");
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    assert_eq!(
+        helper
+            .get_access_token()
+            .await
+            .expect("a live cached token"),
+        "LIVE-ACCESS-TOKEN"
+    );
+    assert!(
+        wire.refreshes().is_empty(),
+        "a live token needs no network at all"
+    );
+    assert_nothing_interactive_happened(&opened, port);
+}
+
+/// An expired token with a WORKING refresh is the mode's happy path: it
+/// refreshes and returns the new token, entirely unattended.
+#[tokio::test]
+async fn refresh_only_with_an_expired_token_and_a_working_refresh_returns_the_new_token() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let key = seed_expired(&store, &base, &SeedSpec::new()).await;
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    assert_eq!(
+        helper
+            .get_access_token()
+            .await
+            .expect("an unattended refresh"),
+        "refreshed-access-token"
+    );
+
+    assert_eq!(wire.refreshes().len(), 1);
+    assert_nothing_interactive_happened(&opened, port);
+    assert_eq!(
+        stored(&store, &key).await.access_token(),
+        "refreshed-access-token",
+        "the refreshed credential is persisted, so the next call is a cache hit"
+    );
+}
+
+/// **The row D-08 exists for.**
+///
+/// A failing refresh under `RefreshOnly` returns a TYPED refusal immediately.
+/// Three independent observables, because any one of them alone can pass for
+/// the wrong reason:
+///
+/// - `is_reauth_required()` / `reauth_issuer()` — the programmatic identity, not
+///   a substring match, so a caller can branch on it.
+/// - a browser-launcher count of zero — the direct assertion.
+/// - the redirect port still bindable — catches a listener bound before the
+///   browser call, which the launcher count alone would miss.
+///
+/// The wall clock is asserted too, but LAST and loosely: it is corroboration
+/// that the five-minute callback timeout was not entered, not the proof.
+#[tokio::test]
+async fn refresh_only_with_a_failing_refresh_is_reauth_required_and_starts_nothing() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::failure(400, json!({ "error": "invalid_grant" }).to_string()),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    seed_expired(&store, &base, &SeedSpec::new()).await;
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    let started = std::time::Instant::now();
+    let err = helper
+        .get_access_token()
+        .await
+        .expect_err("a failing refresh under RefreshOnly is an error, not a browser");
+    let elapsed = started.elapsed();
+
+    assert!(
+        err.is_reauth_required(),
+        "the refusal must carry the programmatic reauth-required identity: {err}"
+    );
+    assert_eq!(
+        err.reauth_issuer(),
+        Some(base.as_str()),
+        "and must name the issuer the caller has to re-authorize against"
+    );
+    assert_eq!(wire.refreshes().len(), 1, "the refresh WAS attempted first");
+    assert_nothing_interactive_happened(&opened, port);
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "corroboration only: the five-minute callback wait was plainly not entered ({elapsed:?})"
+    );
+}
+
+/// No stored credentials at all is the same typed refusal, immediately. This is
+/// the cold-start case for a headless runtime whose credential store has not
+/// been seeded yet — and it must be actionable, not a five-minute silence.
+#[tokio::test]
+async fn refresh_only_with_no_cached_credentials_is_the_same_typed_refusal() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    let err = helper
+        .get_access_token()
+        .await
+        .expect_err("no credentials under RefreshOnly is an error");
+
+    assert!(err.is_reauth_required(), "{err}");
+    assert_eq!(err.reauth_issuer(), Some(base.as_str()));
+    assert!(
+        wire.refreshes().is_empty(),
+        "with nothing stored there is nothing to refresh"
+    );
+    assert_nothing_interactive_happened(&opened, port);
+}
+
+/// An expired record carrying NO refresh token is the third way to reach the
+/// refusal, and it must be reported as its own condition rather than folded
+/// into "the refresh failed" — the fix is different (re-authorize with
+/// `offline_access`, not retry).
+#[tokio::test]
+async fn refresh_only_with_an_expired_token_and_no_refresh_token_refuses_distinctly() {
+    let (_server, _mocks, base, wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    seed_expired(&store, &base, &SeedSpec::new().refresh_token(None)).await;
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    let err = helper
+        .get_access_token()
+        .await
+        .expect_err("no refresh token under RefreshOnly is an error");
+
+    assert!(err.is_reauth_required(), "{err}");
+    let message = err.to_string();
+    assert!(
+        message.contains("refresh token"),
+        "the refusal must say WHICH condition it is: {message}"
+    );
+    assert!(
+        wire.refreshes().is_empty(),
+        "there was no refresh token to present"
+    );
+    assert_nothing_interactive_happened(&opened, port);
+}
+
+/// `authorize_with_details` is the OTHER public entry point, and it is the one
+/// that means "log me in". Under `RefreshOnly` it must refuse rather than open a
+/// browser, or the mode's guarantee has a hole a caller can fall through by
+/// picking the other method.
+#[tokio::test]
+async fn refresh_only_refuses_the_explicit_login_entry_point_too() {
+    let (_server, _mocks, base, _wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    let err = helper
+        .authorize_with_details()
+        .await
+        .expect_err("an explicit login under RefreshOnly is a contradiction");
+
+    assert!(err.is_reauth_required(), "{err}");
+    assert_nothing_interactive_happened(&opened, port);
+}
+
+/// 116-11's authorization-server substitution refusal is also a
+/// reauth-required, and it must keep NAMING the change: a headless caller that
+/// receives it needs to know its identity provider moved, not merely that it
+/// needs to log in again.
+///
+/// This row is under `RefreshOnly` deliberately — the two refusals must be
+/// distinguishable by MESSAGE even though they share a programmatic identity.
+#[tokio::test]
+async fn a_reauth_required_from_an_issuer_change_still_names_the_change() {
+    let (_server, _mocks, base, _wire) = refresh_server(
+        &["openid"],
+        TokenReply::ok("refreshed-access-token", Some("rotated"), Some(3600)),
+    )
+    .await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let server_key = normalize_server_key(&base).expect("normalized");
+    store
+        .record_issuer(&server_key, "https://previous-as.example")
+        .await
+        .expect("seeding the previous issuer");
+
+    // A PRE-REGISTERED client_id, which is the provenance D-18 makes fatal.
+    let (helper, opened, port) = refresh_only_helper_for(&HelperSpec::new(&base), &store);
+    let err = helper
+        .get_access_token()
+        .await
+        .expect_err("a substitution with a pre-registered client_id is fatal");
+
+    assert!(err.is_reauth_required(), "{err}");
+    let message = err.to_string();
+    assert!(
+        message.contains("https://previous-as.example"),
+        "the refusal must name the OLD authorization server: {message}"
+    );
+    assert!(
+        message.contains(&base),
+        "the refusal must name the NEW authorization server: {message}"
+    );
+    assert!(
+        message.contains(&server_key),
+        "the refusal must name the MCP server the change is about: {message}"
+    );
+    assert_nothing_interactive_happened(&opened, port);
 }

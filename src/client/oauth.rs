@@ -444,6 +444,79 @@ impl BrowserLauncher for SystemBrowserLauncher {
 // Source of truth: src/server/auth/provider.rs:302-382.
 pub use crate::server::auth::provider::{DcrRequest, DcrResponse};
 
+/// Whether an [`OAuthHelper`] may fall back to an INTERACTIVE browser login.
+///
+/// Select it with [`OAuthHelper::with_interactivity`]. [`Self::Interactive`] is
+/// the default, so a helper that never calls that method behaves exactly as it
+/// always has.
+///
+/// # What [`Self::RefreshOnly`] is for, and what it costs
+///
+/// With the default mode, a headless runtime that cannot complete a browser
+/// login pays for the attempt anyway: [`OAuthHelper::get_access_token`] binds a
+/// loopback listener nothing can reach, hands an authorization URL to a browser
+/// nobody can see, and then waits **five minutes** for a callback that will
+/// never arrive — per attempt. In a Lambda or a Worker that is five minutes of
+/// billed wall clock ending in a timeout that does not say what is actually
+/// wrong.
+///
+/// [`Self::RefreshOnly`] turns that into an immediate
+/// [`Error::reauth_required`], which a caller can convert into whatever its own
+/// runtime calls a consent-required condition — an operator notification, a
+/// queued re-login, a `401` to the user. The cost is that a `RefreshOnly`
+/// helper can never obtain credentials it does not already have: the mode
+/// narrows the FALL-BACK, not the cache and not the refresh.
+///
+/// # Why this is a mode and not environment sniffing
+///
+/// Sniffing (`DISPLAY`, `SSH_TTY`, `AWS_LAMBDA_FUNCTION_NAME`, …) guesses, and
+/// the two ways of guessing wrong are not symmetric: guessing "interactive"
+/// when it is not costs five minutes and then fails anyway, while guessing
+/// "headless" when it is not breaks a CLI login that would have worked. A
+/// caller always knows which one it is; the SDK does not.
+///
+/// # The guarantee
+///
+/// Under [`Self::RefreshOnly`] the interactive path is unreachable BY
+/// CONSTRUCTION rather than skipped by a branch: the arm that handles it calls
+/// an associated function that has no `self`, and therefore no access to the
+/// configured [`BrowserLauncher`] and no route to the loopback listener. Both
+/// public entry points check.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use pmcp::client::oauth::{Interactivity, OAuthConfig, OAuthHelper};
+///
+/// # async fn example() -> pmcp::Result<()> {
+/// let helper = OAuthHelper::new(OAuthConfig::default())?
+///     .with_interactivity(Interactivity::RefreshOnly);
+///
+/// match helper.get_access_token().await {
+///     Ok(token) => println!("bearer {token}"),
+///     Err(e) if e.is_reauth_required() => {
+///         // Actionable in milliseconds instead of a five-minute timeout.
+///         eprintln!("a human must log in again at {:?}", e.reauth_issuer());
+///     },
+///     Err(e) => return Err(e),
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Interactivity {
+    /// Today's behaviour, unchanged: when no stored credential can serve the
+    /// request, run the authorization-code flow — bind a loopback listener,
+    /// open a browser and wait for the callback.
+    #[default]
+    Interactive,
+    /// Serve the request from stored credentials or a refresh, or fail with
+    /// [`Error::reauth_required`]. No browser is opened and no listener is
+    /// bound.
+    RefreshOnly,
+}
+
 /// OAuth configuration for CLI authentication flows.
 ///
 /// # Migration note (pmcp 2.5.0)
@@ -571,6 +644,36 @@ struct ResolvedClientIdentity {
     registered_application_type: Option<String>,
 }
 
+/// What the credential store could contribute to one `get_access_token` call.
+///
+/// A plain `Option<String>` was enough while a miss always meant "run the
+/// browser flow". [`Interactivity::RefreshOnly`] has to TELL a caller why there
+/// is no token, so the miss now carries its reason.
+#[derive(Debug)]
+enum StoreOutcome {
+    /// An access token that can be handed to the caller verbatim.
+    Token(String),
+    /// The store could not serve this request; the variant says why.
+    Miss(StoreMiss),
+}
+
+/// Why the credential store could not serve a request on its own.
+///
+/// The three variants are kept apart rather than collapsed into one message
+/// because each has a DIFFERENT operator fix, and a headless caller acting on
+/// the refusal is exactly the audience that cannot go and look.
+#[derive(Debug)]
+enum StoreMiss {
+    /// No store is configured, or it holds no entry for this
+    /// `(issuer, account, server)`.
+    NoCredentials,
+    /// An entry exists and has expired, but carries no refresh token — RFC 6749
+    /// §6 does not require one ever to have been issued.
+    NoRefreshToken,
+    /// A refresh was attempted and refused.
+    RefreshFailed(Error),
+}
+
 /// Device code authorization response.
 #[derive(Debug, Deserialize)]
 struct DeviceAuthResponse {
@@ -666,6 +769,14 @@ pub struct OAuthHelper {
     /// Fires the D-17 legacy-cache warning at most once per instance, rather
     /// than once per call.
     legacy_cache_warned: Once,
+    /// Whether this helper may fall back to an interactive browser login.
+    ///
+    /// A PRIVATE field rather than an [`OAuthConfig`] field for the reason
+    /// `iss_validation` above records: `OAuthConfig` is public, all-pub-field
+    /// and not `#[non_exhaustive]`, so a new field there is a MAJOR break.
+    /// [`Interactivity::Interactive`] is the default, so no existing caller
+    /// changes behaviour.
+    interactivity: Interactivity,
 }
 
 impl OAuthHelper {
@@ -688,7 +799,38 @@ impl OAuthHelper {
             credential_store: OnceLock::new(),
             account_scope: String::new(),
             legacy_cache_warned: Once::new(),
+            interactivity: Interactivity::Interactive,
         })
+    }
+
+    /// Choose whether this helper may fall back to an INTERACTIVE browser
+    /// login.
+    ///
+    /// See [`Interactivity`] for what the two modes mean, what the default one
+    /// costs a headless runtime, and why this is an explicit mode rather than
+    /// environment sniffing. With no call to this method the helper behaves
+    /// exactly as it always has.
+    ///
+    /// This is an inherent builder method rather than an [`OAuthConfig`] field
+    /// because that struct is exhaustively constructible downstream and gaining
+    /// a field would be a MAJOR semver break.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::client::oauth::{Interactivity, OAuthConfig, OAuthHelper};
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let helper = OAuthHelper::new(OAuthConfig::default())?
+    ///     .with_interactivity(Interactivity::RefreshOnly);
+    /// # let _ = helper;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_interactivity(mut self, mode: Interactivity) -> Self {
+        self.interactivity = mode;
+        self
     }
 
     /// Persist credentials through `store` instead of through the default
@@ -1583,6 +1725,12 @@ impl OAuthHelper {
     /// anything. Discovery therefore runs first even on a cache hit. What a hit
     /// still avoids is the part that costs a human: no browser is opened and no
     /// authorization request is made.
+    ///
+    /// # Interactivity
+    ///
+    /// Under [`Interactivity::RefreshOnly`] this method never reaches the
+    /// interactive tail at all: a store miss becomes
+    /// [`Error::reauth_required`] immediately. See [`Interactivity`].
     pub async fn get_access_token(&self) -> Result<String> {
         self.discard_legacy_token_cache();
 
@@ -1596,34 +1744,91 @@ impl OAuthHelper {
         // authorization server it was not provisioned for.
         self.announce_authorization_server_change(&metadata).await?;
 
-        if let Some(access_token) = self.token_from_store(&metadata).await? {
-            return Ok(access_token);
-        }
+        let miss = match self.token_from_store(&metadata).await? {
+            StoreOutcome::Token(access_token) => return Ok(access_token),
+            StoreOutcome::Miss(miss) => miss,
+        };
 
+        match self.interactivity {
+            // NOTHING reachable from this arm can bind a socket or open a
+            // browser: `refresh_only_refusal` is an associated function with no
+            // `self`, so it holds no `BrowserLauncher`, no `redirect_port` and
+            // no route to `authorization_code_flow_inner`. That is what makes
+            // the interactive path unreachable BY CONSTRUCTION here rather than
+            // merely skipped by this `match`.
+            Interactivity::RefreshOnly => Err(Self::refresh_only_refusal(&metadata, &miss)),
+            Interactivity::Interactive => self.interactive_token(&metadata, iss_presence).await,
+        }
+    }
+
+    /// The interactive tail: bind a loopback listener, hand a URL to a browser,
+    /// wait up to five minutes for the callback.
+    ///
+    /// Split out of [`Self::get_access_token`] so that the one call site is
+    /// visibly the [`Interactivity::Interactive`] arm of a two-arm `match`. A
+    /// reviewer checking D-08's guarantee has to read exactly one `match` and
+    /// one call site, instead of tracing a fall-through through the rest of the
+    /// function.
+    async fn interactive_token(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        iss_presence: IssPresence,
+    ) -> Result<String> {
         tracing::info!("No cached token found, starting OAuth flow...");
-        self.authorize_with_fallback(&metadata, iss_presence)
+        self.authorize_with_fallback(metadata, iss_presence)
             .await
             .map(|result| result.access_token)
+    }
+
+    /// The typed refusal an [`Interactivity::RefreshOnly`] caller receives
+    /// instead of a browser it cannot see and a five-minute wait.
+    ///
+    /// An associated function taking no `self` **on purpose** — see the comment
+    /// at its call site. It also names WHICH of the three conditions occurred,
+    /// because the operator fix differs: a rejected refresh token means
+    /// re-authorize, an absent one means re-authorize asking for
+    /// `offline_access`, and no credentials at all means the store was never
+    /// seeded for this `(issuer, account, server)`.
+    fn refresh_only_refusal(metadata: &OidcDiscoveryMetadata, miss: &StoreMiss) -> Error {
+        let reason = match miss {
+            StoreMiss::NoCredentials => {
+                "no credentials are stored for this authorization server, account and MCP server"
+                    .to_string()
+            },
+            StoreMiss::NoRefreshToken => {
+                "the stored credentials have expired and carry no refresh token".to_string()
+            },
+            StoreMiss::RefreshFailed(e) => format!("the stored refresh token was refused: {e}"),
+        };
+        Error::reauth_required(
+            &metadata.issuer,
+            &format!(
+                "{reason}. This helper is in Interactivity::RefreshOnly, so no browser was \
+                 opened and no loopback listener was bound. An interactive authorization is \
+                 required; perform one and store the result, then retry."
+            ),
+        )
     }
 
     /// Serve this request from the credential store when it can be: a live
     /// token verbatim, or a refreshed one.
     ///
-    /// Returns `Ok(None)` whenever an interactive flow is required, which
-    /// includes "no store", "no entry for this `(issuer, account, server)`",
-    /// "expired with no refresh token" and "the refresh attempt failed".
-    async fn token_from_store(&self, metadata: &OidcDiscoveryMetadata) -> Result<Option<String>> {
+    /// A [`StoreOutcome::Miss`] carries WHY, because
+    /// [`Interactivity::RefreshOnly`] has to report a reason to a caller that
+    /// cannot see a browser, and "nothing was stored" and "the refresh was
+    /// refused" have different fixes.
+    async fn token_from_store(&self, metadata: &OidcDiscoveryMetadata) -> Result<StoreOutcome> {
         let Some(cached) = self.load_stored_credentials(&metadata.issuer).await else {
-            return Ok(None);
+            return Ok(StoreOutcome::Miss(StoreMiss::NoCredentials));
         };
 
         if cached.expires_at().is_some_and(|at| unix_now_secs() < at) {
             tracing::info!("Using cached OAuth token");
-            return Ok(Some(cached.access_token().to_string()));
+            return Ok(StoreOutcome::Token(cached.access_token().to_string()));
         }
 
         let Some(refresh_token) = cached.refresh_token() else {
-            return Ok(None);
+            return Ok(StoreOutcome::Miss(StoreMiss::NoRefreshToken));
         };
         tracing::warn!("OAuth token expired, refreshing...");
         let refreshed = match self
@@ -1642,7 +1847,7 @@ impl OAuthHelper {
                 // nobody may be watching. The message carries the authorization
                 // server's own reason and no credential content.
                 tracing::warn!("OAuth token refresh failed: {e}");
-                return Ok(None);
+                return Ok(StoreOutcome::Miss(StoreMiss::RefreshFailed(e)));
             },
         };
 
@@ -1677,7 +1882,7 @@ impl OAuthHelper {
             cached.registered_application_type(),
         )
         .await?;
-        Ok(Some(result.access_token))
+        Ok(StoreOutcome::Token(result.access_token))
     }
 
     /// Like `get_access_token` but returns the full authorization result for
@@ -1698,7 +1903,28 @@ impl OAuthHelper {
     /// flow (RFC 8628). In that case, `refresh_token` may be `None` since
     /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
     /// requested scopes when the token response does not echo them.
+    ///
+    /// # Interactivity
+    ///
+    /// This method IS the interactive authorization, so under
+    /// [`Interactivity::RefreshOnly`] it refuses with
+    /// [`Error::reauth_required`] before performing any I/O at all. The mode's
+    /// guarantee has to hold at BOTH public entry points, or a caller escapes
+    /// it by picking the other one.
     pub async fn authorize_with_details(&self) -> Result<AuthorizationResult> {
+        if self.interactivity == Interactivity::RefreshOnly {
+            return Err(Error::reauth_required(
+                self.config
+                    .issuer
+                    .as_deref()
+                    .unwrap_or("the authorization server"),
+                "authorize_with_details performs an interactive authorization, and this helper \
+                 is in Interactivity::RefreshOnly. No browser was opened and no loopback \
+                 listener was bound. Use get_access_token to serve the request from stored \
+                 credentials, or build a helper without RefreshOnly to log in.",
+            ));
+        }
+
         self.discard_legacy_token_cache();
 
         let (metadata, extras) = self.get_metadata_with_extras().await?;
