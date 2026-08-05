@@ -2662,7 +2662,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 116-12-PLAN.md — Wave 8. D-14's three refresh defects, all of which block headless operation: the stored refresh token destroyed whenever the AS omits one, DCR clients unable to refresh at all, and `scope` never sent — now sent as EXACTLY the stored granted scope or omitted entirely, never widened with an advertised-but-ungranted `offline_access` (RFC 6749 §6). Plus D-08's `Interactivity::RefreshOnly` making the browser path unreachable by construction instead of a five-minute wait on a listener nothing can reach, and this file's remaining hygiene — bounded reads, the post-hoc DCR cap upgraded to streaming, the plaintext token log, and the private PKCE duplicates
+- [x] 116-12-PLAN.md — Wave 8. D-14's three refresh defects, all of which block headless operation: the stored refresh token destroyed whenever the AS omits one, DCR clients unable to refresh at all, and `scope` never sent — now sent as EXACTLY the stored granted scope or omitted entirely, never widened with an advertised-but-ungranted `offline_access` (RFC 6749 §6). Plus D-08's `Interactivity::RefreshOnly` making the browser path unreachable by construction instead of a five-minute wait on a listener nothing can reach, and this file's remaining hygiene — bounded reads, the post-hoc DCR cap upgraded to streaming, the plaintext token log, and the private PKCE duplicates
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 12/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 13/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

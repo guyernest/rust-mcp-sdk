@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 116-11-PLAN.md
-last_updated: "2026-08-05T03:44:13.615Z"
+last_updated: "2026-08-05T07:06:28.791Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 370
+  completed_plans: 371
   percent: 85
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 12 of 16
+Plan: 13 of 16
 Status: Ready to execute
 
 **116-11 HAS LANDED — `OAuthHelper` persists through the `(issuer, account, server)`-keyed
@@ -839,6 +839,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 116-09: RFC 9207 iss is anchored on metadata.issuer (the AS's own published issuer), never config.issuer nor the effective issuer reported to cache consumers
 - [Phase ?]: 116-09: an iss/state refusal is TERMINAL — propagated verbatim, never downgraded to the generic 'no supported OAuth flow available' and never falling back to device code
 - [Phase ?]: 116-09: BrowserLauncher is a documented PLATFORM seam (headless CI, display-less containers), not doc(hidden) test scaffolding
+- [Phase 116]: 116-12: refresh sources client_id and granted scopes from the credential record the caller already loaded, never a second store.load - a refresh token and its client_id are ONE pairing
+- [Phase 116]: 116-12: authorize_with_details also refuses under Interactivity::RefreshOnly, so the headless guarantee holds at BOTH public entry points
+- [Phase 116]: 116-12: the D-14 defect-1 test PASSED pre-fix (116-11 had already closed it) and is kept as a negative-control-proven regression fence, not counted as coverage
+- [Phase 116]: 116-12: D-116-KEYCHAIN reopened - reproduced at 92 GiB free and identically against the PRE-PLAN source, so D-116-DISK is not the mechanism; the defect is the .expect at streamable_http.rs:458
 
 ### Pending Todos
 
@@ -893,7 +897,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-05T03:44:13.603Z
+Last session: 2026-08-05T07:06:10.969Z
 Stopped at: Completed 116-11-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1009,3 +1013,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P08 | 51min | 3 tasks | 45 files |
 | Phase 116 P09 | 173min | 2 tasks | 4 files |
 | Phase 116 P10 | 118min | 2 tasks | 3 files |
+| Phase 116 P12 | 300min | 3 tasks | 3 files |
