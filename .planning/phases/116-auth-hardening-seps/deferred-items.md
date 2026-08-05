@@ -716,3 +716,71 @@ already warns about. The two changes must land together.
 2. add `--features "full,oauth"` invocations to both `make lint` and the gate's test stage.
 
 Doing (2) without (1) turns the gate red. Doing neither leaves 25 security tests outside CI.
+
+### `116-10` re-measured both halves, and the numbers MOVED in the right direction
+
+Measured at `87f1f648`, with `make lint`'s command run verbatim under `--features "full,oauth"`:
+
+| Tree | `^error` count | Distribution |
+|---|---|---|
+| `86fbb70a` (this plan's baseline, pristine) | **24** | 24 / 24 in `src/client/oauth.rs` |
+| `87f1f648` (after both `116-10` tasks) | **21** | 21 / 21 in `src/client/oauth.rs` |
+
+**ZERO new errors attributable**, compared as a multiset of
+`(error message, offending source-line text)` rather than by line number, since every line in the
+file moved again. The three that DISAPPEARED were not fixed as a side quest — each sat on a line
+this plan had to rewrite anyway: `items_after_statements` on the function-local
+`const MAX_DCR_RESPONSE_BYTES` (hoisted to module scope so the rejection path and the success path
+name one number), `map(<f>).unwrap_or_else(<g>)` on `granted_scopes` (rewritten as an explicit
+two-branch `match` so RFC 6749 §5.1's omission rule is named at the branch that applies it), and a
+`doc_markdown` hit on `TokenResponse` in a doc comment the signature change forced.
+
+**The anchor for `116-11` and `116-12` is therefore 21, not 24 and not 29.** It has now moved twice
+in three plans, always downward and always as a side effect of rewriting the surrounding line — so
+a plan that measures against a stale figure will report phantom "fixes".
+
+The test-side twin was re-measured too, on this plan's own suites:
+
+| Suite | `--features full` | `--features full,oauth` |
+|---|---|---|
+| `oauth_dcr_integration` + the two new inline `client::oauth` modules (`116-10`) | **0** | **38** |
+
+`cargo nextest run --features full -E '<this plan's selector>'` reports
+`Starting 0 tests across 2 binaries` and then `error: no tests to run`. `make quality-gate` exited
+**0** at this HEAD with `test-unit` at **1880 passed** — the identical figure `116-09` recorded,
+which is itself the proof: this plan added **14** new inline lib tests and the gate's population did
+not move by one, because every one of them is behind `oauth`. Running the gate is not evidence that
+this plan's tests passed; it is evidence that they never ran.
+
+---
+
+## D-116-GREP — a fourth instance, from `116-10`'s own acceptance criteria
+
+**Found during:** `116-10` (Task 2), running the plan's `<acceptance_criteria>` literally.
+
+**Finding.** The criterion is *"`grep -n 'retry' src/client/oauth.rs` shows no automatic
+`application_type` retry was added"*. It returns **3** hits at `87f1f648` — lines 310–312, all three
+of them `///` doc lines inside `registration_rejected`, which say:
+
+```
+/// SEP-837's OPTIONAL retry with an adjusted `application_type` is also
+/// deliberately not implemented. The specification says clients MAY retry; an
+/// automatic retry would silently register the client under a type its operator
+/// did not choose, which is the opposite of surfacing a meaningful error.
+```
+
+So the ONLY way to satisfy the criterion as written is to delete the documentation that records the
+non-adoption — and recording that non-adoption is required by the same task's `<action>`. The two
+instructions are in direct conflict when the grep is read literally.
+
+This is the same shape `116-06` first recorded (a module's own PROSE trips its audit grep) and the
+fifth instance in the phase overall. The meaningful check, which `116-10` performed instead: every
+hit is a `///` line, and there is no control-flow retry — `do_dynamic_client_registration` issues
+exactly one `POST` and returns `registration_rejected(...)` on any non-success status, with no loop
+and no second `apply_application_type` call.
+
+**Proposed owner:** `116-15`. The convention `D-116-GREP` already proposes (measure an acceptance
+grep's baseline count when the plan is written) would have caught this at planning time. A second
+half is worth adding: **an audit grep over a file that documents its own non-adoptions must exclude
+comment lines** (`grep -n 'retry' … | grep -v '^\s*[0-9]*:\s*///'`), or the plan should assert the
+absence of the CODE construct rather than the absence of the word. No source change is owed.

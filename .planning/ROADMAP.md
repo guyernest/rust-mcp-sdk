@@ -2654,7 +2654,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 116-10-PLAN.md — Wave 6. Two SEPs at one edit site: derived `application_type` sent unconditionally (D-11, with echo divergence warned and never fatal), `grant_types` gaining `refresh_token`, and `offline_access` handled at the RIGHT protocol stages — declared in DCR client metadata AND requested in the authorization request when advertised, with the GRANTED scope recorded from the token response (RFC 6749 §5.1 for the omitted-`scope` case) and never introduced at refresh. Plus an actionable registration-rejection error naming what was sent. Echo divergence is pinned by a private pure helper unit-tested inline and persisted through `StoredCredentials`' private fields, so no field is added to any public constructible type. SEP-837's optional retry MAY is deliberately not adopted
+- [x] 116-10-PLAN.md — Wave 6. Two SEPs at one edit site: derived `application_type` sent unconditionally (D-11, with echo divergence warned and never fatal), `grant_types` gaining `refresh_token`, and `offline_access` handled at the RIGHT protocol stages — declared in DCR client metadata AND requested in the authorization request when advertised, with the GRANTED scope recorded from the token response (RFC 6749 §5.1 for the omitted-`scope` case) and never introduced at refresh. Plus an actionable registration-rejection error naming what was sent. Echo divergence is pinned by a private pure helper unit-tested inline and persisted through `StoredCredentials`' private fields, so no field is added to any public constructible type. SEP-837's optional retry MAY is deliberately not adopted
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 10/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 11/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

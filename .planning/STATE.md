@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 116-08-PLAN.md
-last_updated: "2026-08-04T22:59:10.386Z"
-last_activity: 2026-08-04
+last_updated: "2026-08-05T02:13:15.130Z"
+last_activity: 2026-08-05
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 368
+  completed_plans: 369
   percent: 85
 ---
 
@@ -29,8 +29,44 @@ Phase: 116 (auth-hardening-seps) — EXECUTING
 Plan: 11 of 16
 Status: Ready to execute
 
-**116-16 HAS LANDED — the default on-disk credential store, and `make quality-gate` is GREEN
-(exit 0) for the first time in this phase.** Commit `2d769409` (+1787/−1 across 5 files).
+**116-10 HAS LANDED — SEP-837's `application_type` and SEP-2207's refresh metadata are on the DCR
+wire, and the wire is what the tests check.** Commits `defc2eb5` + `87f1f648` (+1550/−41 across
+3 files; `src/client/oauth.rs` 1993 → 2680, `tests/oauth_dcr_integration.rs` 253 → 1075 with
+**5 → 24** tests, plus 14 new inline tests). Every registration now carries a DERIVED
+`application_type: "native"`, declares the `refresh_token` grant, and requests `offline_access`
+at BOTH stages where asking means something — DCR client metadata and the authorization request —
+and at neither refresh nor the device-code grant. Echo divergence WARNS and never fails
+(RFC 7591 § 3.2.1 permits the server to modify requested metadata); a rejection now names the
+status, the server's parsed `error`/`error_description`, the `application_type` sent and the
+`redirect_uris` sent, read under the 1 MiB cap. `T-116-07`, transferred twice (116-03 → 116-04 →
+116-10), is finally DISCHARGED: the derivation had refused mismatches since 116-04 but nothing
+called it.
+
+**⚠ THE REJECTION PATH WAS AN ECHO CHANNEL AND AN UNBOUNDED READ, AND NEITHER WAS IN THE PLAN'S
+TASK LIST AS A DEFECT.** `response.text().await.unwrap_or_default()` interpolated the whole
+authorization-server-controlled body verbatim into the error message. Both fixed under Rule 2
+(`collect_reqwest_body_within_cap` + `MAX_DCR_ERROR_FIELD_CHARS = 200`). The negative control is
+the lesson: with the raw body echoed, `a_rejected_registration_names_the_status_the_sent_type_and_the_sent_redirect_uri`
+**still PASSED** — every substring it asserts is present in a message that also leaks everything.
+**A presence assertion is not a detector for an echo channel; only an absence assertion is.**
+
+**⚠ A "RED" RUN IS NOT ATTRIBUTION WHEN THE BEHAVIOUR WAS ACCIDENTALLY TRUE.** Task 2's PREFIX-RED
+run (24 run, 19 passed, 5 failed) showed all three echo-divergence rows PASSING pre-fix — because
+"registration never fails on a divergent echo" was already true when nothing read the echo at all.
+A targeted control (divergence made fatal: **30 run, 29 passed, 1 failed**, the omitted-echo and
+identical-echo siblings both holding) is what makes those rows evidence.
+
+**⚠ D-116-LINT-OAUTH's ANCHOR HAS MOVED AGAIN: 29 → 24 → 21.** Measured on the PRISTINE `86fbb70a`
+tree (24) and after both 116-10 tasks (21), compared as a multiset of
+`(error message, offending source-line text)` — **ZERO new errors**, 3 gone, every one a side
+effect of rewriting a line the plan had to touch. **`116-11` and `116-12` must measure against 21.**
+The test-side twin is worse than before: `--features full` selects **0** of this plan's **38**
+tests, and the gate's `test-unit` count is **1880**, byte-identical to 116-09's, despite 14 new
+inline lib tests. `make quality-gate` exit 0 is not evidence these tests passed.
+
+Prior-plan context — **116-16 HAS LANDED — the default on-disk credential store, and
+`make quality-gate` is GREEN (exit 0) for the first time in this phase.** Commit `2d769409`
+(+1787/−1 across 5 files).
 `src/shared/credential_file.rs` (690 lines) holds `FileCredentialStore` implementing BOTH
 `CredentialStore` and `CredentialStoreAdmin`, gated
 `#[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]`. It knows **no JSON**:
@@ -404,7 +440,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-04
+Last activity: 2026-08-05
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -814,8 +850,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-04T22:55:25.307Z
-Stopped at: Completed 116-08-PLAN.md
+Last session: 2026-08-05T02:13:15.117Z
+Stopped at: Completed 116-10-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -928,3 +964,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P16 | 215min | 1 tasks | 5 files |
 | Phase 116 P08 | 51min | 3 tasks | 45 files |
 | Phase 116 P09 | 173min | 2 tasks | 4 files |
+| Phase 116 P10 | 118min | 2 tasks | 3 files |
