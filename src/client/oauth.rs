@@ -18,10 +18,10 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::RngExt;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Once, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,6 +34,10 @@ use crate::client::http_middleware::HttpMiddlewareChain;
 use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
+use crate::shared::credential_file::FileCredentialStore;
+use crate::shared::credential_store::{
+    normalize_server_key, CredentialKey, CredentialStore, StoredCredentials,
+};
 use crate::shared::http_body_cap::{collect_reqwest_body_within_cap, DEFAULT_AUTH_RESPONSE_BYTES};
 use crate::shared::oauth_validation::{
     derive_application_type, iss_presence_from, parse_iss_env_value,
@@ -116,6 +120,31 @@ const OFFLINE_ACCESS_SCOPE: &str = "offline_access";
 /// literal, so a hostile registration endpoint faces ONE number and the refusal
 /// message that names it cannot drift from the number actually enforced.
 const MAX_DCR_RESPONSE_BYTES: usize = DEFAULT_AUTH_RESPONSE_BYTES;
+
+/// The file name the issuer-keyed credential store uses inside whichever
+/// directory holds it.
+///
+/// This is `default_credential_path`'s own file name, and
+/// `the_credential_store_file_name_matches_default_credential_path` asserts the
+/// two cannot drift. They must agree: a caller who sets
+/// [`OAuthConfig::cache_file`] and a caller who does not would otherwise end up
+/// with two different credential stores inside one directory, and a login
+/// through one would be invisible to the other.
+const CREDENTIAL_STORE_FILE_NAME: &str = "oauth-cache.json";
+
+/// Absolute Unix seconds, with a pre-epoch clock reported as `0` rather than
+/// panicking.
+///
+/// One function for the whole module so an expiry computed on the
+/// authorization-code path and one computed on the device-code path cannot
+/// disagree about what "now" means. The previous `cache_token` form
+/// (`.duration_since(UNIX_EPOCH).unwrap()`) panicked in library code on a clock
+/// set before 1970, which is a denial of service a caller cannot catch.
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
 
 /// Compose a `scope` value from the configured scopes plus
 /// [`OFFLINE_ACCESS_SCOPE`], and only when the authorization server advertises
@@ -521,13 +550,25 @@ pub struct AuthorizationResult {
     pub client_id: String,
 }
 
-/// Token cache stored on disk.
-#[derive(Debug, Serialize, Deserialize)]
-struct TokenCache {
-    access_token: String,
-    refresh_token: Option<String>,
-    expires_at: Option<u64>,
-    scopes: Vec<String>,
+/// The client identity one flow resolved, plus what dynamic registration
+/// registered it as.
+///
+/// Exists because `client_id` alone is not enough to persist a credential
+/// record: the `application_type` the authorization server registered (116-10)
+/// has to travel from `do_dynamic_client_registration` to
+/// [`StoredCredentials::with_registered_application_type`], and a new field on
+/// the public, all-`pub`-field [`AuthorizationResult`] would be
+/// `constructible_struct_adds_field` — a MAJOR semver break.
+#[derive(Debug, Clone)]
+struct ResolvedClientIdentity {
+    /// The effective client id: DCR-issued when DCR fired, config-supplied
+    /// otherwise.
+    client_id: String,
+    /// `Some` only when dynamic registration ran in THIS flow. A
+    /// config-supplied client id was registered out of band, so this client has
+    /// no observation to record about it — and recording a guess would be worse
+    /// than recording nothing.
+    registered_application_type: Option<String>,
 }
 
 /// Device code authorization response.
@@ -609,10 +650,30 @@ pub struct OAuthHelper {
     /// How the interactive authorization URL reaches a human. Defaults to
     /// [`SystemBrowserLauncher`], i.e. unchanged behaviour.
     browser_launcher: Arc<dyn BrowserLauncher>,
+    /// The SEP-2352 credential store, resolved LAZILY.
+    ///
+    /// Empty until either [`OAuthHelper::with_credential_store`] fills it or the
+    /// first store operation resolves the default [`FileCredentialStore`]. It is
+    /// a `OnceLock` rather than an `Option` precisely so the resolution can
+    /// happen behind `&self`: `OAuthHelper::new` must perform no filesystem and
+    /// no environment access, because a hosting platform that will inject its
+    /// own store a line later has no home directory for the default to find.
+    credential_store: OnceLock<Arc<dyn CredentialStore>>,
+    /// The account component of the [`CredentialKey`]. Empty by default — the
+    /// single-user CLI case — and set by
+    /// [`OAuthHelper::with_account_scope`] for a multi-tenant caller.
+    account_scope: String,
+    /// Fires the D-17 legacy-cache warning at most once per instance, rather
+    /// than once per call.
+    legacy_cache_warned: Once,
 }
 
 impl OAuthHelper {
     /// Create a new OAuth helper with the given configuration.
+    ///
+    /// Performs **no** filesystem and no environment access: the credential
+    /// store, and therefore any home-directory resolution, is deferred to the
+    /// first operation that needs it.
     pub fn new(config: OAuthConfig) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -624,7 +685,73 @@ impl OAuthHelper {
             client,
             iss_validation: None,
             browser_launcher: Arc::new(SystemBrowserLauncher),
+            credential_store: OnceLock::new(),
+            account_scope: String::new(),
+            legacy_cache_warned: Once::new(),
         })
+    }
+
+    /// Persist credentials through `store` instead of through the default
+    /// on-disk [`FileCredentialStore`].
+    ///
+    /// This is the platform seam. A helper built this way touches no home
+    /// directory at all — not in the constructor, and not on any later call —
+    /// which is what makes it usable from a Lambda, a container or any runtime
+    /// that keeps credentials in a KV store or a secrets manager.
+    ///
+    /// This is an inherent builder method rather than an [`OAuthConfig`] field
+    /// because that struct is exhaustively constructible downstream and gaining
+    /// a field would be a MAJOR semver break.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
+    /// use pmcp::{CredentialStore, InMemoryCredentialStore};
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    /// let helper = OAuthHelper::new(OAuthConfig::default())?
+    ///     .with_credential_store(store);
+    /// # let _ = helper;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_credential_store(mut self, store: Arc<dyn CredentialStore>) -> Self {
+        self.credential_store = OnceLock::from(store);
+        self
+    }
+
+    /// Key this helper's credentials under `account`.
+    ///
+    /// The account is the second component of the [`CredentialKey`], so two
+    /// helpers with different account scopes never see one another's
+    /// credentials even against the same authorization server and the same MCP
+    /// server. The default is the empty string, which is the single-user CLI
+    /// case.
+    ///
+    /// The value is stored verbatim — the SDK does not parse, normalise or
+    /// interpret it. A platform passes whatever identifies the principal to it,
+    /// such as a Cognito `sub`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// let helper = OAuthHelper::new(OAuthConfig::default())?
+    ///     .with_account_scope("cognito-sub-123");
+    /// # let _ = helper;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_account_scope(mut self, account: impl Into<String>) -> Self {
+        self.account_scope = account.into();
+        self
     }
 
     /// Set tier 2 of the RFC 9207 `iss` precedence chain.
@@ -729,6 +856,219 @@ impl OAuthHelper {
         };
 
         iss_presence_from(env_override, self.iss_validation, discovery_flag)
+    }
+
+    /// The credential store this helper persists through, or `None` when the
+    /// caller asked for no persistence at all.
+    ///
+    /// Resolution order, evaluated on FIRST USE and never in the constructor:
+    ///
+    /// 1. a store injected through [`OAuthHelper::with_credential_store`];
+    /// 2. otherwise, when [`OAuthConfig::cache_file`] is set, a
+    ///    [`FileCredentialStore`] over `<that file's directory>/oauth-cache.json`;
+    /// 3. otherwise **no store** — the caller opted out of caching.
+    ///
+    /// # Why `cache_file` names the DIRECTORY and not the store itself
+    ///
+    /// `cache_file` points at the flat, issuer-less `TokenCache` document this
+    /// module used to write. Every such file on disk today is in that format, so
+    /// pointing the issuer-keyed store at it would both READ it — which D-17
+    /// forbids, because an issuer-less token cannot be attributed to an
+    /// authorization server without guessing — and OVERWRITE it, when the whole
+    /// point is to leave it for the user to delete. The directory is honoured;
+    /// the file is not.
+    ///
+    /// # Why an absent `cache_file` means no persistence
+    ///
+    /// That is what it has always meant here: every previous cache read and
+    /// write in this module was guarded by `if let Some(ref cache_file) =
+    /// self.config.cache_file`. `cargo pmcp auth login --no-cache` sets the
+    /// field to `None` for exactly that reason, so resolving a default store in
+    /// that case would silently defeat the flag.
+    ///
+    /// A caller that wants a store at a specific path builds one:
+    /// `with_credential_store(Arc::new(FileCredentialStore::new(path)))`.
+    fn credential_store(&self) -> Option<&Arc<dyn CredentialStore>> {
+        if let Some(injected) = self.credential_store.get() {
+            return Some(injected);
+        }
+
+        let legacy = self.config.cache_file.as_ref()?;
+        let resolved: Arc<dyn CredentialStore> = Arc::new(FileCredentialStore::new(
+            legacy.with_file_name(CREDENTIAL_STORE_FILE_NAME),
+        ));
+        Some(self.credential_store.get_or_init(|| resolved))
+    }
+
+    /// The normalized MCP server key — the THIRD component of the
+    /// [`CredentialKey`], and the one SEP-2352 does not name.
+    ///
+    /// Two MCP servers can share one authorization server and one account while
+    /// holding different dynamic registrations, different client IDs and
+    /// different granted scopes. Without this component they share one entry, so
+    /// whichever authenticated last overwrites the other and a logout on one
+    /// deletes the other's credentials (D-116-R1, AUTH-03 as amended in
+    /// `0aebf7f6`). RFC 8707's `resource` parameter would have bound the
+    /// audience instead; it is deferred by owner decision, so the key carries
+    /// the binding.
+    ///
+    /// It is computed with [`normalize_server_key`] so that trailing-slash,
+    /// path and host-case variants of one MCP server URL do not become two
+    /// logins.
+    ///
+    /// # Errors
+    ///
+    /// When neither `mcp_server_url` nor `issuer` is configured there is nothing
+    /// to key against, and the same configuration cannot discover metadata
+    /// either. The issuer is the fallback because a helper configured with only
+    /// an issuer is talking to that authorization server directly, so its URL is
+    /// the only stable server identity available.
+    fn server_key(&self) -> Result<String> {
+        if let Some(ref url) = self.config.mcp_server_url {
+            return normalize_server_key(url);
+        }
+        if let Some(ref issuer) = self.config.issuer {
+            return normalize_server_key(issuer);
+        }
+        Err(Error::internal(
+            "cannot address stored credentials: neither mcp_server_url nor issuer is configured"
+                .to_string(),
+        ))
+    }
+
+    /// The `(issuer, account, server)` address of this helper's credentials.
+    ///
+    /// `issuer` must be the issuer the authorization server published in its OWN
+    /// discovery document — the same value AUTH-01 uses as its RFC 9207 anchor —
+    /// and never `config.issuer`, which is a user-typed discovery seed.
+    fn credential_key(&self, issuer: &str, server_key: &str) -> CredentialKey {
+        CredentialKey::new(issuer, self.account_scope.as_str(), server_key)
+    }
+
+    /// Announce, once per helper, that the legacy flat token cache is being
+    /// discarded (D-17).
+    ///
+    /// The old `~/.pmcp/oauth-tokens.json` holds a single token and records NO
+    /// issuer. It cannot be re-keyed for [`CredentialKey`] without GUESSING
+    /// which authorization server issued it, and guessing is precisely what
+    /// SEP-2352 forbids — so it is never opened for reading and never migrated.
+    /// It is also never deleted or renamed: removing a user's file to fix a
+    /// format problem is not this SDK's call.
+    ///
+    /// `cargo-pmcp`'s own multi-server cache is a different file that DOES
+    /// record an issuer per entry, and it gets a real migration inside
+    /// [`FileCredentialStore`].
+    fn discard_legacy_token_cache(&self) {
+        self.legacy_cache_warned.call_once(|| {
+            let legacy = self
+                .config
+                .cache_file
+                .clone()
+                .unwrap_or_else(default_cache_path);
+            if !legacy.exists() {
+                return;
+            }
+            tracing::warn!(
+                "the legacy OAuth token cache at {} is DISCARDED, not migrated: it records no \
+                 issuer, so which authorization server issued its token cannot be determined \
+                 without guessing — and guessing is what SEP-2352 forbids. One re-login is \
+                 required. The file is left in place; delete it when you are ready.",
+                legacy.display()
+            );
+        });
+    }
+
+    /// Read the credentials stored for `issuer` under this helper's account and
+    /// server, treating every failure as a cache MISS.
+    ///
+    /// A store that cannot be read must never be able to prevent a fresh login:
+    /// a corrupt document, a stale lock or a path that now holds the legacy flat
+    /// format would otherwise brick authentication entirely. The failure is
+    /// warned — naming the path or the reason the store gave, never any
+    /// credential content — and the flow continues as if nothing were cached,
+    /// which costs exactly one interactive login.
+    async fn load_stored_credentials(&self, issuer: &str) -> Option<StoredCredentials> {
+        let store = self.credential_store()?;
+        let server_key = match self.server_key() {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!("cannot address stored credentials ({e}); treating as a cache miss");
+                return None;
+            },
+        };
+
+        match store.load(&self.credential_key(issuer, &server_key)).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!(
+                    "the credential store could not be read ({e}); treating as a cache miss, \
+                     which costs one re-login"
+                );
+                None
+            },
+        }
+    }
+
+    /// Persist one successful authorization under `(issuer, account, server)`,
+    /// together with the server's last-seen issuer.
+    ///
+    /// `issuer` is the discovery document's issuer, never `config.issuer`.
+    ///
+    /// The record carries the effective `client_id`, the GRANTED scopes and the
+    /// registered `application_type`. The client id is not a convenience: it is
+    /// what makes SEP-2352's "MUST re-register with the new authorization
+    /// server" automatic, because a DCR-issued id lives under the key of the
+    /// authorization server that issued it and is unreachable from any other.
+    ///
+    /// The write goes through [`CredentialStore::save_with_issuer`] rather than
+    /// `save` followed by `record_issuer`: two separate writes leave a window in
+    /// which the store names one issuer while holding another's credentials, and
+    /// [`FileCredentialStore`] implements the combined method as ONE atomic
+    /// read-modify-write precisely so this call site is correct for free.
+    async fn persist_credentials(
+        &self,
+        issuer: &str,
+        result: &AuthorizationResult,
+        registered_application_type: Option<&str>,
+    ) -> Result<()> {
+        let Some(store) = self.credential_store() else {
+            return Ok(());
+        };
+
+        let server_key = self.server_key()?;
+        let mut credentials = StoredCredentials::new(&result.access_token, &result.client_id)
+            .with_granted_scopes(result.scopes.clone());
+        if let Some(refresh_token) = result.refresh_token.as_deref() {
+            credentials = credentials.with_refresh_token(refresh_token);
+        }
+        if let Some(expires_at) = result.expires_at {
+            credentials = credentials.with_expires_at(expires_at);
+        }
+        if let Some(application_type) = registered_application_type {
+            credentials = credentials.with_registered_application_type(application_type);
+        }
+
+        store
+            .save_with_issuer(
+                &self.credential_key(issuer, &server_key),
+                &credentials,
+                &server_key,
+                issuer,
+            )
+            .await
+    }
+
+    /// The issuer REPORTED to a caller for its own bookkeeping: the
+    /// caller-provided `config.issuer` when there is one, else the discovered
+    /// value.
+    ///
+    /// Deliberately distinct from the value used to KEY credentials and to
+    /// anchor RFC 9207 validation, both of which are `metadata.issuer` alone.
+    fn effective_issuer(&self, metadata: &OidcDiscoveryMetadata) -> Option<String> {
+        self.config
+            .issuer
+            .clone()
+            .or_else(|| Some(metadata.issuer.clone()))
     }
 
     /// Perform RFC 7591 Dynamic Client Registration against `registration_endpoint`.
@@ -908,10 +1248,21 @@ impl OAuthHelper {
     ///
     /// Returns `Err` with an actionable message when DCR is needed but the
     /// server does not advertise a `registration_endpoint`.
-    async fn resolve_client_id_for_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+    ///
+    /// The returned [`ResolvedClientIdentity`] carries the registered
+    /// `application_type` alongside the id, because that value has to reach
+    /// [`StoredCredentials::with_registered_application_type`] and there is no
+    /// other hop out of the registration call that costs no semver event.
+    async fn resolve_client_identity_for_flow(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+    ) -> Result<ResolvedClientIdentity> {
         // Caller-provided client_id skips DCR entirely.
         if let Some(ref id) = self.config.client_id {
-            return Ok(id.clone());
+            return Ok(ResolvedClientIdentity {
+                client_id: id.clone(),
+                registered_application_type: None,
+            });
         }
 
         if !self.config.dcr_enabled {
@@ -928,16 +1279,19 @@ impl OAuthHelper {
                 let outcome = self
                     .do_dynamic_client_registration(endpoint, metadata)
                     .await?;
-                // The registered `application_type` is reported here rather than
-                // discarded: 116-11 persists it through
-                // `StoredCredentials::with_registered_application_type`, and
-                // until then a later diagnosis of a redirect-URI refusal can at
-                // least read it out of the flow's own log.
+                // The registered `application_type` is both LOGGED and CARRIED:
+                // the log serves a developer diagnosing a redirect-URI refusal,
+                // and the carried value reaches
+                // `StoredCredentials::with_registered_application_type` so the
+                // same diagnosis is possible from the stored record later.
                 tracing::info!(
                     "DCR succeeded — issued client_id, registered with application_type=\"{}\"",
                     outcome.registered_application_type
                 );
-                Ok(outcome.response.client_id)
+                Ok(ResolvedClientIdentity {
+                    client_id: outcome.response.client_id,
+                    registered_application_type: Some(outcome.registered_application_type),
+                })
             },
             None => Err(Error::internal(
                 "server does not support DCR — pass a pre-registered client_id".to_string(),
@@ -955,7 +1309,9 @@ impl OAuthHelper {
     #[cfg(any(test, feature = "oauth"))]
     pub async fn test_resolve_client_id_from_discovery(&self) -> Result<String> {
         let metadata = self.get_metadata().await?;
-        self.resolve_client_id_for_flow(&metadata).await
+        self.resolve_client_identity_for_flow(&metadata)
+            .await
+            .map(|identity| identity.client_id)
     }
 
     /// Whether an authorization-code-flow failure is a validation REFUSAL that
@@ -1081,63 +1437,77 @@ impl OAuthHelper {
     /// For callers that only need a bearer-header value. Cache consumers that
     /// need to persist `refresh_token` / `expires_at` / `issuer` across runs
     /// should use [`authorize_with_details`](Self::authorize_with_details) instead.
+    ///
+    /// # Discovery now precedes the cache read, and it has to
+    ///
+    /// Credentials are addressed by the authorization server that ISSUED them
+    /// (SEP-2352), so the issuer has to be known before the store can be asked
+    /// anything. Discovery therefore runs first even on a cache hit. What a hit
+    /// still avoids is the part that costs a human: no browser is opened and no
+    /// authorization request is made.
     pub async fn get_access_token(&self) -> Result<String> {
-        // Try to load cached token first
-        if let Some(ref cache_file) = self.config.cache_file {
-            if let Ok(cached) = self.load_cached_token(cache_file).await {
-                // Check if token is still valid
-                if let Some(expires_at) = cached.expires_at {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-                    if now < expires_at {
-                        tracing::info!("Using cached OAuth token");
-                        return Ok(cached.access_token);
-                    }
-                }
-
-                // Try to refresh if we have a refresh token
-                if let Some(refresh_token) = cached.refresh_token {
-                    tracing::warn!("OAuth token expired, refreshing...");
-                    if let Ok(new_token) = self.refresh_token(&refresh_token).await {
-                        self.cache_token(&new_token, cache_file).await?;
-                        return Ok(new_token.access_token);
-                    }
-                }
-            }
-        }
-
-        // No valid cached token, try authorization code flow first
-        tracing::info!("No cached token found, starting OAuth flow...");
+        self.discard_legacy_token_cache();
 
         // Get metadata to see what flows are supported. The extras carry the
         // RFC 9207 flag, which is tier 3 of the `iss` precedence chain.
         let (metadata, extras) = self.get_metadata_with_extras().await?;
         let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
 
-        // Try authorization code flow first (more common, works with MCP Inspector-like servers)
-        match self.authorization_code_flow(&metadata, iss_presence).await {
-            Ok(token) => Ok(token),
-            Err(e) if Self::is_terminal_authorization_refusal(&e) => Err(e),
-            Err(e) => {
-                tracing::warn!("Authorization code flow failed: {}", e);
-
-                // Fall back to device code flow if available
-                if metadata.device_authorization_endpoint.is_some() {
-                    tracing::info!("Trying device code flow...");
-                    return self.device_code_flow_with_metadata(&metadata).await;
-                }
-                Err(Error::internal(
-                    "No supported OAuth flow available.\n\
-                     \n\
-                     The server must support either:\n\
-                     - Authorization code flow (authorization_endpoint), or\n\
-                     - Device code flow (device_authorization_endpoint)"
-                        .to_string(),
-                ))
-            },
+        if let Some(access_token) = self.token_from_store(&metadata).await? {
+            return Ok(access_token);
         }
+
+        tracing::info!("No cached token found, starting OAuth flow...");
+        self.authorize_with_fallback(&metadata, iss_presence)
+            .await
+            .map(|result| result.access_token)
+    }
+
+    /// Serve this request from the credential store when it can be: a live
+    /// token verbatim, or a refreshed one.
+    ///
+    /// Returns `Ok(None)` whenever an interactive flow is required, which
+    /// includes "no store", "no entry for this `(issuer, account, server)`",
+    /// "expired with no refresh token" and "the refresh attempt failed".
+    async fn token_from_store(&self, metadata: &OidcDiscoveryMetadata) -> Result<Option<String>> {
+        let Some(cached) = self.load_stored_credentials(&metadata.issuer).await else {
+            return Ok(None);
+        };
+
+        if cached.expires_at().is_some_and(|at| unix_now_secs() < at) {
+            tracing::info!("Using cached OAuth token");
+            return Ok(Some(cached.access_token().to_string()));
+        }
+
+        let Some(refresh_token) = cached.refresh_token() else {
+            return Ok(None);
+        };
+        tracing::warn!("OAuth token expired, refreshing...");
+        let Ok(refreshed) = self.refresh_token(refresh_token).await else {
+            return Ok(None);
+        };
+
+        // The refreshed record inherits everything the token response does not
+        // restate. RFC 6749 section 6 permits an authorization server to omit a
+        // new refresh token, in which case the existing one stays valid, and it
+        // never restates the client id or the registered application type.
+        let result = AuthorizationResult {
+            access_token: refreshed.access_token,
+            refresh_token: refreshed
+                .refresh_token
+                .or_else(|| Some(refresh_token.to_string())),
+            expires_at: refreshed.expires_in.map(|ttl| unix_now_secs() + ttl),
+            scopes: cached.granted_scopes().to_vec(),
+            issuer: self.effective_issuer(metadata),
+            client_id: cached.client_id().to_string(),
+        };
+        self.persist_credentials(
+            &metadata.issuer,
+            &result,
+            cached.registered_application_type(),
+        )
+        .await?;
+        Ok(Some(result.access_token))
     }
 
     /// Like `get_access_token` but returns the full authorization result for
@@ -1159,70 +1529,68 @@ impl OAuthHelper {
     /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
     /// requested scopes when the token response does not echo them.
     pub async fn authorize_with_details(&self) -> Result<AuthorizationResult> {
+        self.discard_legacy_token_cache();
+
         let (metadata, extras) = self.get_metadata_with_extras().await?;
         let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
 
-        // Effective issuer: prefer the caller-provided config.issuer; fall back
-        // to discovery metadata.issuer. metadata.issuer is always populated by
-        // OIDC-compliant servers.
-        //
-        // NOTE: this is the value REPORTED to the caller for cache persistence,
-        // and it is deliberately NOT the RFC 9207 comparison anchor. The anchor
-        // is `metadata.issuer` alone — see `authorization_code_flow_inner`.
-        let effective_issuer = self
-            .config
-            .issuer
-            .clone()
-            .or_else(|| Some(metadata.issuer.clone()));
+        // Deliberately does NOT consult the store: this is the "log me in" entry
+        // point, and `cargo pmcp auth login` means a fresh authorization.
+        // `get_access_token` is the one that reads the cache.
+        self.authorize_with_fallback(&metadata, iss_presence).await
+    }
 
-        // The scope this flow ACTUALLY requested at the authorization request —
-        // `config.scopes` plus `offline_access` when the server advertises it.
-        // It is composed by the same function `build_authorization_url` uses, so
-        // the value recorded as "requested" cannot drift from the value sent.
-        // RFC 6749 §5.1 makes this the granted scope when the token response
-        // omits `scope`, so getting it from `config.scopes` alone would silently
-        // narrow every subsequent refresh.
-        let requested_scopes =
-            compose_scopes_with_offline_access(&self.config.scopes, &metadata.scopes_supported);
-
-        // Try authorization code flow first (returns the full TokenResponse).
+    /// Run the authorization-code flow, PERSIST what it produced, and fall back
+    /// to the device-code grant on a non-terminal failure.
+    ///
+    /// One implementation for both public entry points, so a credential that
+    /// reaches `get_access_token`'s caller and one that reaches
+    /// `authorize_with_details`' caller cannot be stored differently.
+    async fn authorize_with_fallback(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        iss_presence: IssPresence,
+    ) -> Result<AuthorizationResult> {
         match self
-            .authorization_code_flow_inner(&metadata, iss_presence)
+            .authorization_code_flow_inner(metadata, iss_presence)
             .await
         {
-            Ok((token_response, resolved_client_id)) => Ok(Self::build_auth_result(
-                token_response,
-                resolved_client_id,
-                effective_issuer,
-                &requested_scopes,
-            )),
+            Ok((token_response, identity)) => {
+                // The scope this flow ACTUALLY requested at the authorization
+                // request — `config.scopes` plus `offline_access` when the
+                // server advertises it. Composed by the same function
+                // `build_authorization_url` uses, so the value recorded as
+                // "requested" cannot drift from the value sent. RFC 6749 §5.1
+                // makes this the granted scope when the token response omits
+                // `scope`, so using `config.scopes` alone would silently narrow
+                // every subsequent refresh.
+                let requested_scopes = compose_scopes_with_offline_access(
+                    &self.config.scopes,
+                    &metadata.scopes_supported,
+                );
+                let result = Self::build_auth_result(
+                    token_response,
+                    identity.client_id,
+                    self.effective_issuer(metadata),
+                    &requested_scopes,
+                );
+                self.persist_credentials(
+                    &metadata.issuer,
+                    &result,
+                    identity.registered_application_type.as_deref(),
+                )
+                .await?;
+                Ok(result)
+            },
             Err(e) if Self::is_terminal_authorization_refusal(&e) => Err(e),
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
 
-                // Device flow only returns an access_token string via the legacy
-                // path — `refresh_token` / full `TokenResponse` are unavailable.
-                // See the rustdoc on this function for the device-code caveat.
                 if metadata.device_authorization_endpoint.is_some() {
                     tracing::info!(
                         "Trying device code flow (refresh_token may be None per RFC 8628)..."
                     );
-                    // Resolve client_id the same way authorization_code would.
-                    let resolved_client_id = self.resolve_client_id_for_flow(&metadata).await?;
-                    let access_token = self.device_code_flow_with_metadata(&metadata).await?;
-                    // Device flow returns only the access_token — populate what
-                    // we know, leave refresh_token/expires_at/scopes at defaults.
-                    // `scopes` stays `config.scopes`: the device grant never
-                    // builds an authorization URL, so `offline_access` was never
-                    // requested on this path and recording it would be a lie.
-                    return Ok(AuthorizationResult {
-                        access_token,
-                        refresh_token: None,
-                        expires_at: None,
-                        scopes: self.config.scopes.clone(),
-                        issuer: effective_issuer,
-                        client_id: resolved_client_id,
-                    });
+                    return self.device_code_flow_with_metadata(metadata).await;
                 }
                 Err(Error::internal(
                     "No supported OAuth flow available.\n\
@@ -1249,13 +1617,9 @@ impl OAuthHelper {
         requested_scopes: &[String],
     ) -> AuthorizationResult {
         // Convert `expires_in` (relative seconds) to `expires_at` (absolute unix seconds).
-        let expires_at = token_response.expires_in.map(|ttl| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            now + ttl
-        });
+        let expires_at = token_response
+            .expires_in
+            .map(|ttl| unix_now_secs().saturating_add(ttl));
 
         // The GRANTED scope, per RFC 6749 §5.1. The two branches look
         // interchangeable and are NOT, which is why each names its own rule:
@@ -1302,22 +1666,6 @@ impl OAuthHelper {
         hasher.update(verifier.as_bytes());
         let hash = hasher.finalize();
         URL_SAFE_NO_PAD.encode(hash)
-    }
-
-    /// Perform OAuth authorization code flow with PKCE (public wrapper).
-    ///
-    /// Returns just the access token for the simple `get_access_token` caller.
-    /// Full artifacts (refresh_token, expires_at, scopes, issuer, client_id) are
-    /// available through `authorize_with_details()` via `authorization_code_flow_inner`.
-    async fn authorization_code_flow(
-        &self,
-        metadata: &OidcDiscoveryMetadata,
-        iss_presence: IssPresence,
-    ) -> Result<String> {
-        let (token_response, _client_id) = self
-            .authorization_code_flow_inner(metadata, iss_presence)
-            .await?;
-        Ok(token_response.access_token)
     }
 
     /// Bind the loopback callback listener and return it with the redirect URI
@@ -1516,9 +1864,16 @@ impl OAuthHelper {
 
     /// Inner PKCE authorization code flow returning the full token response.
     ///
-    /// Returns (`TokenResponse`, `resolved_client_id`) so `authorize_with_details`
-    /// can populate `AuthorizationResult` fields including `refresh_token`,
-    /// `expires_at`, `scopes`, and the effective `client_id`.
+    /// Returns (`TokenResponse`, [`ResolvedClientIdentity`]) so
+    /// [`Self::authorize_with_fallback`] can populate `AuthorizationResult`
+    /// including `refresh_token`, `expires_at`, `scopes` and the effective
+    /// `client_id` — and can persist the registered `application_type`
+    /// alongside them.
+    ///
+    /// Persistence deliberately lives in the CALLER: a flow that exchanged a
+    /// code has not yet decided what the granted scope was (RFC 6749 §5.1's
+    /// omission rule needs the composed request), and storing twice from two
+    /// levels is how a record and its issuer come to disagree.
     ///
     /// `iss_presence` is resolved by the caller through
     /// [`Self::resolve_iss_presence`] and passed in, so the environment is read
@@ -1527,10 +1882,11 @@ impl OAuthHelper {
         &self,
         metadata: &OidcDiscoveryMetadata,
         iss_presence: IssPresence,
-    ) -> Result<(crate::client::auth::TokenResponse, String)> {
+    ) -> Result<(crate::client::auth::TokenResponse, ResolvedClientIdentity)> {
         tracing::info!("Starting OAuth authorization code flow...");
 
-        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
+        let identity = self.resolve_client_identity_for_flow(metadata).await?;
+        let resolved_client_id = identity.client_id.clone();
 
         // The specification's mandated per-request record: the expected issuer,
         // the PKCE verifier, the CSRF `state` and the `iss` policy, bound into
@@ -1596,20 +1952,14 @@ impl OAuthHelper {
 
         tracing::info!("Authentication successful");
 
-        // Cache the token
-        if let Some(ref cache_file) = self.config.cache_file {
-            self.cache_token_from_response(&token_response, cache_file)
-                .await?;
-        }
-
-        Ok((token_response, resolved_client_id))
+        Ok((token_response, identity))
     }
 
     /// Perform OAuth device code flow (with pre-fetched metadata).
     async fn device_code_flow_with_metadata(
         &self,
         metadata: &OidcDiscoveryMetadata,
-    ) -> Result<String> {
+    ) -> Result<AuthorizationResult> {
         tracing::info!("Starting OAuth device code flow...");
 
         // Check if device flow is supported
@@ -1636,8 +1986,9 @@ impl OAuthHelper {
         &self,
         metadata: &OidcDiscoveryMetadata,
         device_auth_endpoint: &str,
-    ) -> Result<String> {
-        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
+    ) -> Result<AuthorizationResult> {
+        let identity = self.resolve_client_identity_for_flow(metadata).await?;
+        let resolved_client_id = identity.client_id.clone();
 
         // Step 1: Request device code. `offline_access` is deliberately NOT
         // composed in here: the device grant never builds an authorization URL,
@@ -1716,12 +2067,29 @@ impl OAuthHelper {
 
                 tracing::info!("Authentication successful");
 
-                // Cache the token
-                if let Some(ref cache_file) = self.config.cache_file {
-                    self.cache_token(&token_response, cache_file).await?;
-                }
+                // `scopes` stays `config.scopes`: the device grant never builds
+                // an authorization URL, so SEP-2207's `offline_access` was never
+                // requested on this path and recording it would be a lie. RFC
+                // 8628 §3.5 does not require a `refresh_token` either, so this
+                // record may legitimately carry none.
+                let result = AuthorizationResult {
+                    access_token: token_response.access_token,
+                    refresh_token: token_response.refresh_token,
+                    expires_at: token_response
+                        .expires_in
+                        .map(|ttl| unix_now_secs().saturating_add(ttl)),
+                    scopes: self.config.scopes.clone(),
+                    issuer: self.effective_issuer(metadata),
+                    client_id: resolved_client_id,
+                };
+                self.persist_credentials(
+                    &metadata.issuer,
+                    &result,
+                    identity.registered_application_type.as_deref(),
+                )
+                .await?;
 
-                return Ok(token_response.access_token);
+                return Ok(result);
             }
 
             // Check error response
@@ -1784,66 +2152,6 @@ impl OAuthHelper {
             .map_err(|e| Error::internal(format!("Failed to parse token response: {e}")))
     }
 
-    /// Load cached token from disk.
-    async fn load_cached_token(&self, cache_file: &PathBuf) -> Result<TokenCache> {
-        let content = tokio::fs::read_to_string(cache_file)
-            .await
-            .map_err(|e| Error::internal(format!("Failed to read token cache: {e}")))?;
-        serde_json::from_str(&content)
-            .map_err(|e| Error::internal(format!("Failed to parse token cache: {e}")))
-    }
-
-    /// Cache token to disk.
-    async fn cache_token(&self, token: &TokenResponse, cache_file: &PathBuf) -> Result<()> {
-        let expires_at = token.expires_in.map(|secs| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + secs
-        });
-
-        let cache = TokenCache {
-            access_token: token.access_token.clone(),
-            refresh_token: token.refresh_token.clone(),
-            expires_at,
-            scopes: self.config.scopes.clone(),
-        };
-
-        // Ensure directory exists
-        if let Some(parent) = cache_file.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| Error::internal(format!("Failed to create cache directory: {e}")))?;
-        }
-
-        let json = serde_json::to_string_pretty(&cache)
-            .map_err(|e| Error::internal(format!("Failed to serialize cache: {e}")))?;
-        tokio::fs::write(cache_file, json)
-            .await
-            .map_err(|e| Error::internal(format!("Failed to write token cache: {e}")))?;
-
-        tracing::debug!("Token cached to: {}", cache_file.display());
-
-        Ok(())
-    }
-
-    /// Cache token from the SDK's auth `TokenResponse` type.
-    async fn cache_token_from_response(
-        &self,
-        token: &crate::client::auth::TokenResponse,
-        cache_file: &PathBuf,
-    ) -> Result<()> {
-        // Convert to internal TokenResponse
-        let internal_token = TokenResponse {
-            access_token: token.access_token.clone(),
-            refresh_token: token.refresh_token.clone(),
-            expires_in: token.expires_in,
-            token_type: token.token_type.clone(),
-        };
-        self.cache_token(&internal_token, cache_file).await
-    }
-
     /// Create HTTP middleware chain with OAuth bearer token.
     ///
     /// Obtains an access token (from cache, refresh, or interactive flow)
@@ -1868,10 +2176,24 @@ impl OAuthHelper {
     }
 }
 
-/// Get default cache file path (`~/.pmcp/oauth-tokens.json`).
+/// The path of the LEGACY, issuer-less flat token cache
+/// (`~/.pmcp/oauth-tokens.json`).
 ///
-/// Uses the user's home directory to store cached OAuth tokens.
-/// Falls back to the current directory if the home directory cannot be determined.
+/// Uses the user's home directory, falling back to the current directory when
+/// the home directory cannot be determined.
+///
+/// # This file is no longer read (D-17 / SEP-2352)
+///
+/// It held ONE token and recorded NO issuer, so which authorization server
+/// issued it cannot be determined without guessing — and guessing is what
+/// SEP-2352 forbids. `OAuthHelper` never opens it, never migrates it and never
+/// deletes it; it warns once that it is being discarded and leaves it for the
+/// user to remove. One re-login is required.
+///
+/// The value is still useful as a LOCATION: setting
+/// [`OAuthConfig::cache_file`] to it opts a caller into the issuer-keyed store,
+/// which lives beside it as `oauth-cache.json` in the same directory. Setting
+/// the field to `None` continues to mean "do not cache".
 pub fn default_cache_path() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push(".pmcp");
@@ -1903,6 +2225,129 @@ pub fn default_cache_path() -> PathBuf {
 pub async fn create_oauth_middleware(config: OAuthConfig) -> Result<Arc<HttpMiddlewareChain>> {
     let helper = OAuthHelper::new(config)?;
     helper.create_middleware_chain().await
+}
+
+/// The credential-store WIRING rules that are decidable without a network.
+///
+/// The end-to-end evidence lives in `tests/oauth_store_wiring.rs`; these pin the
+/// two rules that would otherwise only be visible as a downstream symptom.
+#[cfg(test)]
+mod credential_store_wiring_tests {
+    use super::*;
+
+    /// [`CREDENTIAL_STORE_FILE_NAME`] and `default_credential_path` must name
+    /// the same file, or a caller who sets `cache_file` and a caller who does
+    /// not would build two different stores inside one directory and a login
+    /// through one would be invisible to the other.
+    #[test]
+    fn the_credential_store_file_name_matches_default_credential_path() {
+        let default = crate::shared::credential_file::default_credential_path()
+            .expect("a resolvable default credential path");
+        assert_eq!(
+            default.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(CREDENTIAL_STORE_FILE_NAME),
+            "the store file name drifted from default_credential_path"
+        );
+    }
+
+    /// The legacy flat cache and the issuer-keyed store are DIFFERENT files, so
+    /// resolving the store never opens or overwrites the legacy document.
+    #[test]
+    fn the_legacy_flat_cache_and_the_credential_store_are_different_files() {
+        let legacy = default_cache_path();
+        assert_eq!(
+            legacy.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("oauth-tokens.json")
+        );
+        assert_ne!(
+            legacy.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(CREDENTIAL_STORE_FILE_NAME)
+        );
+        assert_eq!(
+            legacy
+                .with_file_name(CREDENTIAL_STORE_FILE_NAME)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str),
+            Some(CREDENTIAL_STORE_FILE_NAME),
+            "the store lives beside the legacy file, not on top of it"
+        );
+    }
+
+    /// With no `cache_file` and no injected store there is no persistence at
+    /// all, which is what `--no-cache` has always meant. Resolution is also
+    /// I/O-free in that case: there is nothing to resolve.
+    #[test]
+    fn no_cache_file_and_no_injected_store_resolves_to_no_store() {
+        let helper = OAuthHelper::new(OAuthConfig {
+            mcp_server_url: Some("https://mcp.example".to_string()),
+            cache_file: None,
+            ..OAuthConfig::default()
+        })
+        .expect("helper");
+        assert!(helper.credential_store().is_none());
+    }
+
+    /// A configured `cache_file` opts into a store BESIDE it, never onto it.
+    #[test]
+    fn a_configured_cache_file_resolves_a_store_beside_it() {
+        let helper = OAuthHelper::new(OAuthConfig {
+            mcp_server_url: Some("https://mcp.example".to_string()),
+            cache_file: Some(PathBuf::from("/nonexistent-116-11/oauth-tokens.json")),
+            ..OAuthConfig::default()
+        })
+        .expect("helper");
+        let store = helper.credential_store().expect("a resolved store");
+        assert!(
+            format!("{store:?}").contains("oauth-cache.json"),
+            "expected a store beside the legacy file, got {store:?}"
+        );
+        assert!(
+            !std::path::Path::new("/nonexistent-116-11").exists(),
+            "resolving a store must not create anything"
+        );
+    }
+
+    /// The key carries all THREE components, with the server normalized.
+    #[test]
+    fn the_credential_key_carries_issuer_account_and_normalized_server() {
+        let helper = OAuthHelper::new(OAuthConfig {
+            mcp_server_url: Some("https://MCP.Example:443/api/".to_string()),
+            ..OAuthConfig::default()
+        })
+        .expect("helper")
+        .with_account_scope("cognito-sub-123");
+
+        let server_key = helper.server_key().expect("a normalizable server URL");
+        assert_eq!(server_key, "https://mcp.example");
+
+        let key = helper.credential_key("https://as.example", &server_key);
+        assert_eq!(key.issuer(), "https://as.example");
+        assert_eq!(key.account(), "cognito-sub-123");
+        assert_eq!(key.server(), "https://mcp.example");
+    }
+
+    /// The default account scope is the empty string — the single-user CLI
+    /// case — and the issuer is the fallback server identity.
+    #[test]
+    fn the_default_account_scope_is_empty_and_the_issuer_is_the_server_fallback() {
+        let helper = OAuthHelper::new(OAuthConfig {
+            mcp_server_url: None,
+            issuer: Some("https://as.example/tenant".to_string()),
+            ..OAuthConfig::default()
+        })
+        .expect("helper");
+        let server_key = helper.server_key().expect("a normalizable issuer");
+        assert_eq!(server_key, "https://as.example");
+        assert_eq!(
+            helper
+                .credential_key("https://as.example", &server_key)
+                .account(),
+            ""
+        );
+
+        let unaddressable = OAuthHelper::new(OAuthConfig::default()).expect("helper");
+        assert!(unaddressable.server_key().is_err());
+    }
 }
 
 #[cfg(test)]
@@ -2000,10 +2445,10 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let resolved = helper
-            .resolve_client_id_for_flow(&metadata(Some("https://x/register")))
+            .resolve_client_identity_for_flow(&metadata(Some("https://x/register")))
             .await
             .unwrap();
-        assert_eq!(resolved, "preset");
+        assert_eq!(resolved.client_id, "preset");
     }
 
     #[tokio::test]
@@ -2015,10 +2460,10 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let resolved = helper
-            .resolve_client_id_for_flow(&metadata(None))
+            .resolve_client_identity_for_flow(&metadata(None))
             .await
             .unwrap();
-        assert_eq!(resolved, "preset");
+        assert_eq!(resolved.client_id, "preset");
     }
 
     #[tokio::test]
@@ -2029,7 +2474,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .resolve_client_id_for_flow(&metadata(None))
+            .resolve_client_identity_for_flow(&metadata(None))
             .await
             .unwrap_err();
         let msg = format!("{err}");
@@ -2048,7 +2493,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .resolve_client_id_for_flow(&metadata(Some("https://x/register")))
+            .resolve_client_identity_for_flow(&metadata(Some("https://x/register")))
             .await
             .unwrap_err();
         let msg = format!("{err}");
