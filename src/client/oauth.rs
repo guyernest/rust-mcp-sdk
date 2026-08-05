@@ -945,6 +945,144 @@ impl OAuthHelper {
         CredentialKey::new(issuer, self.account_scope.as_str(), server_key)
     }
 
+    /// Announce an authorization-server SUBSTITUTION for this MCP server, and
+    /// refuse the flow exactly where the specification asks for a refusal
+    /// (D-18, refined by RESEARCH A4).
+    ///
+    /// Issuer-keyed storage makes a substitution SAFE — the old credentials
+    /// simply become unreachable — but it also makes it INVISIBLE: the user is
+    /// walked through a fresh login at an identity provider they did not expect,
+    /// and nothing says so. This is the "says so".
+    ///
+    /// # The mechanism the specification names is NOT the one used here
+    ///
+    /// The specification describes an authorization-server change as one
+    /// "detected via updated protected resource metadata" — RFC 9728 Protected
+    /// Resource Metadata. `pmcp` does not implement RFC 9728: it derives the
+    /// authorization server from the MCP base URL directly (see
+    /// [`Self::discover_metadata_with_extras`]), and RFC 9728 discovery is
+    /// **DEFERRED by owner decision (2026-08-02)**, recorded with a named owner
+    /// in this phase's deferred-items file.
+    ///
+    /// So detection here uses the provenance signal that exists today: the
+    /// issuer discovery actually RESOLVED for this MCP server URL, compared
+    /// against the one last recorded for it. That is a narrower signal than the
+    /// specification's, and it is stated plainly rather than presented as
+    /// parity. Practically it detects a server that starts pointing at a
+    /// different authorization server; it cannot detect a change announced only
+    /// through protected resource metadata, because nothing reads that yet.
+    ///
+    /// # Why the remedy depends on credential PROVENANCE
+    ///
+    /// The specification's two adjacent sentences prescribe different remedies,
+    /// and collapsing them into one would be wrong in both directions:
+    ///
+    /// - **DCR-issued** (`config.client_id` is `None`) — warn and PROCEED. The
+    ///   requirement is "MUST NOT reuse client credentials from a different
+    ///   authorization server and MUST re-register with the new authorization
+    ///   server", which issuer-keyed storage already accomplishes by missing the
+    ///   cache. Hard-failing here would convert a legitimate operational event —
+    ///   a tenant move, a provider migration — into an outage, which D-18
+    ///   explicitly rejects.
+    /// - **Pre-registered** (`config.client_id` is `Some`) — return
+    ///   [`Error::reauth_required`]. A pre-registered id is provisioned for one
+    ///   authorization server and is meaningless at another; silently re-running
+    ///   a browser login against an unexpected identity provider with it is
+    ///   precisely the case the specification warns about. The browser flow is
+    ///   not started.
+    ///
+    /// # Errors
+    ///
+    /// The ONLY error this returns is the pre-registered refusal above. Every
+    /// store failure — an unreadable issuer record, an unaddressable server, a
+    /// failed write — warns and proceeds, because a store that cannot be read
+    /// must not be able to brick authentication and because the resulting
+    /// behaviour is exactly today's: no detection. That is also what the
+    /// [`CredentialStore::last_issuer`] default (`Ok(None)`) promises an
+    /// implementor who declines the tracking.
+    async fn announce_authorization_server_change(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+    ) -> Result<()> {
+        let Some(store) = self.credential_store() else {
+            return Ok(());
+        };
+        let Ok(server_key) = self.server_key() else {
+            return Ok(());
+        };
+        let discovered = metadata.issuer.as_str();
+
+        let previous = match store.last_issuer(&server_key).await {
+            Ok(previous) => previous,
+            Err(e) => {
+                tracing::warn!(
+                    "could not read the last-seen authorization server for {server_key} ({e}); \
+                     proceeding without substitution detection"
+                );
+                return Ok(());
+            },
+        };
+
+        let Some(previous) = previous else {
+            // First connection for this MCP server. Recording HERE, rather than
+            // only on a successful authorization, means a login that never
+            // completes still establishes the anchor a second connection needs.
+            Self::record_issuer_best_effort(store, &server_key, discovered).await;
+            return Ok(());
+        };
+
+        if previous == discovered {
+            return Ok(());
+        }
+
+        if self.config.client_id.is_some() {
+            return Err(Error::reauth_required(
+                discovered,
+                &format!(
+                    "the authorization server for MCP server {server_key} changed from \
+                     {previous} to {discovered}. This client is configured with a PRE-REGISTERED \
+                     client_id, which is specific to one authorization server, so it is neither \
+                     reused nor exchanged at the new one and no browser flow is started. If the \
+                     change is expected, register this client with {discovered} and update \
+                     OAuthConfig::client_id; if it is not, treat the MCP server as compromised."
+                ),
+            ));
+        }
+
+        tracing::warn!(
+            "the authorization server for MCP server {} changed from {} to {}. This client's \
+             credentials were issued by dynamic registration, so the previous ones are neither \
+             reused nor sent anywhere — they are simply unreachable under the new issuer — and \
+             this client is re-registering with {} and asking you to log in there. If you did not \
+             expect that identity provider, stop and treat the MCP server as compromised.",
+            server_key,
+            previous,
+            discovered,
+            discovered
+        );
+        Self::record_issuer_best_effort(store, &server_key, discovered).await;
+        Ok(())
+    }
+
+    /// Record a server's last-seen issuer, warning rather than failing when the
+    /// store refuses.
+    ///
+    /// Detection is diagnostic, so a write failure here must not abort a flow.
+    /// The AUTHORITATIVE record is the one `save_with_issuer` writes on success,
+    /// and that failure IS propagated.
+    async fn record_issuer_best_effort(
+        store: &Arc<dyn CredentialStore>,
+        server_key: &str,
+        issuer: &str,
+    ) {
+        if let Err(e) = store.record_issuer(server_key, issuer).await {
+            tracing::warn!(
+                "could not record the authorization server for {server_key} ({e}); a later \
+                 substitution may go undetected until the next successful login"
+            );
+        }
+    }
+
     /// Announce, once per helper, that the legacy flat token cache is being
     /// discarded (D-17).
     ///
@@ -1453,6 +1591,11 @@ impl OAuthHelper {
         let (metadata, extras) = self.get_metadata_with_extras().await?;
         let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
 
+        // D-18, BEFORE the cache is consulted and before anything interactive:
+        // a pre-registered client must not be walked through a login at an
+        // authorization server it was not provisioned for.
+        self.announce_authorization_server_change(&metadata).await?;
+
         if let Some(access_token) = self.token_from_store(&metadata).await? {
             return Ok(access_token);
         }
@@ -1533,6 +1676,10 @@ impl OAuthHelper {
 
         let (metadata, extras) = self.get_metadata_with_extras().await?;
         let iss_presence = self.resolve_iss_presence(extras.iss_parameter_supported());
+
+        // D-18, before anything interactive. Both public entry points check, so
+        // a substitution cannot be reached by picking the other one.
+        self.announce_authorization_server_change(&metadata).await?;
 
         // Deliberately does NOT consult the store: this is the "log me in" entry
         // point, and `cargo pmcp auth login` means a fresh authorization.

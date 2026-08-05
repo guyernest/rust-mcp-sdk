@@ -33,7 +33,7 @@
 #![cfg(feature = "oauth")]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mockito::{Matcher, Mock, Server, ServerGuard};
@@ -239,6 +239,68 @@ fn helper_for(
 /// dropped, so nextest does not report the reader as leaky.
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(20)).await;
+}
+
+/// Captures WARN-level event messages, so "a warning fired, and it named X" is
+/// ASSERTED rather than assumed.
+///
+/// Without this, the D-18 warn-and-proceed path would be tested only by its side
+/// effect (the flow proceeded), which a version that never warned at all would
+/// also satisfy — the same shape as 116-10's "a presence assertion is not a
+/// detector" finding.
+#[derive(Debug, Default)]
+struct WarnCapture {
+    messages: Arc<Mutex<Vec<String>>>,
+}
+
+/// Pulls the formatted `message` field out of a `tracing` event.
+struct MessageVisitor<'a>(&'a mut Vec<String>);
+
+impl tracing::field::Visit for MessageVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0.push(format!("{value:?}"));
+        }
+    }
+}
+
+impl tracing::Subscriber for WarnCapture {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::WARN
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() != tracing::Level::WARN {
+            return;
+        }
+        let mut held = self.messages.lock().expect("captured warnings");
+        event.record(&mut MessageVisitor(&mut held));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// Warnings that mention an authorization-server substitution, filtered out of
+/// everything else this module warns about (an unregistered redirect URI, an
+/// expired token, a discarded legacy cache).
+fn substitution_warnings(captured: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    captured
+        .lock()
+        .expect("captured warnings")
+        .iter()
+        .filter(|message| message.contains("authorization server"))
+        .cloned()
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -836,5 +898,367 @@ async fn a_dcr_flow_stores_the_issued_client_id_and_the_registered_application_t
         stored.registered_application_type(),
         Some("native"),
         "the registered application_type must reach the store (116-10 -> 116-11)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Group E — D-18, the authorization-server substitution
+// ---------------------------------------------------------------------------
+
+/// The first connection to a given MCP server URL records the issuer discovery
+/// resolved for it, against `normalize_server_key(server_url)`.
+///
+/// That record is the comparison anchor every later connection uses, so it has
+/// to exist before there is anything to compare.
+#[tokio::test]
+async fn a_first_connection_records_the_discovered_issuer_against_the_normalized_server_key() {
+    let (_server, _mocks, base) = authorization_server(false).await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let server_key = normalize_server_key(&base).expect("normalized");
+
+    assert_eq!(
+        store.last_issuer(&server_key).await.expect("readable"),
+        None,
+        "nothing is recorded before the first connection"
+    );
+
+    let (helper, _opened) = helper_for(&base, &store, Some("preset-client"));
+    helper.authorize_with_details().await.expect("a full flow");
+    settle().await;
+
+    assert_eq!(
+        store.last_issuer(&server_key).await.expect("readable"),
+        Some(base.clone())
+    );
+}
+
+/// A second connection that discovers the SAME issuer produces no warning and
+/// no error — the positive control for both change rows below.
+#[tokio::test]
+async fn an_unchanged_issuer_on_a_second_connection_neither_warns_nor_errors() {
+    let (_server, _mocks, base) = authorization_server(false).await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let server_key = normalize_server_key(&base).expect("normalized");
+    store
+        .record_issuer(&server_key, &base)
+        .await
+        .expect("seeding the same issuer");
+
+    let capture = WarnCapture::default();
+    let messages = capture.messages.clone();
+    let _guard = tracing::subscriber::set_default(capture);
+
+    let (helper, opened) = helper_for(&base, &store, Some("preset-client"));
+    let result = helper.authorize_with_details().await;
+    settle().await;
+
+    assert!(result.is_ok(), "an unchanged issuer must not be fatal");
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    assert!(
+        substitution_warnings(&messages).is_empty(),
+        "an unchanged issuer must not warn: {:?}",
+        substitution_warnings(&messages)
+    );
+}
+
+/// **DCR-issued credentials: warn and PROCEED.**
+///
+/// SEP-2352 requires that a client MUST NOT reuse credentials from a different
+/// authorization server and MUST re-register with the new one. Issuer-keyed
+/// storage already accomplishes both by MISSING the cache, so nothing here has
+/// to enforce anything — the warning is what makes the automatic
+/// re-registration visible. Hard-failing would turn a legitimate operational
+/// event (a tenant move, a provider migration) into an outage, which D-18
+/// explicitly rejects.
+#[tokio::test]
+async fn an_issuer_change_with_dcr_credentials_warns_naming_both_issuers_and_proceeds() {
+    let (_server, _mocks, base) = authorization_server(true).await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let server_key = normalize_server_key(&base).expect("normalized");
+    store
+        .record_issuer(&server_key, "https://previous-as.example")
+        .await
+        .expect("seeding the previous issuer");
+
+    let capture = WarnCapture::default();
+    let messages = capture.messages.clone();
+    let _guard = tracing::subscriber::set_default(capture);
+
+    // client_id is None + dcr_enabled, i.e. DCR-issued provenance.
+    let (helper, opened) = helper_for(&base, &store, None);
+    let result = helper
+        .authorize_with_details()
+        .await
+        .expect("a DCR change must PROCEED, not fail");
+    settle().await;
+
+    // The flow ran, and re-registration happened against the NEW server.
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    assert_eq!(result.client_id, "dcr-issued-id");
+
+    // The warning names both issuers and the server.
+    let warnings = substitution_warnings(&messages);
+    assert_eq!(
+        warnings.len(),
+        1,
+        "exactly one substitution warning, got {warnings:?}"
+    );
+    let warning = &warnings[0];
+    assert!(
+        warning.contains("https://previous-as.example"),
+        "the warning must name the OLD issuer: {warning}"
+    );
+    assert!(
+        warning.contains(&base),
+        "the warning must name the NEW issuer: {warning}"
+    );
+    assert!(
+        warning.contains(&server_key),
+        "the warning must name the MCP server: {warning}"
+    );
+
+    // The newly recorded last-seen issuer is the new one.
+    assert_eq!(
+        store.last_issuer(&server_key).await.expect("readable"),
+        Some(base.clone())
+    );
+}
+
+/// **Pre-registered credentials: REFUSE.**
+///
+/// A pre-registered `client_id` is provisioned for one authorization server and
+/// is meaningless at another, so silently walking a user through a browser login
+/// at an unexpected IdP with that id is the exact case the specification warns
+/// about. The refusal carries the stable `reauth_required` identity, so a caller
+/// branches on `is_reauth_required()` rather than on message text.
+#[tokio::test]
+async fn an_issuer_change_with_a_pre_registered_client_id_is_reauth_required_and_starts_no_flow() {
+    let mut server = Server::new_async().await;
+    let base = server.url();
+
+    let _disc = server
+        .mock("GET", "/.well-known/openid-configuration")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(discovery_body(&base, false))
+        .create_async()
+        .await;
+    // The refusal must happen BEFORE any authorization request, so the token
+    // endpoint must never be reached.
+    let token = server
+        .mock("POST", "/token")
+        .with_status(200)
+        .with_body("{}")
+        .expect(0)
+        .create_async()
+        .await;
+
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+    let server_key = normalize_server_key(&base).expect("normalized");
+    store
+        .record_issuer(&server_key, "https://previous-as.example")
+        .await
+        .expect("seeding the previous issuer");
+
+    let port = free_port();
+    let (launcher, opened) = CountingCallbackLauncher::new(port);
+    let helper = OAuthHelper::new(OAuthConfig {
+        mcp_server_url: Some(base.clone()),
+        client_id: Some("provisioned-for-the-previous-as".to_string()),
+        dcr_enabled: false,
+        redirect_port: port,
+        ..OAuthConfig::default()
+    })
+    .expect("helper")
+    .with_browser_launcher(launcher)
+    .with_credential_store(store.clone());
+
+    let err = helper
+        .authorize_with_details()
+        .await
+        .expect_err("a pre-registered client_id must refuse an AS substitution");
+
+    // The programmatic identity, not a substring.
+    assert!(err.is_reauth_required(), "expected reauth_required: {err}");
+    assert_eq!(
+        err.reauth_issuer(),
+        Some(base.as_str()),
+        "reauth_issuer must name the NEW issuer"
+    );
+
+    // The message still names all three values, for a human.
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("https://previous-as.example"),
+        "{rendered}"
+    );
+    assert!(rendered.contains(&base), "{rendered}");
+    assert!(rendered.contains(&server_key), "{rendered}");
+
+    // No browser, no loopback listener, no token exchange.
+    assert_eq!(
+        opened.load(Ordering::SeqCst),
+        0,
+        "the browser flow must NOT be started"
+    );
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+        "the loopback callback port must never have been bound"
+    );
+    token.assert_async().await;
+
+    // `get_access_token` refuses identically — both entry points, one rule.
+    let port2 = free_port();
+    let (launcher2, opened2) = CountingCallbackLauncher::new(port2);
+    let second = OAuthHelper::new(OAuthConfig {
+        mcp_server_url: Some(base.clone()),
+        client_id: Some("provisioned-for-the-previous-as".to_string()),
+        dcr_enabled: false,
+        redirect_port: port2,
+        ..OAuthConfig::default()
+    })
+    .expect("helper")
+    .with_browser_launcher(launcher2)
+    .with_credential_store(store.clone());
+    let err2 = second
+        .get_access_token()
+        .await
+        .expect_err("get_access_token must refuse too");
+    assert!(err2.is_reauth_required(), "{err2}");
+    assert_eq!(opened2.load(Ordering::SeqCst), 0);
+}
+
+/// An issuer change observed for MCP server A neither warns, errors nor rewrites
+/// anything for MCP server B — the `issuers` map is keyed by server, exactly as
+/// D-116-R1's credential key is.
+///
+/// Without this, a multi-server agent would produce spurious `reauth_required`
+/// refusals the moment any one of its servers moved.
+#[tokio::test]
+async fn an_issuer_change_for_one_server_leaves_another_servers_issuer_record_untouched() {
+    let (_server, _mocks, base) = authorization_server(true).await;
+    let store: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::new());
+
+    let server_a = normalize_server_key(&base).expect("normalized");
+    let server_b = normalize_server_key("https://other-mcp.example").expect("normalized");
+
+    // BOTH servers last saw the same old authorization server.
+    store
+        .record_issuer(&server_a, "https://previous-as.example")
+        .await
+        .expect("seeding A");
+    store
+        .record_issuer(&server_b, "https://previous-as.example")
+        .await
+        .expect("seeding B");
+
+    let (helper, _opened) = helper_for(&base, &store, None);
+    helper
+        .authorize_with_details()
+        .await
+        .expect("A's change warns and proceeds");
+    settle().await;
+
+    assert_eq!(
+        store.last_issuer(&server_a).await.expect("readable"),
+        Some(base.clone()),
+        "A's record advanced to the new issuer"
+    );
+    assert_eq!(
+        store.last_issuer(&server_b).await.expect("readable"),
+        Some("https://previous-as.example".to_string()),
+        "B's record must be untouched by A's substitution"
+    );
+}
+
+/// A store that declines D-18's issuer tracking — implementing only
+/// `load`/`save`/`delete` and inheriting the `last_issuer` / `record_issuer`
+/// defaults — still works: no warning, no error, no panic. It simply never
+/// detects a substitution, which is today's behaviour and is what the trait's
+/// defaults promise.
+#[tokio::test]
+async fn a_store_that_does_not_track_issuers_still_works() {
+    use std::collections::BTreeMap;
+
+    #[derive(Debug, Default)]
+    struct MinimalStore {
+        held: Mutex<BTreeMap<String, StoredCredentials>>,
+    }
+
+    impl MinimalStore {
+        fn address(key: &CredentialKey) -> String {
+            format!("{}|{}|{}", key.issuer(), key.account(), key.server())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CredentialStore for MinimalStore {
+        async fn load(&self, key: &CredentialKey) -> pmcp::Result<Option<StoredCredentials>> {
+            Ok(self
+                .held
+                .lock()
+                .expect("held")
+                .get(&Self::address(key))
+                .cloned())
+        }
+
+        async fn save(
+            &self,
+            key: &CredentialKey,
+            credentials: &StoredCredentials,
+        ) -> pmcp::Result<()> {
+            self.held
+                .lock()
+                .expect("held")
+                .insert(Self::address(key), credentials.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &CredentialKey) -> pmcp::Result<()> {
+            self.held.lock().expect("held").remove(&Self::address(key));
+            Ok(())
+        }
+    }
+
+    let (_server, _mocks, base) = authorization_server(false).await;
+    let minimal = Arc::new(MinimalStore::default());
+    let store: Arc<dyn CredentialStore> = minimal.clone();
+
+    let capture = WarnCapture::default();
+    let messages = capture.messages.clone();
+    let _guard = tracing::subscriber::set_default(capture);
+
+    let (helper, opened) = helper_for(&base, &store, Some("preset-client"));
+    let result = helper
+        .authorize_with_details()
+        .await
+        .expect("the defaults must not break a flow");
+    settle().await;
+
+    assert_eq!(result.access_token, "fresh-access-token");
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    assert!(
+        substitution_warnings(&messages).is_empty(),
+        "a store that reports no last issuer must never warn about a change"
+    );
+
+    // `save_with_issuer`'s default really did store the credentials.
+    let key = CredentialKey::new(&base, "", normalize_server_key(&base).expect("normalized"));
+    assert_eq!(
+        store
+            .load(&key)
+            .await
+            .expect("readable")
+            .expect("the record")
+            .access_token(),
+        "fresh-access-token"
+    );
+    // And the default `last_issuer` still reports nothing, as specified.
+    assert_eq!(
+        store
+            .last_issuer(&normalize_server_key(&base).expect("normalized"))
+            .await
+            .expect("readable"),
+        None
     );
 }
