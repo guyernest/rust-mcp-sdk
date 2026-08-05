@@ -34,9 +34,10 @@ use crate::client::http_middleware::HttpMiddlewareChain;
 use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
+use crate::shared::http_body_cap::DEFAULT_AUTH_RESPONSE_BYTES;
 use crate::shared::oauth_validation::{
-    iss_presence_from, parse_iss_env_value, validate_authorization_response,
-    AuthorizationRequestRecord, IssPresence,
+    derive_application_type, iss_presence_from, parse_iss_env_value,
+    validate_authorization_response, AuthorizationRequestRecord, IssPresence,
 };
 use crate::shared::pkce::generate_state;
 
@@ -84,6 +85,110 @@ const CALLBACK_FAILURE_RESPONSE: &str =
      <h1 style='color: red;'>Authentication Failed</h1>\
      <p>No authorization code received. Please try again.</p>\
      </body></html>";
+
+/// The scope an OAuth client asks for when it wants a refresh token (SEP-2207).
+///
+/// It appears at exactly two protocol stages and means a DIFFERENT thing at
+/// each, which is why this module writes it in two places and deliberately not
+/// in a third:
+///
+/// | Stage | What writing it there means | Written here? |
+/// |---|---|---|
+/// | the Dynamic Client Registration request's `scope` | CLIENT METADATA: what this client is permitted to ask for | yes, when advertised |
+/// | the authorization request's `scope` | the ASK itself — the only stage at which requesting it does anything | yes, when advertised |
+/// | a refresh request's `scope` | a scope CHANGE on an existing grant | **no, never** |
+///
+/// The third row is the one that matters. RFC 6749 §6 permits a refresh request
+/// to narrow the granted scope and never to widen it, so introducing a scope at
+/// refresh that was never granted can have the authorization server refuse a
+/// refresh that would otherwise have succeeded. Refresh sends only what was
+/// GRANTED, or no `scope` at all.
+///
+/// Both writes are conditioned on the authorization server ADVERTISING the scope
+/// in its `scopes_supported`, because SEP-2207 states the client MAY request it
+/// when the server advertises support — the condition is the whole rule.
+const OFFLINE_ACCESS_SCOPE: &str = "offline_access";
+
+/// The largest Dynamic Client Registration response body this client will read,
+/// on the success path and on the rejection path alike.
+///
+/// Defined as the shared authorization-surface cap rather than as a second
+/// literal, so a hostile registration endpoint faces ONE number and the refusal
+/// message that names it cannot drift from the number actually enforced.
+const MAX_DCR_RESPONSE_BYTES: usize = DEFAULT_AUTH_RESPONSE_BYTES;
+
+/// Compose a `scope` value from the configured scopes plus
+/// [`OFFLINE_ACCESS_SCOPE`], and only when the authorization server advertises
+/// that scope in its `scopes_supported`.
+///
+/// The result is **order-stable** (configured scopes keep their order,
+/// `offline_access` is appended last) and **deduplicated** (a caller who already
+/// listed `offline_access` gets one entry, not two — a duplicated scope token is
+/// legal but is the kind of thing a strict authorization server rejects).
+///
+/// It takes a slice and returns a fresh `Vec`, so `OAuthConfig::scopes` is never
+/// mutated. That is not a stylistic preference: `scopes` is a public field on a
+/// public struct, and a caller who reuses one [`OAuthConfig`] across two flows
+/// against an advertising server must not watch it grow an entry per flow.
+fn compose_scopes_with_offline_access(
+    configured: &[String],
+    scopes_supported: &[String],
+) -> Vec<String> {
+    let mut composed: Vec<String> = Vec::with_capacity(configured.len() + 1);
+    for scope in configured {
+        if !composed.iter().any(|held| held == scope) {
+            composed.push(scope.clone());
+        }
+    }
+
+    let advertised = scopes_supported
+        .iter()
+        .any(|scope| scope == OFFLINE_ACCESS_SCOPE);
+    if advertised && !composed.iter().any(|held| held == OFFLINE_ACCESS_SCOPE) {
+        composed.push(OFFLINE_ACCESS_SCOPE.to_string());
+    }
+
+    composed
+}
+
+/// Write SEP-837's `application_type` onto a registration request, DERIVING it
+/// from the `redirect_uris` the request is actually registering.
+///
+/// Returns the value that will go on the wire, so the caller can compare it
+/// against whatever the authorization server echoes back.
+///
+/// # Why derive from `redirect_uris` rather than from `config.redirect_port`
+///
+/// The redirect URIs are the values the authorization server will enforce its
+/// per-type constraints against. Deriving from anything else lets the declared
+/// type and the registered URIs drift apart the moment the URI shape changes,
+/// which is precisely the mismatch SEP-837 warns registration will be rejected
+/// for.
+///
+/// # The override path
+///
+/// An `application_type` that is ALREADY set on the request is kept, never
+/// overwritten. `DcrRequest::set_application_type` performs no validation
+/// exactly so that it can serve as the authoritative override for this
+/// derivation (116-03 / D-09), and silently clobbering it here would delete that
+/// path.
+///
+/// # Errors
+///
+/// Propagates [`derive_application_type`]'s refusal for an empty, unparseable,
+/// cleartext-remote or MIXED `redirect_uris` vector. A mixed vector is an error
+/// and never a pick: choosing one classification for a vector containing both
+/// registers a client whose declared type contradicts some of its own redirect
+/// URIs, which is an open-redirect primitive (D-10).
+fn apply_application_type(request: &mut DcrRequest) -> Result<String> {
+    if let Some(explicit) = request.application_type() {
+        return Ok(explicit.to_string());
+    }
+
+    let derived = derive_application_type(&request.redirect_uris)?;
+    request.set_application_type(derived.as_str());
+    Ok(derived.as_str().to_string())
+}
 
 /// How the interactive authorization URL reaches a human.
 ///
@@ -459,10 +564,26 @@ impl OAuthHelper {
     /// requested). `client_name` falls back to `"pmcp-sdk"` when the config value is
     /// `None`. Non-`https://` endpoints are rejected except for localhost loopback
     /// variants, guarding against discovery-spoofing. Response body size is capped
-    /// at 1 MiB.
+    /// at [`MAX_DCR_RESPONSE_BYTES`] on both the success and the rejection path.
+    ///
+    /// # The two SEPs this body carries
+    ///
+    /// - **SEP-837** — an `application_type` derived from the `redirect_uris`
+    ///   being registered, sent UNCONDITIONALLY. Omitting it defaults to `web`
+    ///   under OIDC, which contradicts the loopback redirect this very request
+    ///   registers; a non-OIDC authorization server safely ignores it.
+    /// - **SEP-2207** — `refresh_token` declared in `grant_types`, plus
+    ///   `offline_access` in the registered `scope` when the authorization server
+    ///   advertises it. See [`OFFLINE_ACCESS_SCOPE`] for why this is client
+    ///   METADATA and not the request itself.
+    ///
+    /// `metadata` is taken as a parameter (rather than re-discovered) so
+    /// `scopes_supported` is read from the same document the rest of the flow
+    /// used. This is a private method, so widening its signature costs nothing.
     async fn do_dynamic_client_registration(
         &self,
         registration_endpoint: &str,
+        metadata: &OidcDiscoveryMetadata,
     ) -> Result<crate::server::auth::provider::DcrResponse> {
         let parsed = Url::parse(registration_endpoint)
             .map_err(|e| Error::internal(format!("Invalid registration_endpoint URL: {e}")))?;
@@ -491,23 +612,46 @@ impl OAuthHelper {
         // browsers resolving `localhost` to `::1` when the listener binds IPv4-only.
         let redirect_uri = format!("http://127.0.0.1:{}/callback", self.config.redirect_port);
 
-        let request = crate::server::auth::provider::DcrRequest {
+        // SEP-2207 client metadata: declaring `offline_access` here says what this
+        // client is PERMITTED to ask for. The ask itself happens at the
+        // authorization request — see `build_authorization_url`.
+        let registered_scopes =
+            compose_scopes_with_offline_access(&self.config.scopes, &metadata.scopes_supported);
+
+        let mut request = crate::server::auth::provider::DcrRequest {
             redirect_uris: vec![redirect_uri],
             client_name: Some(client_name),
             client_uri: None,
             logo_uri: None,
             contacts: vec![],
             token_endpoint_auth_method: Some("none".to_string()),
-            grant_types: vec!["authorization_code".to_string()],
+            // SEP-2207: an authorization server that was never told this client
+            // wants a refresh grant has every reason not to issue a refresh
+            // token. This is the missing prerequisite for refresh working at all.
+            grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
             // `DcrRequest` has `#[serde(skip_serializing_if = "Vec::is_empty")]`;
             // RFC 7591 §3.1 requires `response_types` in the body, so it must be
             // non-empty. `"code"` is the authorization-code public-PKCE flow.
             response_types: vec!["code".to_string()],
-            scope: None,
+            // `scope` is `skip_serializing_if = "Option::is_none"`, so an empty
+            // composition leaves the key off the wire entirely rather than
+            // registering an empty string.
+            scope: (!registered_scopes.is_empty()).then(|| registered_scopes.join(" ")),
             software_id: None,
             software_version: None,
             extra: Default::default(),
         };
+
+        // SEP-837, sent on every era and under every configuration: there is no
+        // gate, no feature flag and no era check. `application_type` has been a
+        // standard OIDC Dynamic Registration parameter since 2014, a non-OIDC
+        // server ignores it, and era-gating would require plumbing a protocol
+        // era into DCR that does not exist before an MCP connection is
+        // established.
+        apply_application_type(&mut request)?;
 
         let response = self
             .client
@@ -530,7 +674,6 @@ impl OAuthHelper {
 
         // reqwest has no direct bytes-limit API — read the body as bytes, enforce
         // the cap, then parse from slice.
-        const MAX_DCR_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
         let bytes = response
             .bytes()
             .await
@@ -542,8 +685,11 @@ impl OAuthHelper {
                 bytes.len()
             )));
         }
-        serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(&bytes)
-            .map_err(|e| Error::internal(format!("Failed to parse DCR response: {e}")))
+        let registration =
+            serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(&bytes)
+                .map_err(|e| Error::internal(format!("Failed to parse DCR response: {e}")))?;
+
+        Ok(registration)
     }
 
     /// Resolve the `client_id` for the current OAuth flow, performing DCR
@@ -571,7 +717,9 @@ impl OAuthHelper {
         match metadata.registration_endpoint.as_ref() {
             Some(endpoint) => {
                 tracing::info!("Performing Dynamic Client Registration at {}", endpoint);
-                let response = self.do_dynamic_client_registration(endpoint).await?;
+                let response = self
+                    .do_dynamic_client_registration(endpoint, metadata)
+                    .await?;
                 tracing::info!("DCR succeeded — issued client_id");
                 Ok(response.client_id)
             },
@@ -811,6 +959,16 @@ impl OAuthHelper {
             .clone()
             .or_else(|| Some(metadata.issuer.clone()));
 
+        // The scope this flow ACTUALLY requested at the authorization request —
+        // `config.scopes` plus `offline_access` when the server advertises it.
+        // It is composed by the same function `build_authorization_url` uses, so
+        // the value recorded as "requested" cannot drift from the value sent.
+        // RFC 6749 §5.1 makes this the granted scope when the token response
+        // omits `scope`, so getting it from `config.scopes` alone would silently
+        // narrow every subsequent refresh.
+        let requested_scopes =
+            compose_scopes_with_offline_access(&self.config.scopes, &metadata.scopes_supported);
+
         // Try authorization code flow first (returns the full TokenResponse).
         match self
             .authorization_code_flow_inner(&metadata, iss_presence)
@@ -820,7 +978,7 @@ impl OAuthHelper {
                 token_response,
                 resolved_client_id,
                 effective_issuer,
-                &self.config.scopes,
+                &requested_scopes,
             )),
             Err(e) if Self::is_terminal_authorization_refusal(&e) => Err(e),
             Err(e) => {
@@ -838,6 +996,9 @@ impl OAuthHelper {
                     let access_token = self.device_code_flow_with_metadata(&metadata).await?;
                     // Device flow returns only the access_token — populate what
                     // we know, leave refresh_token/expires_at/scopes at defaults.
+                    // `scopes` stays `config.scopes`: the device grant never
+                    // builds an authorization URL, so `offline_access` was never
+                    // requested on this path and recording it would be a lie.
                     return Ok(AuthorizationResult {
                         access_token,
                         refresh_token: None,
@@ -859,7 +1020,12 @@ impl OAuthHelper {
         }
     }
 
-    /// Helper to construct an `AuthorizationResult` from a TokenResponse.
+    /// Helper to construct an `AuthorizationResult` from a `TokenResponse`.
+    ///
+    /// `requested_scopes` must be the scope the flow ACTUALLY sent at the
+    /// authorization request — including `offline_access` when it was added —
+    /// because RFC 6749 §5.1 makes it the granted scope whenever the token
+    /// response omits `scope`.
     fn build_auth_result(
         token_response: crate::client::auth::TokenResponse,
         client_id: String,
@@ -875,13 +1041,28 @@ impl OAuthHelper {
             now + ttl
         });
 
-        // If the server returned a `scope` string, split it; else fall back to
-        // the requested scopes.
-        let granted_scopes = token_response
-            .scope
-            .as_deref()
-            .map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>())
-            .unwrap_or_else(|| requested_scopes.to_vec());
+        // The GRANTED scope, per RFC 6749 §5.1. The two branches look
+        // interchangeable and are NOT, which is why each names its own rule:
+        //
+        // - `scope` PRESENT: that string IS the granted scope. It is recorded
+        //   verbatim even when it is NARROWER than what was asked for — the
+        //   authorization server is entitled to downgrade, and assuming the
+        //   request was honoured is exactly the tampering assumption T-116-38b
+        //   names.
+        // - `scope` ABSENT: RFC 6749 §5.1 says the parameter is OPTIONAL "if
+        //   identical to the scope requested by the client", so an omission
+        //   means the request was granted in full and the REQUESTED scope is
+        //   what was granted.
+        //
+        // 116-12 refreshes with this value and nothing else, so a wrong branch
+        // here silently re-widens or narrows every subsequent refresh.
+        let granted_scopes = match token_response.scope.as_deref() {
+            Some(granted) => granted
+                .split_whitespace()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            None => requested_scopes.to_vec(),
+        };
 
         AuthorizationResult {
             access_token: token_response.access_token,
@@ -970,12 +1151,20 @@ impl OAuthHelper {
         let mut auth_url = Url::parse(&metadata.authorization_endpoint)
             .map_err(|e| Error::internal(format!("Invalid authorization endpoint: {e}")))?;
 
+        // SEP-2207: THIS is the stage at which requesting `offline_access` means
+        // anything. Declaring it in the registration says what the client may
+        // ask for; this is the ask. Composed from `config.scopes` — never by
+        // mutating it, because a caller who reuses one `OAuthConfig` across two
+        // flows must not watch its public `scopes` field grow.
+        let requested_scopes =
+            compose_scopes_with_offline_access(&self.config.scopes, &metadata.scopes_supported);
+
         auth_url
             .query_pairs_mut()
             .append_pair("client_id", client_id)
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", redirect_uri)
-            .append_pair("scope", &self.config.scopes.join(" "))
+            .append_pair("scope", &requested_scopes.join(" "))
             .append_pair(
                 "code_challenge",
                 &Self::generate_code_challenge(record.code_verifier()),
@@ -1234,7 +1423,9 @@ impl OAuthHelper {
     ) -> Result<String> {
         let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
 
-        // Step 1: Request device code
+        // Step 1: Request device code. `offline_access` is deliberately NOT
+        // composed in here: the device grant never builds an authorization URL,
+        // and SEP-2207's request stage is that URL.
         let scope = self.config.scopes.join(" ");
 
         let response = self
@@ -1659,7 +1850,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .do_dynamic_client_registration("http://attacker.example/register")
+            .do_dynamic_client_registration("http://attacker.example/register", &metadata(None))
             .await
             .unwrap_err();
         let msg = format!("{err}");
@@ -1744,7 +1935,7 @@ mod dcr_tests {
         })
         .unwrap();
         let result = helper
-            .do_dynamic_client_registration(&format!("{}/register", server.url()))
+            .do_dynamic_client_registration(&format!("{}/register", server.url()), &metadata(None))
             .await;
         assert!(
             result.is_ok(),
@@ -1764,7 +1955,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .do_dynamic_client_registration("http://[::1]:9/register")
+            .do_dynamic_client_registration("http://[::1]:9/register", &metadata(None))
             .await
             .unwrap_err();
         let msg = format!("{err}");
@@ -1784,7 +1975,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .do_dynamic_client_registration("http://localhost:9/register")
+            .do_dynamic_client_registration("http://localhost:9/register", &metadata(None))
             .await
             .unwrap_err();
         let msg = format!("{err}");
@@ -1802,7 +1993,7 @@ mod dcr_tests {
         };
         let helper = OAuthHelper::new(cfg).unwrap();
         let err = helper
-            .do_dynamic_client_registration("http://127.0.0.1:9/register")
+            .do_dynamic_client_registration("http://127.0.0.1:9/register", &metadata(None))
             .await
             .unwrap_err();
         let msg = format!("{err}");
@@ -1888,6 +2079,167 @@ mod dcr_tests {
         assert_eq!(r.scopes, requested);
         assert!(r.expires_at.is_none());
         assert!(r.refresh_token.is_none());
+    }
+}
+
+/// SEP-837 and SEP-2207 composition rules, pinned at the level they are
+/// DECIDED at rather than at the level they are observed at.
+///
+/// Each of these three helpers is a private pure function precisely so its rule
+/// can be asserted without a network, a log subscriber or a new public field.
+/// The wire-level consequences are asserted separately in
+/// `tests/oauth_dcr_integration.rs`; a rule that only had wire coverage would be
+/// the shape 116-09 measured and named — a suite that is green over a defect it
+/// structurally cannot see.
+#[cfg(test)]
+mod sep837_sep2207_composition_tests {
+    use super::*;
+
+    fn dcr_request_registering(redirect_uris: &[&str]) -> DcrRequest {
+        DcrRequest {
+            redirect_uris: redirect_uris.iter().map(|u| (*u).to_string()).collect(),
+            client_name: Some("pmcp-sdk".to_string()),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".to_string()),
+            grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
+            response_types: vec!["code".to_string()],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn owned(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_application_type — derivation, and the override that outranks it
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_loopback_redirect_derives_native() {
+        let mut request = dcr_request_registering(&["http://127.0.0.1:8080/callback"]);
+        let sent = apply_application_type(&mut request).expect("loopback derives");
+        assert_eq!(sent, "native");
+        assert_eq!(request.application_type(), Some("native"));
+    }
+
+    #[test]
+    fn an_https_non_loopback_redirect_derives_web() {
+        // pmcp's own flow only ever registers a loopback URI, so this row is
+        // unreachable end to end and is exercised directly — a platform
+        // `oauth-proxy` registering an https redirect is the real caller.
+        let mut request = dcr_request_registering(&["https://proxy.example.com/callback"]);
+        let sent = apply_application_type(&mut request).expect("https non-loopback derives");
+        assert_eq!(sent, "web");
+        assert_eq!(request.application_type(), Some("web"));
+    }
+
+    #[test]
+    fn an_explicit_application_type_is_never_clobbered_by_the_derivation() {
+        // D-09's documented override path. The redirect URI here would derive
+        // `native`, so a clobbering implementation produces a DIFFERENT value
+        // and this test is a real detector rather than a tautology.
+        let mut request = dcr_request_registering(&["http://127.0.0.1:8080/callback"]);
+        request.set_application_type("web");
+        let sent = apply_application_type(&mut request).expect("an override is not re-derived");
+        assert_eq!(sent, "web");
+        assert_eq!(request.application_type(), Some("web"));
+    }
+
+    #[test]
+    fn a_mixed_redirect_vector_is_an_error_and_never_a_pick() {
+        let mut request = dcr_request_registering(&[
+            "http://127.0.0.1:8080/callback",
+            "https://proxy.example.com/callback",
+        ]);
+        let err = apply_application_type(&mut request)
+            .expect_err("D-10: a mixed vector is an ERROR, never a silent choice");
+        let message = err.to_string();
+        assert!(
+            message.contains("127.0.0.1"),
+            "names the native URI: {message}"
+        );
+        assert!(
+            message.contains("proxy.example.com"),
+            "names the web URI: {message}"
+        );
+        assert_eq!(
+            request.application_type(),
+            None,
+            "a refused derivation must not leave a half-written value on the request"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // compose_scopes_with_offline_access — SEP-2207's advertise-conditioned add
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn offline_access_is_added_only_when_the_server_advertises_it() {
+        let configured = owned(&["openid", "profile"]);
+        assert_eq!(
+            compose_scopes_with_offline_access(&configured, &owned(&["openid", "offline_access"])),
+            owned(&["openid", "profile", "offline_access"]),
+            "advertised: appended last, configured order preserved"
+        );
+        assert_eq!(
+            compose_scopes_with_offline_access(&configured, &owned(&["openid", "profile"])),
+            owned(&["openid", "profile"]),
+            "NOT advertised: absent, because SEP-2207 conditions the request on support"
+        );
+        assert_eq!(
+            compose_scopes_with_offline_access(&configured, &[]),
+            owned(&["openid", "profile"]),
+            "an empty scopes_supported advertises nothing"
+        );
+    }
+
+    #[test]
+    fn an_already_configured_offline_access_is_not_duplicated() {
+        let configured = owned(&["openid", "offline_access"]);
+        assert_eq!(
+            compose_scopes_with_offline_access(&configured, &owned(&["offline_access"])),
+            owned(&["openid", "offline_access"]),
+            "a duplicated scope token is legal but is what a strict server rejects"
+        );
+    }
+
+    #[test]
+    fn the_configured_scopes_are_never_mutated_and_never_accumulate() {
+        let configured = owned(&["openid"]);
+        let advertised = owned(&["offline_access"]);
+
+        let first = compose_scopes_with_offline_access(&configured, &advertised);
+        let second = compose_scopes_with_offline_access(&configured, &advertised);
+
+        assert_eq!(
+            configured,
+            owned(&["openid"]),
+            "`OAuthConfig::scopes` is a public field; a caller reusing one config \
+             across two flows must not watch it grow"
+        );
+        assert_eq!(
+            first, second,
+            "two flows compose the same value, not a longer one"
+        );
+        assert_eq!(first, owned(&["openid", "offline_access"]));
+    }
+
+    #[test]
+    fn duplicate_configured_scopes_collapse_to_one_entry() {
+        let configured = owned(&["openid", "openid", "profile"]);
+        assert_eq!(
+            compose_scopes_with_offline_access(&configured, &[]),
+            owned(&["openid", "profile"])
+        );
     }
 }
 
