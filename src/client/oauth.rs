@@ -16,8 +16,6 @@
 //! pmcp = { version = "1.11", features = ["oauth"] }
 //! ```
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::RngExt;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -38,12 +36,14 @@ use crate::shared::credential_file::FileCredentialStore;
 use crate::shared::credential_store::{
     normalize_server_key, CredentialKey, CredentialStore, StoredCredentials,
 };
-use crate::shared::http_body_cap::{collect_reqwest_body_within_cap, DEFAULT_AUTH_RESPONSE_BYTES};
+use crate::shared::http_body_cap::{
+    collect_reqwest_body_within_cap, is_body_over_cap, DEFAULT_AUTH_RESPONSE_BYTES,
+};
 use crate::shared::oauth_validation::{
     derive_application_type, iss_presence_from, parse_iss_env_value,
     validate_authorization_response, AuthorizationRequestRecord, IssPresence,
 };
-use crate::shared::pkce::generate_state;
+use crate::shared::pkce::{code_challenge_s256, generate_code_verifier, generate_state};
 
 /// The environment variable an operator sets to override RFC 9207 `iss`
 /// strictness without a redeploy or a code change.
@@ -131,6 +131,44 @@ const MAX_DCR_RESPONSE_BYTES: usize = DEFAULT_AUTH_RESPONSE_BYTES;
 /// with two different credential stores inside one directory, and a login
 /// through one would be invisible to the other.
 const CREDENTIAL_STORE_FILE_NAME: &str = "oauth-cache.json";
+/// A stable, non-reversible identifier for a token, safe to put in a log line.
+///
+/// A PREFIX of a live access token is still token material: 20 characters is
+/// enough to correlate it against a leak elsewhere, and on some authorization
+/// servers it is enough to identify the issuing key or the tenant. A prefix of
+/// the SHA-256 digest identifies the same token across log lines without being
+/// any part of it.
+///
+/// Twelve hex characters is 48 bits — far beyond collision range for the
+/// handful of tokens one process holds, and far too short to brute-force back
+/// to a token carrying at least 128 bits of entropy.
+///
+/// The result is deliberately prefixed with `sha256:` so a reader cannot
+/// mistake it for the token itself, which is the failure mode a bare hex string
+/// invites.
+const FINGERPRINT_HEX_CHARS: usize = 12;
+
+/// Lowercase hex digits for [`token_fingerprint`].
+///
+/// A table and a loop rather than a `format!` per byte: `clippy::format_collect`
+/// rejects the latter, and this shape allocates exactly once. Declared at module
+/// level because `clippy::items_after_statements` rejects a `const` inside the
+/// function body.
+const HEX_DIGITS: [char; 16] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+];
+
+fn token_fingerprint(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(FINGERPRINT_HEX_CHARS);
+    for byte in digest.iter().take(FINGERPRINT_HEX_CHARS / 2) {
+        hex.push(HEX_DIGITS[usize::from(byte >> 4)]);
+        hex.push(HEX_DIGITS[usize::from(byte & 0x0f)]);
+    }
+    format!("sha256:{hex}")
+}
 
 /// Absolute Unix seconds, with a pre-epoch clock reported as `0` rather than
 /// panicking.
@@ -1472,22 +1510,41 @@ impl OAuthHelper {
             ));
         }
 
-        // reqwest has no direct bytes-limit API — read the body as bytes, enforce
-        // the cap, then parse from slice.
-        let bytes = response
-            .bytes()
+        // The cap is enforced DURING the read, not after it. The previous shape
+        // read the whole body with `.bytes()` and then measured it, which bounds
+        // what is ACCEPTED and not what is ALLOCATED — a registration endpoint
+        // answering with a gigabyte still spent a gigabyte of this client's
+        // memory on the way to being refused (D-113-V). The cap VALUE is
+        // unchanged at 1 MiB: this is a change of mechanism, not of policy.
+        let bytes = collect_reqwest_body_within_cap(response, MAX_DCR_RESPONSE_BYTES)
             .await
-            .map_err(|e| Error::internal(format!("Failed to read DCR response body: {e}")))?;
-        if bytes.len() > MAX_DCR_RESPONSE_BYTES {
-            return Err(Error::internal(format!(
-                "DCR response exceeds {} byte cap (got {} bytes) — refusing to parse",
-                MAX_DCR_RESPONSE_BYTES,
-                bytes.len()
-            )));
-        }
-        let registration =
-            serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(&bytes)
-                .map_err(|e| Error::internal(format!("Failed to parse DCR response: {e}")))?;
+            .map_err(|e| {
+                if is_body_over_cap(&e) {
+                    // Re-framed as a DCR refusal so the message names the
+                    // endpoint's own limit; the shared refusal's rule is kept —
+                    // it names the cap and the observed size and reproduces no
+                    // byte of the refused body.
+                    Error::internal(format!(
+                        "DCR response exceeds the {MAX_DCR_RESPONSE_BYTES} byte cap — refusing \
+                         to parse it. {e}"
+                    ))
+                } else {
+                    e
+                }
+            })?;
+        let registration = serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(
+            &bytes,
+        )
+        .map_err(|e| {
+            Error::internal(format!(
+                "Failed to parse DCR response ({:?} error at line {}, column {}). The parser's \
+                 own message is not reproduced here because a data error echoes the offending \
+                 input, and a registration response body carries a client identity",
+                e.classify(),
+                e.line(),
+                e.column()
+            ))
+        })?;
 
         // D-11 — echo divergence WARNS and never fails. See
         // `application_type_divergence` for why an omitted echo is not a
@@ -2054,20 +2111,6 @@ impl OAuthHelper {
         }
     }
 
-    /// Generate PKCE code verifier (RFC 7636).
-    fn generate_code_verifier() -> String {
-        let random_bytes: [u8; 32] = rand::rng().random();
-        URL_SAFE_NO_PAD.encode(random_bytes)
-    }
-
-    /// Generate PKCE code challenge from verifier (RFC 7636).
-    fn generate_code_challenge(verifier: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(verifier.as_bytes());
-        let hash = hasher.finalize();
-        URL_SAFE_NO_PAD.encode(hash)
-    }
-
     /// Bind the loopback callback listener and return it with the redirect URI
     /// that must be advertised to the authorization server.
     ///
@@ -2131,7 +2174,7 @@ impl OAuthHelper {
             .append_pair("scope", &requested_scopes.join(" "))
             .append_pair(
                 "code_challenge",
-                &Self::generate_code_challenge(record.code_verifier()),
+                &code_challenge_s256(record.code_verifier()),
             )
             .append_pair("code_challenge_method", "S256")
             // The CSRF `state` is the record's — a BOUND value, comparable on
@@ -2302,7 +2345,7 @@ impl OAuthHelper {
         // one whose metadata I fetched".
         let record = AuthorizationRequestRecord::new(
             metadata.issuer.clone(),
-            Self::generate_code_verifier(),
+            generate_code_verifier()?,
             generate_state()?,
             iss_presence,
         );
@@ -2407,15 +2450,24 @@ impl OAuthHelper {
             .map_err(|e| Error::internal(format!("Failed to request device code: {e}")))?;
 
         if !response.status().is_success() {
+            let status = response.status();
+            let body =
+                collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
             return Err(Error::internal(format!(
-                "Device authorization failed: {}",
-                response.text().await.unwrap_or_default()
+                "Device authorization failed ({status}): {}",
+                String::from_utf8_lossy(&body)
             )));
         }
 
-        let device_auth: DeviceAuthResponse = response.json().await.map_err(|e| {
+        let body = collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
+        let device_auth: DeviceAuthResponse = serde_json::from_slice(&body).map_err(|e| {
             Error::internal(format!(
-                "Failed to parse device authorization response: {e}"
+                "Failed to parse device authorization response ({:?} error at line {}, \
+                 column {}). The parser's own message is not reproduced here because a data \
+                 error echoes the offending input",
+                e.classify(),
+                e.line(),
+                e.column()
             ))
         })?;
 
@@ -2456,14 +2508,24 @@ impl OAuthHelper {
                 .map_err(|e| Error::internal(format!("Failed to poll for token: {e}")))?;
 
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| Error::internal(format!("Failed to read token response body: {e}")))?;
+            // Polled in a loop, so an unbounded read here is an unbounded read
+            // per poll for as long as the device code lives.
+            let raw =
+                collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
+            let body = String::from_utf8_lossy(&raw).into_owned();
 
             if status.is_success() {
-                let token_response: TokenResponse = serde_json::from_str(&body)
-                    .map_err(|e| Error::internal(format!("Failed to parse token response: {e}")))?;
+                let token_response: TokenResponse = serde_json::from_slice(&raw).map_err(|e| {
+                    Error::internal(format!(
+                        "Failed to parse token response ({:?} error at line {}, column {}). \
+                             The parser's own message is not reproduced here because a data \
+                             error echoes the offending input, and a token response body carries \
+                             credentials",
+                        e.classify(),
+                        e.line(),
+                        e.column()
+                    ))
+                })?;
 
                 tracing::info!("Authentication successful");
 
@@ -2639,9 +2701,10 @@ impl OAuthHelper {
     pub async fn create_middleware_chain(&self) -> Result<Arc<HttpMiddlewareChain>> {
         let access_token = self.get_access_token().await?;
 
+        // NEVER a prefix of the token itself. See `token_fingerprint`.
         tracing::debug!(
-            "Creating OAuth middleware with token: {}...",
-            &access_token[..access_token.len().min(20)]
+            "Creating OAuth middleware with token {}",
+            token_fingerprint(&access_token)
         );
 
         let bearer_token = BearerToken::new(access_token);
@@ -2705,6 +2768,98 @@ pub fn default_cache_path() -> PathBuf {
 pub async fn create_oauth_middleware(config: OAuthConfig) -> Result<Arc<HttpMiddlewareChain>> {
     let helper = OAuthHelper::new(config)?;
     helper.create_middleware_chain().await
+}
+
+/// [`token_fingerprint`] is the only thing in this module allowed to put a
+/// token-derived string into a log line, so the rules it has to satisfy are
+/// pinned here rather than left to review.
+#[cfg(test)]
+mod token_fingerprint_tests {
+    use super::*;
+
+    /// A token used across the rows below, long enough that a "first N
+    /// characters" regression would visibly leak.
+    const TOKEN: &str = "ya29.A0ARrdaM-THIS-IS-A-LIVE-LOOKING-ACCESS-TOKEN-abcdef0123456789";
+
+    /// **The row that matters: the fingerprint reproduces NO part of the
+    /// token.**
+    ///
+    /// A presence assertion ("it contains `sha256:`") is not a detector for a
+    /// leak channel — 116-10's finding — so absence is asserted directly, over
+    /// every prefix long enough to be identifying, in BOTH directions.
+    fn assert_no_token_material(fingerprint: &str, token: &str) {
+        assert!(
+            !fingerprint.contains(token),
+            "the whole token appeared in {fingerprint}"
+        );
+        for len in 4..=token.len() {
+            let prefix = &token[..len];
+            assert!(
+                !fingerprint.contains(prefix),
+                "a {len}-character prefix of the token appeared in {fingerprint}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fingerprint_reproduces_no_part_of_the_token() {
+        assert_no_token_material(&token_fingerprint(TOKEN), TOKEN);
+    }
+
+    /// The 20-character prefix the previous implementation logged is exactly
+    /// what this row forbids, so a revert would fail here rather than in review.
+    #[test]
+    fn the_previous_twenty_character_prefix_is_absent() {
+        let fingerprint = token_fingerprint(TOKEN);
+        assert!(
+            !fingerprint.contains(&TOKEN[..20]),
+            "the old plaintext prefix is back: {fingerprint}"
+        );
+    }
+
+    /// Stable across calls, so one token can be correlated across log lines —
+    /// which is the entire reason for logging anything at all here.
+    #[test]
+    fn a_fingerprint_is_stable_for_one_token() {
+        assert_eq!(token_fingerprint(TOKEN), token_fingerprint(TOKEN));
+    }
+
+    /// Distinct for distinct tokens, including two that share a long prefix:
+    /// an implementation that hashed only the first few bytes would collide
+    /// here and be useless for correlation.
+    #[test]
+    fn two_tokens_sharing_a_long_prefix_fingerprint_differently() {
+        let sibling = format!("{TOKEN}-second");
+        assert_ne!(token_fingerprint(TOKEN), token_fingerprint(&sibling));
+    }
+
+    /// Shape: the `sha256:` marker plus exactly
+    /// [`FINGERPRINT_HEX_CHARS`] lowercase hex digits, so a reader cannot
+    /// mistake it for a credential.
+    #[test]
+    fn a_fingerprint_is_the_marker_plus_twelve_hex_digits() {
+        let fingerprint = token_fingerprint(TOKEN);
+        let hex = fingerprint
+            .strip_prefix("sha256:")
+            .expect("the marker prefix");
+        assert_eq!(hex.len(), FINGERPRINT_HEX_CHARS);
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "expected lowercase hex, got {hex}"
+        );
+    }
+
+    /// An empty token is not a panic. It cannot occur through the live flow,
+    /// but the helper is a logging primitive and a logging primitive that can
+    /// panic is worse than the leak it replaced.
+    #[test]
+    fn an_empty_token_is_fingerprinted_without_panicking() {
+        assert_eq!(
+            token_fingerprint("").len(),
+            "sha256:".len() + FINGERPRINT_HEX_CHARS
+        );
+    }
 }
 
 /// The credential-store WIRING rules that are decidable without a network.
