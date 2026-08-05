@@ -668,7 +668,20 @@ impl Error {
     /// Borrows rather than allocating: every caller of the two public accessors
     /// only ever compares the value.
     fn retired_field(&self, key: &str) -> Option<&str> {
-        if !self.is_retired_on_v2() {
+        self.marker_field(RETIRED_ON_V2_MARKER, key)
+    }
+
+    /// One string field of a marker payload, guarded by the marker it belongs to.
+    ///
+    /// Every marker family in this module reads its payload the same way: check
+    /// that THIS error carries THAT marker, then project one `data` key out as a
+    /// string. Writing that out per family made the guard-before-read invariant a
+    /// convention rather than a single enforced function, so a fourth family
+    /// would have arrived as a fourth copy.
+    ///
+    /// Borrows rather than allocating — every caller only compares the value.
+    fn marker_field(&self, marker: &str, key: &str) -> Option<&str> {
+        if self.pmcp_error_marker() != Some(marker) {
             return None;
         }
         self.protocol_data()?.get(key)?.as_str()
@@ -780,10 +793,7 @@ impl Error {
     ///
     /// Borrows rather than allocating, mirroring [`Error::retired_field`].
     fn iss_field(&self, key: &str) -> Option<&str> {
-        if !self.is_iss_mismatch() {
-            return None;
-        }
-        self.protocol_data()?.get(key)?.as_str()
+        self.marker_field(ISS_MISMATCH_MARKER, key)
     }
 
     /// The authorization response's `state` did not match the value recorded
@@ -868,10 +878,7 @@ impl Error {
     /// error.
     #[must_use]
     pub fn reauth_issuer(&self) -> Option<&str> {
-        if !self.is_reauth_required() {
-            return None;
-        }
-        self.protocol_data()?.get(REAUTH_ISSUER_KEY)?.as_str()
+        self.marker_field(REAUTH_REQUIRED_MARKER, REAUTH_ISSUER_KEY)
     }
 
     /// The `data` object of an [`Error::Protocol`], if it has one.

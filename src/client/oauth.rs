@@ -1010,7 +1010,7 @@ impl OAuthHelper {
     /// unrecognised value warns and falls through; the precedence arithmetic
     /// itself is [`iss_presence_from`]'s, never re-implemented here.
     fn resolve_iss_presence(&self, discovery_flag: Option<bool>) -> IssPresence {
-        let env_override = match std::env::var("PMCP_OAUTH_ISS_VALIDATION") {
+        let env_override = match std::env::var(ISS_VALIDATION_ENV_VAR) {
             Ok(raw) => {
                 let parsed = parse_iss_env_value(&raw);
                 if parsed.is_none() {
@@ -2512,7 +2512,6 @@ impl OAuthHelper {
             // per poll for as long as the device code lives.
             let raw =
                 collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
-            let body = String::from_utf8_lossy(&raw).into_owned();
 
             if status.is_success() {
                 let token_response: TokenResponse = serde_json::from_slice(&raw).map_err(|e| {
@@ -2555,7 +2554,7 @@ impl OAuthHelper {
             }
 
             // Check error response
-            if let Ok(error) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Ok(error) = serde_json::from_slice::<serde_json::Value>(&raw) {
                 if let Some(error_code) = error.get("error").and_then(|e| e.as_str()) {
                     match error_code {
                         "authorization_pending" => continue,
@@ -3338,10 +3337,7 @@ mod dcr_tests {
             refresh_token: Some("r".into()),
             scope: Some("openid profile".into()),
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
         let r = OAuthHelper::build_auth_result(
             token,
             "c1".into(),

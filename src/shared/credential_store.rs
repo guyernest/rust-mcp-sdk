@@ -414,10 +414,19 @@ impl CredentialSnapshot {
     /// Every stored key whose `server` component equals `server_key`, across
     /// all issuers and accounts. This is what a per-server logout operates on.
     pub fn keys_for_server(&self, server_key: &str) -> Vec<CredentialKey> {
-        self.keys()
-            .into_iter()
-            .filter(|key| key.server() == server_key)
-            .collect()
+        // The tree is keyed issuer -> server -> account, so the server is a
+        // direct lookup rather than a scan. Building every key in the store and
+        // discarding the non-matching ones cost three String allocations per
+        // stored credential to find the handful under one server.
+        let mut out = Vec::new();
+        for (issuer, by_server) in &self.credentials {
+            if let Some(by_account) = by_server.get(server_key) {
+                for account in by_account.keys() {
+                    out.push(CredentialKey::new(issuer, account, server_key));
+                }
+            }
+        }
+        out
     }
 
     /// Remove everything, returning how many credentials were removed.
@@ -652,15 +661,14 @@ pub fn parse_credential_snapshot(bytes: &[u8]) -> Result<(CredentialSnapshot, Mi
 /// Read a document already at the current schema version.
 fn parse_current(bytes: &[u8]) -> Result<(CredentialSnapshot, MigrationReport)> {
     let document: Document = serde_json::from_slice(bytes).map_err(|e| malformed_document(&e))?;
-    let mut snapshot = CredentialSnapshot::new();
-    for (issuer, by_server) in document.credentials {
-        for (server, by_account) in by_server {
-            for (account, credentials) in by_account {
-                snapshot.insert(CredentialKey::new(&issuer, account, &server), credentials);
-            }
-        }
-    }
-    snapshot.issuers = document.issuers;
+    // `Document::credentials` is already an `IssuerMap` — the same type and the
+    // same nesting the snapshot stores — so it is MOVED rather than walked and
+    // re-inserted. Rebuilding it entry-by-entry re-cloned the issuer and server
+    // strings once per account, on a path every load/list/mutation runs through.
+    let snapshot = CredentialSnapshot {
+        credentials: document.credentials,
+        issuers: document.issuers,
+    };
     Ok((snapshot, MigrationReport::default()))
 }
 
