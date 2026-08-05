@@ -1626,20 +1626,47 @@ impl OAuthHelper {
             return Ok(None);
         };
         tracing::warn!("OAuth token expired, refreshing...");
-        let Ok(refreshed) = self.refresh_token(refresh_token).await else {
-            return Ok(None);
+        let refreshed = match self
+            .refresh_token(
+                refresh_token,
+                Some(cached.client_id()),
+                cached.granted_scopes(),
+            )
+            .await
+        {
+            Ok(refreshed) => refreshed,
+            Err(e) => {
+                // Previously SILENT. A refresh failure is the single most useful
+                // line in an unattended log, because everything downstream of it
+                // needs a human: the flow is about to fall back to a browser
+                // nobody may be watching. The message carries the authorization
+                // server's own reason and no credential content.
+                tracing::warn!("OAuth token refresh failed: {e}");
+                return Ok(None);
+            },
         };
 
         // The refreshed record inherits everything the token response does not
         // restate. RFC 6749 section 6 permits an authorization server to omit a
         // new refresh token, in which case the existing one stays valid, and it
         // never restates the client id or the registered application type.
+        //
+        // D-14 defect 1 lives on the next three lines. `TokenResponse`'s
+        // `refresh_token` is `#[serde(default)]`, so an OMITTED field arrives as
+        // `None` — and `None` looks exactly like data here. Writing it over a
+        // good token limits an unattended agent to exactly ONE refresh cycle
+        // before it demands a human, so the rule is: replace only when the
+        // response actually SUPPLIES one.
         let result = AuthorizationResult {
             access_token: refreshed.access_token,
             refresh_token: refreshed
                 .refresh_token
                 .or_else(|| Some(refresh_token.to_string())),
-            expires_at: refreshed.expires_in.map(|ttl| unix_now_secs() + ttl),
+            // `saturating_add`, because `expires_in` is peer-supplied: a
+            // hostile `u64::MAX` would otherwise panic in a debug build.
+            expires_at: refreshed
+                .expires_in
+                .map(|ttl| unix_now_secs().saturating_add(ttl)),
             scopes: cached.granted_scopes().to_vec(),
             issuer: self.effective_issuer(metadata),
             client_id: cached.client_id().to_string(),
@@ -2263,40 +2290,120 @@ impl OAuthHelper {
         }
     }
 
-    /// Refresh an existing token.
-    async fn refresh_token(&self, refresh_token: &str) -> Result<TokenResponse> {
+    /// Refresh an existing access token (RFC 6749 §6).
+    ///
+    /// `stored_client_id` and `granted_scopes` come from the credential record
+    /// the caller has ALREADY loaded under this helper's
+    /// `(issuer, account, server)` key. They are parameters rather than a second
+    /// `store.load` for a correctness reason and not a performance one: a
+    /// refresh token and the `client_id` it was issued to are ONE pairing, and
+    /// re-reading the store here could pair this refresh token with a
+    /// `client_id` another process wrote in between.
+    ///
+    /// # Errors
+    ///
+    /// When no `client_id` is available from either place, when the request
+    /// fails, when the authorization server refuses, or when the response body
+    /// exceeds [`DEFAULT_AUTH_RESPONSE_BYTES`].
+    async fn refresh_token(
+        &self,
+        refresh_token: &str,
+        stored_client_id: Option<&str>,
+        granted_scopes: &[String],
+    ) -> Result<TokenResponse> {
         let metadata = self.get_metadata().await?;
         let token_endpoint = &metadata.token_endpoint;
 
-        // Refresh requires a previously-established client_id — DCR is not
-        // re-run on refresh (cached entry implies we already have one).
-        let client_id = self.config.client_id.as_deref().ok_or_else(|| {
-            Error::internal("cannot refresh token without a cached client_id".to_string())
-        })?;
+        // D-14 defect 2. Under dynamic registration the `client_id` is ISSUED,
+        // so it lives in the credential record and never in `OAuthConfig` —
+        // reading config alone made a DCR-registered client unable to refresh
+        // even ONCE, sending it back through a full browser login on every
+        // expiry. The stored id wins because it is the one this refresh token
+        // was issued to; the configured one is the fallback for a pre-registered
+        // client. Only when BOTH are absent is it an error, and the message
+        // names both places.
+        let client_id = stored_client_id
+            .filter(|id| !id.is_empty())
+            .or(self.config.client_id.as_deref())
+            .ok_or_else(|| {
+                Error::internal(
+                    "cannot refresh: no client_id in the stored credential record for this \
+                     (issuer, account, server), and none in OAuthConfig::client_id. Both places \
+                     were checked. Run an interactive authorization to register (or re-register) \
+                     this client."
+                        .to_string(),
+                )
+            })?;
+
+        // D-14 defect 3, and stage 4 of SEP-2207's `offline_access` lifecycle:
+        //
+        //   1. `offline_access` is DECLARED in the DCR client metadata when the
+        //      authorization server advertises it (116-10).
+        //   2. It is REQUESTED in the authorization request when advertised
+        //      (116-10).
+        //   3. What the server actually GRANTED is recorded from the token
+        //      response's `scope` or, when that field is absent, taken as the
+        //      requested scope per RFC 6749 §5.1 (116-10, persisted by 116-11).
+        //   4. A refresh sends EXACTLY that recorded set, or omits `scope`
+        //      entirely when it is empty.
+        //
+        // Stage 4 never introduces a scope, never consults `scopes_supported`
+        // and never falls back to `config.scopes`. `config.scopes` is what was
+        // ASKED for; RFC 6749 §6 says a refresh request's scope "MUST NOT
+        // include any scope not originally granted by the resource owner", so
+        // re-widening here is a specification violation that a conforming
+        // authorization server answers with `invalid_scope` — breaking refresh
+        // entirely, which is the opposite of what this fix is for. Reaching for
+        // `config.scopes` looks obviously right at this call site and is
+        // obviously wrong two protocol stages away.
+        //
+        // Built as a `Vec` so an empty grant leaves the key OFF the wire rather
+        // than sending `scope=`, which a conforming server may read as a
+        // request for no scopes at all. This is the shape the sibling
+        // `TokenExchangeClient::refresh_token` already uses.
+        let scope = granted_scopes.join(" ");
+        let mut form: Vec<(&str, &str)> = vec![
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+            ("grant_type", "refresh_token"),
+        ];
+        if !scope.is_empty() {
+            form.push(("scope", scope.as_str()));
+        }
 
         let response = self
             .client
             .post(token_endpoint)
-            .form(&[
-                ("client_id", client_id),
-                ("refresh_token", refresh_token),
-                ("grant_type", "refresh_token"),
-            ])
+            .form(&form)
             .send()
             .await
             .map_err(|e| Error::internal(format!("Failed to refresh token: {e}")))?;
 
         if !response.status().is_success() {
+            let status = response.status();
+            // A hostile authorization server controls its ERROR bodies too, and
+            // an error path is where it has the most freedom. The over-cap
+            // refusal propagates verbatim: it names the cap and the observed
+            // size and reproduces no byte of what it dropped.
+            let body =
+                collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
             return Err(Error::internal(format!(
-                "Token refresh failed: {}",
-                response.text().await.unwrap_or_default()
+                "Token refresh failed ({status}): {}",
+                String::from_utf8_lossy(&body)
             )));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to parse token response: {e}")))
+        let body = collect_reqwest_body_within_cap(response, DEFAULT_AUTH_RESPONSE_BYTES).await?;
+        serde_json::from_slice::<TokenResponse>(&body).map_err(|e| {
+            Error::internal(format!(
+                "Failed to parse refresh response ({:?} error at line {}, column {}). The \
+                 parser's own message is not reproduced here because a data error echoes the \
+                 offending input, and a token response body carries credentials",
+                e.classify(),
+                e.line(),
+                e.column()
+            ))
+        })
     }
 
     /// Create HTTP middleware chain with OAuth bearer token.
