@@ -916,3 +916,117 @@ the finding can have. **A green gate is not evidence that any of `116-11`'s 24 t
 The paired resolution is unchanged and now cheaper: clear the **17**, then add `--features
 "full,oauth"` to `make lint` AND to the gate's test stage. **81** tests from `116-09`, `116-10` and
 `116-11` are outside CI.
+
+---
+
+## D-116-KEYCHAIN — REOPENED by `116-12`, and the disk theory is refuted
+
+`116-06` closed this by measurement (1865 passed / 0 failed on a clean volume) and `116-16` and
+`116-11` reconfirmed it clean. **It reproduced during `116-12`'s final gate run**, and the
+circumstances rule out both previous explanations.
+
+**The observation.** `make quality-gate` exit **2** at `test-unit`: `1866 passed; 14 failed`. All
+14 are in `shared::streamable_http::tests`, a module `116-12` never touched. Every one panics at
+the same pre-existing line:
+
+```
+panicked at src/shared/streamable_http.rs:458:18:
+Failed to load native root certificates: Custom { kind: NotFound, error:
+  "no native root CA certificates found (errors: [
+     Error { context: \"failed to load user trust settings\",   kind: Os(Error { code: -36, message: \"I/O error.\" }) },
+     Error { context: \"failed to load admin trust settings\",  kind: Os(Error { code: -36, message: \"I/O error.\" }) },
+     Error { context: \"failed to load system trust settings\", kind: Os(Error { code: -36, message: \"I/O error.\" }) }])" }
+```
+
+`14` is exactly the count `116-04` measured, so this is the same phenomenon and not a new one.
+
+**Three measurements that settle the attribution.**
+
+| Measurement | Result |
+|---|---|
+| An EARLIER `make quality-gate` in the same session, on the identical tree | `test result: ok. **1880 passed; 0 failed**` — the same commit passed minutes before it failed |
+| `df -h /` at the moment of failure | **92 GiB free, 12% used** — the volume was nowhere near full |
+| The same 14 tests run against the **PRE-PLAN** `src/client/oauth.rs` (`git show 73d95880:...`, the tree whose own summary records `make quality-gate` exit 0) | `81 passed; **14 failed**` — byte-identical failure with none of this plan's code present |
+
+**What this changes.** `D-116-DISK` is NOT the mechanism. The mechanism is the macOS Security
+framework returning `ioErr` (`-36`) for user, admin AND system trust settings at once — a
+transient keychain/`securityd` condition that a full volume can PROVOKE but does not require.
+`116-06`'s resolution should be read as "it did not reproduce that day", not as "it is fixed".
+
+**The real defect is the `.expect`.** `src/shared/streamable_http.rs:458` unwraps a
+`Result<ConnectorBuilder, io::Error>` from `hyper_rustls`, so a transient OS condition becomes a
+PANIC inside a transport constructor. That is a library-code panic a caller cannot catch, in the
+same family as the `duration_since(UNIX_EPOCH).unwrap()` `116-11` removed from `oauth.rs`. It
+should return an `Error`, and the tests should build their transports through a fixture that does
+not need the platform trust store at all.
+
+**Do not** "fix" this by pinning `rustls` to `webpki-roots`: that changes which CAs the SDK trusts
+in production to work around a test-environment fault.
+
+**Proposed owner:** `116-15`, as a NAMED item rather than a generic deferral — it is a
+gate-red condition reproducible on a healthy machine and it will fail CI on any macOS runner that
+hits the same keychain state.
+
+---
+
+## D-116-GREP — fifth instance, and the first where the plan's own grep hid real violations
+
+`116-12` Task 3's acceptance criterion is
+`grep -c '\.text()\.await\|\.bytes()\.await\|\.json()\.await\|\.json::<' src/client/oauth.rs` = 0,
+and the plan's `<action>` names **three** remaining whole-body reads on that basis.
+
+**There were six.** `rustfmt` splits a long chain across lines, so the three below never matched a
+single-line pattern and were invisible to every audit this phase ran:
+
+| Site | Rendered form | Why the grep missed it |
+|---|---|---|
+| DCR SUCCESS body | `let bytes = response\n    .bytes()\n    .await` | `.bytes()` and `.await` on different lines |
+| device-code POLL body | `let body = response\n    .text()\n    .await` | same |
+| refresh SUCCESS body | `response\n    .json()\n    .await` | same |
+
+Note that the grep returned **0 both before and after** three of the six were fixed, so it could
+never have distinguished a clean file from a dirty one.
+
+**The check that actually holds** is multi-line aware, and it is what `116-12` used:
+
+```python
+re.finditer(r'\.\s*(text|bytes|json)\s*(::<[^>]*>)?\s*\(\s*\)\s*\n?\s*\.\s*await', src)
+```
+
+`116-14`'s fence must use a form like this, not a line-oriented `grep`, or a single `cargo fmt`
+run can silently reopen every site the fence claims to guard. The same shape appeared twice more
+in this plan and is worth stating as a general rule: **a line-oriented count over a
+`rustfmt`-formatted file is not a reliable audit.** Two further examples measured here:
+
+- `grep -c '^error'` over a clippy log counts the `could not compile ... due to N previous errors`
+  summary line as an error, so the honest count is one lower than the grep (`116-11`'s 17 and this
+  plan's raw 18 are the SAME number).
+- `grep -c '^warning'` over a `cargo build` log counts the `generated N warnings` summary line the
+  same way (93 vs the anchor's 92).
+
+**Proposed owner:** `116-14` for the fence itself; `116-15` to fold the rule into the phase
+conventions.
+
+---
+
+## D-116-LINT-OAUTH — `116-12` is the FOURTH consecutive plan whose inline tests the gate never runs
+
+| Measurement | `116-09` | `116-10` | `116-11` | **`116-12`** |
+|---|---|---|---|---|
+| gate `test-unit` population | 1880 | 1880 | 1880 | **1880** |
+| inline lib tests the plan ADDED | yes | yes | 6 | **6** |
+| the plan's own tests the gate SELECTED | 0 of 25 | 0 of 38 | 0 of 24 | **0 of 27** |
+
+`116-12`'s numbers, measured rather than inferred: `cargo nextest run --features full -E
+'binary(oauth_refresh)'` reports `Starting 0 tests across 1 binary` then `error: no tests to run`;
+`cargo test --lib --features full token_fingerprint` reports `0 passed … 1880 filtered out`. Under
+`full,oauth` the same two are **21** and **6**. The gate's own population has now failed to move
+across four consecutive plans that each added inline tests, which is as direct a proof as the
+finding can have.
+
+**The clippy half is unchanged at 17** (`116-12` added zero, having fixed two of its own —
+`format_collect` and `items_after_statements` — rather than allowing them). **102 tests** from
+`116-09`, `116-10`, `116-11` and `116-12` are now outside CI.
+
+Owner: `116-15`, unchanged — clear the 17, then add `--features "full,oauth"` to `make lint` AND
+to the gate's test stage, as a PAIR.
