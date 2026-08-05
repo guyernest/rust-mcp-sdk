@@ -784,3 +784,135 @@ grep's baseline count when the plan is written) would have caught this at planni
 half is worth adding: **an audit grep over a file that documents its own non-adoptions must exclude
 comment lines** (`grep -n 'retry' … | grep -v '^\s*[0-9]*:\s*///'`), or the plan should assert the
 absence of the CODE construct rather than the absence of the word. No source change is owed.
+
+---
+
+## D-116-PRM — RFC 9728 is a NAMED DEPENDENCY of two things this phase shipped, not just a deferred nicety
+
+**Found during:** `116-11` (Tasks 1 and 2), writing the D-116-R1 collision test and D-18's detection.
+Recorded because "deferred by owner decision" understates what is actually blocked.
+
+**Finding.** `pmcp` derives the authorization server from the MCP base URL directly —
+`get_metadata_with_extras` → `discover_metadata_with_extras` → `extract_base_url` — and `116-07`
+then enforces RFC 8414 §3.3 anchoring, so the fetched document must declare exactly the issuer the
+URL was built from. **Two consequences follow, and both are load-bearing for AUTH-03:**
+
+1. **The D-116-R1 collision is not CONSTRUCTIBLE through the live flow.** Two MCP servers at two
+   different origins always resolve two different issuers, and two MCP servers at ONE origin
+   normalize to one `server` key (`normalize_server_key` drops the path). So "two MCP servers
+   sharing one authorization server and one account" — the case AUTH-03's amended text was written
+   for, and the case the third key component exists to keep apart — cannot arise until the
+   authorization server is discovered independently of the MCP origin. That is RFC 9728 Protected
+   Resource Metadata. `116-11`'s collision test therefore SEEDS the second server's entry, which is
+   recorded in the test file's own module doc rather than left for a reader to infer. The key shape
+   is correct and proven; the scenario it defends is currently reachable only by a platform that
+   drives the store itself.
+
+2. **D-18's detection is narrower than the specification's.** The specification describes an
+   authorization-server change as one "detected via updated protected resource metadata". `116-11`
+   compares the issuer discovery RESOLVED for a server URL against the one last recorded for it,
+   which catches a server that starts pointing somewhere else but cannot catch a change announced
+   only through protected resource metadata, because nothing reads that. This is written into
+   `announce_authorization_server_change`'s rustdoc in place, and `T-116-43`'s disposition is
+   `accept`.
+
+**Why this is not `116-11`'s to fix.** RFC 9728 discovery is a new network surface with its own
+threat register, its own `.well-known` probe order and its own caching rules. It is DEFERRED by
+owner decision (2026-08-02, `116-CONTEXT.md` § Deferred Ideas). Implementing it inside a wiring plan
+would be the architectural change Rule 4 exists to stop.
+
+**Proposed owner:** `116-15` to record it as a named dependency with an owner, rather than as a
+generic deferral. The two items above should be quotable when AUTH-03 is booked: the key shape is
+delivered and proven at the store, the trait and the helper; the SCENARIO in consequence 1 has no
+end-to-end coverage and cannot have any until RFC 9728 lands.
+
+---
+
+## D-116-PLANCONFLICT — a plan `<action>` whose two instructions cannot both be satisfied, and the measurement that settles it
+
+**Found during:** `116-11` (Task 1). The same family as `D-116-GREP` — an instruction that reads
+correctly in isolation and is unsatisfiable against the tree — but in the `<action>` rather than in
+the acceptance criteria, so a grep convention would not have caught it.
+
+**Finding.** `116-11`'s `<action>` says to resolve the default store "honoring `config.cache_file`
+when set and `default_credential_path()` otherwise". Its `<behavior>` says
+`~/.pmcp/oauth-tokens.json` "is NEVER opened for reading" and "The file is left in place for the
+user to delete". **Both cannot hold**, because the two in-repo callers pass exactly that file as
+`cache_file`:
+
+```
+crates/mcp-tester/src/main.rs:594     Some(default_cache_path())
+cargo-pmcp/src/commands/auth.rs:76    Some(default_cache_path())
+```
+
+Pointing a `FileCredentialStore` at `cache_file` therefore (a) parses the legacy flat document —
+which `parse_credential_snapshot` rejects for having no `schema_version`, so every existing user's
+first call errors — and (b) overwrites it on the first save, which is the opposite of leaving it in
+place.
+
+A second, independent conflict in the same sentence: `cache_file: None` means **do not cache**.
+Every previous cache read and write in `src/client/oauth.rs` was guarded by
+`if let Some(ref cache_file) = self.config.cache_file`, and `cargo-pmcp/src/commands/auth.rs:73`
+sets the field to `None` precisely when `--no-cache` is passed. Resolving a default store in that
+case would silently defeat the flag — and, measurably, would have made every `oauth`-gated
+integration test in this phase write real credential documents into the developer's
+`~/.pmcp/oauth-cache.json` under an `O_EXCL` lock shared by ~10 parallel nextest processes.
+
+**Resolution applied in `116-11`** (both recorded as Rule 1 deviations, both tested):
+
+| Rule | Behaviour |
+|---|---|
+| `cache_file` names the legacy file's DIRECTORY | the store is `<that directory>/oauth-cache.json`, i.e. `default_credential_path()`'s file name beside the legacy one. `cargo-pmcp`/`mcp-tester` land on exactly `~/.pmcp/oauth-cache.json` |
+| `cache_file: None` and no injected store | NO persistence, as before |
+| a caller who wants a specific store path | `with_credential_store(Arc::new(FileCredentialStore::new(path)))`, which is strictly better because it also admits a non-file store |
+
+**Proposed owner:** `116-15`. The convention worth adding to `D-116-GREP`'s: **when a plan's
+`<action>` names a configuration field, the plan should record what the in-repo callers actually
+pass to it.** One `grep -rn '<field>' src crates cargo-pmcp` at planning time would have surfaced
+this. `116-13` must also carry the CHANGELOG line — an existing `~/.pmcp/oauth-tokens.json` is
+discarded, one re-login is required, and the file is left on disk.
+
+---
+
+## D-116-LINT-OAUTH — `116-11` re-measured BOTH halves; the anchor moved again, 21 → 17
+
+Appended to `D-116-LINT-OAUTH` rather than opening a new entry.
+
+**The clippy half.** Measured with `make lint`'s command run verbatim under `--features "full,oauth"`:
+
+| Tree | `^error` count | Distribution |
+|---|---|---|
+| `70dc259f` (`116-11`'s pristine baseline) | **21** | 21 / 21 in `src/client/oauth.rs` |
+| `3b2a61e1` (after both `116-11` tasks) | **17** | 17 / 17 in `src/client/oauth.rs` |
+
+**ZERO new errors attributable**, compared as a multiset of `(error message, offending source-line
+text)` rather than by line number, since every line in the file moved again. The four that
+DISAPPEARED all sat on lines this plan had to rewrite or delete:
+
+- `map(<f>).unwrap_or(<a>)` on `let now = SystemTime::now()` in `build_auth_result` — replaced by
+  the module-level `unix_now_secs()`, which the device-code path now shares, so a second copy of
+  the same lint was never introduced.
+- **three** `doc_markdown` hits on one line — `/// Full artifacts (refresh_token, expires_at,
+  scopes, issuer, client_id) are` — inside `authorization_code_flow`, the `String`-returning wrapper
+  this plan deleted once both entry points went through `authorize_with_fallback`. One deleted line,
+  three errors, because `doc_markdown` fires once per unbackticked item.
+
+**The anchor for `116-12` is therefore 17**, not 21, not 24 and not 29. It has now moved three times
+in four plans, always downward and always as a side effect of rewriting a surrounding line.
+
+**The test half — a THIRD independent measurement, and the population is still 1880.** Measured at
+`3b2a61e1`:
+
+| Suite | `--features full` | `--features full,oauth` |
+|---|---|---|
+| `binary(oauth_store_wiring)` | **0** (`Starting 0 tests across 1 binary`, then `error: no tests to run`) | **18** |
+| inline `client::oauth::credential_store_wiring_tests` | **0** (`1880 filtered out`) | **6** |
+
+`make quality-gate`'s `test-unit` population is **1880** — byte-identical to `116-09`'s and
+`116-10`'s — although this plan added **6** new inline lib tests. So the gate's own number has now
+failed to move for three consecutive plans that added inline tests, which is as direct a proof as
+the finding can have. **A green gate is not evidence that any of `116-11`'s 24 tests ran.**
+
+The paired resolution is unchanged and now cheaper: clear the **17**, then add `--features
+"full,oauth"` to `make lint` AND to the gate's test stage. **81** tests from `116-09`, `116-10` and
+`116-11` are outside CI.

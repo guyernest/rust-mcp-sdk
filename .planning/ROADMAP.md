@@ -2658,7 +2658,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 116-11-PLAN.md — Wave 7. The store adopted: credentials, the DCR-issued `client_id` and the granted scopes keyed by `(issuer, account, server)` and persisted with `save_with_issuer` in one atomic update, the issuer-less legacy `oauth-tokens.json` never read and its discard announced once, and D-18's AS-change detection refined by amendment A4 to branch on credential provenance — warn-and-re-register for DCR, a typed `reauth_required` error for pre-registered, which is what the spec's two adjacent sentences actually prescribe
+- [x] 116-11-PLAN.md — Wave 7. The store adopted: credentials, the DCR-issued `client_id` and the granted scopes keyed by `(issuer, account, server)` and persisted with `save_with_issuer` in one atomic update, the issuer-less legacy `oauth-tokens.json` never read and its discard announced once, and D-18's AS-change detection refined by amendment A4 to branch on credential provenance — warn-and-re-register for DCR, a typed `reauth_required` error for pre-registered, which is what the spec's two adjacent sentences actually prescribe
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 11/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 12/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |

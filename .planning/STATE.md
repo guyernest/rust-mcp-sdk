@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-08-PLAN.md
-last_updated: "2026-08-05T02:13:15.130Z"
+stopped_at: Completed 116-11-PLAN.md
+last_updated: "2026-08-05T03:44:13.615Z"
 last_activity: 2026-08-05
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 369
+  completed_plans: 370
   percent: 85
 ---
 
@@ -26,11 +26,54 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 11 of 16
+Plan: 12 of 16
 Status: Ready to execute
 
-**116-10 HAS LANDED — SEP-837's `application_type` and SEP-2207's refresh metadata are on the DCR
-wire, and the wire is what the tests check.** Commits `defc2eb5` + `87f1f648` (+1550/−41 across
+**116-11 HAS LANDED — `OAuthHelper` persists through the `(issuer, account, server)`-keyed
+`CredentialStore`, and an authorization-server substitution is no longer invisible.** Commits
+`4d27db50` + `3b2a61e1` (+2083/−227; `src/client/oauth.rs` 2680 → 3272, new
+`tests/oauth_store_wiring.rs` at 1264 lines with **18** tests, plus 6 inline). Two new public
+methods and **no new field on any public struct**: `with_credential_store(Arc<dyn CredentialStore>)`
+and `with_account_scope(..)`, both backed by private fields, so `semver-checks` is 223/223 again.
+The record carries the DCR-issued `client_id`, the GRANTED scopes and 116-10's registered
+`application_type`; the single write is `save_with_issuer`. `struct TokenCache`,
+`load_cached_token` and `cache_token` are GONE. D-18 warns-and-re-registers for DCR provenance and
+returns `Error::reauth_required` for a pre-registered `client_id`, without binding the loopback
+listener.
+
+**⚠ THE PLAN'S `<action>` AND `<behavior>` CONTRADICTED EACH OTHER ON `config.cache_file`.** Both
+in-repo callers pass `default_cache_path()` (`crates/mcp-tester/src/main.rs:594`,
+`cargo-pmcp/src/commands/auth.rs:76`), so pointing the store at that field would read a document
+`parse_credential_snapshot` rejects AND overwrite the file D-17 says to leave alone. Resolved
+(Rule 1): the configured path's **directory** is honoured, the store is `<dir>/oauth-cache.json`,
+and `cache_file: None` with no injected store means **no persistence** — which is what
+`cargo pmcp auth login --no-cache` has always meant. Logged as `D-116-PLANCONFLICT`.
+
+**⚠ THE PLAN'S OWN LEGACY-DISCARD TEST IS NOT A DETECTOR FOR THE STORE'S PATH.** With the store
+pointed AT the legacy flat file, `the_legacy_issuer_less_token_cache_is_never_read_and_is_left_in_place`
+**still PASSED**, because it injects a store and never reaches default resolution.
+`the_default_store_lives_beside_the_legacy_file_and_never_on_top_of_it` was added as the real one.
+Same shape as 116-10's echo-channel finding, second instance.
+
+**⚠ RFC 9728 IS A NAMED DEPENDENCY, NOT A GENERIC DEFERRAL (`D-116-PRM`).** pmcp derives the
+authorization server from the MCP base URL, and 116-07's RFC 8414 §3.3 anchor then forces two
+origins to two issuers — so the **D-116-R1 two-servers-one-authorization-server case is not
+constructible through the live flow**, and its test seeds the second server (written into the test
+file's module doc). D-18's detection is correspondingly narrower than the specification's
+"detected via updated protected resource metadata". **`116-15` must not book AUTH-03 without
+quoting this.**
+
+**⚠ D-116-LINT-OAUTH's ANCHOR MOVED AGAIN: 29 → 24 → 21 → 17.** Measured on the pristine
+`70dc259f` tree (21) and after both 116-11 tasks (17), as a multiset of `(error message, offending
+source-line text)` — **ZERO new**, 4 gone (one `map(..).unwrap_or(..)` replaced by the shared
+`unix_now_secs()`, three `doc_markdown` hits on one deleted line). **`116-12` must measure against
+17.** Test-side twin, THIRD measurement: `--features full` selects **0 of 24**, and the gate's
+`test-unit` count is **still 1880** despite 6 new inline tests. **81** tests from 116-09/10/11 are
+outside CI. `make quality-gate` exits **0** and ran none of them.
+
+Prior-plan context — **116-10 HAS LANDED — SEP-837's `application_type` and SEP-2207's refresh
+metadata are on the DCR wire, and the wire is what the tests check.** Commits `defc2eb5` +
+`87f1f648` (+1550/−41 across
 3 files; `src/client/oauth.rs` 1993 → 2680, `tests/oauth_dcr_integration.rs` 253 → 1075 with
 **5 → 24** tests, plus 14 new inline tests). Every registration now carries a DERIVED
 `application_type: "native"`, declares the `refresh_token` grant, and requests `offline_access`
@@ -59,7 +102,7 @@ identical-echo siblings both holding) is what makes those rows evidence.
 **⚠ D-116-LINT-OAUTH's ANCHOR HAS MOVED AGAIN: 29 → 24 → 21.** Measured on the PRISTINE `86fbb70a`
 tree (24) and after both 116-10 tasks (21), compared as a multiset of
 `(error message, offending source-line text)` — **ZERO new errors**, 3 gone, every one a side
-effect of rewriting a line the plan had to touch. **`116-11` and `116-12` must measure against 21.**
+effect of rewriting a line the plan had to touch. **`116-12` must measure against 17** (this line's 21 was 116-10's anchor).
 The test-side twin is worse than before: `--features full` selects **0** of this plan's **38**
 tests, and the gate's `test-unit` count is **1880**, byte-identical to 116-09's, despite 14 new
 inline lib tests. `make quality-gate` exit 0 is not evidence these tests passed.
@@ -850,8 +893,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-05T02:13:15.117Z
-Stopped at: Completed 116-10-PLAN.md
+Last session: 2026-08-05T03:44:13.603Z
+Stopped at: Completed 116-11-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -860,6 +903,7 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
+| Phase 116 P11 | 265min | 2 tasks | 3 files |
 | (v2.4 phases not yet planned) | — | — | — |
 | Phase 109 P00 | 25min | 2 tasks | 7 files |
 | Phase 109 P01 | 10min | 4 tasks | 38 files |
