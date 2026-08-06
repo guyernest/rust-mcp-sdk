@@ -1,6 +1,6 @@
 [package]
 name = "cargo-pmcp"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 authors = ["PMCP SDK Contributors"]
 description = "Production-grade MCP server development toolkit"
@@ -49,7 +49,11 @@ glob = "0.3"
 hdrhistogram = "7.5"
 tokio = { version = "1", features = ["full", "rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-pmcp = { version = "2.9.0", path = "..", features = ["streamable-http", "oauth"] }
+# The pin names the minor that ships `CredentialStore` / `FileCredentialStore`
+# (Phase 116). `path` wins locally, but a published cargo-pmcp 0.19.0 claiming
+# compatibility with an older pmcp would not compile: `auth_cmd` resolves every
+# credential through that seam.
+pmcp = { version = "2.18.0", path = "..", features = ["streamable-http", "oauth"] }
 mcp-tester = { version = "0.7.0", path = "../crates/mcp-tester" }
 mcp-preview = { version = "0.3.1", path = "../crates/mcp-preview" }
 pmcp-workbook-compiler = { version = "0.1.0", path = "../crates/pmcp-workbook-compiler" }
@@ -91,9 +95,12 @@ zip = "8.1"                             # Zip file creation for landing page dep
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
-tempfile = "3"                          # Atomic token cache writes (auth_cmd::cache)
+tempfile = "3"                          # Temp dirs/files across scaffold + publishing paths
 thiserror = "2"                         # Error types for generated code
-url = "2"                               # URL normalization for cache keys
+# NOT for credential-cache keys any more: `auth_cmd` normalizes through
+# `pmcp::shared::credential_store::normalize_server_key`. Still used directly by
+# `commands::team::dev` for endpoint parsing.
+url = "2"
 
 # For secrets management
 secrecy = { version = "0.10", features = ["serde"] }  # Secure secret handling with zeroization
