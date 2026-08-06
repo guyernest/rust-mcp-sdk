@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 116-11-PLAN.md
-last_updated: "2026-08-05T07:06:28.791Z"
-last_activity: 2026-08-05
+last_updated: "2026-08-06T23:27:24.223Z"
+last_activity: 2026-08-06
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 371
+  completed_plans: 372
   percent: 85
 ---
 
@@ -26,10 +26,55 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plan: 13 of 16
+Plans complete: 14 of 16 (01–13 and 16; the counter is wave-ordered, not sequential)
+Remaining: 116-14, 116-15
 Status: Ready to execute
 
-**116-11 HAS LANDED — `OAuthHelper` persists through the `(issuer, account, server)`-keyed
+**116-13 HAS LANDED — cargo-pmcp carries NO credential format, reader or writer of its own, and the
+2.18.0 / 0.19.0 pair is publishable.** Commits `554a305e` (Task 1, +1263/−704 across 9 files) +
+`be93951d` (Task 2, +63/−6 across 4). `TokenCacheV1`, `TokenCacheEntry`, `read`, `write_atomic`,
+`normalize_cache_key` and `refresh_and_persist` are GONE; `cache.rs` greps clean of `serde_json`,
+`schema_version` and `write_atomic`. All five subcommands are thin wrappers over
+`CredentialStore`/`CredentialStoreAdmin`; the schema 1→2 migration is inherited from core's pure
+`parse_credential_snapshot`, never reimplemented. `auth_integration.rs` 7 → **20** tests, 20/20
+green, including the D-116-R1 CLI isolation test and two migration-DESTRUCTION tests (a read-only
+command leaves the previous-format document byte-identical). `make quality-gate` exits **0** and
+`semver-checks --baseline-rev b2bf9157` exits **0** (196/196) with the minor bump in place.
+
+**⚠ THE HOST LOST THE ABILITY TO `exec()` ANY NEWLY-CREATED FILE MID-PLAN, AND IT LOOKED EXACTLY
+LIKE HUNG TESTS.** macOS `syspolicyd`/`amfid` wedge (2892 min CPU, `Error checking with
+notarization daemon: 3`). `cp /bin/date /tmp/p && /tmp/p` hung >45s — that probe is the cheap
+discriminator and belongs BEFORE any "hung test" investigation. Second recorded instance of this
+class. The executor returned a `checkpoint:human-action` rather than write a SUMMARY asserting
+gates it could not run; an operator cleared it with `sudo killall -9 syspolicyd`. **Zed's
+rust-analyzer made the same compile 254x slower** (exit 124 at 1800s with it running vs exit 0 in
+209s with it quit) and caused a multi-hour cargo build-lock deadlock.
+
+**⚠ THIS PLAN'S GREEN IS GREEN UNDER `SSL_CERT_FILE`.** The gates ran with
+`SSL_CERT_FILE=target/116-verify/cacert.pem` (158 certs exported by the Apple-signed `security`
+tool), because this host denies freshly built binaries the keychain read `rustls-native-certs`
+performs and every TLS-client test panicked at the PRE-EXISTING `.expect` at
+`src/shared/streamable_http.rs:458` with `ioErr -36`. Without it: **106** core failures and **14**
+in `make quality-gate`; with it: **1** and **0**. No test skipped, no code changed —
+but `116-15` must not book these numbers without the caveat.
+
+**⚠ TWO GATE-SCOPE FACTS FOR `116-15`'s CLASSIFICATION.** (1) `make quality-gate` does NOT reach
+these integration binaries — that is how a stale `oauth_state_csrf` source-inspection assertion,
+broken by `75c4d088`'s /simplify hoist, survived a green gate until an explicit `--features
+full,oauth` run caught it (fixed separately as `42f5c8f0`, NOT part of 116-13). (2) There is **no
+pre-commit hook installed in this clone** — CLAUDE.md's "ALL commits are blocked until quality
+gates pass" is a discipline, not a mechanism.
+
+**⚠ `Cargo.lock` IS NOT GIT-TRACKED (`.gitignore:3`), SO 116-13's `files_modified` FRONTMATTER
+LISTS A FILE IT COULD NEVER COMMIT.** Resolved to the not-tracked branch, exactly as
+`116-BASELINES.md` item 6 instructs. Refined dependency fence recorded with output: root
+`Cargo.toml`'s diff against `b2bf9157` is exactly one `+`/`-` pair (the version line) and no
+dependency was added, removed or moved. The version bump also tripped the scaffold-pin tripwire
+in `templates/workbook_server.rs` (both lib and bin targets) — bumped to 2.18.0 in the same commit,
+because otherwise `cargo pmcp new` would scaffold projects pinned to a pmcp with no
+`CredentialStore`.
+
+Prior-plan context — **116-11 HAS LANDED — `OAuthHelper` persists through the `(issuer, account, server)`-keyed
 `CredentialStore`, and an authorization-server substitution is no longer invisible.** Commits
 `4d27db50` + `3b2a61e1` (+2083/−227; `src/client/oauth.rs` 2680 → 3272, new
 `tests/oauth_store_wiring.rs` at 1264 lines with **18** tests, plus 6 inline). Two new public
@@ -483,7 +528,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-05
+Last activity: 2026-08-06
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -843,6 +888,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 116]: 116-12: authorize_with_details also refuses under Interactivity::RefreshOnly, so the headless guarantee holds at BOTH public entry points
 - [Phase 116]: 116-12: the D-14 defect-1 test PASSED pre-fix (116-11 had already closed it) and is kept as a negative-control-proven regression fence, not counted as coverage
 - [Phase 116]: 116-12: D-116-KEYCHAIN reopened - reproduced at 92 GiB free and identically against the PRE-PLAN source, so D-116-DISK is not the mechanism; the defect is the .expect at streamable_http.rs:458
+- [Phase ?]: 116-13: cargo-pmcp auth subcommands are thin wrappers over pmcp CredentialStore/CredentialStoreAdmin; the CLI key is (issuer, empty-account, normalize_server_key(url))
+- [Phase ?]: 116-13: Cargo.lock is NOT git-tracked here, so version-bump plans must not list it in files_modified; the RESEARCH dependency fence is refined to 'no dependency line added/removed/changed, only the version line'
+- [Phase ?]: 116-13: this phase's gate results are green only under SSL_CERT_FILE (exported keychain bundle) because fresh binaries are denied the rustls-native-certs keychain read on this host; 116-15 must carry the caveat
 
 ### Pending Todos
 
@@ -897,7 +945,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-05T07:06:10.969Z
+Last session: 2026-08-06T23:26:43.653Z
 Stopped at: Completed 116-11-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1014,3 +1062,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P09 | 173min | 2 tasks | 4 files |
 | Phase 116 P10 | 118min | 2 tasks | 3 files |
 | Phase 116 P12 | 300min | 3 tasks | 3 files |
+| Phase 116 P13 | 2 sessions | 2 tasks | 13 files |

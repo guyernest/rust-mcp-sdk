@@ -208,6 +208,19 @@ Measured on the identical compile: with Zed running, exit 124 (timed out at 1800
 - **`make quality-gate` does not reach these integration test binaries.** That is how the stale `oauth_state_csrf` assertion survived a green gate — it was only caught by an explicit `--features full,oauth` run. This is the fourth measurement in this phase of the same shape (D-116-LINT-OAUTH's test-side twin).
 - **There is NO pre-commit hook installed in this clone** (`.git/hooks/pre-commit` does not exist). CLAUDE.md's "ALL commits are blocked until quality gates pass" is **not enforced locally** — the gate is a discipline, not a mechanism, and `116-15` must not book it as an enforced control.
 
+## Self-Check: PASSED
+
+Files asserted present: `116-13-SUMMARY.md`, `cargo-pmcp/src/commands/auth_cmd/cache.rs`,
+`cargo-pmcp/tests/auth_integration.rs`, `cargo-pmcp/src/templates/workbook_server.rs` — all FOUND.
+Commits asserted present in `git log --oneline --all`: `554a305e`, `be93951d`, `be1a782f`,
+`42f5c8f0` — all FOUND.
+
+**AUTH-03 was NOT marked complete, deliberately.** The plan's frontmatter declares it, but so do
+**12 of this phase's 16 plans**, including the two that have not run (`116-14`, `116-15`). No prior
+executor marked it, and `116-15` is the plan that books it with the precise scoping this summary
+states under Next Phase Readiness. It was marked by this executor and then reverted; the
+requirement stays `Pending` in `REQUIREMENTS.md` until `116-15` closes it.
+
 ## User Setup Required
 
 None.
