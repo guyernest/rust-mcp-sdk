@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
-stopped_at: Completed 116-14-PLAN.md
-last_updated: "2026-08-07T02:51:35.240Z"
+status: verifying
+stopped_at: Completed 116-15-PLAN.md — Phase 116 COMPLETE (16/16)
+last_updated: "2026-08-07T04:59:24.939Z"
 last_activity: 2026-08-06
 progress:
   total_phases: 72
-  completed_phases: 61
+  completed_phases: 62
   total_plans: 374
-  completed_plans: 373
-  percent: 85
+  completed_plans: 374
+  percent: 86
 ---
 
 # Project State
@@ -25,12 +25,66 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 116 (auth-hardening-seps) — EXECUTING
-Plans complete: 15 of 16 (01–14 and 16; the counter is wave-ordered, not sequential)
-Remaining: 116-15
-Status: Ready to execute
+Phase: 116 (auth-hardening-seps) — **COMPLETE**
+Plans complete: 16 of 16
+Remaining: none
+Status: Phase complete — ready for `/gsd:verify-phase 116`, then Phase 117
 
-**116-14 HAS LANDED — D-113-V IS CLOSED BY MEASUREMENT.** Commit `43b3dde8` (test, +142/−25 in
+**116-15 HAS LANDED — PHASE 116 IS COMPLETE AND AUTH-01/02/03 ARE BOOKED `[x]`.** Commits
+`a334d104` (fix) + `37638653` + `1afd7f80` + `ac9de6d2` + `b0b92cfd` + `0e820dfb`
+(+1518/−34 across 5 files; `deferred-items.md` 1032 → 2249 lines). **All eleven Class-A gates exit 0
+at HEAD**, and `make quality-gate` was re-run green AFTER the final commit. `RESEARCH assumption A2
+IS CLOSED` — carried unmeasured since `116-01`, measured here: exit 0 in 20 min 10 s, banner once,
+zero `Terminated`/`FAILED`. The `full,oauth` sweep is **3104/3104** (was 3103/3104 at `116-13`;
+`42f5c8f0` closed the one failure). Eight contract bindings flipped `planned` → `implemented` with
+**24/24 equation invariants** mapped to a named test, and four `signature:` values corrected to the
+shipped form rather than silently absorbed.
+
+**⚠ A CLASS-A GATE WENT RED FOR A GENUINE CODE REASON, AND THE GATE-SCOPE HOLE IS WHY.** A3
+(`clippy --features full,oauth --lib --tests` with `make lint`'s flag set) exited **101** on
+`clippy::err_expect` at `tests/oauth_iss_integration.rs:168` — a `clippy::all` lint, so a HARD
+ERROR, not a pedantic warning. Fixed under Rule 1 in `a334d104`. **This is the FIRST instance in
+which `D-116-LINT-OAUTH` hid a hard error rather than warnings**, and it is a sixth instance
+overall. Two independent holes over one file: `make lint` compiles zero lines of it, and the gate's
+test stage runs it as `0 passed`.
+
+**⚠ THE GATE-SCOPE HOLE IS NOW A NUMBER: 143, not "81" or "102".** Measured from this session's own
+gate transcript against the per-binary `full,oauth` runs: `make quality-gate` DOES compile and run
+all thirteen core binaries, but **six report `0 passed`** because they are
+`#![cfg(feature = "oauth")]` and the gate uses `--features "full"` — 117 core tests — plus **26**
+`cargo-pmcp` auth tests the gate does not run at all. The gate's `test-unit` population is **still
+1880**, byte-identical across five consecutive plans. **The good half had never been recorded: the
+ungated pure tier IS inside the gate** — 180 of the 323 tests, identical counts under both feature
+sets, which is `116-02`/`04`/`05`'s ungated-`src/shared/` design paying off as coverage.
+**`D-116-LINT-OAUTH` named `116-15` as its owner and `116-15` structurally cannot discharge it** (no
+task touches the `Makefile`); it is REASSIGNED to UNASSIGNED as `LIM-116-10`, with the pairing
+requirement intact: clear the 17 FIRST, then add the feature to `make lint` and the gate's test
+stage TOGETHER.
+
+**⚠ `make doc-check`'s B2 CONDITION CANNOT PASS AS LITERALLY WORDED, AND BOTH READINGS ARE ON THE
+RECORD.** B1 PASS (28 = anchor, per-file distribution identical). B2 literal FAIL on ONE error —
+`src/error/mod.rs`, which `116-02` edited. Non-attribution PROVEN, not argued: the offending doc
+line exists verbatim at `b2bf9157:src/error/mod.rs:573`, and this phase's three hunks in that file
+(old lines 130, 628, 837) do not touch it; 573 → 613 is a 40-line insertion above it. Classified
+Class B on the criterion `116-BASELINES.md` states for that exact file. **Sixth and seventh
+`D-116-GREP` instances are in `116-15`'s OWN acceptance criteria** — the wide TODO grep (9 = 9
+pre-existing, all template text in `cargo-pmcp/src/`) and the unanchored `status: planned` count
+(10 → 1, because it matches PROSE; the anchored form is 0).
+
+**Fuzz was RE-MEASURED at HEAD rather than carried** from `116-08`: both targets `Done 200000 runs`,
+artifacts empty. `semver-checks --baseline-rev b2bf9157` **196/196**. `make wasm-build` 92 warnings =
+anchor. `pmat --checks complexity` 0 violations with **zero** cognitive-complexity allows at HEAD or
+at base. `D-113-V` is now recorded CLOSED in BOTH deferred-items files, and
+`116-BASELINES.md` § D-15's stale accumulation count is annotated 7 → **13**.
+
+**AUTH-03 IS BOOKED WITH `D-116-PRM` QUOTED VERBATIM, as this file required.** The key shape is
+delivered and proven at the store, the trait and the helper; the two-servers-one-authorization-server
+SCENARIO is **not constructible through the live flow** until RFC 9728 lands, so `116-11`'s collision
+test seeds the second server. RFC 9728 and RFC 8707 are recorded as NAMED DEPENDENCIES with owner
+**Guy**, shipping together. SEP-2350 is recorded as a DEFERRAL, never as an AUTH-03 limitation —
+listing it as one is what made the previous revision unbookable.
+
+Prior-plan context — **116-14 HAS LANDED — D-113-V IS CLOSED BY MEASUREMENT.** Commit `43b3dde8` (test, +142/−25 in
 `tests/v2_bounded_reads_tripwire.rs` alone; `git diff --exit-code` clean on all four source files).
 The four auth files — `src/client/auth.rs`, `src/client/oauth.rs`,
 `src/server/auth/providers/{generic_oidc,cognito}.rs` — are PERMANENTLY in `EXTRA_SCOPE`, and the
@@ -937,6 +991,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 116-14: REQUIRED_FILES converted to FULL RELATIVE PATHS with the matcher moved from file_name() to rel() in the same edit — nine tracked files share auth.rs's base name and two live under src/, so a base-name entry could report a green guard over the wrong file
 - [Phase ?]: 116-14: fence-closing order is fix-then-fence — widening scope ahead of 116-06/07/12's bounding would have left make quality-gate red for several waves
 - [Phase ?]: 116-14: an anti-vacuity control must be run in the direction that CAN fail (scope removed, requirement retained); the reverse direction passes vacuously and is recorded as a measured LIMIT, never as evidence
+- [Phase ?]: 116-15: doc-check accepted as Class-B BASELINE DELTA on 116-BASELINES.md's criterion; B2's literal wording cannot pass at any HEAD, so both readings are recorded and non-attribution is PROVEN at b2bf9157:src/error/mod.rs:573
+- [Phase ?]: 116-15: PHASE_116_EQUATIONS retained after the binding flip (the hand-off's sanctioned branch) — deleting it would delete the phase_116_records >= 8 anti-vacuity floor; Phase 115 set the same precedent in the same file
+- [Phase ?]: 116-15: D-116-LINT-OAUTH reassigned off 116-15 to UNASSIGNED — the booking plan touches no Makefile; measured at HEAD as 17 clippy diagnostics and 143 tests outside make quality-gate
 
 ### Pending Todos
 
@@ -991,8 +1048,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-07T02:51:30.638Z
-Stopped at: Completed 116-14-PLAN.md
+Last session: 2026-08-07T04:58:32.288Z
+Stopped at: Completed 116-15-PLAN.md — Phase 116 COMPLETE (16/16)
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -1110,3 +1167,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P12 | 300min | 3 tasks | 3 files |
 | Phase 116 P13 | 2 sessions | 2 tasks | 13 files |
 | Phase 116 P14 | 4h | 1 tasks | 1 files |
+| Phase 116 P15 | 2h05m | 4 tasks | 5 files |
