@@ -588,8 +588,8 @@ pub enum Request {
 /// exhaustive `match` arms in the workspace crates (a source-level break that
 /// `cargo-semver-checks` classifies as "minor" but that violates the milestone's
 /// hard 2.x-minor promise). Instead it is carried by the crate-private
-/// [`InternalClientRequest`] and routed by matching the raw method string via
-/// [`classify_internal_method`] BEFORE conversion into the public enum. Plan 05
+/// `InternalClientRequest` and routed by matching the raw method string via
+/// `classify_internal_method` BEFORE conversion into the public enum. Plan 05
 /// wires this classifier into the server request path so v2 `server/discover`
 /// reaches the era-gated handler while v1 / non-opted-in requests fall through
 /// to the existing `parse_request` → `method_not_found` → `-32601` (D-10).

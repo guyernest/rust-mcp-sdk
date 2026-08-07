@@ -489,7 +489,7 @@ impl StreamableHttpTransport {
     ///
     /// Additive by construction: an inherent method on a struct whose fields are
     /// all private, rather than a field on the externally-constructible
-    /// [`StreamableHttpTransportConfig`] (see [`Self::max_collected_body_bytes`]).
+    /// [`StreamableHttpTransportConfig`] (see `Self::max_collected_body_bytes`).
     ///
     /// # Examples
     ///
@@ -1446,7 +1446,7 @@ impl Transport for StreamableHttpTransport {
     /// Delegates to the existing inherent
     /// [`Self::set_protocol_version`], which writes the field the
     /// `MCP-Protocol-Version` request header is emitted from, AND latches the
-    /// separate [`Self::v2_mode`] flag that gates every v2-only behavior. The
+    /// separate `Self::v2_mode` flag that gates every v2-only behavior. The
     /// two are distinct on purpose — see that field's docs.
     fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
         // Classify through `protocol_era`, the single source of truth, NOT by

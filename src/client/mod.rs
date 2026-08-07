@@ -878,7 +878,7 @@ impl<T: Transport> Client<T> {
     /// latter.
     ///
     /// Takes `&mut self` because it STORES the returned capabilities: after this
-    /// call [`Self::assert_capability`] enforces on v2 exactly as it does on v1
+    /// call `Self::assert_capability` enforces on v2 exactly as it does on v1
     /// against initialize-learned ones.
     ///
     /// # Errors

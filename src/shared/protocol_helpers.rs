@@ -106,7 +106,7 @@ pub(crate) fn parse_request_or_internal(
 /// `server/discover`) resolve to [`Error::method_not_found`] on this PUBLIC
 /// entrypoint — the v1 `-32601` behavior, byte-identical to before. The
 /// era-gated live routing to the internal handler is performed by the server
-/// dispatch via the crate-private [`parse_request_or_internal`] seam (D-10).
+/// dispatch via the crate-private `parse_request_or_internal` seam (D-10).
 pub fn parse_request(request: JSONRPCRequest<Value>) -> Result<(RequestId, Request)> {
     let method = request.method.clone();
     match parse_request_or_internal(request)? {

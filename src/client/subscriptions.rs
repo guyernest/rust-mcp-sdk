@@ -3,7 +3,7 @@
 //! Plan 10 built the SERVER route and proved it with a raw HTTP/1.1 client. This
 //! module is the other half: a pmcp [`Client`](crate::Client) that opts into
 //! `2026-07-28` opens the long-lived stream and consumes its frames as a typed
-//! [`futures::Stream`] of [`ServerNotification`]s — which is what HTTP-04's
+//! [`futures::Stream`] of `ServerNotification`s — which is what HTTP-04's
 //! requirement text ("**v2 clients get change notifications**") actually asks
 //! for.
 //!
@@ -17,10 +17,10 @@
 //!    `-32601`) is surfaced to the caller UNCHANGED, so "this server does not do
 //!    subscriptions" is distinguishable from a transport fault.
 //! 3. The FIRST frame MUST be a
-//!    [`ACKNOWLEDGED_METHOD`] notification. Anything else is an error naming the
+//!    `ACKNOWLEDGED_METHOD` notification. Anything else is an error naming the
 //!    spec's acknowledgement-first MUST.
 //! 4. Every subsequent frame carries the SAME
-//!    [`SUBSCRIPTION_ID_META_KEY`] value. A frame carrying a DIFFERENT one is
+//!    `SUBSCRIPTION_ID_META_KEY` value. A frame carrying a DIFFERENT one is
 //!    yielded as an `Err`, never forwarded as the caller's own (T-113-66): a
 //!    mismatched tag means the server or an intermediary cross-delivered, which
 //!    is precisely the failure plan 10's `ListenKey` prevents server-side, and
@@ -39,7 +39,7 @@
 //!
 //! # No second SSE tokenizer
 //!
-//! Frames are decoded with the SHARED [`SseParser`], the same one the
+//! Frames are decoded with the SHARED `SseParser`, the same one the
 //! streamable-HTTP transport already feeds. This module adds the JSON-RPC
 //! classification on top of it and nothing else.
 

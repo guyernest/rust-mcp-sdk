@@ -610,7 +610,7 @@ impl Error {
     ///
     /// Like the two MRTR client-local errors above, this rides the existing
     /// [`Error::Protocol`] variant discriminated by a marker in
-    /// `data.pmcpError`, because [`Error`] is not `#[non_exhaustive]` and a new
+    /// `data.pmcpError`, because [`enum@Error`] is not `#[non_exhaustive]` and a new
     /// variant would be a MAJOR semver break. Don't "fix" it into one.
     ///
     /// # Examples

@@ -88,11 +88,11 @@ pub(crate) struct VerifiedContinuation {
 /// This is an additive `#[non_exhaustive]` value type: construct it with
 /// [`ProtocolContext::new`] and layer optional fields via the `with_*`
 /// builders. The four negotiation fields are public and directly readable; the
-/// MRTR fields are crate-private (see [`ProtocolContext::with_mrtr_params`]).
+/// MRTR fields are crate-private (see `ProtocolContext::with_mrtr_params`).
 ///
 /// # `Debug` is hand-written and REDACTS the MRTR fields
 ///
-/// A derived `Debug` printed [`VerifiedContinuation::state`] — the DECRYPTED,
+/// A derived `Debug` printed `VerifiedContinuation::state` — the DECRYPTED,
 /// server-minted continuation, which routinely holds partially collected tool
 /// arguments — plus the raw `requestState` token and the client's
 /// `inputResponses`, verbatim. This value is carried on
@@ -442,7 +442,7 @@ fn parse_reserved_object<T: serde::de::DeserializeOwned>(
 ///
 /// The `traceparent`, `tracestate`, and `baggage` strings are **untrusted**
 /// data taken verbatim from the client-supplied `_meta` JSON. They are only
-/// **length-bounded** (see [`MAX_TRACE_VALUE_LEN`]); no W3C syntax validation
+/// **length-bounded** (see `MAX_TRACE_VALUE_LEN`); no W3C syntax validation
 /// is performed. These values MUST NOT be treated as trusted, authenticated,
 /// or safe to interpolate into logs/queries without independent sanitization.
 #[derive(Debug, Clone)]
@@ -460,7 +460,7 @@ impl TraceContext {
     /// Extract a `TraceContext` from a request `_meta` JSON value.
     ///
     /// Returns `Some` only when the `_meta` object carries a `traceparent`
-    /// string within [`MAX_TRACE_VALUE_LEN`]; returns `None` when it is absent,
+    /// string within `MAX_TRACE_VALUE_LEN`; returns `None` when it is absent,
     /// not a string, or over the bound. The optional `tracestate`/`baggage`
     /// keys are surfaced when present and in-bounds, and silently dropped when
     /// over the bound. Never panics on arbitrary untrusted input.

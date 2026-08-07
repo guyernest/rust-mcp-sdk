@@ -15,7 +15,7 @@
 //! # v2 only (D-11)
 //!
 //! The hints exist on the **v2 projection only**. A `2025-11-25` (or earlier)
-//! response never carries them: [`project_caching_hints`] REMOVES both keys on
+//! response never carries them: `project_caching_hints` REMOVES both keys on
 //! every non-v2 input, so a handler that sets a hint and then serves a legacy
 //! client emits a byte-identical legacy response. That severability is what
 //! keeps the v1 compatibility layer cleanly removable.
@@ -40,7 +40,7 @@
 //! # Why this module carries no `cfg`
 //!
 //! This module is deliberately `cfg`-free, so it compiles on every target and
-//! [`project_caching_hints`] is callable from ALL dispatchers: the native
+//! `project_caching_hints` is callable from ALL dispatchers: the native
 //! `ServerCore` / `Server` paths (`src/server/core.rs` and `src/server/mod.rs`,
 //! both gated `cfg(not(target_arch = "wasm32"))`) AND `WasmMcpServer`
 //! (`src/server/wasm_server.rs`, gated `cfg(target_arch = "wasm32")`). Those two

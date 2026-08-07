@@ -101,7 +101,7 @@ pub use crate::shared::http_constants::DEFAULT_HTTP_SSE_BUFFERED_BYTES;
 /// Default cap on ONE fully-collected response body on this transport, in bytes
 /// (16 MiB).
 ///
-/// [`HttpTransport::send_request`] reads its POST response with
+/// `HttpTransport::send_request` reads its POST response with
 /// `Full`-body semantics: the whole thing lands in memory before it is parsed,
 /// and the PEER chooses how many bytes it sends. Without a cap that read was
 /// unbounded — the same defect class 113-17 fixed on this file's sibling SSE

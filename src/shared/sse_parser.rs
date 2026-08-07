@@ -349,10 +349,10 @@ impl SseParser {
     /// Feed data to the parser and get parsed events.
     ///
     /// The parser retains at most [`Self::max_buffer_size`] bytes across its two
-    /// accumulators on return; see [`Self::buffered_bytes`]. A chunk that would
+    /// accumulators on return; see `Self::buffered_bytes`. A chunk that would
     /// break that is refused whole and [`Self::overflowed`] latches. Callers with
     /// an ALREADY-CAPPED complete body, rather than a chunk of a live stream,
-    /// want [`Self::feed_complete_body`].
+    /// want `Self::feed_complete_body`.
     ///
     /// # Examples
     ///

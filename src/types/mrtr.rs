@@ -28,8 +28,8 @@
 //! ```
 //!
 //! **These fields are NOT in `_meta`.** Getting that wrong is the single most likely
-//! silent interop failure in the phase, which is why [`splice_mrtr_params`] and
-//! [`extract_mrtr_params`] are the only two places the key spelling exists.
+//! silent interop failure in the phase, which is why `splice_mrtr_params` and
+//! `extract_mrtr_params` are the only two places the key spelling exists.
 //!
 //! # The `Mcp-Name` header rule (locked, cross-plan)
 //!
@@ -38,7 +38,7 @@
 //! presence (Phase-112 D-05) while its `cross_check_name` skips the value comparison
 //! for non-name-bearing methods. Provenance: `113-SPEC-RECHECK.md`, section
 //! `## Mcp-Name Header Rule` (and `DRIFT-1`, which records that pmcp is deliberately
-//! STRICTER than the draft transport spec here). [`encode_header_value`] therefore
+//! STRICTER than the draft transport spec here). `encode_header_value` therefore
 //! MUST round-trip the empty string unchanged.
 //!
 //! # Visibility
@@ -486,7 +486,7 @@ pub(crate) fn decode_header_value(raw: &str) -> Option<String> {
 /// them. That matters because a token minted by one build is presented to
 /// another during a rolling deploy: a changed spelling would make every
 /// in-flight continuation's kinds map undecodable, which — under
-/// [`Continuation`](crate::server::request_state::Continuation)'s
+/// `Continuation`'s
 /// absent-means-pre-kinds rule — is a HARD failure, not a graceful degradation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputRequestKind {

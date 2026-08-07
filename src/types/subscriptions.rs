@@ -26,9 +26,9 @@
 //! verbatim. `resourceSubscriptions` in particular is `string[]` — an array of
 //! resource URIs — and NOT a boolean and NOT a map. Guessing that shape is how a
 //! silent interop failure ships, so
-//! [`tests::filter_matches_the_shape_recorded_in_the_spec_recheck`] deserializes
+//! `tests::filter_matches_the_shape_recorded_in_the_spec_recheck` deserializes
 //! the recorded declaration and
-//! [`tests::a_boolean_resource_subscriptions_is_rejected`] pins the negative.
+//! `tests::a_boolean_resource_subscriptions_is_rejected` pins the negative.
 
 use crate::types::capabilities::ServerCapabilities;
 use crate::types::jsonrpc::RequestId;
@@ -59,7 +59,7 @@ pub const SUBSCRIPTION_ID_META_KEY: &str = "io.modelcontextprotocol/subscription
 /// filter retains.
 ///
 /// The registry keeps an agreed filter per live stream and
-/// [`SubscriptionFilter::covers`] scans this list for every
+/// `SubscriptionFilter::covers` scans this list for every
 /// `notifications/resources/updated`, so an unbounded list is both a retained-memory
 /// and a work-amplification `DoS` — the same class every other Phase-113 ingress
 /// field (`requestState`, `inputResponses`, the SSE line buffer, the v2 headers) is
