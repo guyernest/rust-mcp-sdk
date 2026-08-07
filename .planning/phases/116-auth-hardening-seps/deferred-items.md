@@ -50,6 +50,12 @@ does NOT chain it — confirmed at `Makefile:680-694`, whose sub-target list is 
 `validate-always`, `purity-check`, `comply` and contains no `doc-check`. So Class A can be green
 while Class B is red without contradiction.
 
+> **SUPERSEDED — see `CORRECTION-116-DOC` at the end of this file.** This paragraph is
+> wrong in both halves: the anchor it relies on is a branch-only commit, and CI runs
+> `make doc-check` as its own step inside the `quality-gate` job (`ci.yml:231`), so a red
+> `doc-check` DOES fail the org-required `gate`. The 27 errors were ours and are fixed in
+> `57367dc3`. Retained unedited so the faulty reasoning stays legible.
+
 Its acceptance condition is a DELTA, not zero, and has two parts, BOTH of which must hold:
 
 - **B1** — the total `^error` count at HEAD is LESS THAN OR EQUAL TO the recorded anchor (28); and
@@ -1064,7 +1070,10 @@ attributable to this phase — B2 PASS on attribution. The single hit in a file 
 **Identifiers:** cross-referenced to the EXISTING `D-113-W` / `D-114-V`. **No new identifier is
 minted here** — this entry is a pointer, deliberately.
 **Owner:** UNASSIGNED (inherited).
-**Status:** OPEN, and now three phases old.
+**Status:** **CLOSED — FIXED in `57367dc3`, not accepted.** The "pre-existing / not this
+phase's" attribution above is incorrect: the anchor `b2bf9157` is not an ancestor of
+`upstream/main`, and `Quality Gate` is green upstream. See `CORRECTION-116-DOC` at the end of
+this file for the full correction.
 
 ---
 
@@ -2302,3 +2311,65 @@ yields cargo-pmcp's own version and is NOT the answer.
 
 Out of scope for Phase 116 (nothing in this phase touches those templates) and NOT a regression —
 `mcp_app.rs` and the two oauth templates were already stale before it. Owner: **UNASSIGNED**.
+
+---
+
+## CORRECTION-116-DOC — the Class-B acceptance of `make doc-check` was WRONG; the errors were ours and are now FIXED
+
+**Recorded:** 2026-08-06, after PR #299 CI. **Supersedes:** the Class-B disposition in the
+"Class A / Class B" framing above, `LIM-116-06`, and the `B make doc-check` row of the gate table.
+Those entries are left in place unedited so the reasoning that produced the error stays legible;
+this section is the operative disposition.
+
+**What 116-15 concluded:** `make doc-check` is an ACCEPTED BASELINE DELTA — 28 `^error` lines at
+HEAD, 28 at the anchor (B1 PASS), none attributable to this phase's files (B2 PASS), therefore
+red-but-accepted, and Class A can be green while Class B is red "without contradiction."
+
+**What was actually true.** Three findings, each verified:
+
+1. **The anchor was branch-only.** `git merge-base --is-ancestor b2bf9157 upstream/main` → **false**.
+   `b2bf9157` ("docs(116): defer RFC 9728 + RFC 8707 by owner decision") is a commit on this
+   long-lived feature branch, not an upstream commit. So B1 compared the branch against ITSELF.
+   "Pre-existing" meant "pre-existing on this branch", never "pre-existing upstream" — and the
+   Class-B framing silently traded on the second reading while only ever measuring the first.
+
+2. **`doc-check` DOES gate merge.** The Makefile reasoning was correct as far as it went —
+   `make quality-gate` genuinely does not chain `doc-check` (`Makefile:680-694`) — but CI does not
+   reach `doc-check` through `make quality-gate`. `.github/workflows/ci.yml:231` runs
+   `make doc-check` as its OWN step inside the `quality-gate` **job**, one step ahead of
+   `make quality-gate` at `:234`. The `gate` job (`ci.yml:443`) lists `quality-gate` in `needs:`
+   and hard-fails on `QG_RESULT != "success"`. A red `doc-check` therefore fails the org-required
+   `gate` status check and blocks merge. Checking the Makefile target and not the workflow step is
+   the whole of the mistake.
+
+3. **Upstream was green.** `Quality Gate` on `upstream/main@259385f8` is **success**. Zero rustdoc
+   errors upstream, 27 on this branch. The errors were introduced by earlier phases on this branch
+   and were ours to fix, not an inherited baseline.
+
+**Disposition: FIXED, not accepted.** Commit `57367dc3` ("fix(docs): resolve the 27 rustdoc errors
+blocking Quality Gate") resolves all of them — 27 insertions, 27 deletions across 12 `src/` files
+(`client/mod.rs`, `client/subscriptions.rs`, `error/mod.rs`, `shared/{http,protocol_helpers,
+sse_parser,streamable_http}.rs`, `types/{caching,mrtr,subscriptions}.rs`,
+`types/protocol/{context,mod}.rs`). Private and unresolvable intra-doc links became code spans;
+the ambiguous `[`Error`]` in `src/error/mod.rs` became `[`enum@Error`]`. Local `make doc-check`
+now exits **0** with "✓ Zero rustdoc warnings" over a genuine (non-cached) `Documenting pmcp
+v2.18.0 … Finished in 5.14s`.
+
+**Count discrepancy, stated rather than smoothed over.** 116-15 measured 28 via
+`grep -cE '^error'`; CI reported and this commit fixed 27. The 28th line is the trailing
+`error: aborting due to 27 previous errors` summary, which `^error` also matches. The diagnostic
+count was always 27. Separately, only 23 of the 27 carried a `-->` source location; the remaining
+4 — all module-doc links in `src/client/subscriptions.rs` (lines 6, 20, 23, 42:
+`ServerNotification`, `ACKNOWLEDGED_METHOD`, `SUBSCRIPTION_ID_META_KEY`, `SseParser`) — were
+locatable only from the raw CI log, which is why a location-keyed local extraction under-counted.
+
+**Lesson, for the next phase that reaches for a baseline delta.** Two rules follow directly:
+
+- **Anchor a "pre-existing" claim to the merge target, not to the branch.** State the anchor commit
+  and prove it is an ancestor of `upstream/main` in the same breath. An anchor on the branch under
+  test measures nothing.
+- **Prove a gate is non-blocking from the WORKFLOW, not from the Makefile.** The question is never
+  "does `make quality-gate` chain it" — it is "does any job named in `gate`'s `needs:` run it in any
+  step". Grep `.github/workflows/ci.yml` for the target name before writing "accepted".
+
+There is now no Class-B gate in Phase 116. Every gate is Class A, and `doc-check` is green.
