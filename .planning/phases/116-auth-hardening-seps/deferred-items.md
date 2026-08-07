@@ -3,6 +3,545 @@
 Out-of-scope discoveries logged during execution. Each names the plan that found it and a
 proposed owner. Nothing here was fixed by the finding plan — that is the point of the file.
 
+**Reading order.** `116-15` (the phase-end plan) writes the first three sections — the gate
+results, the contract-first closure and the deferred register. Everything from `## D-116-EX`
+onward is the accumulated per-plan log, in the order the plans found it.
+
+---
+
+## Phase-End Gate Results
+
+Written by `116-15` Task 1, at HEAD `c9dcbd21`-parent (the tree as `116-14` left it, plus this
+plan's one Rule-1 fix — see A3). Measured 2026-08-06/07. Toolchain `stable-aarch64-apple-darwin`
+(clippy reports `rust-1.97.0` lint URLs), `pmat 3.15.0`.
+
+### The acceptance policy — stated BEFORE any number in this file
+
+This section states the rule first, deliberately, so the classification of a result cannot be
+chosen after seeing it. Codex raised the previous revision's policy as unexecutable (HIGH — "The
+final booking gate cannot complete as written"): it said "if ANY gate is red, STOP" while also
+asserting that `make doc-check` stays red at 28 pre-existing errors this phase neither caused nor
+will clear. Both cannot hold. The replacement is two explicitly named classes.
+
+**Class A — REQUIRED-GREEN.** These must exit 0. Any red here STOPS the phase; Tasks 2 and 3 do
+not run. Booking a requirement on a red Class-A gate is precisely the failure `D-115-G` records
+twice on one requirement in Phase 115.
+
+| | Class A member |
+|---|---|
+| A1 | `make quality-gate` |
+| A2 | `cargo nextest run --features full,oauth`, plus a non-zero PARSED count per binary |
+| A3 | `cargo clippy --features full,oauth --lib --tests` with `make lint`'s full flag set |
+| A4 | `pmat quality-gate --fail-on-violation --checks complexity` |
+| A5 | `cargo semver-checks check-release -p pmcp --baseline-rev b2bf9157` |
+| A6 | `make wasm-build` after `rustup target add wasm32-unknown-unknown` |
+| A7 | `make check-todos` |
+| A8 | `make test-examples` plus the two `cargo run --example c11_oauth_iss_state_validation` invocations |
+| A9 | the two `cargo fuzz` campaigns |
+| A10 | the refined dependency fence, including the `Cargo.lock` assertion |
+| A11 | `make comply` plus the contract-binding resolution check (Task 2) |
+
+**Class B — ACCEPTED BASELINE DELTA.** Exactly ONE gate is in this class: `make doc-check`. It was
+ALREADY red at the phase base with 28 `^error` lines, none in the files this phase touches
+(`116-BASELINES.md` § doc-check ACCEPTED BASELINE DELTA ANCHOR); it is recorded as `D-113-W` /
+`D-114-V` with owner UNASSIGNED; and clearing it is not this phase's scope. `make quality-gate`
+does NOT chain it — confirmed at `Makefile:680-694`, whose sub-target list is `fmt-check`, `lint`,
+`build`, `test-all`, `pmcp-package-gate`, `audit`, `unused-deps`, `check-todos`, `check-unwraps`,
+`validate-always`, `purity-check`, `comply` and contains no `doc-check`. So Class A can be green
+while Class B is red without contradiction.
+
+Its acceptance condition is a DELTA, not zero, and has two parts, BOTH of which must hold:
+
+- **B1** — the total `^error` count at HEAD is LESS THAN OR EQUAL TO the recorded anchor (28); and
+- **B2** — ZERO `^error` lines occur in any file this phase created or modified.
+
+If either fails, `make doc-check` is treated as Class A red and the phase STOPS. **Nothing else may
+be added to Class B. A gate that turns red for a NEW reason is Class A red by rule.**
+
+### Command hygiene used throughout
+
+Every recorded command uses `&&` between steps, never `;`, and every pipeline is preceded by
+`set -o pipefail` — a `;` separator or a bare `| tail` reports the wrong status, which cross-AI
+review flagged as a failure-masking pattern in the previous revision's own verify blocks. Every
+test count below is PARSED from the `Summary [...] N tests run` line with a `binary(...)` selector;
+no count is inferred from a `tail`, and no bare `test(/.../)` file selector appears anywhere
+(measured in this repo, `test(auth)` skips 4 of `auth_integration.rs`'s 7 original tests including
+the load-bearing `logout_no_args_errors_via_cli`, so it can report a healthy non-zero count having
+run none of the tests AUTH-03 depends on).
+
+**Two environmental deviations apply to every number below, and both are host faults rather than
+code defects. They are declared here so no reader mistakes these for clean-room numbers.**
+
+1. **`SSL_CERT_FILE`.** Every cargo test invocation ran with
+   `SSL_CERT_FILE=target/116-verify/cacert.pem` (158 certificates exported from the system keychain
+   by the Apple-signed `security` tool). This host denies freshly built binaries the keychain read
+   `rustls-native-certs` performs, so every TLS-client test panics at the **pre-existing** `.expect`
+   at `src/shared/streamable_http.rs:458` with `Os { code: -36 }`. Measured by `116-13`: without the
+   variable, **106** failures in the core run and **14** in `make quality-gate`; with it, **1** and
+   **0**. No test was skipped and no source changed. "Green" here means green under that variable.
+2. **Zed's rust-analyzer.** Measured by `116-13` on an identical compile: exit 124 at the 1800 s
+   timeout with Zed running versus exit 0 in 209 s with it quit — a 254x difference, with
+   `syspolicyd` consuming +965 s of CPU versus +3.8 s. Zed was quit for this session. One
+   `rust-analyzer` WAS running throughout (PID 30749, parent `.../uv/.../bin/python` — serena's
+   language server, 15 s of CPU over 5 h 33 m); it was judged idle on the CPU evidence and left
+   alone, exactly as `116-14` recorded. `make quality-gate` completed in **20 min 10 s**, against
+   the ~45 min `116-14` measured, so the host was not degraded.
+
+### A1 — `make quality-gate`
+
+```bash
+mkdir -p target/116-verify && \
+SSL_CERT_FILE="$PWD/target/116-verify/cacert.pem" CARGO_BUILD_JOBS=4 /usr/bin/make quality-gate
+```
+
+**exit 0.** Single-writer log `target/116-verify/116-15-quality-gate.log` (9179 lines), exit code
+captured separately to `target/116-verify/116-15-quality-gate.exit` (`exit=0`). Success banner
+appears exactly **once**; `grep -cE '^(FAILED|error\[|Terminated)'` returns **0**. Wall clock
+19:59:15 → 20:19:25 local = **20 min 10 s**.
+
+| Stage | Command it runs | Result |
+|---|---|---|
+| `fmt-check` | `cargo fmt --all -- --check` | exit 0 |
+| `lint` | `--features "full" --lib --tests` + pedantic/nursery/cargo, `RUSTFLAGS="-D warnings"` | exit 0, "✓ No lint issues" (`:47`) |
+| `build` | — | exit 0 (`:82`) |
+| `test-unit` | `cargo test --lib --features "full"` | **1880 passed**, 0 failed (`:1970`) |
+| `test-doc` | `Doc-tests pmcp` | **445 passed**, 0 failed, 79 ignored, 939.13 s (`:2532`) |
+| `test-property` | — | exit 0 |
+| `test-examples` | — | "All examples processed successfully" (`:8893`) |
+| `test-integration` | `cargo test --test '*' --features "full"` | **111 binaries, 1054 passed**, 0 failed |
+| `pmcp-package-gate` | fmt + clippy + test on the workspace-excluded crate | exit 0 (`:5277`), 101 unit tests |
+| `audit` | `cargo audit` | exit 0, "✓ No vulnerabilities found" (`:5760`) |
+| `unused-deps` | **NO-OP STUB** — see below | prints success unconditionally (`:5762`) |
+| `check-todos` | `! grep -r "TODO\|FIXME\|HACK\|XXX" src/` | exit 0 (`:5766`) |
+| `check-unwraps` | **NO-OP STUB** — see below | prints success unconditionally (`:5768`) |
+| `validate-always` | re-runs fuzz/property/unit/example stages | exit 0 |
+| `purity-check` | — | exit 0 |
+| `comply` | `pmat comply check` + `comply-bindings-check` | exit 0 (`:9174`) |
+
+**This closes RESEARCH assumption A2 by name.** A2 read: "`make quality-gate` currently exits 0 at
+this branch HEAD. **Not re-measured this session** — carried from Phase 114's recorded result (4899
+passed / 0 failed)." `116-01` did not run it and wrote that `116-15` must close it;
+`116-BASELINES.md` § "Open item carried, not re-measured" names this plan as its owner. **A2 is
+CLOSED: measured, exit 0, at this HEAD.** No macOS-keychain flake (`D-115-AL`) occurred, so no
+second run was needed; the gate was run once and that run is the citable one.
+
+**Two members of the gate prove nothing, and must never be cited as evidence.**
+
+- `unused-deps` (`Makefile:210-214`) — its whole body is
+  `@echo "⚠ cargo machete not installed - skipping"` with the real invocation commented out. Present
+  in this transcript at line 5762.
+- `check-unwraps` (`Makefile:776-780`) — its whole body is two unconditional `echo`s, the second of
+  which asserts "✓ No unwrap() calls in production code" without inspecting a single file. Present
+  in this transcript at line 5768. The two `.duration_since(UNIX_EPOCH).unwrap()` calls in
+  `src/client/oauth.rs` production paths are therefore **uncovered**, and are carried as a real item
+  in the register below.
+
+The plan named these at `Makefile:768-772` and `:202-206`; the measured lines are `776-780` and
+`210-214`. The line numbers had drifted; the finding had not.
+
+### A2 — the `full,oauth` sweep and the per-binary parsed counts
+
+```bash
+mkdir -p target/116-verify && set -o pipefail && \
+SSL_CERT_FILE="$PWD/target/116-verify/cacert.pem" CARGO_BUILD_JOBS=4 \
+cargo nextest run --features full,oauth 2>&1 | tee target/116-verify/full-sweep.log && \
+grep -qE 'Summary \[.*\] [1-9][0-9]* tests? run' target/116-verify/full-sweep.log
+```
+
+**exit 0** — `Summary [ 53.917s] 3104 tests run: 3104 passed, 2 skipped`.
+
+Delta against `116-13`'s recorded `3104 run: 3103 passed, 1 failed`: **the one failure is gone.**
+It was the stale `oauth_state_csrf` source-inspection assertion broken by `75c4d088`'s /simplify
+hoist and fixed separately in `42f5c8f0`. 3104 → 3104, 0 failed.
+
+Per-binary counts, each PARSED from its own `Summary` line with a `binary(...)` selector, using the
+standard form from `116-BASELINES.md` item 7. The `--features full` column is not a second
+invocation: it is read from THIS session's `make quality-gate` transcript (A1's `test-integration`
+stage, `cargo test --test '*' --features "full"`), so both columns describe the same HEAD.
+
+| # | Binary | selector | `full,oauth` PARSED | `full` (what the gate ran) | invisible to the gate |
+|---|---|---|---|---|---|
+| 1 | `oauth_iss_validation` | `binary(oauth_iss_validation)` | **27** | 27 | 0 |
+| 2 | `oauth_discovery_urls` | `binary(oauth_discovery_urls)` | **38** | 38 | 0 |
+| 3 | `oauth_application_type` | `binary(oauth_application_type)` | **14** | 14 | 0 |
+| 4 | `oauth_credential_store` | `binary(oauth_credential_store)` | **54** | 54 | 0 |
+| 5 | `oauth_credential_file` | `binary(oauth_credential_file)` | **29** | 0 | **29** |
+| 6 | `oauth_discovery_validation` | `binary(oauth_discovery_validation)` | **19** | 19 | 0 |
+| 7 | `oauth_provider_discovery` | `binary(oauth_provider_discovery)` | **15** | 15 | 0 |
+| 8 | `oauth_state_csrf` | `binary(oauth_state_csrf)` | **12** | 0 | **12** |
+| 9 | `oauth_iss_integration` | `binary(oauth_iss_integration)` | **13** | 0 | **13** |
+| 10 | `oauth_dcr_integration` | `binary(oauth_dcr_integration)` | **24** | 0 | **24** |
+| 11 | `oauth_store_wiring` | `binary(oauth_store_wiring)` | **18** | 0 | **18** |
+| 12 | `oauth_refresh` | `binary(oauth_refresh)` | **21** | 0 | **21** |
+| 13 | `v2_bounded_reads_tripwire` | `binary(v2_bounded_reads_tripwire)` | **13** | 13 | 0 |
+| 14 | cargo-pmcp `auth_integration` | `-p cargo-pmcp -E 'binary(auth_integration)'` | **20** | not run at all | **20** |
+| 15 | cargo-pmcp `auth_cmd` inline | `-p cargo-pmcp -E 'binary(cargo_pmcp) and test(auth_cmd)'` | **6** | not run at all | **6** |
+| | **TOTAL** | | **323** | 180 | **143** |
+
+Every count is NON-ZERO. Row 14 names `binary(auth_integration)`, **not** `test(auth)`, and its
+count is **20** (>= 7). Row 15 is the only place a `test(...)` term appears, and only inside the
+permitted compound `binary(X) and test(Y)` form; its `Summary` reads
+`6 tests run: 6 passed, 454 skipped`.
+
+**The gate-scope hole, finally quantified rather than asserted.** `make quality-gate` DOES compile
+and run every one of the thirteen core binaries — they appear by name in the `test-integration`
+transcript. Six of them report `0 passed; 0 failed; 0 filtered out`, because the file carries
+`#![cfg(feature = "oauth")]` and the gate runs `--features "full"`, which does not contain `oauth`
+(`Cargo.toml`: `oauth = ["http-client", "dep:webbrowser", "dep:dirs", "dep:rand"]`). A green
+`test result: ok. 0 passed` is indistinguishable in a transcript from a suite that has no tests.
+**117 core tests plus 26 cargo-pmcp tests — 143 in total — are outside `make quality-gate`.** That
+is the mechanism by which `42f5c8f0`'s defect survived a green gate, and it supersedes the "81
+tests outside CI" figure recorded after `116-11` and the "102" recorded after `116-12`.
+
+**The good half of the same measurement, which no prior plan recorded.** The ungated pure tier IS
+inside the gate: rows 1, 2, 3, 4, 6, 7 and 13 report identical counts under `full` and under
+`full,oauth`. That is `116-02`/`116-04`/`116-05`'s design intent — putting the decision tables in
+ungated `src/shared/` — paying off as coverage, not just as wasm-cleanliness. 180 of the 323 are
+gate-covered.
+
+### A3 — clippy under `full,oauth`, with `make lint`'s full flag set
+
+The exact command is committed as a script so a reader re-runs it rather than retypes 32 flags:
+`target/116-verify/116-15-clippy-a3.sh`. It is `make lint`'s clippy invocation (`Makefile:158-192`)
+with `--features full,oauth` substituted for `--features "full"` — `-D clippy::all`,
+`-W clippy::pedantic`, `-W clippy::nursery`, `-W clippy::cargo`, and the same 28-entry `-A` list.
+
+**exit 0** — `0` `^error` lines, `37` `^warning` lines, all of them `-W`-level pedantic/nursery
+notes that `make lint` also tolerates. Log: `target/116-verify/116-15-clippy-A3.log`.
+
+**This gate was RED on first measurement, for a genuine code reason, and it was fixed rather than
+reclassified.** First run: **exit 101**, one real diagnostic —
+
+```
+error: called `.err().expect()` on a `Result` value
+   --> tests/oauth_iss_integration.rs:168:14
+   = note: `-D clippy::err-expect` implied by `-D clippy::all`
+```
+
+`clippy::err_expect` is a `clippy::all` lint, so it is a HARD ERROR under this flag set, not a
+pedantic warning. Fixed under deviation Rule 1 (`.err().expect(..)` → `.expect_err(..)`, one line,
+in a test helper this phase created in `116-09`); the binary re-runs `13 tests run: 13 passed`, and
+`cargo fmt --all -- --check` exits 0.
+
+**This is the first time the gate-scope hole hid an actual hard error rather than a pedantic
+warning**, and it is a sixth instance of `D-116-LINT-OAUTH`. `make lint` was green throughout,
+because `--features "full"` compiles **zero lines** of `tests/oauth_iss_integration.rs` — the same
+file whose 13 tests row 9 of A2's table shows the gate running as 0. Two independent scope holes,
+the lint one and the test one, over the same file, both closed only by an explicit `full,oauth`
+run.
+
+**Companion measurement — the `D-116-LINT-OAUTH` anchor, which is NOT a Class-A gate.** Running the
+same script with `RUSTFLAGS="-D warnings"` (`116-15-clippy-a3.sh promote`) promotes the `-W`
+pedantic lints to errors: **exit 101, 18 `^error` lines = 17 diagnostics + 1 `could not compile`
+aggregate, ALL 17 in `src/client/oauth.rs`, 0 elsewhere.** The anchor moved 29 → 24 → 21 → 17
+across `116-09`..`116-12` and is **still exactly 17 — ZERO new from `116-13`, `116-14` or this
+plan.** This is a tracked, pre-existing, owner-assigned item (see the register), not a new gate:
+per `D-116-LINT`, `make lint` / `make quality-gate` is the authoritative clippy evidence, because
+the two commands diverge in OPPOSITE directions and neither dominates. Recorded here so the delta
+is visible, and deliberately NOT admitted to Class B, which has exactly one member.
+
+### A4 — `pmat quality-gate --fail-on-violation --checks complexity`
+
+```bash
+set -o pipefail && pmat quality-gate --fail-on-violation --checks complexity
+```
+
+**exit 0** — `Quality Gate: PASSED`, `Total violations: 0`. Log:
+`target/116-verify/116-15-pmat-complexity.log`. (One advisory line, `AST analysis failed for
+./deploy/cloudflare/src/lib.rs, using heuristic fallback`, is pre-existing and outside `src/`.)
+
+**No `#[allow(clippy::cognitive_complexity)]` was added anywhere in this phase — the expected
+answer.** Measured in both directions rather than assumed:
+
+```
+$ grep -rn 'allow(clippy::cognitive_complexity)' src/ cargo-pmcp/src/ tests/ | wc -l
+0        # at HEAD
+$ git grep -c 'allow(clippy::cognitive_complexity)' b2bf9157 -- src/ cargo-pmcp/src/ tests/ | wc -l
+0        # at the phase base
+```
+
+Zero at the base and zero at HEAD, so the phase neither added one nor inherited one. This matches
+`116-BASELINES.md` § PMAT Quality-Proxy Write Workflow clause (c): "No plan in Phase 116 is expected
+to need one — the phase's new functions are small pure validators."
+
+### A5 — `cargo semver-checks check-release -p pmcp --baseline-rev b2bf9157`
+
+**exit 0** — `Checking pmcp v2.17.0 -> v2.18.0 (minor change)`, `Checked 196 checks: 196 pass,
+57 skip`, `Summary no semver update required`. Log: `target/116-verify/116-15-semver.log`.
+
+The baseline is NAMED in the command, as every semver claim in this phase must be: the flag is
+`--baseline-rev b2bf9157`, the phase base. The phase-base baseline was `223 pass / 0 fail` at
+`116-01`; the check population changed to 196/57 once `116-13` landed the 2.17.0 → 2.18.0 minor
+bump, which is why the two numbers differ. Zero failures in both.
+
+**Stated separately, because it is NOT this phase's:** run against the PUBLISHED crates.io 2.17.0
+instead of the phase base, `cargo semver-checks` reports a pre-existing `#[deprecated]` failure on
+`OptimizedSseTransport` (`116-BASELINES.md` item 1 / RESEARCH Pitfall 9). It predates this phase and
+is not this phase's to clear. A plan that quietly drops `--baseline-rev b2bf9157` is answering a
+different question.
+
+### B1 / B2 — `make doc-check` (the ONE Class-B gate)
+
+```bash
+CARGO_BUILD_JOBS=4 /usr/bin/make doc-check      # Makefile:426-430
+```
+
+**exit 2** (make's code; rustdoc exits 101). `grep -cE '^error'` → **28**. Log:
+`target/116-verify/116-15-doc-check.log`.
+
+Per-file distribution at HEAD, set beside the anchor's table so the delta is visible per file:
+
+| File | anchor (`b2bf9157`) | **HEAD** | delta | touched by this phase? |
+|---|---|---|---|---|
+| `src/types/mrtr.rs` | 4 | **4** | 0 | no |
+| `src/types/protocol/context.rs` | 4 | **4** | 0 | no |
+| `src/types/subscriptions.rs` | 3 | **3** | 0 | no |
+| `src/shared/sse_parser.rs` | 2 | **2** | 0 | no |
+| `src/shared/streamable_http.rs` | 2 | **2** | 0 | no |
+| `src/types/caching.rs` | 2 | **2** | 0 | no |
+| `src/types/protocol/mod.rs` | 2 | **2** | 0 | no |
+| `src/client/mod.rs` | 1 | **1** | 0 | no |
+| `src/shared/protocol_helpers.rs` | 1 | **1** | 0 | no |
+| `src/shared/http.rs` | 1 | **1** | 0 | no |
+| `src/error/mod.rs` | 1 | **1** | 0 | **YES** — see B2 |
+| **attributed subtotal** | 23 | **23** | 0 | |
+| *unattributed* (no `-->` span) | 4 | **4** | 0 | no |
+| *terminal aggregate* (`could not document pmcp`) | 1 | **1** | 0 | |
+| **TOTAL** | **28** | **28** | **0** | |
+
+**B1 — PASS.** 28 <= 28. The count is not merely under the anchor, it is EQUAL to it, file for file.
+
+**B2 — evaluated in both readings, because the literal wording cannot pass at any HEAD.**
+
+The literal condition is "ZERO `^error` lines occur in any file this phase created or modified".
+The twelve files this phase changed under `src/` are, from
+`git diff --name-only b2bf9157..HEAD -- src/`:
+
+```
+src/client/auth.rs   src/client/oauth.rs   src/error/mod.rs   src/lib.rs
+src/server/auth/provider.rs   src/server/auth/providers/cognito.rs
+src/server/auth/providers/generic_oidc.rs   src/shared/credential_file.rs
+src/shared/credential_store.rs   src/shared/http_body_cap.rs
+src/shared/mod.rs   src/shared/oauth_validation.rs
+```
+
+Eleven of the twelve appear **zero** times in the doc-check log. The twelfth, `src/error/mod.rs`,
+appears **once** — so:
+
+- **B2 read literally: FAIL** (one error in a file the phase modified).
+- **B2 read as "zero errors ATTRIBUTABLE to this phase": PASS**, and that is the reading
+  `116-BASELINES.md` — the very document B2 points at — pre-authorises for this exact file:
+  *"Note `src/error/mod.rs` already carries 1 (`Error` is both an enum and a derive macro) and
+  `116-02` edits that file — its acceptance criterion is `<= 28` overall, and it must not add a
+  second."*
+
+The non-attribution is PROVEN, not asserted. The error at HEAD is:
+
+```
+error: `Error` is both an enum and a derive macro
+   --> src/error/mod.rs:613:37
+613 |     /// `data.pmcpError`, because [`Error`] is not `#[non_exhaustive]` and a new
+    |                                     ^^^^^ ambiguous link
+```
+
+and that source line exists **verbatim at the phase base**, at `b2bf9157:src/error/mod.rs:573`.
+This phase's three hunks in that file are at old lines 130, 628 and 837
+(`git diff b2bf9157..HEAD -- src/error/mod.rs | grep '^@@'`); none touches line 573. The line
+number moved 573 → 613 solely because `116-02` inserted 40 lines above it. **One error, byte
+identical, in a region this phase never edited.** `src/error/mod.rs` carried exactly 1 at the base
+and carries exactly 1 now; `116-02` did not add a second, which was its stated obligation.
+
+The same check was run against the two files that could plausibly have introduced a NEW error under
+an unchanged count — `src/shared/http.rs` (1 at base, 1 at HEAD) and `src/shared/streamable_http.rs`
+(2 and 2). Neither is in this phase's changed-file list at all, and both symbols their errors name
+(`DEFAULT_HTTP_COLLECTED_BODY_BYTES`, `with_max_collected_body_bytes`) exist at `b2bf9157`. So no
+identity swapped under a stable count.
+
+**Verdict recorded, without choosing the convenient reading silently:** B1 PASS; B2 PASS on
+attribution, FAIL on the plan's literal wording, with the wording defect logged below as a sixth
+`D-116-GREP` instance. The gate is treated as Class B ACCEPTED BASELINE DELTA, on the criterion
+`116-BASELINES.md` states, and NOT escalated to Class A red — because the escalation rule exists to
+catch a gate that turned red for a NEW reason, and nothing here is new: zero errors changed, in
+either count or identity, anywhere in the tree.
+
+**The sentence this record is required to state: this phase NEITHER CAUSED NOR CLEARED the
+pre-existing 28.** They are recorded as `D-113-W` / `D-114-V`, owner UNASSIGNED, and no new
+identifier is minted for them here.
+
+**Why B2 is a REQUIRED half of the condition and not a nicety:** `make doc-check` is the ONLY gate
+whose feature list includes `oauth` (`Makefile:428-429`), so it is the only place this phase's new
+rustdoc is compiled at all. `src/shared/oauth_validation.rs`, `src/shared/credential_store.rs`,
+`src/shared/credential_file.rs`, `src/client/oauth.rs` and `src/shared/http_body_cap.rs` — every
+doc comment and every intra-doc link this phase wrote — are checked here and nowhere else. Their
+zero is the meaningful result in this section, and it is also the closure of `D-116-DOC`, which
+`116-02` opened after its new module briefly took the count 28 → 32.
+
+### A6 — `make wasm-build`
+
+```bash
+rustup target add wasm32-unknown-unknown && CARGO_BUILD_JOBS=4 /usr/bin/make wasm-build
+```
+
+`rustup target add` → **exit 0** ("component rust-std for target wasm32-unknown-unknown is up to
+date"). `make wasm-build` → **exit 0**, `pmcp (lib) generated 92 warnings`, **0 errors**.
+
+**92 is EXACTLY the anchor** (`116-BASELINES.md` item 5: 92 pre-existing `never used` / `never read`
+dead-code warnings under `--no-default-features --features wasm`). So the two UNGATED modules this
+phase added under `src/shared/` — `oauth_validation.rs` and `credential_store.rs`, both confirmed
+un-`cfg`-gated at `src/shared/mod.rs:32` and `:62` — cost the wasm build **zero** new warnings and
+zero errors. `D-06` holds.
+
+**The CI job `116-05` added is present in `gate`'s `needs:` array**, verified in the workflow rather
+than assumed: `.github/workflows/ci.yml:404` defines `wasm32-purity` ("wasm32 build fence (ungated
+OAuth tier, Phase 116 D-06)"), and `:443` reads
+`needs: [test, quality-gate, purity-check, pmcp-agent-targets, wasm32-purity]`, with `:452` and
+`:458` propagating `WASM32_RESULT` into the failure condition. It is therefore PR-blocking through
+the org-required `gate` status check.
+
+### A7 — `make check-todos`
+
+```bash
+/usr/bin/make check-todos            # Makefile:771-774
+```
+
+**exit 0** — "✓ No technical debt comments". The target's body is
+`! grep -r "TODO\|FIXME\|HACK\|XXX" src/ --include="*.rs"`, i.e. it is scoped to `src/` only.
+
+**The plan's wider criterion — `grep -rn 'TODO\|FIXME\|HACK\|XXX' src/ cargo-pmcp/src/` must return
+nothing — CANNOT pass at any HEAD, and is a sixth `D-116-GREP` instance.** Measured:
+
+| Scope | HEAD | phase base `b2bf9157` | attributable to this phase |
+|---|---|---|---|
+| `src/` | **0** | 0 | 0 |
+| `cargo-pmcp/src/` | **9** | **9** | **0** |
+
+The nine are 7 in `cargo-pmcp/src/commands/validate.rs` (lines 451, 459, 468, 476, 483, 491, 510 —
+all inside the TEMPLATE TEXT that `cargo pmcp validate` emits into a generated test file, i.e. they
+are string contents intended to reach the user's scaffold, not debt in this repo) and 2 in
+`cargo-pmcp/src/deployment/targets/cloudflare/init.rs` (616, 667). `git grep` at `b2bf9157` returns
+the identical nine, line for line. **Zero new; the real gate passes; the plan's criterion was
+un-satisfiable as written.** Carried in the register with an owner.
+
+### A8 — examples
+
+`make test-examples` ran inside A1 and reported "All examples processed successfully"
+(`116-15-quality-gate.log:8893`), a second time under `validate-always`.
+
+The two direct invocations, which are the ALWAYS-EXAMPLE evidence for this phase (`D-116-EX`, owned
+and discharged by `116-08`):
+
+```bash
+cargo run --quiet --example c11_oauth_iss_state_validation                          # exit 0
+cargo run --quiet --example c11_oauth_iss_state_validation --features full,oauth    # exit 0
+```
+
+Both **exit 0**, and their **stdout is byte-identical** (53 lines; `diff -q` reports no difference
+once stderr — which legitimately differs, being build warnings for two different feature sets — is
+separated with `2>/dev/null`). That equality is the point of the example: the `iss`/`state`
+decision table is ungated, so it produces the same answers with and without the `oauth` feature.
+Matches `116-08`'s recorded result exactly.
+
+### A9 — the two fuzz campaigns, RE-RUN at HEAD rather than carried
+
+The plan permits carrying `116-08`'s campaign result. A nightly toolchain is installed here, so both
+campaigns were re-run at HEAD instead — a measurement beats a citation:
+
+```bash
+cd fuzz && CARGO_BUILD_JOBS=4 \
+  cargo +nightly fuzz run <target> -- -runs=200000 -max_total_time=180
+```
+
+| Target | exit | runs | `fuzz/artifacts/<target>/` | seed corpus |
+|---|---|---|---|---|
+| `oauth_authorization_response` | **0** | **Done 200000 runs** in 15 s | **0 files** | 3662 |
+| `oauth_credential_and_dcr` | **0** | **Done 200000 runs** in 14 s | **0 files** | 5936 |
+
+Both artifacts directories exist and are EMPTY (`find -type f | wc -l` = 0), which is the shape of
+the claim — an absent directory would prove nothing. Logs:
+`target/116-verify/116-15-fuzz-*.log`. `git status --short fuzz/` is empty afterwards.
+
+**`fuzz/` is in the workspace `exclude` array (`D-115-AB`), so `make quality-gate` covers nothing
+under it** — the campaign result is separate evidence, which is exactly why it is recorded here as
+its own gate. Compounding that, `make test-fuzz` (`Makefile:242-251`) is `D-116-FUZZGATE`: it runs
+`cargo fuzz` without `+nightly` on a stable default toolchain and swallows the failure with
+`|| echo "... completed"`, so the `validate-always` stage inside A1 reports success having executed
+**zero** iterations. A1's fuzz stage proves nothing; the two runs in this table are the evidence.
+
+### A10 — the refined dependency fence
+
+`116-13` broke RESEARCH's original fence deliberately (it bumped the version), so the fence is the
+refined form: *no dependency line added, removed or changed — only the version line*.
+
+```bash
+$ git diff b2bf9157 -- Cargo.toml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)'
+-version = "2.17.0"
++version = "2.18.0"
+
+$ grep -rnE '^oauth2\s*=|^openidconnect\s*=' Cargo.toml
+(exit 1 — no hits)
+
+$ grep -rn 'oauth2::' cargo-pmcp/src/commands/
+(exit 1 — no hits)
+
+$ set -o pipefail && grep -rn "openidconnect" --include="Cargo.toml" .
+(exit 1 — no hits anywhere in the repository)
+```
+
+**Exactly one `+`/`-` pair across the entire root manifest, and it is the version line.** Zero
+packages added, removed or moved. `T-116-SC` holds: this phase installed nothing.
+
+**The `Cargo.lock` half of the assertion resolves to the NOT-TRACKED branch**, as
+`116-BASELINES.md` item 6 instructs and `116-13` recorded:
+
+```
+$ git ls-files --error-unmatch Cargo.lock
+error: pathspec 'Cargo.lock' did not match any file(s) known to git
+$ grep -n 'Cargo.lock' .gitignore
+3:Cargo.lock
+```
+
+A lockfile diff assertion is therefore vacuous in this repository and is recorded as inapplicable
+rather than silently skipped. Codex's MEDIUM finding ("Version changes omit `Cargo.lock`") is right
+in general and wrong for this repo; the same untracked lockfile is the mechanism behind the recorded
+CI purity-gate drift, and it is carried in the register.
+
+The single external `oauth2` crate in the repository is **pre-existing** at
+`cargo-pmcp/Cargo.toml:88` (`oauth2 = "5.0"`), confined to
+`cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs`, and untouched by this phase. The six
+`oauth2::` paths under `src/` all resolve to the INTERNAL module `crate::server::auth::oauth2`.
+
+### A11 — `make comply` plus the binding resolution
+
+```bash
+/usr/bin/make comply                 # Makefile:841-849
+```
+
+**exit 0** — `pmat comply check --path .` advisories are informational per CLAUDE.md D-07, then
+`comply-bindings-check` resolves every `contracts/team-servers/binding.yaml` function against source
+and prints "✓ every team-servers binding resolves to a real function". Log:
+`target/116-verify/116-15-comply.log`. The Phase-116 half of A11 — resolving the eight bindings
+`116-01` authored — is § Contract-First Closure below.
+
+### Classification summary
+
+| Gate | Class | exit | Verdict |
+|---|---|---|---|
+| A1 `make quality-gate` | A | 0 | **GREEN** — closes RESEARCH A2 |
+| A2 `nextest --features full,oauth` | A | 0 | **GREEN** — 3104/3104; 15 binaries, all non-zero |
+| A3 clippy `full,oauth` | A | 0 | **GREEN after a Rule-1 fix** (was 101 on a real `clippy::all` error) |
+| A4 `pmat --checks complexity` | A | 0 | **GREEN** — 0 violations, 0 allow attributes |
+| A5 `semver-checks --baseline-rev b2bf9157` | A | 0 | **GREEN** — 196/196 |
+| A6 `make wasm-build` | A | 0 | **GREEN** — 92 warnings = anchor, 0 errors |
+| A7 `make check-todos` | A | 0 | **GREEN** — `src/` clean; wide grep 9 = 9 pre-existing |
+| A8 examples | A | 0 | **GREEN** — both invocations, stdout identical |
+| A9 fuzz campaigns | A | 0 | **GREEN** — 2 × 200 000 runs, artifacts empty |
+| A10 dependency fence | A | 0 | **GREEN** — one version line, nothing installed |
+| A11 `make comply` + bindings | A | 0 | **GREEN** — see Contract-First Closure |
+| **B `make doc-check`** | **B** | 2 | **ACCEPTED BASELINE DELTA** — B1 PASS (28 = 28), B2 PASS on attribution (0 new, proven), FAIL on literal wording |
+
+Every claim `116-15` Task 3 makes has a command, an exit code, a parsed number and a stated
+acceptance class behind it.
+
 ---
 
 ## D-116-EX — No plan in Phase 116 owns CLAUDE.md's ALWAYS-**EXAMPLE** requirement
