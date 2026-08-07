@@ -2247,3 +2247,58 @@ finding can have.
 
 Owner: `116-15`, unchanged — clear the 17, then add `--features "full,oauth"` to `make lint` AND
 to the gate's test stage, as a PAIR.
+
+---
+
+## POST-VERIFICATION AMENDMENTS — two findings from the `/simplify` review at `aca9d6fc`
+
+Both arrived AFTER `116-VERIFICATION.md` passed the phase. Recorded here rather than edited
+silently into the plan summaries, so the record shows what changed and when.
+
+### AMD-116-01 — the auth scope was ENUMERATED, and it hid two unbounded JWKS reads. CLOSED.
+
+`116-14` widened the bounded-read tripwire by naming `providers/generic_oidc.rs` and
+`providers/cognito.rs` individually — reproducing by hand the omission the file's other owner had
+already learned not to risk. Its own doc states the rule it did not follow: *"a NEW file cannot
+escape the scan by nobody remembering to add it here. Losing coverage by omission is exactly how
+this requirement reopened three times."*
+
+It cost coverage immediately. `src/server/auth/jwt.rs` and `src/server/auth/jwt_validator.rs` each
+hold a `reqwest::Client` and parse a JWKS body an identity provider controls — the SAME trust model
+`116-14` used to justify pulling the two providers in — and neither was ever scanned. Both
+unbounded reads survived the whole of D-113-V unreported.
+
+Closed by `2632d59e`: `src/server/auth/` is now WALKED like `src/shared/`, and both reads go
+through `collect_reqwest_body_within_cap` under `DEFAULT_AUTH_RESPONSE_BYTES`. Proven RED by the
+tripwire itself (`jwt.rs:188`, `jwt_validator.rs:377`) before the fix and green after — not accepted
+on assertion. Deriving the scope added **zero** `ALLOWLIST` entries, so the deep fix was cheaper
+than the enumeration it replaced.
+
+**This STRENGTHENS AUTH-03 as `116-15` booked it**: the bounded-reads claim now covers the whole
+server auth surface rather than four hand-picked files. `116-VERIFICATION.md` was written against
+the narrower scope and remains accurate for what it verified; this entry is the delta.
+
+### DEF-116-04 — five scaffold templates emit an unguarded `pmcp` pin; three cannot resolve to 2.x
+
+`116-13` bumped `PMCP_VERSION` in `cargo-pmcp/src/templates/workbook_server.rs` because a drift test
+caught it. That test protects ONE template out of six:
+
+| Template | Emitted pin | Guard |
+|---|---|---|
+| `workbook_server.rs:53` | `2.18.0` | yes |
+| `agent.rs:43` | (pmcp-agent) | yes |
+| `sql_server.rs:57` | `2.8.1` | **none** |
+| `openapi_server.rs:73` | `2.8.1` | **none** |
+| `mcp_app.rs:342`, `:885` | **`1.10`** | **none** |
+| `oauth/proxy.rs:468` | **`0.3`** | **none** |
+| `oauth/authorizer.rs:216` | **`0.3`** | **none** |
+
+`^1.10` and `^0.3` cannot resolve to a 2.x `pmcp` at all, so those scaffolds do not build today.
+The structural fix is to stop hardcoding the fact: export `pub const VERSION: &str =
+env!("CARGO_PKG_VERSION")` from `pmcp` and have the templates read `pmcp::VERSION`, making drift
+impossible rather than merely detectable. `cargo-pmcp` already depends on `pmcp`, so the value is
+the version it actually compiled against. Note `env!("CARGO_PKG_VERSION")` inside `cargo-pmcp`
+yields cargo-pmcp's own version and is NOT the answer.
+
+Out of scope for Phase 116 (nothing in this phase touches those templates) and NOT a regression —
+`mcp_app.rs` and the two oauth templates were already stale before it. Owner: **UNASSIGNED**.
