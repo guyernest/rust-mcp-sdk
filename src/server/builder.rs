@@ -22,6 +22,12 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
 use std::sync::Arc;
+// Scrubs the by-value `[u8; 32]` / `Vec<[u8; 32]>` setter parameters after their
+// contents move into the zeroizing fields (D-113-P, copy 2 of 3). `zeroize` is
+// only compiled in under `streamable-http`, so the import carries the same gate
+// as the fields it serves.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+use zeroize::Zeroize;
 
 /// Builder for constructing a `ServerCore` instance.
 ///
@@ -87,6 +93,35 @@ pub struct ServerCoreBuilder {
     suppress_double_wrap: HashSet<String>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02).
+    ///
+    /// Defaults to the v1-only legacy set (EXCLUDES `2026-07-28`) so an
+    /// un-opted-in server behaves exactly as today. Overridden via
+    /// [`Self::with_supported_protocol_versions`]; an explicitly-empty accept-list
+    /// falls back to this v1-only default (never an all-reject server).
+    supported_protocol_versions: Vec<crate::types::ProtocolVersion>,
+    /// Explicit `requestState` minting key (Phase 113, HTTP-02), set via
+    /// [`Self::with_request_state_key`]. Overrides `PMCP_REQUEST_STATE_KEY`.
+    ///
+    /// Copy 1 of 3 (D-113-P): held as a
+    /// [`SecretKey`](crate::server::request_state::SecretKey), never as bare
+    /// `[u8; 32]`, so the destructor rides on the value and scrubs on drop —
+    /// including on every early-`?` path out of [`Self::build`]. Reverting this
+    /// to bare bytes is caught at COMPILE time by
+    /// `request_state_key_field_is_the_zeroizing_type`.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_key: Option<crate::server::request_state::SecretKey>,
+    /// Rotated-out `requestState` keys accepted for VERIFICATION only, set via
+    /// [`Self::with_request_state_previous_keys`].
+    ///
+    /// Copy 1 of 3 (D-113-P), the rotated-out half: each element scrubs itself
+    /// when the `Vec` drops.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_previous_keys: Vec<crate::server::request_state::SecretKey>,
+    /// Explicit continuation lifetime, set via [`Self::with_request_state_ttl`].
+    /// Beats both the 300-second default and `PMCP_REQUEST_STATE_TTL_SECS` (D-05).
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    request_state_ttl: Option<std::time::Duration>,
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
@@ -134,6 +169,13 @@ impl ServerCoreBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: HashSet::new(),
             stateless_mode: None, // Auto-detect by default
+            supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_key: None,
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_previous_keys: Vec::new(),
+            #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+            request_state_ttl: None,
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
             website_url: None,
@@ -729,6 +771,123 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Opt into a protocol-version accept-list (Phase 112, VERS-01/02; D-02/D-04).
+    ///
+    /// This is the v2 opt-in. With no call, the server is **v1-only** and behaves
+    /// exactly as today (the default set EXCLUDES `2026-07-28`). Pass a list
+    /// including [`PROTOCOL_VERSION_2026_07_28`](crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    /// to serve v2 (dual, or v2-only). One API expresses v1-only, dual, and
+    /// v2-only — directly supporting the Phase 117 severability story.
+    ///
+    /// # Empty accept-list
+    ///
+    /// An EMPTY iterator falls back to the v1-only legacy default rather than
+    /// producing an all-reject server (documented safe fallback). De-duplication
+    /// is left to the resolver.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
+    /// use pmcp::types::ProtocolVersion;
+    ///
+    /// // Dual v1 + v2 server.
+    /// let builder = ServerCoreBuilder::new().with_supported_protocol_versions([
+    ///     ProtocolVersion("2025-11-25".to_string()),
+    ///     ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn with_supported_protocol_versions(
+        mut self,
+        versions: impl IntoIterator<Item = crate::types::ProtocolVersion>,
+    ) -> Self {
+        // An explicitly-empty accept-list falls back to the v1-only legacy
+        // default — never an all-reject server (D-02/D-04). De-duplication is
+        // left to the resolver.
+        self.supported_protocol_versions =
+            crate::types::protocol::context::normalize_accept_list(versions);
+        self
+    }
+
+    /// Configure the shared `requestState` minting key (Phase 113, HTTP-02, D-03).
+    ///
+    /// The [`ServerCoreBuilder`] twin of
+    /// [`ServerBuilder::with_request_state_key`](crate::ServerBuilder::with_request_state_key).
+    /// With no call, the key is resolved from `PMCP_REQUEST_STATE_KEY`; when that
+    /// variable is unset the core generates a per-process key and WARNs at build
+    /// time (D-04). Calling this overrides the environment entirely.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    ///
+    /// The parameter type is deliberately still `[u8; 32]`: the SDK owns the
+    /// copy it takes, not the caller's (D-113-P, T-113-121).
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_key(mut self, mut key: [u8; 32]) -> Self {
+        // Closes copy 1 of 3 (D-113-P): the FIELD now scrubs on drop.
+        self.request_state_key = Some(crate::server::request_state::SecretKey::new(key));
+        // Closes copy 2 of 3 (D-113-P): this by-value parameter's OWN stack
+        // slot. `[u8; 32]` is `Copy`, so the line above copied out of it and
+        // left the caller's key bytes sitting here.
+        key.zeroize();
+        self
+    }
+
+    /// Accept rotated-out `requestState` keys for VERIFICATION only.
+    ///
+    /// Tokens minted under a listed key still verify, but new tokens are always
+    /// minted under the current key — so a rotation does not strand in-flight
+    /// continuations. With no call, only the current key is accepted.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_previous_keys(mut self, mut keys: Vec<[u8; 32]>) -> Self {
+        // Closes copy 1 of 3 (D-113-P), rotated-out half.
+        self.request_state_previous_keys = keys
+            .iter()
+            .copied()
+            .map(crate::server::request_state::SecretKey::new)
+            .collect();
+        // Closes copy 2 of 3 (D-113-P): the by-value `Vec`'s own heap buffer,
+        // which the copy above read out of and would otherwise return to the
+        // allocator holding every rotated-out key in the clear. `Vec::zeroize`
+        // scrubs the initialized elements AND the spare capacity.
+        keys.zeroize();
+        self
+    }
+
+    /// Configure the `requestState` continuation lifetime (D-05).
+    ///
+    /// With no call, the lifetime is `PMCP_REQUEST_STATE_TTL_SECS` if parseable,
+    /// else 300 seconds. A builder value beats both.
+    ///
+    /// Has no effect on a core that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn with_request_state_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.request_state_ttl = Some(ttl);
+        self
+    }
+
+    /// Populate a reverse-DNS-keyed entry in the server's `extensions` capability
+    /// map (Phase 112, VERS-08).
+    ///
+    /// Convenience over mutating [`ServerCapabilities::extensions`](crate::types::ServerCapabilities)
+    /// directly. Use a namespaced reverse-DNS id (e.g.
+    /// `io.modelcontextprotocol/foo`). Does NOT change the `ServerCapabilities`
+    /// type.
+    #[must_use]
+    pub fn with_extension(mut self, id: impl Into<String>, value: serde_json::Value) -> Self {
+        self.capabilities
+            .extensions
+            .get_or_insert_with(HashMap::new)
+            .insert(id.into(), value);
+        self
+    }
+
     /// Enable experimental MCP Tasks support with a task router (LEGACY).
     ///
     /// **Legacy / experimental.** This is the older `pmcp-tasks`
@@ -738,13 +897,19 @@ impl ServerCoreBuilder {
     /// [`TaskStore`](crate::server::task_store::TaskStore) via
     /// [`Self::task_store`] instead (see `examples/s45_tool_as_task_lifecycle.rs`).
     ///
-    /// The task router handles task lifecycle operations (`tasks/get`, `tasks/result`,
-    /// `tasks/list`, `tasks/cancel`) and task-augmented `tools/call` requests.
+    /// The task router handles task lifecycle operations and task-augmented
+    /// `tools/call` requests. The served method set is ERA-DEPENDENT (Phase
+    /// 114): v1 (2025-11-25) is `tasks/get`, `tasks/result`, `tasks/list`,
+    /// `tasks/cancel`; v2 (2026-07-28) is `tasks/get`, `tasks/update`,
+    /// `tasks/cancel`, with the other two retired to `-32601`.
     ///
     /// This method:
     /// - Stores the task router for use during request handling
     /// - Auto-configures `experimental.tasks` in server capabilities so clients
-    ///   know the server supports the tasks protocol extension
+    ///   know the server supports the tasks protocol extension. **v1-only:**
+    ///   `project_capabilities_for_v2` strips `experimental` on the 2026-07-28
+    ///   path, where tasks are declared through the `extensions` map key
+    ///   `io.modelcontextprotocol/tasks` instead (plan 114-05)
     ///
     /// The `router` parameter is typically created by the `pmcp-tasks` crate,
     /// which wraps a `TaskStore` with routing logic.
@@ -792,9 +957,14 @@ impl ServerCoreBuilder {
     ///   support) in `initialize` — the mere presence of a store flips the
     ///   capability on, unless an explicit `tasks` capability was already
     ///   configured (additive-only; an explicit value is preserved verbatim).
-    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
-    ///   requests via the store
-    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    /// - Handles the `tasks/*` surface via the store. The method set is
+    ///   ERA-DEPENDENT (Phase 114): v1 (2025-11-25) serves `tasks/get`,
+    ///   `tasks/result`, `tasks/list` and `tasks/cancel`; v2 (2026-07-28)
+    ///   serves `tasks/get`, `tasks/update` and `tasks/cancel`, and answers
+    ///   `-32601` for the two retired methods
+    /// - Resolves task owner from auth context. **v1** falls back through OAuth
+    ///   subject → client ID → session ID; **v2** has no session to fall back
+    ///   to and binds fail-closed on an auth-configured server (TASK-05, D-07)
     ///
     /// A tool declaring
     /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)
@@ -1118,6 +1288,26 @@ impl ServerCoreBuilder {
         #[cfg(not(all(feature = "skills", not(target_arch = "wasm32"))))]
         let final_resources = self.resources.take();
 
+        // Resolve the server-owned `requestState` codec EXACTLY ONCE, here at
+        // BUILD time (Phase 113, HTTP-02) — before `supported_protocol_versions`
+        // is moved into the core below. A malformed CONFIGURED key fails the
+        // build; an UNSET key falls back to a per-process key with a genuine
+        // startup WARN. A v1-only core gets `None` and reads no env var.
+        //
+        // Both key arguments go BY REFERENCE, which closes copy 3 of 3
+        // (D-113-P): the by-value form manufactured an unscrubbed stack copy on
+        // every call. Because they are borrowed rather than moved, the two
+        // fields are still owned by `self` here and drop through the zeroizing
+        // destructor — on this path AND on every early `?` above, none of which
+        // moves the key material anywhere.
+        #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+        let request_state_codec = crate::server::request_state::resolve_codec_at_build(
+            &self.supported_protocol_versions,
+            self.request_state_key.as_ref(),
+            &self.request_state_previous_keys,
+            self.request_state_ttl,
+        )?;
+
         let core = ServerCore::new(
             info,
             self.capabilities,
@@ -1144,6 +1334,14 @@ impl ServerCoreBuilder {
         // `Server` uses (no drift between the two dispatchers).
         #[cfg(not(target_arch = "wasm32"))]
         let core = core.with_suppress_double_wrap(self.suppress_double_wrap);
+        // Thread the configured protocol-version accept-list (Phase 112,
+        // VERS-01/02) so ingress era-resolution enforces the exact set the author
+        // opted into. Default (unset) is v1-only — the server behaves as today.
+        let core = core.with_supported_protocol_versions(self.supported_protocol_versions);
+        // Thread the once-resolved `requestState` codec (Phase 113, HTTP-02) into
+        // the running core. `None` for a v1-only core.
+        #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+        let core = core.with_request_state_codec(request_state_codec);
         Ok(core)
     }
 }
@@ -1210,6 +1408,157 @@ mod tests {
             .version("1.0.0")
             .build();
         assert!(result.is_ok());
+    }
+
+    // -- requestState key material (D-113-P) --------------------------------
+
+    /// COMPILE-LEVEL guard on the FIELD TYPES, not on behaviour.
+    ///
+    /// The whole D-113-P fix is invisible at run time: a builder that stores
+    /// bare `[u8; 32]` mints and verifies exactly like one that stores
+    /// [`SecretKey`](crate::server::request_state::SecretKey), so no behavioural
+    /// test can detect a silent revert. The type is the guard — reverting either
+    /// field to bare bytes makes the two `let` bindings below fail to compile.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[test]
+    fn request_state_key_field_is_the_zeroizing_type() {
+        use crate::server::request_state::SecretKey;
+        let builder = ServerCoreBuilder::new()
+            .with_request_state_key([0x11; 32])
+            .with_request_state_previous_keys(vec![[0x22; 32]]);
+
+        let key: &Option<SecretKey> = &builder.request_state_key;
+        let previous: &Vec<SecretKey> = &builder.request_state_previous_keys;
+
+        assert_eq!(key.as_deref(), Some(&[0x11u8; 32]));
+        assert_eq!(previous.len(), 1);
+        assert_eq!(**previous.first().expect("one previous key"), [0x22u8; 32]);
+    }
+
+    /// The real regression risk of the D-113-P type change is the PLUMBING, not
+    /// the scrubbing: a core configured with a key plus a rotated-out key must
+    /// still mint a token under the current key and verify it.
+    #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+    #[test]
+    fn a_core_with_zeroizing_key_fields_still_mints_and_verifies() {
+        use crate::server::request_state::{RequestBinding, Verdict};
+
+        const CURRENT: [u8; 32] = [0x11; 32];
+        const ROTATED: [u8; 32] = [0x22; 32];
+
+        let core = ServerCoreBuilder::new()
+            .name("t")
+            .version("1")
+            .with_supported_protocol_versions([
+                crate::types::ProtocolVersion("2026-07-28".to_string()),
+                crate::types::ProtocolVersion("2025-11-25".to_string()),
+            ])
+            .with_request_state_key(CURRENT)
+            .with_request_state_previous_keys(vec![ROTATED])
+            .build()
+            .expect("core builds");
+
+        let codec = core.request_state_codec().expect("a v2 core has a codec");
+        let params = serde_json::json!({ "name": "t", "arguments": { "a": 1 } });
+        let binding = RequestBinding::from_request("alice", "tools/call", &params)
+            .expect("a two-level fixture is far inside the canonical depth cap");
+        let token = codec
+            .mint(&serde_json::json!({ "step": 1 }), &binding, 0, None)
+            .expect("mint");
+        assert!(
+            matches!(codec.verify(&token, &binding), Verdict::Ok(_)),
+            "the zeroizing field type must not disturb the key plumbing"
+        );
+
+        // The rotated-out key reached the ACCEPTING set through the new
+        // by-reference `resolve_codec_at_build` argument.
+        let accepting = codec.accepting_key_ids();
+        assert!(accepting.contains(&crate::server::request_state::key_id_of(&ROTATED)));
+    }
+
+    #[test]
+    fn test_default_builder_is_v1_only_not_v2_opted_in() {
+        // No .with_supported_protocol_versions() call => v1-only default: the
+        // stored set EXCLUDES 2026-07-28 and is_v2_opted_in() is false (D-04).
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .build()
+            .unwrap();
+        assert!(!server.is_v2_opted_in());
+        assert!(!server
+            .supported_protocol_versions()
+            .iter()
+            .any(|v| v.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28));
+    }
+
+    #[test]
+    fn test_dual_accept_list_flips_is_v2_opted_in() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+        assert!(server.is_v2_opted_in());
+    }
+
+    #[test]
+    fn test_v2_only_accept_list_stores_exactly_2026() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions([ProtocolVersion(
+                PROTOCOL_VERSION_2026_07_28.to_string(),
+            )])
+            .build()
+            .unwrap();
+        assert!(server.is_v2_opted_in());
+        assert_eq!(server.supported_protocol_versions().len(), 1);
+        assert_eq!(
+            server.supported_protocol_versions()[0].as_str(),
+            PROTOCOL_VERSION_2026_07_28
+        );
+    }
+
+    #[test]
+    fn test_empty_accept_list_falls_back_to_v1_only_default() {
+        use crate::types::ProtocolVersion;
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_supported_protocol_versions(std::iter::empty::<ProtocolVersion>())
+            .build()
+            .unwrap();
+        // Empty => v1-only default (safe fallback, never all-reject).
+        assert!(!server.is_v2_opted_in());
+        assert_eq!(server.supported_protocol_versions().len(), 4);
+    }
+
+    #[test]
+    fn test_with_extension_populates_capabilities_extensions() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_extension("io.modelcontextprotocol/foo", serde_json::json!({}))
+            .build()
+            .unwrap();
+        let ext = server
+            .capabilities()
+            .extensions
+            .as_ref()
+            .expect("with_extension populates the extensions map");
+        assert!(ext.contains_key("io.modelcontextprotocol/foo"));
     }
 
     #[test]

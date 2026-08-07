@@ -7,7 +7,8 @@ use crate::server::http_middleware::{
 use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
 use crate::server::Server;
 use crate::shared::http_constants::{
-    APPLICATION_JSON, LAST_EVENT_ID, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
+    APPLICATION_JSON, LAST_EVENT_ID, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID,
+    TEXT_EVENT_STREAM,
 };
 use crate::shared::TransportMessage;
 use crate::types::{ClientRequest, Request};
@@ -278,6 +279,15 @@ pub(crate) struct ServerState {
     sse_streams: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<TransportMessage>>>>,
     /// Session tracking (session ID -> session info)
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+    /// The resumability event store, type-erased from `config.event_store`.
+    ///
+    /// Always derived from the config in production ([`make_server_state`] is the
+    /// only constructor). It lives here rather than being read straight off the
+    /// config so every resumability helper can be written against the
+    /// [`EventStore`] trait — see [`EventStoreHandle`] for why the public config
+    /// field's concrete type must not change. Reach it ONLY through
+    /// [`resumability_store`], never directly.
+    event_store: Option<EventStoreHandle>,
 }
 
 /// Build the base MCP Router without any Tower layers applied.
@@ -303,12 +313,19 @@ pub(crate) fn make_server_state(
         .allowed_origins
         .clone()
         .unwrap_or_else(AllowedOrigins::localhost);
+    // Type-erase the configured store ONCE, here, so the resumability helpers
+    // never touch the concrete `InMemoryEventStore` (see [`EventStoreHandle`]).
+    let event_store: Option<EventStoreHandle> = config
+        .event_store
+        .clone()
+        .map(|store| store as EventStoreHandle);
     ServerState {
         server,
         config: Arc::new(config),
         allowed_origins,
         sse_streams: Arc::new(RwLock::new(HashMap::new())),
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        event_store,
     }
 }
 
@@ -342,6 +359,1186 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
     });
 
     (status, Json(error_body)).into_response()
+}
+
+// ===========================================================================
+// v2 required-header gate (Plan 112-06, VERS-05 / D-05 / D-06 / D-11).
+//
+// The v2 verdict is Plan 04's RESOLVED `ProtocolContext.era`, CONSUMED here —
+// this layer never runs a second independent era resolver (Pitfall 2). The
+// streamable-HTTP inbound handler resolves the context ONCE (for this gate) and
+// threads that SAME value into `Server::handle_request_with_context`, so
+// dispatch is a pass-through, not a re-resolve.
+//
+// The classifier is decomposed into small single-responsibility helpers, each
+// well under cognitive-complexity 25 (PMAT CI gate — WARNING 4), composed by a
+// thin top-level `classify_v2_request`. Every new header-violation error sources
+// its JSON-RPC code from `error_codes::` (VERS-06); no new bare -326xx literal.
+// ===========================================================================
+
+/// Upper bound on a RAW `Mcp-Name`/`Mcp-Method` header, which may carry the
+/// `=?base64?…?=` sentinel expansion of a value bounded by
+/// [`MAX_V2_HEADER_VALUE_LEN`]. Re-exported for the same single-source reason.
+use crate::types::mrtr::MAX_HEADER_SENTINEL_LEN as MAX_V2_HEADER_SENTINEL_LEN;
+/// Upper bound on a header value we will consider (`DoS` guard, T-112-13).
+///
+/// Re-exported from `types::mrtr` rather than redeclared: the ingress bound and the
+/// `Mcp-Name` sentinel decoder's bound MUST be the same number, or a value in the gap
+/// is admitted here and then rejected there as a malformed sentinel.
+use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
+
+// ---------------------------------------------------------------------------
+// Session era gate (Plan 113-04, HTTP-01).
+//
+// `stateless()` is a BUILD-TIME config: it clears `session_id_generator` once,
+// when the server is constructed. A dual-version server is built with
+// `Default::default()`, which keeps a live generator — so every session decision
+// that keys off the CONFIG would mint, demand and echo session ids for v2
+// requests too (RESEARCH Pitfall 1). HTTP-01 requires the opposite: on v2 there
+// is no handshake and no session at all.
+//
+// The fix is one predicate, not a transport fork. Every session decision routes
+// through `sessions_active`, which makes the ERA the decider and leaves the v1
+// path byte-for-byte unchanged.
+// ---------------------------------------------------------------------------
+
+/// The pure session-era rule: are sessions live for THIS request?
+///
+/// | `cfg_has_generator` | `era`            | result | why |
+/// |---------------------|------------------|--------|-----|
+/// | `true`              | `Some(Era::V2)`  | `false`| v2 is handshake-free and session-free (HTTP-01) |
+/// | `true`              | `Some(Era::V1)`  | `true` | v1 session behavior is untouched |
+/// | `true`              | `None`           | `true` | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `false`             | anything         | `false`| an explicitly `stateless()` server stays stateless |
+///
+/// Split out from [`sessions_active`] so the RULE is unit- and property-testable
+/// without constructing a live [`ServerState`].
+const fn sessions_active_for(
+    cfg_has_generator: bool,
+    era: Option<crate::types::protocol::Era>,
+) -> bool {
+    !matches!(era, Some(crate::types::protocol::Era::V2)) && cfg_has_generator
+}
+
+/// Are sessions live for this request? THE single reader of
+/// `config.session_id_generator`'s presence.
+///
+/// `era` is the ALREADY-RESOLVED [`ProtocolContext::era`](crate::types::protocol::ProtocolContext)
+/// being CONSUMED here — this layer never runs a second era resolver (Pitfall 2 /
+/// D-11). The POST entrypoints resolve it once via the v2 header gate and thread
+/// that same value into every session decision below.
+///
+/// `None` means the server is NOT opted into v2, so no era detection ran at all
+/// and the v1 path executes with zero era code (D-04).
+fn sessions_active(state: &ServerState, era: Option<crate::types::protocol::Era>) -> bool {
+    sessions_active_for(state.config.session_id_generator.is_some(), era)
+}
+
+/// The session-id generator to use for THIS request, or `None` when sessions are
+/// not active for it.
+///
+/// The second (and last) permitted reader of `config.session_id_generator`: it
+/// gates the borrow behind [`sessions_active`] so no caller can reach the
+/// generator on a request whose era suppresses sessions.
+fn active_session_generator(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+) -> Option<&(dyn Fn() -> String + Send + Sync)> {
+    if !sessions_active(state, era) {
+        return None;
+    }
+    state.config.session_id_generator.as_deref()
+}
+
+/// The ONE place a `Mcp-Session-Id` response header is emitted.
+///
+/// `response_session_id` is already `None` for a v2 request (both session
+/// resolvers return `None` when [`sessions_active`] is false), so this is
+/// defense in depth: even a future caller that manufactured a session id could
+/// not leak it onto a v2 response. Non-panicking — an unrepresentable id is
+/// skipped rather than unwrapped (T-112-13 discipline).
+fn apply_session_header(
+    headers: &mut HeaderMap,
+    response_session_id: Option<&String>,
+    sessions_on: bool,
+) {
+    if !sessions_on {
+        return;
+    }
+    let Some(sid) = response_session_id else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(sid) {
+        headers.insert(MCP_SESSION_ID, value);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resumability era gate (Plan 113-08, HTTP-05).
+//
+// The 2026-07-28 transport spec is verbatim: "Resumable SSE streams via
+// `Last-Event-ID` are not supported", and a `Last-Event-ID` header "ignore it".
+// The official conformance suite has already retired its `sse-polling` scenario
+// for this revision.
+//
+// The gate mirrors [`sessions_active`] exactly: ONE predicate, consuming the
+// ALREADY-RESOLVED era, routing every read / replay / store decision. It is
+// deliberately INDEPENDENT of the session gate. Before this plan a v2 request
+// happened not to reach the event store, but only INCIDENTALLY — the store write
+// is conditioned on a `response_session_id`, which the session gate already
+// zeroes on v2. An incidental guarantee is not a guarantee: the SSE-stream
+// routing bug this plan fixes is exactly what happens when one of those two
+// couplings is broken and the other is assumed to cover it.
+//
+// SEVERABILITY (CONTEXT.md "Claude's Discretion", lighter option taken): the
+// [`EventStore`] trait, [`InMemoryEventStore`], the `LAST_EVENT_ID` constant and
+// the whole v1 replay path are left FULLY INTACT. Deleting them is a Phase-117 /
+// SMPL-01 severability concern, not this phase's; removing them now would
+// maximize v1 blast radius for zero v2 benefit.
+// ---------------------------------------------------------------------------
+
+/// The event-store handle the transport actually uses for resumability.
+///
+/// Type-erased so every resumability helper is written against the [`EventStore`]
+/// TRAIT rather than the concrete [`InMemoryEventStore`] that the public
+/// `StreamableHttpServerConfig::event_store` field pins. That public field's type
+/// is deliberately UNCHANGED — widening it would be a public-field type change,
+/// i.e. a MAJOR semver break, which the milestone rules out (D-113-D discipline).
+/// The indirection is what lets the crate's own tests substitute a spy and prove
+/// zero v2 traffic directly instead of inferring it from a normal-looking 200.
+pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
+
+/// The pure resumability rule: is event replay/retention live for THIS request?
+///
+/// | `cfg_has_event_store` | `era`           | result | why |
+/// |-----------------------|-----------------|--------|-----|
+/// | `true`                | `Some(Era::V2)` | `false`| v2 does not offer resumability at all (HTTP-05) |
+/// | `true`                | `Some(Era::V1)` | `true` | v1 resumability is untouched |
+/// | `true`                | `None`          | `true` | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `false`               | anything        | `false`| no store configured, nothing to read or write |
+///
+/// Split out from [`resumability_active`] so the RULE is unit- and
+/// property-testable without constructing a live [`ServerState`].
+const fn resumability_active_for(
+    cfg_has_event_store: bool,
+    era: Option<crate::types::protocol::Era>,
+) -> bool {
+    // The RULE is shared with `sessions_active_for` — both facilities are
+    // "v1-only, and only when configured". Sharing the pure predicate does NOT
+    // couple the two GATES (the point of keeping them independent): each still
+    // reads its own config field, `event_store` here and `session_id_generator`
+    // there. What it removes is a second copy of the era rule that had to be
+    // edited in lockstep, along with a cloned truth table and a cloned proptest.
+    sessions_active_for(cfg_has_event_store, era)
+}
+
+/// Is resumability live for this request? THE single reader of the event
+/// store's presence.
+///
+/// `era` is the ALREADY-RESOLVED [`ProtocolContext::era`](crate::types::protocol::ProtocolContext)
+/// being CONSUMED here — this layer never runs a second era resolver (Pitfall 2 /
+/// D-11), exactly as [`sessions_active`] does not.
+///
+/// `None` means the server is NOT opted into v2, so no era detection ran at all
+/// and the v1 path executes with zero era code (D-04).
+fn resumability_active(state: &ServerState, era: Option<crate::types::protocol::Era>) -> bool {
+    resumability_active_for(state.event_store.is_some(), era)
+}
+
+/// The event store to use for THIS request, or `None` when its era suppresses
+/// resumability.
+///
+/// The second (and last) permitted reader of `ServerState::event_store`: it gates
+/// the borrow behind [`resumability_active`], so no caller can reach the store —
+/// to REPLAY from it or to WRITE to it — on a v2 request. Storing without
+/// replaying would be dead retention of response envelopes, which is precisely
+/// the material an id-replay bug feeds on (T-113-30).
+fn resumability_store(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+) -> Option<&EventStoreHandle> {
+    if !resumability_active(state, era) {
+        return None;
+    }
+    state.event_store.as_ref()
+}
+
+// ---------------------------------------------------------------------------
+// Direct-response id ownership (Plan 113-08, HTTP-05).
+//
+// # The invariant, scoped precisely
+//
+//   Every DIRECT response to a live request carries THAT request's id, on BOTH
+//   eras. A REPLAYED HISTORICAL EVENT is not a direct response and legitimately
+//   retains its ORIGINAL id.
+//
+// The scoping is load-bearing. Stated as "every response id equals the live
+// request id on both eras" the claim contradicts v1 resumability, whose entire
+// purpose is to re-emit past events unchanged — so a literal implementation
+// would either break v1 replay or make the assertion vacuous. The two behaviors
+// are deliberately separated here so they are never conflated again:
+//
+//   * DIRECT response  -> assembled through `envelope_for_live_request`
+//   * HISTORICAL event -> re-emitted verbatim by `replay_sse_events_from_header`
+//
+// MRTR independently reinforces the direct half: a retry MUST use a different
+// JSON-RPC id, so any id replay becomes immediately visible to the client.
+//
+// # Audit — every site in this transport that assembles, clones, caches or
+// # stores a response, and its verdict
+//
+// | Site | Kind | Verdict |
+// |------|------|---------|
+// | `handle_fast_path_request` | direct | routed through `envelope_for_live_request` with the id captured at ingress |
+// | `dispatch_message_with_middleware` (Public Request arm) | direct | routed through `envelope_for_live_request` |
+// | `assemble_discover_response_fast` | direct | routed through `envelope_for_live_request` |
+// | `assemble_discover_response_with_middleware` | direct | routed through `envelope_for_live_request` |
+// | `build_response` | framing | dispatches an ALREADY-constructed envelope by transport mode; constructs none of its own |
+// | `build_json_response` / `build_sse_response_from_single_message` | framing | serialize/frame one already-constructed envelope; construct none of their own |
+// | `build_success_response_with_middleware` | framing | serializes one already-constructed envelope |
+// | `state.sse_streams` send inside `build_response` | routing | gated on `sessions_on`, so a v2 reply can never be handed to another caller's stream (the T-113-07 fix) |
+// | `store_response_event` | caching | gated on `resumability_active`; on v1 it retains a whole envelope, which is CORRECT — that is the historical-event record replay re-emits |
+// | `sse_event_for_message` | caching | same gate, same verdict |
+// | `replay_sse_events_from_header` | historical | re-emits stored events verbatim, ORIGINAL ids intact — intentional, and asserted by `v1_replayed_event_retains_original_id` |
+// | `create_error_response_with_id` + `v2_gate_reject_response` + `map_unparsed_body_for_v2` | direct (error) | cannot use the constructor: `RequestId` has no `Null` variant and a JSON-RPC error for an unparseable body legitimately carries `id: null`. Their id comes from `raw_request_id(<the LIVE body>)`, never from a cache, so the invariant holds by construction |
+// | `create_error_response` | direct (error) | pre-dispatch transport failure with no live id at all; emits `id: null`, unchanged since before v2 |
+//
+// No site was found reusing an envelope for a direct response. One site WAS
+// found handing a direct response to the WRONG caller — the `sse_streams` route
+// above — and it is fixed in `build_response`.
+// ---------------------------------------------------------------------------
+
+/// **The ONE constructor for a direct JSON-RPC response envelope on this
+/// transport.**
+///
+/// It takes the PAYLOAD (the `result`/`error` value) and the LIVE request id as
+/// SEPARATE arguments, so a caller physically cannot pass a whole cached envelope
+/// through and have its stale id survive. That argument shape is the actual
+/// guarantee; the `debug_assert!` below is only belt and braces.
+///
+/// A source-audit comment plus a `debug_assert!` would catch a regression solely
+/// in debug builds and solely if someone ran the right test (Codex Plan-08
+/// MEDIUM). Making the id a mandatory, separately-supplied parameter makes the
+/// stale-id response unconstructible instead.
+///
+/// This is deliberately NOT applied to a replayed historical event: see the
+/// audit block above.
+fn envelope_for_live_request(
+    payload: crate::types::jsonrpc::ResponsePayload<serde_json::Value, crate::types::JSONRPCError>,
+    live_id: crate::types::RequestId,
+) -> crate::types::JSONRPCResponse {
+    // No `debug_assert_eq!` that the response carries `live_id`: this function
+    // CONSTRUCTS the response from `live_id`, so the assertion could not fail for
+    // any input — the argument shape IS the guarantee. It also cost a `RequestId`
+    // clone (a heap `String` for the UUID ids this transport uses) on every
+    // direct response, because `debug_assert_eq!` compiles to a runtime `false`
+    // branch rather than `#[cfg]` — so the binding survived into release builds.
+    match payload {
+        crate::types::jsonrpc::ResponsePayload::Result(result) => {
+            crate::types::JSONRPCResponse::success(live_id, result)
+        },
+        crate::types::jsonrpc::ResponsePayload::Error(error) => {
+            crate::types::JSONRPCResponse::error(live_id, error)
+        },
+    }
+}
+
+/// The decoded `MCP-Protocol-Version` header, classified for the era matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderProtocolVersion {
+    /// Header not present.
+    Absent,
+    /// Present but non-UTF-8 or oversized — decoded without panicking.
+    Malformed,
+    /// Exactly `2026-07-28` (the v2 era).
+    V2,
+    /// Any other decodable value (v1 or unknown).
+    Other,
+}
+
+/// The classification of an opted-in request over the header/`_meta` matrix.
+enum V2Classification {
+    /// v1 / both signals non-v2 → run the legacy path with zero enforcement.
+    Legacy,
+    /// v2 on BOTH the header and the resolved `_meta` era → enforce headers.
+    Enforce,
+    /// A conflict cell (v2-header/non-v2-`_meta` or vice-versa) → fail closed.
+    Reject(i32, &'static str),
+}
+
+// ---------------------------------------------------------------------------
+// v2 HTTP status mapping (Plan 113-04, HTTP-01).
+//
+// The transport spec turns several JSON-RPC error codes into specific HTTP
+// statuses on the v2 path — most notably "If the server does not implement the
+// requested RPC method, it MUST respond with 404 Not Found and a JSON-RPC error
+// with code -32601", which pmcp answered at HTTP 200 (v1 behavior) before this
+// plan.
+//
+// The mapper below is CODE-driven, never call-site-driven: -32021 is emitted by
+// dispatch (plan 09), not by the header gate, and a code that reaches the wire
+// from anywhere must map identically. It is also era-gated: on v1 / a
+// non-opted-in server every status is exactly what it was before.
+// ---------------------------------------------------------------------------
+
+/// The HTTP status the v2 transport requires for a JSON-RPC error `code`.
+///
+/// Values come from the centralized table (VERS-06); the per-constant rustdoc in
+/// `error_codes.rs` is the single documented source for each mapping. Anything
+/// not listed is handler semantics rather than a transport-layer rejection and
+/// stays at HTTP 200 with the JSON-RPC error in the body.
+fn v2_status_for_code(code: i32) -> StatusCode {
+    use crate::types::protocol::error_codes as ec;
+    match code {
+        ec::METHOD_NOT_FOUND => StatusCode::NOT_FOUND,
+        ec::HEADER_MISMATCH
+        | ec::MISSING_REQUIRED_CLIENT_CAPABILITY
+        | ec::UNSUPPORTED_PROTOCOL_VERSION
+        | ec::PARSE_ERROR
+        | ec::INVALID_REQUEST
+        | ec::INVALID_PARAMS => StatusCode::BAD_REQUEST,
+        _ => StatusCode::OK,
+    }
+}
+
+/// Era-gated status for an error `code`: v2 uses [`v2_status_for_code`], every
+/// other era keeps `v1_status` byte-for-byte.
+fn status_for_error(
+    era: Option<crate::types::protocol::Era>,
+    code: i32,
+    v1_status: StatusCode,
+) -> StatusCode {
+    if matches!(era, Some(crate::types::protocol::Era::V2)) {
+        v2_status_for_code(code)
+    } else {
+        v1_status
+    }
+}
+
+/// The JSON-RPC `id` of a raw request body, or `Null` when it has none.
+///
+/// Used so a v2 error envelope built BEFORE (or INSTEAD OF) a successful typed
+/// parse still carries the ORIGINAL request id — HTTP-05 depends on it and plan
+/// 08 asserts it. Never panics on adversarial input.
+fn raw_request_id(body: &[u8]) -> serde_json::Value {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("id").cloned())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// Build a JSON-RPC error response with an explicit id and optional structured
+/// `data`.
+///
+/// The v2 counterpart of [`create_error_response`], which hardcodes `id: null`.
+/// Kept separate so no v1 response byte changes: only v2 paths call this.
+fn create_error_response_with_id(
+    status: StatusCode,
+    id: serde_json::Value,
+    code: i32,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Response {
+    let mut error = serde_json::Map::new();
+    error.insert("code".to_string(), json!(code));
+    error.insert("message".to_string(), json!(message));
+    if let Some(data) = data {
+        error.insert("data".to_string(), data);
+    }
+    // Built through a `Map` rather than the `json!` macro because the macro
+    // BORROWS its interpolated values, which would leave `id` passed-by-value
+    // but never consumed.
+    let mut body = serde_json::Map::new();
+    body.insert("jsonrpc".to_string(), json!("2.0"));
+    body.insert("error".to_string(), serde_json::Value::Object(error));
+    body.insert("id".to_string(), id);
+    (status, Json(serde_json::Value::Object(body))).into_response()
+}
+
+/// Re-map a pre-dispatch parse rejection onto the v2 status table.
+///
+/// The typed parse is where an UNKNOWN METHOD surfaces: `parse_request_or_internal`
+/// answers `Error::method_not_found` for any method string that matches no
+/// `ClientRequest` / `ServerRequest` variant, which the transport stringifies into
+/// an "Invalid request" parse failure. On v1 that has always been HTTP 400 with
+/// `-32700` and `id: null`, and it stays exactly that.
+///
+/// On v2 the spec is explicit: "If the server does not implement the requested RPC
+/// method, it MUST respond with `404 Not Found` and a JSON-RPC error with code
+/// `-32601`." A body whose method never deserializes therefore cannot be diagnosed
+/// from an already-built TYPED response — this mapping has to happen at the RAW
+/// level, from the body bytes, which is what this function does.
+///
+/// The era is resolved from the RAW `params._meta` (the same read the
+/// `server/discover` ingress uses) because no typed request exists to read it
+/// from. A body that is not a well-formed JSON-RPC request, or a server that is
+/// not opted into v2, or a v1 request, all keep `v1_response` untouched.
+///
+/// KNOWN LIMITATION: a KNOWN method whose params fail to deserialize also reaches
+/// `method_not_found` at this seam and is therefore reported as `-32601`/404 on
+/// v2 rather than `-32602`/400. Distinguishing the two requires a method-string
+/// table this layer does not own; plan 06 (MRTR param parse errors) adds the
+/// precise per-parameter mapping.
+async fn map_unparsed_body_for_v2(
+    state: &ServerState,
+    raw_body: &[u8],
+    v1_response: Response,
+) -> Response {
+    use crate::types::protocol::error_codes::METHOD_NOT_FOUND;
+    let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(raw_body) else {
+        return v1_response;
+    };
+    // Only a well-formed JSON-RPC REQUEST (method + id) can be an unknown-method
+    // rejection; anything else keeps the v1 parse-error response.
+    let Some(method) = envelope.get("method").and_then(serde_json::Value::as_str) else {
+        return v1_response;
+    };
+    if envelope.get("id").is_none() {
+        return v1_response;
+    }
+    // The SAME reader the header gate uses, so an unknown method is classified
+    // against exactly the era its sibling requests would get. Reads the
+    // ALREADY-PARSED `envelope` above rather than re-parsing `raw_body` — this
+    // is an attacker-supplied body, and parsing it twice per request bought
+    // nothing.
+    let raw_meta = params_meta_of(Some(&envelope));
+    let resolved = {
+        let server = state.server.lock().await;
+        server.resolve_raw_meta_protocol_context(raw_meta.as_ref())
+    };
+    let Ok(Some(context)) = resolved else {
+        return v1_response;
+    };
+    if context.era != crate::types::protocol::Era::V2 {
+        return v1_response;
+    }
+    create_error_response_with_id(
+        v2_status_for_code(METHOD_NOT_FOUND),
+        envelope
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        METHOD_NOT_FOUND,
+        &format!("Method not found: {method}"),
+        None,
+    )
+}
+
+/// The v2 status a built JSON-RPC response must carry, or `None` to keep the
+/// status the response already has.
+///
+/// This is the CODE-driven half of the mapper: `MISSING_REQUIRED_CLIENT_CAPABILITY`
+/// (-32021) is emitted by dispatch (plan 09), not by the header gate, so the
+/// mapping cannot be attached at rejection call sites — it has to read the code
+/// that is actually about to reach the wire.
+fn v2_dispatch_response_status(
+    era: Option<crate::types::protocol::Era>,
+    response: &crate::types::JSONRPCResponse,
+) -> Option<StatusCode> {
+    if !matches!(era, Some(crate::types::protocol::Era::V2)) {
+        return None;
+    }
+    let crate::types::jsonrpc::ResponsePayload::Error(ref error) = response.payload else {
+        return None;
+    };
+    Some(v2_status_for_code(error.code))
+}
+
+/// Assemble the response for a [`V2GateOutcome::Reject`].
+///
+/// The status is code-driven via [`status_for_error`] with a `400` v1 floor (the
+/// gate only rejects requests that already carry a v2 signal on one side, and
+/// `400` is what Phase 112 returned for every such cell). The id is recovered
+/// from the RAW body so a rejection that happened before — or instead of — a
+/// successful typed parse still echoes the client's id.
+fn v2_gate_reject_response(
+    raw_body: &[u8],
+    era: Option<crate::types::protocol::Era>,
+    code: i32,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Response {
+    let status = status_for_error(era, code, StatusCode::BAD_REQUEST);
+    create_error_response_with_id(status, raw_request_id(raw_body), code, message, data)
+}
+
+/// Outcome of the whole v2 gate for one request.
+enum V2GateOutcome {
+    /// Not a v2 request (v1 / non-opted-in) — dispatch normally, no v2 headers.
+    Passthrough,
+    /// Accepted v2 request — dispatch, then echo these headers outbound.
+    EnforceOk { method: String, name: String },
+    /// Rejected — build a 4xx structured JSON-RPC error with this code/message
+    /// and, when the code defines one, a structured `error.data` payload.
+    ///
+    /// `data` is not optional decoration: `UNSUPPORTED_PROTOCOL_VERSION`
+    /// (`-32022`) MUST carry a `supported` array so the client can pick a
+    /// mutually supported version instead of probing, and
+    /// `MISSING_REQUIRED_CLIENT_CAPABILITY` (`-32021`, emitted by dispatch in
+    /// plan 09) MUST carry an object-shaped `requiredCapabilities`. A
+    /// `(code, message)` pair alone cannot express either.
+    Reject {
+        code: i32,
+        message: String,
+        data: Option<serde_json::Value>,
+    },
+}
+
+/// Decode the `MCP-Protocol-Version` header without panicking (T-112-13).
+fn decode_version_header(headers: &HeaderMap) -> HeaderProtocolVersion {
+    let Some(raw) = headers.get(MCP_PROTOCOL_VERSION) else {
+        return HeaderProtocolVersion::Absent;
+    };
+    if raw.as_bytes().len() > MAX_V2_HEADER_VALUE_LEN {
+        return HeaderProtocolVersion::Malformed;
+    }
+    match raw.to_str() {
+        Err(_) => HeaderProtocolVersion::Malformed,
+        Ok(s) if s == crate::types::protocol::PROTOCOL_VERSION_2026_07_28 => {
+            HeaderProtocolVersion::V2
+        },
+        Ok(_) => HeaderProtocolVersion::Other,
+    }
+}
+
+/// Read a header as a bounded UTF-8 string, or `None` if absent/malformed.
+///
+/// The bound is [`MAX_V2_HEADER_SENTINEL_LEN`], not `MAX_V2_HEADER_VALUE_LEN`:
+/// `Mcp-Name` legitimately travels in the `=?base64?…?=` sentinel form, which is
+/// a 4/3 expansion of the logical name. Admitting only the smaller bound here
+/// would reject a conformant request whose name is within
+/// `MAX_V2_HEADER_VALUE_LEN` but whose sentinel is not, which
+/// [`crate::types::mrtr::decode_header_value`] would then never get to see. The
+/// amplification bound is still enforced, on the DECODED value, by that decoder.
+fn bounded_header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(name)?;
+    if raw.as_bytes().len() > MAX_V2_HEADER_SENTINEL_LEN {
+        return None;
+    }
+    raw.to_str().ok().map(str::to_string)
+}
+
+/// Classify one cell of the header/`_meta` matrix on an OPTED-IN server.
+///
+/// `meta_is_v2` is Plan 04's resolved `ProtocolContext.era == Era::V2` — the
+/// authoritative per-request verdict this layer CONSUMES (Pitfall 2 / D-11).
+fn classify_era_cell(header: HeaderProtocolVersion, meta_is_v2: bool) -> V2Classification {
+    let header_is_v2 = matches!(header, HeaderProtocolVersion::V2);
+    match (header_is_v2, meta_is_v2) {
+        (true, true) => V2Classification::Enforce,
+        (false, false) => V2Classification::Legacy,
+        // Both conflict cells are a HEADER/BODY DISAGREEMENT, which is exactly
+        // what the spec allocates `HEADER_MISMATCH` (-32020) for. Before Phase
+        // 113 these emitted the generic `INVALID_REQUEST` (-32600) because the
+        // v2 code did not exist yet.
+        (true, false) => V2Classification::Reject(
+            crate::types::protocol::error_codes::HEADER_MISMATCH,
+            "MCP-Protocol-Version header claims v2 but _meta protocolVersion disagrees",
+        ),
+        (false, true) => V2Classification::Reject(
+            crate::types::protocol::error_codes::HEADER_MISMATCH,
+            "_meta claims v2 but MCP-Protocol-Version header is absent or not 2026-07-28",
+        ),
+    }
+}
+
+/// Require all THREE v2 headers (VERS-05 / D-05); return `(method, name)`.
+///
+/// # The `Mcp-Name` header rule (locked cross-plan contract)
+///
+/// > `Mcp-Name` MUST be PRESENT on every v2 request. Its VALUE is cross-checked
+/// > against the request's logical name only for the name-bearing methods
+/// > (`tools/call`, `prompts/get` → `params.name`; `resources/read` →
+/// > `params.uri`). For every other v2 method the value is the EMPTY STRING and
+/// > is not cross-checked.
+///
+/// Verbatim from `113-SPEC-RECHECK.md` § `Mcp-Name Header Rule`, and locked by
+/// Phase-112 D-05. This function enforces the PRESENCE half (an absent header is
+/// a rejection even when the value would be empty); [`cross_check_name`] enforces
+/// the VALUE half and returns `Ok` immediately for a non-name-bearing method.
+///
+/// The draft transport spec requires the header only for the three name-bearing
+/// methods. pmcp deliberately keeps the stricter, fail-closed rule (Phase-113
+/// DRIFT-1 adjudication): a header a WAF can rely on being present on every
+/// request is worth more than matching the laxer wording, and plan 05's client
+/// emits exactly this — `Mcp-Name: ""` for a name-less method.
+fn require_three_headers(
+    headers: &HeaderMap,
+) -> std::result::Result<(String, String), &'static str> {
+    let version_present = headers.get(MCP_PROTOCOL_VERSION).is_some();
+    let method = bounded_header_str(headers, MCP_METHOD);
+    let name = bounded_header_str(headers, MCP_NAME);
+    match (version_present, method, name) {
+        (true, Some(m), Some(n)) => Ok((m, n)),
+        _ => Err("v2 requests must carry Mcp-Method, Mcp-Name and MCP-Protocol-Version headers"),
+    }
+}
+
+/// Cross-check `Mcp-Method` against the JSON-RPC body `method` (D-06).
+fn cross_check_method(
+    mcp_method: &str,
+    body_method: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    match body_method {
+        Some(bm) if bm == mcp_method => Ok(()),
+        _ => Err("Mcp-Method header does not match the JSON-RPC body method"),
+    }
+}
+
+/// Methods whose logical name must be cross-checked against `Mcp-Name` (D-06).
+///
+/// The name-bearing set and the "where the logical name lives" map are ONE table,
+/// [`crate::types::mrtr::logical_name_key`] — shared with the client emitter
+/// (plan 05) so the two ends can never disagree about which methods carry a name
+/// or which params key holds it.
+fn is_name_bearing_method(method: &str) -> bool {
+    crate::types::mrtr::logical_name_key(method).is_some()
+}
+
+/// Cross-check `Mcp-Name` against the request's logical name for name-bearing
+/// methods (D-06). Name-less methods are presence-only (enforced upstream by
+/// [`require_three_headers`]).
+///
+/// # The sentinel decode is load-bearing
+///
+/// A logical name that is not header-safe (non-ASCII, or containing an RFC 9110
+/// field-value delimiter) MUST travel in the `=?base64?<b64>?=` sentinel form. A
+/// verbatim comparison would therefore reject a legitimate conformant request, so
+/// the header value is decoded through the SHARED codec
+/// [`crate::types::mrtr::decode_header_value`] — the same one the client emitter
+/// uses — before it is compared. A value that starts the sentinel but does not
+/// decode is a malformed header, i.e. a `HEADER_MISMATCH` rejection, never a
+/// silent pass.
+fn cross_check_name(
+    mcp_name: &str,
+    method: &str,
+    body_name: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    if !is_name_bearing_method(method) {
+        return Ok(());
+    }
+    let Some(decoded) = crate::types::mrtr::decode_header_value(mcp_name) else {
+        return Err("Mcp-Name header is a malformed =?base64?...?= sentinel value");
+    };
+    match body_name {
+        Some(bn) if bn == decoded => Ok(()),
+        _ => Err("Mcp-Name header does not match the request's logical name"),
+    }
+}
+
+/// The thin top-level classifier over the full matrix (cog-safe composition).
+///
+/// Inputs: decoded header signals + Plan-04 resolved `meta_is_v2` + the untrusted
+/// body `method`/`params.name`. Output: accept (with echo headers) | reject(code)
+/// | passthrough. Pure and non-panicking — property-tested.
+fn classify_v2_request(
+    headers: &HeaderMap,
+    meta_is_v2: bool,
+    body_method: Option<&str>,
+    body_name: Option<&str>,
+) -> V2GateOutcome {
+    use crate::types::protocol::error_codes::HEADER_MISMATCH;
+    // Every rejection this classifier can produce is a missing-required-header
+    // or a header/body mismatch, so they all carry `HEADER_MISMATCH` and no
+    // structured `data`.
+    let reject = |msg: &str| V2GateOutcome::Reject {
+        code: HEADER_MISMATCH,
+        message: msg.to_string(),
+        data: None,
+    };
+    let header = decode_version_header(headers);
+    match classify_era_cell(header, meta_is_v2) {
+        V2Classification::Legacy => V2GateOutcome::Passthrough,
+        V2Classification::Reject(code, msg) => V2GateOutcome::Reject {
+            code,
+            message: msg.to_string(),
+            data: None,
+        },
+        V2Classification::Enforce => {
+            let (method, name) = match require_three_headers(headers) {
+                Ok(pair) => pair,
+                Err(msg) => return reject(msg),
+            };
+            if let Err(msg) = cross_check_method(&method, body_method) {
+                return reject(msg);
+            }
+            if let Err(msg) = cross_check_name(&name, &method, body_name) {
+                return reject(msg);
+            }
+            V2GateOutcome::EnforceOk { method, name }
+        },
+    }
+}
+
+/// Extract the untrusted `(method, logical-name)` pair from the raw JSON-RPC body.
+///
+/// Re-parses the raw bytes (the transport parse already succeeded) so the
+/// cross-check compares the header against the LITERAL wire value a WAF would see
+/// — the smuggling-relevant view (D-06). Never panics.
+///
+/// The logical name is resolved METHOD-AWARELY because different name-bearing
+/// methods carry it in different params keys:
+/// - `tools/call` → `params.name`
+/// - `prompts/get` → `params.name`
+/// - `resources/read` → `params.uri` (a [`ReadResourceRequest`](crate::types::ReadResourceRequest)
+///   has a `uri` field and NO `name` field, so reading `params.name` would always
+///   yield `None` and wrongly reject a standards-shaped `resources/read`)
+/// - any other method → `None` (presence-only; `cross_check_name` returns Ok for
+///   non-name-bearing methods)
+///
+/// Production goes through [`method_and_name_of`] instead: since Phase 113 plan
+/// 06 the gate parses the raw body EXACTLY ONCE and shares that value with the
+/// era read, this cross-check and the MRTR params read. This byte-slice wrapper
+/// survives as the test entry point, so the existing wire-shape assertions keep
+/// exercising the parse-and-read pair end to end.
+#[cfg(test)]
+fn extract_body_method_and_name(body: &[u8]) -> (Option<String>, Option<String>) {
+    method_and_name_of(raw_body_json(body).as_ref())
+}
+
+/// [`extract_body_method_and_name`] over an ALREADY-PARSED body.
+///
+/// The gate parses the raw body exactly once and hands the value to each reader,
+/// so the era read, the header cross-check and the MRTR params read can never
+/// disagree about what the body says.
+fn method_and_name_of(value: Option<&serde_json::Value>) -> (Option<String>, Option<String>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+    // Read through the ONE shared routing-pair reader — the same function the
+    // CLIENT emits its `Mcp-Method` / `Mcp-Name` from. These two are halves of a
+    // single cross-check; deriving them separately is how they drift.
+    // Non-name-bearing methods yield `None` (presence-only cross-check).
+    match crate::types::mrtr::frame_routing_pair(value) {
+        Some((method, name)) => (Some(method.to_string()), name),
+        None => (None, None),
+    }
+}
+
+/// Emit the three required v2 headers outbound WITHOUT panicking (T-112-13).
+///
+/// Sets `Mcp-Method`, `Mcp-Name` and forces `MCP-Protocol-Version` to the v2
+/// value. Called on BOTH the success and structured-error response of an
+/// accepted v2 request. On an unrepresentable value the individual insert is
+/// skipped (caller already produced a valid response) rather than unwrapping.
+fn apply_v2_outbound_headers(headers: &mut HeaderMap, method: &str, name: &str) {
+    if let Ok(v) = HeaderValue::from_str(method) {
+        headers.insert(MCP_METHOD, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(name) {
+        headers.insert(MCP_NAME, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(crate::types::protocol::PROTOCOL_VERSION_2026_07_28) {
+        headers.insert(MCP_PROTOCOL_VERSION, v);
+    }
+}
+
+/// Map a per-request version-negotiation failure to a structured gate rejection.
+///
+/// An UNSUPPORTED version is the spec's `UNSUPPORTED_PROTOCOL_VERSION` (-32022),
+/// and its `error.data` MUST list the versions the server DOES accept so the
+/// client can pick a mutually supported one and retry rather than probe. A
+/// MALFORMED reserved `_meta` key is a bad method parameter, so it keeps the
+/// `INVALID_PARAMS` mapping the shared dispatch resolver uses.
+fn negotiation_error_to_gate_reject(
+    error: &crate::types::protocol::context::ProtocolNegotiationError,
+    accept_list: &[crate::types::ProtocolVersion],
+) -> V2GateOutcome {
+    use crate::types::protocol::context::ProtocolNegotiationError;
+    use crate::types::protocol::error_codes::UNSUPPORTED_PROTOCOL_VERSION;
+    match error {
+        ProtocolNegotiationError::UnsupportedVersion(requested) => {
+            let supported: Vec<&str> = accept_list.iter().map(|v| v.as_str()).collect();
+            V2GateOutcome::Reject {
+                code: UNSUPPORTED_PROTOCOL_VERSION,
+                message: format!("Unsupported protocol version: {requested}"),
+                data: Some(json!({ "requested": requested, "supported": supported })),
+            }
+        },
+        ProtocolNegotiationError::MalformedMeta(_) => {
+            let (code, message) = crate::server::core::negotiation_error_to_rejection(error);
+            V2GateOutcome::Reject {
+                code,
+                message,
+                data: None,
+            }
+        },
+    }
+}
+
+/// The RAW `params._meta` object of a JSON-RPC request body, if it has one.
+///
+/// # Why the era is read from the RAW body and not from a typed field
+///
+/// A stateless v2 request has no `initialize` handshake, so `params._meta` is the
+/// ONLY era channel — every method must be able to carry it. Reading it from a
+/// typed `req._meta` field can only ever cover the three request structs that
+/// HAVE such a field, and adding the field to the rest is a MAJOR semver break
+/// (`cargo semver-checks` `constructible_struct_adds_field` on the `pub`,
+/// all-`pub`-fields, constructible `ListToolsRequest` and friends). Reading the
+/// body needs no public API change and covers every method, including the ones
+/// plan 10 has not written yet (Phase-113 D-113-B / D-113-D resolution).
+///
+/// The SPEC spelling `_meta` wins; `meta` is accepted as a fallback so this reader
+/// mirrors the `#[serde(rename = "_meta", alias = "meta")]` ingress contract the
+/// typed structs carry (D-113-A) and the two can never disagree about what counts
+/// as a `_meta` object. Never panics on adversarial bytes (T-112-13).
+///
+/// Test-only: every production caller now holds an already-parsed body and goes
+/// through [`params_meta_of`] instead, so this byte-slice form survives purely as
+/// the unit tests' entry point (its sibling `extract_body_method_and_name` is
+/// `#[cfg(test)]` for the same reason).
+#[cfg(test)]
+fn raw_params_meta(body: &[u8]) -> Option<serde_json::Value> {
+    params_meta_of(raw_body_json(body).as_ref())
+}
+
+/// Parse the raw JSON-RPC body ONCE. `None` for adversarial / non-JSON bytes.
+fn raw_body_json(body: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_slice::<serde_json::Value>(body).ok()
+}
+
+/// [`raw_params_meta`] over an ALREADY-PARSED body.
+fn params_meta_of(value: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    let params = value?.get("params")?;
+    params
+        .get(crate::types::mrtr::META_KEY)
+        .or_else(|| params.get("meta"))
+        .filter(|meta| !meta.is_null())
+        .cloned()
+}
+
+/// The raw top-level `params` value of an ALREADY-PARSED body, or `Null`.
+///
+/// `Null` is the "no MRTR fields" input for
+/// [`crate::types::mrtr::extract_mrtr_params`], which returns the default
+/// (both fields absent) for any non-object value.
+fn params_of(value: Option<&serde_json::Value>) -> &serde_json::Value {
+    const NO_PARAMS: &serde_json::Value = &serde_json::Value::Null;
+    value.and_then(|v| v.get("params")).unwrap_or(NO_PARAMS)
+}
+
+// ---------------------------------------------------------------------------
+// MRTR request params at v2 ingress (Plan 113-06, HTTP-03 / T-113-44).
+//
+// # Why the TRANSPORT does this extraction
+//
+// `inputResponses` and `requestState` are top-level `params` SIBLINGS of
+// `name`/`arguments`/`uri` — they are NOT `_meta` keys. `GetPromptRequest` and
+// `ReadResourceRequest` are `pub` structs with all-`pub` fields and are NOT
+// `#[non_exhaustive]`, so giving them typed MRTR fields is a MAJOR semver break
+// (`cargo semver-checks` `constructible_struct_adds_field` — the measured
+// D-113-D finding that forced the raw-body route). Reading the fields off the
+// already-parsed raw body needs ZERO public API change and is the SAME route
+// Phase 112 already uses for the raw `params._meta` era signal.
+//
+// The read runs ONLY for an ACCEPTED v2 request: v1 and non-opted-in requests
+// execute zero MRTR code (D-04).
+// ---------------------------------------------------------------------------
+
+/// Attach the raw-body MRTR params to an accepted v2 request **on an
+/// MRTR-eligible method**, or turn a PRESENT-but-unusable field into an
+/// `INVALID_PARAMS` rejection.
+///
+/// A malformed / oversized / wrong-shaped MRTR field must never be silently
+/// treated as ABSENT: doing so lets an attacker skip the `requestState` verdict
+/// table entirely (T-113-44). `extract_mrtr_params` therefore returns a
+/// `Result`, and every `Err` short-circuits into the plan-04 rejection path,
+/// which the code-driven status mapper renders as HTTP 400.
+///
+/// The client-facing message is the `MrtrParseError`'s `Display`, which names
+/// the violated BOUND and never echoes attacker-supplied content; the
+/// discriminated reason is logged server-side only.
+///
+/// # The method gate, and the defect it closes (Phase 114 plan 13)
+///
+/// [`mrtr_ingest`](crate::server::core::mrtr_ingest) already states the rule —
+/// *"T-113-23: the spec confines MRTR to three methods. A `requestState`
+/// presented on any other method is IGNORED — not verified, not errored"* — and
+/// returns `Inert` for every non-eligible method. This EXTRACTION site had no
+/// method awareness at all, so it applied MRTR's parse and MRTR's bounds to the
+/// top-level `params` of **every** accepted v2 request. The two halves of one rule
+/// disagreed.
+///
+/// That was not cosmetic. `tasks/update`'s entire payload IS `inputResponses`, so
+/// the un-gated extraction judged that method's body at the TRANSPORT HEADER GATE
+/// — before the router's era gate, before the `-32021` declaration gate and before
+/// the `-32003` identity table. MEASURED over a real socket: an UNAUTHENTICATED
+/// caller sending `tasks/update` with `"inputResponses": "not-an-object"` received
+/// `-32602 "inputResponses must be an object"` instead of `-32003`, and an
+/// UNDECLARING caller received it instead of `-32021` — i.e. a free parse of the
+/// caller's own choosing on an unauthenticated path (T-114-64) and an inversion of
+/// 114-09's documented gate order (T-114-63). The regression tests are
+/// `malformed_params_from_an_unauthenticated_caller_yield_32003` and
+/// `an_undeclaring_v2_caller_is_refused_before_the_params_parse` in
+/// `tests/v2_tasks_update_routing.rs`.
+///
+/// The gate reads [`mrtr_eligible`](crate::types::mrtr::mrtr_eligible) — the SAME
+/// predicate over the SAME `MRTR_METHODS` table `mrtr_ingest` reads, never a
+/// second list. `method` is the already-resolved, override-aware body method that
+/// [`classify_v2_request`] has just cross-checked against `Mcp-Method`, so this
+/// adds no new read of the wire.
+///
+/// It is strictly NARROWING: for the three eligible methods nothing changes at
+/// all, and no request that is accepted today becomes rejected. What changes is
+/// that a non-eligible method's `inputResponses` / `requestState` are now IGNORED
+/// here exactly as `mrtr_ingest` already ignores them, instead of being able to
+/// reject the request.
+fn attach_v2_mrtr_params(
+    context: Option<crate::types::protocol::ProtocolContext>,
+    outcome: V2GateOutcome,
+    body_json: Option<&serde_json::Value>,
+    method: Option<&str>,
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    // Only an ACCEPTED v2 request carries MRTR fields (D-04: zero era code on
+    // v1 / non-opted-in, and a rejected request never reaches dispatch).
+    if !matches!(outcome, V2GateOutcome::EnforceOk { .. }) {
+        return (context, outcome);
+    }
+    // ...and only on a method MRTR applies to. See the rustdoc above.
+    if !method.is_some_and(crate::types::mrtr::mrtr_eligible) {
+        return (context, outcome);
+    }
+    let Some(ctx) = context else {
+        return (None, outcome);
+    };
+    match crate::types::mrtr::extract_mrtr_params(params_of(body_json)) {
+        Ok(mrtr) => (Some(ctx.with_mrtr_params(mrtr)), outcome),
+        Err(reason) => {
+            tracing::warn!(
+                target: "mcp.http",
+                reason = ?reason,
+                "rejecting a v2 request whose MRTR params are present but unusable"
+            );
+            let message = reason.to_string();
+            (
+                Some(ctx),
+                V2GateOutcome::Reject {
+                    code: crate::types::protocol::error_codes::INVALID_PARAMS,
+                    message,
+                    data: None,
+                },
+            )
+        },
+    }
+}
+
+/// THE v2 header gate for the streamable-HTTP transport — one path, every method.
+///
+/// Resolves the per-request era from the RAW body's `params._meta` (see
+/// [`raw_params_meta`]), then runs the D-04 passthrough short-circuit, the
+/// negotiation-error mapping, and the [`classify_v2_request`] header/`_meta`
+/// matrix. The resolved [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+/// it returns is the SAME value threaded into dispatch, so this layer resolves the
+/// era exactly ONCE and dispatch never re-resolves it (D-11 / Pitfall 2).
+///
+/// `body_method_override` exists for the one ingress whose method is fixed by
+/// classification rather than read from the wire: a `server/discover` request pins
+/// `Some("server/discover")` so the header/body cross-check cannot be fooled by a
+/// body whose `method` field disagrees with how the request was routed. Every
+/// other caller passes `None` and the method comes from the body.
+///
+/// Before Phase 113 plan 04 there were TWO gates here — a typed one reading
+/// `req._meta` for public requests and a raw one reading `params._meta` for
+/// discover — which meant the two ingress paths could (and did) disagree about
+/// which methods carried an era signal at all. There is now one.
+async fn run_v2_header_gate(
+    state: &ServerState,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    body_method_override: Option<&str>,
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    V2GateOutcome,
+) {
+    // D-04, taken literally: a server that never opted into `2026-07-28` runs
+    // ZERO era code. The accept-list check is a 1–2 element scan; the body parse
+    // below is a full `serde_json` walk of an arbitrarily large request, and on a
+    // v1-only server every byte of its output was discarded.
+    {
+        let server = state.server.lock().await;
+        if !crate::types::protocol::context::is_v2_opted_in(server.supported_protocol_versions()) {
+            return (None, V2GateOutcome::Passthrough);
+        }
+    }
+    // ONE parse of the raw body, shared by the era read, the header cross-check
+    // and the MRTR params read — they can never disagree about what it says.
+    // Deliberately OUTSIDE the lock: parsing an attacker-sized body while holding
+    // the server mutex would serialize every other request behind it.
+    let body_json = raw_body_json(raw_body);
+    let raw_meta = params_meta_of(body_json.as_ref());
+    // The rejection is built INSIDE the lock scope so the accept-list is only
+    // borrowed on the rare negotiation-failure branch. Cloning it into a `Vec`
+    // on every request — under the server mutex — bought nothing: the happy path
+    // never reads it.
+    let resolved = {
+        let server = state.server.lock().await;
+        // Non-opted-in servers run ZERO era-detection — the v1 path is
+        // byte-for-byte unchanged (D-04). `resolve_raw_meta_protocol_context`
+        // short-circuits to `Ok(None)` WITHOUT inspecting `_meta` at all.
+        server
+            .resolve_raw_meta_protocol_context(raw_meta.as_ref())
+            .map_err(|err| {
+                negotiation_error_to_gate_reject(&err, server.supported_protocol_versions())
+            })
+    };
+    let context = match resolved {
+        Ok(ctx) => ctx,
+        Err(reject) => return (None, reject),
+    };
+    // `Ok(None)` == not opted in → zero enforcement (D-04).
+    let Some(ref pc) = context else {
+        return (context.clone(), V2GateOutcome::Passthrough);
+    };
+    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
+    let (extracted_method, body_name) = method_and_name_of(body_json.as_ref());
+    let body_method = body_method_override.or(extracted_method.as_deref());
+    let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
+    // MRTR params (HTTP-03): read on the ACCEPTED v2 path only, and only for an
+    // MRTR-ELIGIBLE method; a present but unusable field becomes an
+    // `INVALID_PARAMS` rejection here, BEFORE dispatch. `body_method` is the
+    // value `classify_v2_request` just cross-checked, reused rather than re-read.
+    attach_v2_mrtr_params(context, outcome, body_json.as_ref(), body_method)
+}
+
+/// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
+///
+/// This is NOT the public [`TransportMessage`] enum — it never adds a variant to
+/// that semver-sensitive type. It only distinguishes an internally-routed
+/// `server/discover` request (which has no public enum variant) from every other
+/// message, so both flow through the SAME POST stages (session → v2 header matrix
+/// → legacy-version → auth → dispatch → event store → response assembly) and
+/// `server/discover` is routed only at the final per-path response-assembly step
+/// (the classify-then-continue design — no pipeline bypass).
+enum HttpIngress {
+    /// Any normal message (typed request, notification, or response) — the
+    /// existing public-enum dispatch path, unchanged.
+    Public(TransportMessage),
+    /// A v2-only `server/discover` request, carrying the ORIGINAL request id.
+    ///
+    /// It does NOT carry a copy of `_meta`: since Phase 113 plan 04 the single
+    /// [`run_v2_header_gate`] reads `params._meta` from the raw body for every
+    /// ingress, so a second captured copy here would be a duplicate read that
+    /// could drift.
+    Discover { id: crate::types::RequestId },
+    /// A `subscriptions/listen` request (Phase 113 plan 10, HTTP-04), carrying
+    /// the ORIGINAL request id — which IS the stream's `subscriptionId` — and the
+    /// RAW `params` value the served branch deserializes into
+    /// [`SubscriptionsListenParams`](crate::types::subscriptions::SubscriptionsListenParams).
+    ///
+    /// Classified here rather than added as a public `ClientRequest` variant:
+    /// Phase 112 established that discipline precisely to keep semver MINOR
+    /// (`enum_variant_added` on a public exhaustive enum is a MAJOR break), and
+    /// `cargo semver-checks` catches a regression. The params stay RAW because
+    /// this classifier must never reject a body — a malformed `params` becomes a
+    /// structured `-32602` in the served branch, after the header gate and auth
+    /// have run, not a parse error before them.
+    SubscriptionsListen {
+        id: crate::types::RequestId,
+        params: Option<serde_json::Value>,
+    },
+    /// A v2-only `tasks/update` request (Phase 114 plan 13, TASK-02), carrying the
+    /// ORIGINAL request id and the RAW `params` the served branch gates over.
+    ///
+    /// Classified through the SHARED
+    /// [`parse_request_or_internal`](crate::shared::protocol_helpers::parse_request_or_internal)
+    /// seam — the `server/discover` route, not this file's `SubscriptionsListen`
+    /// route. `subscriptions/listen` classifies HTTP-locally because it opens an
+    /// HTTP STREAM and has no meaning off this transport; `tasks/update` is an
+    /// ordinary request/response, so its classification belongs in `shared/` where
+    /// a later plan can widen its transport reach without a semver break.
+    ///
+    /// Not a public `ClientRequest` variant for the reason Phase 112 recorded on
+    /// [`Discover`](Self::Discover)'s sibling: `enum_variant_added` on a public
+    /// exhaustive enum is a MAJOR break, and `cargo semver-checks` catches a
+    /// regression. The params stay RAW because the classifier must never reject a
+    /// body — a malformed `params` becomes a structured `-32602` in the served
+    /// branch, AFTER the era, backend, declaration and auth gates have run, not a
+    /// parse error before them.
+    TasksUpdate {
+        id: crate::types::RequestId,
+        params: serde_json::Value,
+    },
+}
+
+impl HttpIngress {
+    /// Whether this ingress is an `initialize` request — the flag that decides
+    /// session minting.
+    ///
+    /// `server/discover`, `subscriptions/listen` and `tasks/update` are non-init
+    /// by construction (a stateless capability projection, a v2 stream opener and
+    /// a v2 task-input delivery respectively).
+    ///
+    /// Both POST preambles derived this with the same inline `match` before plan
+    /// 113.1; it lives here so the two paths cannot drift, and so a new
+    /// `HttpIngress` variant has exactly one place to answer the question.
+    fn is_initialize(&self) -> bool {
+        match self {
+            Self::Public(msg) => is_initialize_request(msg),
+            Self::Discover { .. } | Self::SubscriptionsListen { .. } | Self::TasksUpdate { .. } => {
+                false
+            },
+        }
+    }
+}
+
+/// Classify a raw POST body as an internally-routed request, if it is one.
+///
+/// Three methods are internally routed, none of which has a public
+/// `ClientRequest` variant: `server/discover` (Phase 112, VERS-04),
+/// `subscriptions/listen` (Phase 113 plan 10, HTTP-04) and `tasks/update`
+/// (Phase 114 plan 13, TASK-02). Never panics (T-112-13).
+///
+/// Every other input (malformed JSON, a batch/notification with no `id`, a
+/// non-object, or any other method) returns `None`, so the caller falls through
+/// to the existing public parse path with byte-identical behavior.
+fn classify_http_ingress(body: &[u8]) -> Option<HttpIngress> {
+    let req: crate::types::JSONRPCRequest<serde_json::Value> = serde_json::from_slice(body).ok()?;
+    // `subscriptions/listen` has no typed request at all: it is answered either by
+    // a long-lived SSE stream or by `-32601`, both assembled from the raw id and
+    // params. Classified BEFORE the discover peek so the two internally-routed
+    // methods share one entry point.
+    if req.method == crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD {
+        return Some(HttpIngress::SubscriptionsListen {
+            id: req.id,
+            params: req.params,
+        });
+    }
+    // Fast reject: `server/discover` and `tasks/update` are the only remaining
+    // internally-routed methods, so for ~100% of traffic we skip the typed
+    // `parse_client_request` conversion and the `_meta` clone below.
+    // `parse_request_or_internal` remains the authority for both (its
+    // `IngressRequest::Internal(..)` arms are the only paths that yield `Discover`
+    // / `TasksUpdate`), so this peek changes no classification — any other method
+    // returned `None` before too, via `Public(_) => None`.
+    //
+    // Both spellings are read from the SINGLE-SOURCED constants; neither is
+    // re-typed here.
+    if req.method != crate::types::protocol::SERVER_DISCOVER_METHOD
+        && req.method != crate::types::protocol::TASKS_UPDATE_METHOD
+    {
+        return None;
+    }
+    let (id, ingress) = crate::shared::protocol_helpers::parse_request_or_internal(req).ok()?;
+    match ingress {
+        // The inner match is exhaustive over `InternalClientRequest`, so adding a
+        // future internally-routed method is a compile-time tripwire here.
+        crate::shared::protocol_helpers::IngressRequest::Internal(internal) => match internal {
+            crate::types::protocol::InternalClientRequest::ServerDiscover(_) => {
+                Some(HttpIngress::Discover { id })
+            },
+            crate::types::protocol::InternalClientRequest::TasksUpdate { params } => {
+                Some(HttpIngress::TasksUpdate { id, params })
+            },
+        },
+        // A public request re-parsed here is DISCARDED; the caller re-parses it via
+        // the existing `StdioTransport::parse_message` path so all non-discover
+        // bytes (incl. parse-error responses) stay exactly as before.
+        crate::shared::protocol_helpers::IngressRequest::Public(_) => None,
+    }
 }
 
 impl StreamableHttpServer {
@@ -387,12 +1584,65 @@ impl StreamableHttpServer {
     }
 }
 
+/// Reject a v2 `GET` / `DELETE` with `405 Method Not Allowed`, or `None` to let
+/// the existing v1 handler run.
+///
+/// Spec, verbatim: "HTTP GET or DELETE to the MCP endpoint: respond with
+/// `405 Method Not Allowed`." Neither verb carries a body, so `_meta` is
+/// unavailable and the ONLY era signal is the `MCP-Protocol-Version` header —
+/// read through the existing non-panicking [`decode_version_header`], so an
+/// oversized or non-UTF-8 value classifies as `Malformed` (v1 behavior) rather
+/// than 405.
+///
+/// pmcp is dual-version, so the routes STAY registered: every other header value
+/// reaches today's handler unchanged. The guard runs BEFORE header validation and
+/// before session validation, so a v2 GET never touches session state or the
+/// event store (T-113-18).
+///
+/// It is ALSO gated on `v2_opted_in`, the server's accept-list (D-04: a server
+/// that never opted into `2026-07-28` runs zero era code). Without that gate a
+/// client sending `MCP-Protocol-Version: 2026-07-28` at a v1-only server would
+/// have its legitimate v1 SSE `GET` / session `DELETE` answered `405` by a server
+/// that does not speak v2 at all.
+///
+/// Kept pure (no [`ServerState`]) so the RULE is unit-testable; the live wiring
+/// is [`v2_verb_rejection`].
+fn v2_method_not_allowed(headers: &HeaderMap, verb: &str, v2_opted_in: bool) -> Option<Response> {
+    if !v2_opted_in || !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
+        return None;
+    }
+    Some(create_error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+        &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
+    ))
+}
+
+/// [`v2_method_not_allowed`] against a live server.
+///
+/// The cheap header classification runs FIRST, so the overwhelmingly common v1
+/// `GET`/`DELETE` never touches the server mutex to learn the accept-list.
+async fn v2_verb_rejection(
+    state: &ServerState,
+    headers: &HeaderMap,
+    verb: &str,
+) -> Option<Response> {
+    if !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
+        return None;
+    }
+    let opted_in = {
+        let server = state.server.lock().await;
+        crate::types::protocol::context::is_v2_opted_in(server.supported_protocol_versions())
+    };
+    v2_method_not_allowed(headers, verb, opted_in)
+}
+
 /// Validate `Content-Type: application/json` for POST.
 fn validate_content_type_json(headers: &HeaderMap) -> std::result::Result<(), Response> {
     let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
         return Err(create_error_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Content-Type header is required",
         ));
     };
@@ -400,7 +1650,7 @@ fn validate_content_type_json(headers: &HeaderMap) -> std::result::Result<(), Re
     if !ct.contains(APPLICATION_JSON) {
         return Err(create_error_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Content-Type must be application/json",
         ));
     }
@@ -412,7 +1662,7 @@ fn validate_accept_post(headers: &HeaderMap) -> std::result::Result<(), Response
     let Some(accept) = headers.get(header::ACCEPT) else {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header is required",
         ));
     };
@@ -420,7 +1670,7 @@ fn validate_accept_post(headers: &HeaderMap) -> std::result::Result<(), Response
     if !accept_str.contains(APPLICATION_JSON) && !accept_str.contains(TEXT_EVENT_STREAM) {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header must include application/json or text/event-stream",
         ));
     }
@@ -432,7 +1682,7 @@ fn validate_accept_sse(headers: &HeaderMap) -> std::result::Result<(), Response>
     let Some(accept) = headers.get(header::ACCEPT) else {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header is required for SSE",
         ));
     };
@@ -440,7 +1690,7 @@ fn validate_accept_sse(headers: &HeaderMap) -> std::result::Result<(), Response>
     if !accept_str.contains(TEXT_EVENT_STREAM) {
         return Err(create_error_response(
             StatusCode::NOT_ACCEPTABLE,
-            -32700,
+            crate::types::protocol::error_codes::PARSE_ERROR,
             "Accept header must be text/event-stream for SSE",
         ));
     }
@@ -465,12 +1715,17 @@ fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<()
 }
 
 /// Process session for initialization request.
+///
+/// `era` is the resolved per-request era (see [`sessions_active`]). A v2 request
+/// never reaches `initialize` — v2 has no handshake — but the site is defensive:
+/// with sessions inactive it mints nothing.
 fn process_init_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<String>,
     protocol_version: Option<String>,
 ) -> std::result::Result<(Option<String>, bool), Response> {
-    if let Some(generator) = &state.config.session_id_generator {
+    if let Some(generator) = active_session_generator(state, era) {
         // Stateful mode
         if let Some(sid) = session_id {
             // Check if session already exists and is initialized
@@ -479,7 +1734,7 @@ fn process_init_session(
                     // Session already initialized - reject re-initialization
                     return Err(create_error_response(
                         StatusCode::BAD_REQUEST,
-                        -32600,
+                        crate::types::protocol::error_codes::INVALID_REQUEST,
                         "Session already initialized",
                     ));
                 }
@@ -503,24 +1758,31 @@ fn process_init_session(
             Ok((Some(new_id), true))
         }
     } else {
-        // Stateless mode
+        // Sessions inactive (stateless config, or a v2 request) — mint nothing.
         Ok((None, false))
     }
 }
 
 /// Validate session for non-initialization request.
+///
+/// When sessions are inactive for this request — a `stateless()` server, or ANY
+/// v2 request regardless of config — nothing is required and nothing is
+/// validated. An inbound `Mcp-Session-Id` on a v2 request is IGNORED rather than
+/// rejected, per the transport spec: "An `Mcp-Session-Id` header on a request:
+/// ignore it, and do not mint or echo session IDs."
 fn validate_non_init_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<String>,
 ) -> std::result::Result<Option<String>, Response> {
-    if state.config.session_id_generator.is_some() {
+    if sessions_active(state, era) {
         // Stateful mode - require and validate session ID
         match session_id {
             None => {
                 // Missing session ID
                 Err(create_error_response(
                     StatusCode::BAD_REQUEST,
-                    -32600,
+                    crate::types::protocol::error_codes::INVALID_REQUEST,
                     "Session ID required for non-initialization requests",
                 ))
             },
@@ -530,7 +1792,7 @@ fn validate_non_init_session(
                     // Unknown session ID
                     Err(create_error_response(
                         StatusCode::NOT_FOUND,
-                        -32600,
+                        crate::types::protocol::error_codes::INVALID_REQUEST,
                         "Unknown session ID",
                     ))
                 } else {
@@ -539,7 +1801,8 @@ fn validate_non_init_session(
             },
         }
     } else {
-        // Stateless mode
+        // Sessions inactive (stateless config, or a v2 request) — any inbound
+        // `Mcp-Session-Id` is ignored, and none is echoed back.
         Ok(None)
     }
 }
@@ -582,7 +1845,7 @@ fn serialize_response_as_json_value(
     let json_bytes = crate::shared::StdioTransport::serialize_message(response).map_err(|e| {
         create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Failed to serialize response: {}", e),
         )
     })?;
@@ -594,7 +1857,7 @@ fn serialize_response_as_json_value(
     let json_value: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
         create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Failed to parse JSON response: {}", e),
         )
     })?;
@@ -648,16 +1911,26 @@ fn build_sse_response_from_single_message(response: TransportMessage) -> Respons
 /// [`serialize_response_as_json_value`], [`build_json_response`], and
 /// [`build_sse_response_from_single_message`] so this function is a thin
 /// per-mode dispatcher.
+///
+/// `session_id` is the RAW INBOUND `Mcp-Session-Id` header, and it selects which
+/// open SSE stream (i.e. which CALLER) receives this reply. `sessions_on` is
+/// therefore load-bearing, not cosmetic: without it a v2 POST that merely NAMES a
+/// v1 caller's open session id had its response delivered into THAT caller's
+/// stream — a direct response reaching a caller that never issued the request
+/// (T-113-07), while the v2 caller got a bare `202 Accepted`. On v2 there is no
+/// session, so there is no stream to route to and the reply always goes back to
+/// the caller that asked for it.
 fn build_response(
     state: &ServerState,
     response: TransportMessage,
     session_id: Option<&String>,
+    sessions_on: bool,
 ) -> Response {
     if state.config.enable_json_response {
         return build_json_response(&response, "JSON mode");
     }
     // SSE streaming mode
-    let Some(sid) = session_id else {
+    let Some(sid) = session_id.filter(|_| sessions_on) else {
         return build_json_response(&response, "SSE no-session fallback");
     };
     if let Some(sender) = state.sse_streams.read().get(sid) {
@@ -679,19 +1952,25 @@ fn validate_protocol_version_supported(
     }
     Err(create_error_response(
         StatusCode::BAD_REQUEST,
-        -32600,
+        crate::types::protocol::error_codes::INVALID_REQUEST,
         &format!("Unsupported protocol version: {}", version),
     ))
 }
 
 /// In stateful mode, verify that a provided protocol version matches the
 /// session's recorded negotiated version (if any). Pure early-return chain.
+///
+/// Short-circuits `Ok(())` whenever sessions are inactive for this request. On v2
+/// that is not merely an optimization: there IS no session, and the PER-REQUEST
+/// version is authoritative over any session state (the Phase-112 lock), so a
+/// session-recorded version must never be consulted.
 fn validate_protocol_version_matches_session(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
-    if state.config.session_id_generator.is_none() {
+    if !sessions_active(state, era) {
         return Ok(());
     }
     let Some(sid) = session_id else {
@@ -712,7 +1991,7 @@ fn validate_protocol_version_matches_session(
     }
     Err(create_error_response(
         StatusCode::BAD_REQUEST,
-        -32600,
+        crate::types::protocol::error_codes::INVALID_REQUEST,
         &format!(
             "Protocol version mismatch: expected {}, got {}",
             negotiated_version, provided_version
@@ -728,11 +2007,12 @@ fn validate_protocol_version_matches_session(
 /// [`validate_protocol_version_matches_session`] as early-return chains.
 fn validate_protocol_version(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
     validate_protocol_version_supported(protocol_version)?;
-    validate_protocol_version_matches_session(state, session_id, protocol_version)
+    validate_protocol_version_matches_session(state, era, session_id, protocol_version)
 }
 
 /// Handle POST requests
@@ -740,13 +2020,16 @@ async fn handle_post_request(
     State(state): State<ServerState>,
     request: axum::extract::Request<Body>,
 ) -> impl IntoResponse {
-    // Fast path: No HTTP middleware chain
+    // Fast path: No HTTP middleware chain.
+    // `Box::pin` both dispatch futures: the v2 header gate (Plan 112-06) grows the
+    // POST future past clippy's large_future threshold; boxing keeps the axum
+    // handler future small without changing behavior.
     if state.config.http_middleware.is_none() {
-        return handle_post_fast_path(state, request).await;
+        return Box::pin(handle_post_fast_path(state, request)).await;
     }
 
     // Middleware path: Process through HTTP middleware chain
-    handle_post_with_middleware(state, request).await
+    Box::pin(handle_post_with_middleware(state, request)).await
 }
 
 /// Extract and validate authentication from headers.
@@ -768,7 +2051,7 @@ async fn extract_and_validate_auth(
                 // Auth validation failed - return 401 Unauthorized
                 Err(create_error_response(
                     StatusCode::UNAUTHORIZED,
-                    -32003,
+                    crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
                     &format!("Authentication failed: {}", e),
                 ))
             },
@@ -923,15 +2206,79 @@ fn is_initialize_request(message: &TransportMessage) -> bool {
 /// handlers.
 fn resolve_session_for_request(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<String>,
     protocol_version: Option<String>,
 ) -> std::result::Result<Option<String>, Response> {
     if is_init_request {
-        let (sid, _is_new) = process_init_session(state, session_id, protocol_version)?;
+        let (sid, _is_new) = process_init_session(state, era, session_id, protocol_version)?;
         Ok(sid)
     } else {
-        validate_non_init_session(state, session_id)
+        validate_non_init_session(state, era, session_id)
+    }
+}
+
+/// Resolved output of the v2 required-header gate for one request: the
+/// `ProtocolContext` (consumed by dispatch) and the outbound-header echo.
+type V2GateResolved = (
+    Option<crate::types::protocol::ProtocolContext>,
+    Option<(String, String)>,
+);
+
+/// Run the v2 required-header gate (VERS-05) for one request: resolve the
+/// `ProtocolContext` ONCE (consumed by dispatch), classify the header/`_meta`
+/// matrix fail-closed, and derive the outbound-header echo.
+///
+/// # Ordering — load-bearing, not stylistic
+///
+/// This MUST run BEFORE session resolution (Plan 113-04 / HTTP-01): the ERA
+/// decides whether sessions apply at all, so it must be known before the first
+/// session decision. It MUST also run BEFORE the legacy protocol-version check,
+/// because an accepted v2 request carries `MCP-Protocol-Version: 2026-07-28`,
+/// which the static-SUPPORTED check would otherwise reject.
+///
+/// v1 / non-opted-in → `Passthrough` (zero enforcement, D-04). A
+/// `server/discover` ingress runs the SAME matrix via the raw-`_meta`
+/// counterpart (finding #1).
+///
+/// Extracted in plan 113.1-01 (D-06 / D-09): both POST entrypoints carried this
+/// block verbatim, so [`run_v2_header_gate`] now has exactly one call site. The
+/// middleware path's extra error-hook step lives in the sibling
+/// [`resolve_v2_gate_with_error_hook`], following this file's existing
+/// plain-fn + `*_with_error_hook` convention.
+async fn resolve_v2_gate(
+    state: &ServerState,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    ingress: &HttpIngress,
+) -> std::result::Result<V2GateResolved, Response> {
+    match ingress {
+        // Only a REQUEST carries a header contract. `server/discover` pins its
+        // method (it is routed by classification, not by the body's `method`
+        // field); every other request — including `subscriptions/listen`, whose
+        // body DOES carry its method — reads the method from the body.
+        HttpIngress::Public(TransportMessage::Request { .. })
+        | HttpIngress::Discover { .. }
+        | HttpIngress::SubscriptionsListen { .. }
+        | HttpIngress::TasksUpdate { .. } => {
+            let method_override = matches!(ingress, HttpIngress::Discover { .. })
+                .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
+            let (ctx, gate) = run_v2_header_gate(state, headers, raw_body, method_override).await;
+            match gate {
+                V2GateOutcome::Reject {
+                    code,
+                    message,
+                    data,
+                } => {
+                    let era = ctx.as_ref().map(|pc| pc.era);
+                    Err(v2_gate_reject_response(raw_body, era, code, &message, data))
+                },
+                V2GateOutcome::Passthrough => Ok((ctx, None)),
+                V2GateOutcome::EnforceOk { method, name } => Ok((ctx, Some((method, name)))),
+            }
+        },
+        HttpIngress::Public(_) => Ok((None, None)),
     }
 }
 
@@ -995,7 +2342,7 @@ async fn run_request_middleware(
         let _ = http_middleware.handle_error(&e, context).await;
         return Err(create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
             &format!("Middleware rejected request: {}", e),
         ));
     }
@@ -1011,9 +2358,14 @@ async fn parse_transport_message_with_middleware(
     body: &[u8],
     http_middleware: &ServerHttpMiddlewareChain,
     context: &ServerHttpContext,
-) -> std::result::Result<TransportMessage, Response> {
+) -> std::result::Result<HttpIngress, Response> {
+    // Classify an internally-routed `server/discover` request first; every other
+    // body keeps the existing middleware-aware parse + 400 assembly path.
+    if let Some(ingress) = classify_http_ingress(body) {
+        return Ok(ingress);
+    }
     match crate::shared::StdioTransport::parse_message(body) {
-        Ok(msg) => Ok(msg),
+        Ok(msg) => Ok(HttpIngress::Public(msg)),
         Err(e) => {
             let mut error_response = ServerHttpResponse::new(
                 StatusCode::BAD_REQUEST,
@@ -1052,7 +2404,7 @@ async fn extract_auth_with_middleware(
             let _ = http_middleware.handle_error(&auth_error, context).await;
             Err(create_error_response(
                 StatusCode::UNAUTHORIZED,
-                -32003,
+                crate::types::protocol::error_codes::AUTHENTICATION_REQUIRED,
                 &format!("Authentication failed: {}", e),
             ))
         },
@@ -1068,6 +2420,7 @@ async fn build_success_response_with_middleware(
     response_msg: &TransportMessage,
     response_session_id: Option<&String>,
     version_to_send: &str,
+    sessions_on: bool,
     http_middleware: &ServerHttpMiddlewareChain,
     context: &ServerHttpContext,
 ) -> Response {
@@ -1081,7 +2434,7 @@ async fn build_success_response_with_middleware(
                 .await;
             return create_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                -32603,
+                crate::types::protocol::error_codes::INTERNAL_ERROR,
                 &format!("Failed to serialize response: {}", e),
             );
         },
@@ -1089,9 +2442,7 @@ async fn build_success_response_with_middleware(
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, APPLICATION_JSON.parse().unwrap());
-    if let Some(sid) = response_session_id {
-        response_headers.insert(MCP_SESSION_ID, sid.parse().unwrap());
-    }
+    apply_session_header(&mut response_headers, response_session_id, sessions_on);
     response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
 
     let mut server_response =
@@ -1107,17 +2458,23 @@ async fn build_success_response_with_middleware(
     into_axum(server_response)
 }
 
-/// Persist the initialize response event if an event store is configured.
+/// Persist the response event if resumability is live for THIS request.
 ///
 /// Shared by both POST handlers — same condition (init OR non-init request
 /// with a response session ID), same store-event call, same fire-and-forget
 /// error handling.
+///
+/// The store is reached through [`resumability_store`], so a v2 request writes
+/// NOTHING (HTTP-05 / T-113-30) independently of whether it happens to have a
+/// response session id. Retaining v2 response envelopes that can never be
+/// replayed is dead retention of exactly the material an id-replay bug feeds on.
 async fn store_response_event(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     response_session_id: Option<&String>,
     response_msg: &TransportMessage,
 ) {
-    if let Some(event_store) = &state.config.event_store {
+    if let Some(event_store) = resumability_store(state, era) {
         if let Some(sid) = response_session_id {
             let event_id = Uuid::new_v4().to_string();
             let _ = event_store.store_event(sid, &event_id, response_msg).await;
@@ -1137,7 +2494,7 @@ async fn read_body_with_limit(
     let body_bytes = axum::body::to_bytes(body, max_bytes).await.map_err(|e| {
         create_error_response(
             StatusCode::PAYLOAD_TOO_LARGE,
-            -32600,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
             &format!("Request body exceeds limit: {}", e),
         )
     })?;
@@ -1146,31 +2503,72 @@ async fn read_body_with_limit(
 
 /// Parse a JSON-RPC message on the fast path, returning a 400 error response
 /// on failure.
-fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<TransportMessage, Response> {
-    crate::shared::StdioTransport::parse_message(body).map_err(|e| {
-        create_error_response(
-            StatusCode::BAD_REQUEST,
-            -32700,
-            &format!("Invalid JSON: {}", e),
-        )
-    })
+///
+/// Classifies an internally-routed `server/discover` request as
+/// [`HttpIngress::Discover`] (which then CONTINUES the pipeline); every other
+/// body flows through the existing [`StdioTransport::parse_message`] path as
+/// [`HttpIngress::Public`], so all non-discover parse bytes are byte-identical.
+fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<HttpIngress, Response> {
+    if let Some(ingress) = classify_http_ingress(body) {
+        return Ok(ingress);
+    }
+    crate::shared::StdioTransport::parse_message(body)
+        .map(HttpIngress::Public)
+        .map_err(|e| {
+            create_error_response(
+                StatusCode::BAD_REQUEST,
+                crate::types::protocol::error_codes::PARSE_ERROR,
+                &format!("Invalid JSON: {}", e),
+            )
+        })
 }
 
 /// Handle the successful-request arm on the fast path: dispatch to the
 /// server, persist event, and attach session/version headers to the response.
+/// Per-request dispatch inputs threaded into the fast-path handler.
+///
+/// Bundles the response-shaping flags with the Plan-04-resolved
+/// `ProtocolContext` (threaded into dispatch, never re-resolved — Plan 06) and
+/// the optional v2 outbound headers to echo on success AND error.
+struct FastPathDispatch {
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    /// Plan-04-resolved `ProtocolContext`, CONSUMED at dispatch (D-11).
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    /// When `Some((method, name))`, this is an accepted v2 request whose
+    /// response echoes `Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version`.
+    v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request — gates the `Mcp-Session-Id`
+    /// response header (HTTP-01).
+    sessions_on: bool,
+}
+
 async fn handle_fast_path_request(
     state: &ServerState,
     id: crate::types::RequestId,
     request: Request,
     auth_context: Option<crate::server::auth::AuthContext>,
-    is_init_request: bool,
-    response_session_id: Option<String>,
+    dispatch: FastPathDispatch,
     session_id: Option<&String>,
 ) -> Response {
-    let json_response = {
-        let server = state.server.lock().await;
-        server.handle_request(id, request, auth_context).await
-    };
+    let FastPathDispatch {
+        is_init_request,
+        response_session_id,
+        protocol_context,
+        v2_outbound,
+        sessions_on,
+    } = dispatch;
+
+    let era = protocol_context.as_ref().map(|pc| pc.era);
+    // Captured BEFORE dispatch consumes it: this is the LIVE request's id, and
+    // it is the only id the direct response may carry (HTTP-05).
+    let live_id = id.clone();
+    // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP layer
+    // resolved it once for the header gate; dispatch does NOT re-resolve (Plan 06
+    // / D-11 / Pitfall 2). The shared seam also retires the v2-removed
+    // `resources/subscribe`/`unsubscribe` (HTTP-04) identically on both paths.
+    let json_response =
+        dispatch_request_or_retire(state, id, request, auth_context, protocol_context).await;
 
     tracing::debug!(
         target: "mcp.http",
@@ -1178,7 +2576,16 @@ async fn handle_fast_path_request(
         "StreamableHttpServer response"
     );
 
-    let response_msg = TransportMessage::Response(json_response);
+    // Code-driven v2 status: an error the HANDLER produced (e.g. -32601 for an
+    // unsupported method, or plan 09's -32021) maps to its spec HTTP status.
+    // `None` on v1 / not-opted-in, so every legacy status is unchanged.
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+
+    // Re-envelope the dispatch PAYLOAD onto the live id. Whatever produced the
+    // payload — a handler, a cache, a shared `Arc` — it reaches the wire inside
+    // an envelope that structurally cannot carry anyone else's id.
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     let negotiated_version = if is_init_request {
         let version = extract_negotiated_version(&response_msg);
@@ -1188,15 +2595,15 @@ async fn handle_fast_path_request(
         None
     };
 
-    store_response_event(state, response_session_id.as_ref(), &response_msg).await;
+    store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
 
-    let mut response = build_response(state, response_msg, session_id);
+    let mut response = build_response(state, response_msg, session_id, sessions_on);
 
-    if let Some(sid) = &response_session_id {
-        response
-            .headers_mut()
-            .insert(MCP_SESSION_ID, sid.parse().unwrap());
-    }
+    apply_session_header(
+        response.headers_mut(),
+        response_session_id.as_ref(),
+        sessions_on,
+    );
 
     let version_to_send = compute_outbound_protocol_version(
         state,
@@ -1208,7 +2615,908 @@ async fn handle_fast_path_request(
         .headers_mut()
         .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
 
+    // v2 outbound headers (VERS-05): echoed on BOTH the handler's success and its
+    // structured JSON-RPC error, built without panicking. Overwrites the
+    // MCP-Protocol-Version above with the v2 value for an accepted v2 request.
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+
     response
+}
+
+/// Assemble the `server/discover` response on the fast path (Phase 112, VERS-04).
+///
+/// Runs the SAME response tail as any fast-path request — projects via
+/// [`Server::handle_discover`](crate::server::Server::handle_discover) (the ONE
+/// shared `build_discover_response` era gate), stores the response event, builds
+/// the response, and attaches session/version/outbound-v2 headers — preserving
+/// the ORIGINAL request id. This is reached only AFTER session resolution, the v2
+/// header matrix, legacy-version validation, and auth (classify-then-continue —
+/// no pipeline bypass).
+///
+/// Response-shaping inputs shared by every INTERNALLY-ROUTED request/response
+/// assembler, so the fast and middleware paths can never drift on session-header
+/// gating or the v2 outbound echo.
+///
+/// Two methods use it today — `server/discover` (Phase 112) and `tasks/update`
+/// (Phase 114 plan 13) — which is why it is not named after either. Both are
+/// classified out of the public-enum path by
+/// [`classify_http_ingress`] and both answer with a single JSON-RPC response, so
+/// both run the identical response tail. `subscriptions/listen` deliberately does
+/// NOT use it: it answers with a held-open SSE stream that has no complete body
+/// and therefore no response-middleware or session-header step.
+struct InternalResponseShape<'a> {
+    /// The session id to echo, if any — already `None` on v2.
+    response_session_id: Option<&'a String>,
+    /// `Some((method, name))` for an accepted v2 discover (VERS-05 echo).
+    v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request (HTTP-01).
+    sessions_on: bool,
+}
+
+/// D-10 decision (finding #4): a v2 connection projects the server's
+/// already-computed capabilities (incl. the `extensions` map); a v1 /
+/// non-opted-in connection returns JSON-RPC `-32601` at HTTP 200 with the
+/// original id. This `-32601@200` is a DELIBERATE, benign change from the
+/// pre-112 incidental `PARSE_ERROR` 400 (`id: null`) — justified because
+/// `server/discover` is a v2-only method NO conforming v1 client sends, so no
+/// v1-relied-upon response byte changes (milestone byte-identity reconciled).
+async fn assemble_discover_response_fast(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    shape: InternalResponseShape<'_>,
+    session_id: Option<&String>,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = id.clone();
+    let json_response = {
+        let server = state.server.lock().await;
+        server.handle_discover(id, protocol_context)
+    };
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    let mut response = build_response(state, response_msg, session_id, sessions_on);
+
+    apply_session_header(response.headers_mut(), response_session_id, sessions_on);
+
+    // Discover is never an init request → compute the outbound version normally.
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+    response
+        .headers_mut()
+        .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    // Echo the v2 outbound headers on an accepted v2 discover (VERS-05).
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+
+    response
+}
+
+// ===========================================================================
+// `tasks/update` (Phase 114 plan 13, TASK-02).
+// ===========================================================================
+
+/// The four inputs `TaskDispatch::route_tasks_update` consumes, carried as ONE
+/// value.
+///
+/// Bundled rather than passed as four parameters because the middleware assembler
+/// would otherwise take 8 arguments and trip `clippy::too_many_arguments` (7) —
+/// MEASURED in the plan-13 quality gate, not anticipated. The grouping is not
+/// arbitrary: these are exactly the router's inputs, and
+/// [`InternalResponseShape`] beside it is exactly the response tail's, so the two
+/// assemblers below read as "route with these, then shape with those".
+struct TasksUpdateCall<'a> {
+    /// The ORIGINAL JSON-RPC request id.
+    id: crate::types::RequestId,
+    /// The request's `params`, RAW and undecoded — nothing between the wire and
+    /// the router deserializes them.
+    params: serde_json::Value,
+    /// The context resolved ONCE at ingress and CONSUMED here (D-11).
+    protocol_context: Option<&'a crate::types::protocol::ProtocolContext>,
+    /// The value [`extract_and_validate_auth`] already produced.
+    auth_context: Option<&'a crate::server::auth::AuthContext>,
+}
+
+/// Run the `tasks/update` GATE chain and produce its JSON-RPC response.
+///
+/// THE single place this transport reaches the tasks router for `tasks/update`,
+/// shared by the fast and middleware assemblers below so they cannot drift on
+/// which gates ran or in what order. It holds the server lock for exactly the
+/// delegate call, the same way both `server/discover` assemblers do.
+///
+/// It contains NO gate itself. `Server::handle_tasks_update` is a thin delegate
+/// onto `TaskDispatch::route_tasks_update`, which owns the whole ordered chain:
+/// era → backend → client declaration (`-32021`) → auth (`-32003`) → params
+/// (`-32602`). The `auth_context` is threaded through unchanged —
+/// `tasks/update` is subject to the SAME auth as every other request on this
+/// transport.
+async fn tasks_update_json_response(
+    state: &ServerState,
+    call: &TasksUpdateCall<'_>,
+) -> crate::types::JSONRPCResponse {
+    let server = state.server.lock().await;
+    server
+        .handle_tasks_update(
+            call.id.clone(),
+            &call.params,
+            call.auth_context,
+            call.protocol_context,
+        )
+        .await
+}
+
+/// Assemble the `tasks/update` response on the fast path (TASK-02).
+///
+/// Structurally the twin of [`assemble_discover_response_fast`] and it shares that
+/// function's [`InternalResponseShape`] and response tail verbatim in shape:
+/// store the response event, build the response, attach session / version /
+/// outbound-v2 headers, apply the code-driven v2 status. Reached only AFTER
+/// session resolution, the v2 header matrix, legacy-version validation and auth —
+/// classify-then-continue, no pipeline bypass.
+///
+/// # The v1 answer, and why it is a deliberate change
+///
+/// `tasks/update` does not exist on MCP 2025-11-25, so a v1 caller receives
+/// JSON-RPC `-32601` at HTTP 200 with the ORIGINAL id, where before plan 13 the
+/// unrecognised method produced a `PARSE_ERROR` at HTTP 400 with `id: null`. Same
+/// decision, same justification as `server/discover`'s D-10 finding #4: no
+/// conforming v1 client sends a v2-only method, so no v1-relied-upon response byte
+/// moves.
+async fn assemble_tasks_update_fast(
+    state: &ServerState,
+    call: TasksUpdateCall<'_>,
+    shape: InternalResponseShape<'_>,
+    session_id: Option<&String>,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = call.id.clone();
+    let protocol_context = call.protocol_context;
+    let json_response = tasks_update_json_response(state, &call).await;
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    let mut response = build_response(state, response_msg, session_id, sessions_on);
+
+    apply_session_header(response.headers_mut(), response_session_id, sessions_on);
+
+    // `tasks/update` is never an init request → compute the outbound version
+    // normally.
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+    response
+        .headers_mut()
+        .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    // Echo the v2 outbound headers on BOTH success and structured error (VERS-05).
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+
+    response
+}
+
+/// Assemble the `tasks/update` response on the middleware path (TASK-02).
+///
+/// The middleware-path twin of [`assemble_tasks_update_fast`], differing ONLY in
+/// the response-BUILDING step ([`build_success_response_with_middleware`] instead
+/// of [`build_response`] + [`apply_session_header`]) — this file's established
+/// fast/middleware split. The gate chain is identical because both call the SAME
+/// [`tasks_update_json_response`].
+async fn assemble_tasks_update_with_middleware(
+    state: &ServerState,
+    call: TasksUpdateCall<'_>,
+    shape: InternalResponseShape<'_>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = call.id.clone();
+    let protocol_context = call.protocol_context;
+    let json_response = tasks_update_json_response(state, &call).await;
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+
+    let mut response = build_success_response_with_middleware(
+        &response_msg,
+        response_session_id,
+        &version_to_send,
+        sessions_on,
+        http_middleware,
+        http_context,
+    )
+    .await;
+
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+    response
+}
+
+// ===========================================================================
+// `subscriptions/listen` (Plan 113-10, HTTP-04).
+//
+// # Two conformant configurations, one predicate
+//
+// The official conformance suite gates the requirement on capability
+// advertisement (`src/scenarios/server/stateless.ts:975-1015`, quoted verbatim
+// in [`advertises_subscriptions`]):
+//
+//   * advertise NONE of `tools.listChanged` / `prompts.listChanged` /
+//     `resources.listChanged` / `resources.subscribe` -> `-32601` on
+//     `subscriptions/listen` is a legitimate feature absence (SKIPPED). This is
+//     pmcp's stateless enterprise DEFAULT, and it honors D-11.
+//   * advertise ANY of them -> the stream MUST be served; rejecting the method
+//     is a FAILURE ("claims a feature it does not serve").
+//
+// Both the `server/discover` projection (which publishes the capabilities) and
+// this route gate read the ONE shared `advertises_subscriptions` predicate over
+// the SAME `Server::capabilities()` value, so the advertisement and the
+// implementation cannot drift. `tests/v2_subscriptions.rs` carries the live
+// tripwire over all four capabilities individually.
+//
+// # `resources/subscribe` / `resources/unsubscribe` are retired on v2
+//
+// Both are GONE from the 2026-07-28 schema — the only surviving mention is the
+// "Replaces the former `resources/subscribe` RPC" comment on
+// `SubscriptionFilter.resourceSubscriptions`. On v2 they answer `404` + `-32601`
+// via [`v2_retired_method_of`]; the v1 path is completely untouched.
+// ===========================================================================
+
+/// Disable proxy response buffering so SSE frames reach the client immediately.
+///
+/// Spec, D-12 RESOLUTION item 6: servers "SHOULD set `X-Accel-Buffering: no`".
+const X_ACCEL_BUFFERING: &str = "x-accel-buffering";
+
+/// How often a quiet listen stream emits an SSE comment keep-alive.
+const LISTEN_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The `resources/*` subscription RPC this request invokes, if it is one of the
+/// two the 2026-07-28 schema retired.
+///
+/// Returns the WIRE method name so the `-32601` message names what the client
+/// actually sent. `None` for every other request, which is therefore dispatched
+/// exactly as before on BOTH eras.
+fn v2_retired_method_of(request: &Request) -> Option<&'static str> {
+    let Request::Client(client) = request else {
+        return None;
+    };
+    match **client {
+        ClientRequest::Subscribe(_) => Some("resources/subscribe"),
+        ClientRequest::Unsubscribe(_) => Some("resources/unsubscribe"),
+        _ => None,
+    }
+}
+
+/// Dispatch a public request, first retiring the v2-removed `resources/*`
+/// subscription RPCs (HTTP-04).
+///
+/// THE single dispatch seam both POST entrypoints call, so the retirement rule
+/// cannot drift between the fast and middleware paths. On a non-v2 era this is a
+/// pure pass-through — `v2_retired_method_of` is consulted only inside the era
+/// gate, so a v1 `resources/subscribe` reaches its existing handler with
+/// byte-identical behavior.
+///
+/// The `-32601` it returns flows through the SAME
+/// [`v2_dispatch_response_status`] code-driven mapper every other dispatch error
+/// uses, which is what turns it into HTTP `404` on v2.
+async fn dispatch_request_or_retire(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    request: Request,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+) -> crate::types::JSONRPCResponse {
+    if matches!(
+        protocol_context.as_ref().map(|pc| pc.era),
+        Some(crate::types::protocol::Era::V2)
+    ) {
+        if let Some(method) = v2_retired_method_of(&request) {
+            return crate::types::JSONRPCResponse::error(
+                id,
+                crate::types::jsonrpc::JSONRPCError {
+                    code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                    message: format!(
+                        "Method not found: {method} (retired in MCP 2026-07-28; use {})",
+                        crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD
+                    ),
+                    data: None,
+                },
+            );
+        }
+    }
+    let server = state.server.lock().await;
+    server
+        .handle_request_with_context(id, request, auth_context, protocol_context)
+        .await
+}
+
+/// Everything the listen route needs from the server, read ONCE under the
+/// server lock.
+///
+/// Holds only what cannot be derived: whether the route is advertised is
+/// [`crate::types::subscriptions::advertises_subscriptions`] of `capabilities`,
+/// so caching it here would be a second copy that can drift from its own source.
+struct ListenServerView {
+    /// The server's advertised capabilities, for the agreed-filter intersection
+    /// and the advertisement gate.
+    capabilities: crate::types::ServerCapabilities,
+    /// The server identity the v2 result envelope publishes.
+    info: crate::types::Implementation,
+    /// The registry the accepted stream registers with.
+    registry: Arc<crate::server::subscriptions::ListenRegistry>,
+    /// Whether this server has an auth provider configured — the FAIL-CLOSED
+    /// input to [`resolve_listen_principal`] (D-113-N).
+    ///
+    /// Read HERE, under the one lock acquisition this struct exists to make, and
+    /// nowhere else on the listen path: a second `get_auth_provider()` call
+    /// would be both a second lock and a second place the decision could drift
+    /// from the MRTR ingress it now mirrors.
+    has_auth_provider: bool,
+}
+
+/// Read the listen route's view of the server under ONE lock acquisition.
+///
+/// The registry is taken here rather than re-locking at registration time: the
+/// whole point of this struct is that the listen route touches the server mutex
+/// — which serializes all dispatch on this transport — exactly once.
+async fn listen_server_view(state: &ServerState) -> ListenServerView {
+    let server = state.server.lock().await;
+    ListenServerView {
+        capabilities: server.capabilities().clone(),
+        info: server.info().clone(),
+        registry: Arc::clone(server.listen_registry()),
+        // The EXISTING public accessor (`src/server/mod.rs`), not a new seam and
+        // not a widened field.
+        has_auth_provider: server.get_auth_provider().is_some(),
+    }
+}
+
+/// Assemble a JSON-RPC error for a `subscriptions/listen` request that is not
+/// served, with the ORIGINAL request id.
+///
+/// Built through plan 08's [`envelope_for_live_request`] — the ONE direct-response
+/// constructor on this transport — so a stale id is structurally unconstructible
+/// here too. The status is code-driven via [`v2_dispatch_response_status`]: `404`
+/// for `-32601` on v2, and the response's existing `200` on v1.
+///
+/// D-10 parity note: a v1 / non-opted-in `subscriptions/listen` previously fell
+/// out of the typed parse as `400` + `-32700`. It now answers `-32601` at `200`,
+/// the same DELIBERATE, benign change Phase 112 made for `server/discover` and
+/// for the same reason — `subscriptions/listen` is a v2-only method that no
+/// conforming v1 client sends, so no v1-relied-upon response byte changes.
+fn listen_rejection_response(
+    era: Option<crate::types::protocol::Era>,
+    id: crate::types::RequestId,
+    code: i32,
+    message: String,
+) -> Response {
+    let response = envelope_for_live_request(
+        crate::types::jsonrpc::ResponsePayload::Error(crate::types::jsonrpc::JSONRPCError {
+            code,
+            message,
+            data: None,
+        }),
+        id,
+    );
+    let status = v2_dispatch_response_status(era, &response);
+    let mut http = build_json_response(
+        &TransportMessage::Response(response),
+        "subscriptions/listen gate",
+    );
+    if let Some(status) = status {
+        *http.status_mut() = status;
+    }
+    http
+}
+
+/// The acknowledgement frame — the FIRST message on every listen stream.
+///
+/// Its `notifications` field is the AGREED filter (the intersection of what was
+/// requested and what this server supports), never a superset of the request,
+/// and its `_meta` carries [`SUBSCRIPTION_ID_META_KEY`](crate::types::subscriptions::SUBSCRIPTION_ID_META_KEY).
+///
+/// It is a NOTIFICATION, not a result, so it cannot carry the v2 result envelope
+/// ([`inject_v2_result_envelope`](crate::server::core::inject_v2_result_envelope)
+/// returns early on a non-`Result` payload by design). The `_meta` it does carry
+/// is built by the SAME `subscription_id_meta` helper the terminal result uses,
+/// so the two can never disagree on the key spelling.
+fn listen_ack_frame(
+    agreed: &crate::types::subscriptions::SubscriptionFilter,
+    subscription_id: &crate::types::RequestId,
+) -> String {
+    let params = crate::types::subscriptions::SubscriptionAcknowledgedParams::new(
+        agreed.clone(),
+        subscription_id,
+    );
+    json!({
+        "jsonrpc": "2.0",
+        "method": crate::types::subscriptions::ACKNOWLEDGED_METHOD,
+        "params": params,
+    })
+    .to_string()
+}
+
+/// The graceful-teardown JSON-RPC response for a listen stream.
+///
+/// Routed through plan 09's [`inject_v2_result_envelope`](crate::server::core::inject_v2_result_envelope)
+/// (which delegates to `own_reserved_result_fields`) exactly like every other v2
+/// result, so `resultType` and `io.modelcontextprotocol/serverInfo` are identical
+/// to any other v2 response instead of coming from a bespoke frame builder.
+fn listen_terminal_result_frame(
+    subscription_id: &crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    server_info: &crate::types::Implementation,
+) -> String {
+    let result = crate::types::subscriptions::SubscriptionsListenResult::new(subscription_id);
+    let mut response = envelope_for_live_request(
+        crate::types::jsonrpc::ResponsePayload::Result(
+            serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+        ),
+        subscription_id.clone(),
+    );
+    crate::server::core::inject_v2_result_envelope(
+        &mut response,
+        protocol_context,
+        server_info,
+        crate::server::core::ResponseDisposition::Complete,
+        // A listen teardown mints no reserved MRTR/tasks field.
+        crate::server::core::ReservedFieldOwner::None,
+        // `SubscriptionsListenResult` does not extend `CacheableResult` in the
+        // 2026-07-28 schema, so this frame carries no caching hint (D-07).
+        crate::types::caching::Cacheable::No,
+    );
+    serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Frame one queued listen payload as an SSE event.
+///
+/// A [`ListenFrame::Comment`](crate::server::subscriptions::ListenFrame) becomes
+/// an SSE comment line rather than a `message` event, which is how the
+/// buffer-overflow notice reaches a client without impersonating a protocol
+/// message.
+fn listen_sse_event(frame: crate::server::subscriptions::ListenFrame) -> Event {
+    match frame {
+        crate::server::subscriptions::ListenFrame::Message(payload) => {
+            Event::default().event("message").data(payload)
+        },
+        crate::server::subscriptions::ListenFrame::Comment(text) => Event::default().comment(text),
+    }
+}
+
+/// Attach the listen stream's response headers: the v2 outbound echo (VERS-05),
+/// `X-Accel-Buffering: no`, and no-transform caching.
+///
+/// The `Mcp-Session-Id` header is NEVER attached: there are no sessions on v2
+/// (HTTP-01), so [`attach_sse_response_headers`] — which requires one — is
+/// deliberately not reused here.
+fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&(String, String)>) {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    headers.insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
+    if let Some((method, name)) = v2_outbound {
+        apply_v2_outbound_headers(headers, method, name);
+    }
+}
+
+/// The AGREED filter of a `subscriptions/listen` request, or the rejection that
+/// answers it instead.
+///
+/// Extracted so [`assemble_subscriptions_listen`] stays a short pipeline well
+/// under the cognitive-complexity gate.
+fn resolve_agreed_filter(
+    params: Option<serde_json::Value>,
+    view: &ListenServerView,
+) -> std::result::Result<crate::types::subscriptions::SubscriptionFilter, (i32, String)> {
+    use crate::types::protocol::error_codes::INVALID_PARAMS;
+    use crate::types::subscriptions::SubscriptionsListenParams;
+
+    let Some(value) = params else {
+        return Err((
+            INVALID_PARAMS,
+            "Invalid subscriptions/listen params: `notifications` is required".to_string(),
+        ));
+    };
+    let parsed = serde_json::from_value::<SubscriptionsListenParams>(value).map_err(|e| {
+        (
+            INVALID_PARAMS,
+            format!("Invalid subscriptions/listen params: {e}"),
+        )
+    })?;
+    Ok(parsed
+        .notifications
+        .intersect_with_capabilities(&view.capabilities))
+}
+
+/// Resolve the listen stream's concurrency-accounting principal, FAIL-CLOSED.
+///
+/// The SIBLING this mirrors is `crate::server::core`'s `resolve_mrtr_principal`
+/// (its `MrtrPrincipal` carries the same two inputs), so the two v2 ingress
+/// paths on ONE server give the SAME answer to "what is an unauthenticated
+/// caller":
+///
+/// * an `AuthContext` is present → its `subject`;
+/// * no `AuthContext` but an auth provider IS configured → `None`, i.e. REFUSE;
+/// * no auth provider at all → a fresh
+///   [`anonymous_principal`](crate::server::subscriptions::anonymous_principal).
+///
+/// # The defect this closes (D-113-N)
+///
+/// Before this function the route minted a fresh `anon#N` whenever
+/// `auth_context` was `None` with no `has_auth_provider` check, so on a server
+/// whose provider ADMITS unauthenticated requests every unauthenticated listen
+/// received a private, uncapped identity —
+/// `MAX_LISTEN_STREAMS_PER_PRINCIPAL` never bound and one caller could hold all
+/// `MAX_LISTEN_STREAMS_TOTAL` global slots, starving authenticated subscribers.
+///
+/// # Why the third row deliberately does NOT collapse onto MRTR's shared constant
+///
+/// This is a DECISION, not an oversight — do not "simplify" the two rows into
+/// one. MRTR needs a STABLE principal string on a no-auth server because that
+/// principal is AEAD additional-authenticated-data: a per-request `anon#N` would
+/// make every round-2 `requestState` fail to verify, which is exactly why
+/// `resolve_mrtr_principal` answers with one shared `ANONYMOUS_PRINCIPAL`. This
+/// route has no such binding — its principal is ONLY a concurrency-accounting
+/// key. Unifying them would silently drop a no-auth server from
+/// `MAX_LISTEN_STREAMS_TOTAL` (64) concurrent streams to
+/// `MAX_LISTEN_STREAMS_PER_PRINCIPAL` (4), which is the common local/dev
+/// configuration and the one the shipped `s47_v2_stateless_mrtr` /
+/// `s48_v2_mrtr_client` examples use. The regression guard is
+/// `unauthenticated_listen_still_serves_on_a_server_with_no_auth_provider` in
+/// `tests/v2_subscriptions.rs`.
+fn resolve_listen_principal(
+    auth_context: Option<&crate::server::auth::AuthContext>,
+    has_auth_provider: bool,
+) -> Option<String> {
+    match (auth_context, has_auth_provider) {
+        (Some(context), _) => Some(context.subject.clone()),
+        (None, true) => None,
+        (None, false) => Some(crate::server::subscriptions::anonymous_principal()),
+    }
+}
+
+/// Serve — or conformantly reject — a `subscriptions/listen` request (HTTP-04).
+///
+/// THE single implementation both POST entrypoints call, so the fast and
+/// middleware paths cannot drift on the gate, the agreed filter or the frame
+/// order. The response-middleware chain is deliberately NOT run over a listen
+/// stream: it processes a complete `Vec<u8>` body, and this response has no
+/// complete body by construction.
+///
+/// # Rejection cases, in order
+///
+/// 1. era is not v2 -> `-32601` (`subscriptions/listen` does not exist on v1);
+/// 2. no subscription-delivered capability advertised -> `-32601`, the
+///    conformant-by-absence configuration;
+/// 3. an unauthenticated caller on a server that HAS an auth provider ->
+///    `-32003` (`AUTHENTICATION_REQUIRED`) at HTTP 200 (D-113-N). Placed HERE
+///    deliberately: after the two `-32601` gates, so a v1 or capability-less
+///    server keeps answering "no such method" rather than advertising that it
+///    authenticates; before the params parse, so the refusal never depends on
+///    an unauthenticated caller's body; and before `registry.register`, so a
+///    refused caller never takes a permit. The decision itself lives in
+///    [`resolve_listen_principal`], which mirrors the MRTR ingress;
+/// 4. `params` that do not deserialize (`notifications` is REQUIRED) ->
+///    `-32602`, AFTER the header gate and auth have already run;
+/// 5. the per-principal or global concurrency cap is exhausted -> `-32005`
+///    (`RATE_LIMITED`) at HTTP 200, carrying a JSON-RPC error body;
+/// 6. a duplicate LIVE `(principal, subscriptionId)` -> ALSO `-32005` at HTTP
+///    200. Since 113-18 all three refusals share the RETRYABLE `RATE_LIMITED`
+///    code — the duplicate previously answered `-32600` at HTTP 400, the "do not
+///    retry" class, for a condition that clears on its own — so the refusal
+///    MESSAGE is the only discriminator (the `too many concurrent` substring is
+///    load-bearing). The incumbent stream is untouched: the id belongs to the
+///    caller, so the caller — not the server — resolves the collision by
+///    choosing a free one
+///    (see [`ListenRejection::code`](crate::server::subscriptions::ListenRejection)).
+///
+/// # The three closure triggers
+///
+/// A served stream closes on exactly one of:
+/// * **client disconnect** — dropping the response drops the stream, drops the
+///   moved-in `ListenGuard`, and RAII removes the registry entry and releases
+///   both permits. No terminal result is sent: the peer is gone.
+/// * **server shutdown** — [`Server::close_subscription_streams`](crate::server::Server::close_subscription_streams)
+///   sends each stream its terminal [`SubscriptionsListenResult`](crate::types::subscriptions::SubscriptionsListenResult)
+///   and then ends it. This is the ONLY trigger that sends a terminal result.
+///   The result is pre-built HERE, at registration, because this is where the
+///   shared v2 envelope helpers live.
+/// * **buffer overflow** — a subscriber that fills its bounded channel is
+///   disconnected after one terminal SSE comment (see `LISTEN_CHANNEL_CAPACITY`).
+///
+/// # Resumability
+///
+/// The stream never reads `Last-Event-ID` and never touches the event store: it
+/// ASSERTS [`resumability_active`] is already false for a v2 request (plan 08)
+/// rather than re-deriving the rule.
+async fn assemble_subscriptions_listen(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    params: Option<serde_json::Value>,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    v2_outbound: Option<(String, String)>,
+    auth_context: Option<&crate::server::auth::AuthContext>,
+) -> Response {
+    use crate::server::subscriptions::{ListenFrame, ListenKey, LISTEN_CHANNEL_CAPACITY};
+    use crate::types::protocol::error_codes::{AUTHENTICATION_REQUIRED, METHOD_NOT_FOUND};
+    use crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD;
+
+    let era = protocol_context.map(|pc| pc.era);
+    if !matches!(era, Some(crate::types::protocol::Era::V2)) {
+        return listen_rejection_response(
+            era,
+            id,
+            METHOD_NOT_FOUND,
+            format!("Method not found: {SUBSCRIPTIONS_LISTEN_METHOD}"),
+        );
+    }
+    debug_assert!(
+        !resumability_active(state, era),
+        "a v2 request already has resumability off (plan 08); the listen stream asserts that \
+         rather than re-deriving it"
+    );
+
+    let view = listen_server_view(state).await;
+    if !crate::types::subscriptions::advertises_subscriptions(&view.capabilities) {
+        // The conformant-by-absence configuration (D-12 RESOLUTION): this server
+        // advertises no subscription-delivered capability, so it has nothing to
+        // serve here and the conformance suite records SKIPPED. The tripwire is
+        // that `server/discover` publishes the SAME capabilities this predicate
+        // just read.
+        return listen_rejection_response(
+            era,
+            id,
+            METHOD_NOT_FOUND,
+            format!(
+                "Method not found: {SUBSCRIPTIONS_LISTEN_METHOD} (this server advertises no \
+                 subscription-delivered capability)"
+            ),
+        );
+    }
+
+    // AUTH PLUMBING (the ONE threading site — do not re-resolve elsewhere): the
+    // POST pipeline already validated the request and produced this
+    // `AuthContext` before dispatch, and it is passed straight in here. Both the
+    // per-principal cap and the collision-free `ListenKey` key off its subject.
+    //
+    // FAIL-CLOSED (D-113-N): rejection case 3 above. `None` means "an auth
+    // provider is configured and this caller presented nothing it accepted", the
+    // same answer `resolve_mrtr_principal` gives the MRTR ingress on the same
+    // server. `AUTHENTICATION_REQUIRED` is deliberately NOT in
+    // `v2_status_for_code`'s 400 arm, so — exactly like the three `RATE_LIMITED`
+    // listen refusals — it answers at HTTP 200 with a JSON-RPC error body.
+    // Remapping -32003 to 401 would change the status of every other emitter of
+    // that code across this transport, so `v2_status_for_code` stays untouched.
+    let Some(principal) = resolve_listen_principal(auth_context, view.has_auth_provider) else {
+        return listen_rejection_response(
+            era,
+            id,
+            AUTHENTICATION_REQUIRED,
+            format!(
+                "{SUBSCRIPTIONS_LISTEN_METHOD} requires an authenticated caller on this server"
+            ),
+        );
+    };
+
+    let agreed = match resolve_agreed_filter(params, &view) {
+        Ok(filter) => filter,
+        Err((code, message)) => return listen_rejection_response(era, id, code, message),
+    };
+
+    let (sender, receiver) = mpsc::channel(LISTEN_CHANNEL_CAPACITY + 1);
+    // The acknowledgement goes into the channel BEFORE the entry exists, so
+    // nothing can possibly precede it — the spec MUST is structural here.
+    if sender
+        .try_send(ListenFrame::Message(listen_ack_frame(&agreed, &id)))
+        .is_err()
+    {
+        return listen_rejection_response(
+            era,
+            id,
+            crate::types::protocol::error_codes::INTERNAL_ERROR,
+            "failed to queue the subscription acknowledgement".to_string(),
+        );
+    }
+
+    let terminal = listen_terminal_result_frame(&id, protocol_context, &view.info);
+    let registry = view.registry;
+    let key = ListenKey {
+        principal,
+        request_id: id.clone(),
+    };
+    let guard = match registry.register(key, agreed, sender, terminal) {
+        Ok(guard) => guard,
+        Err(rejection) => {
+            // The code is OWNED by the rejection itself rather than chosen
+            // here, so this route can never disagree with
+            // `ListenRejection::code`'s exhaustive table. As of 113-18 that
+            // table answers all three refusals with the RETRYABLE
+            // `RATE_LIMITED`; the discriminator is the MESSAGE, not the code.
+            return listen_rejection_response(
+                era,
+                id,
+                rejection.code(),
+                rejection.message().to_string(),
+            );
+        },
+    };
+
+    // The guard is part of the stream's STATE, so a dropped SSE response drops
+    // it and RAII reclaims the registry entry and both permits — there is no
+    // unregister call anywhere that could be forgotten (T-113-63).
+    let frames =
+        futures_util::stream::unfold((receiver, guard), |(mut receiver, guard)| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (frame, (receiver, guard)))
+        });
+
+    let events = frames.map(|frame| Ok::<_, Infallible>(listen_sse_event(frame)));
+    let mut response = Sse::new(events)
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(LISTEN_KEEP_ALIVE_INTERVAL))
+        .into_response();
+    attach_listen_response_headers(&mut response, v2_outbound.as_ref());
+    response
+}
+
+/// The fast path's legacy protocol-version guard.
+///
+/// Condition: `!is_init_request && !is_v2_request`, calling the PLAIN
+/// [`validate_protocol_version`]. Legacy validation applies to v1 non-init
+/// requests ONLY — an accepted v2 request is validated by the v2 gate that ran
+/// before this (D-11 left v1 untouched). A v1 / non-opted-in `server/discover`
+/// also flows through here, with no bypass.
+///
+/// # The asymmetry with its twin is DELIBERATE (D-08) — but it is not a
+/// # difference in the PREDICATE
+///
+/// Stated precisely, because the imprecise version misleads:
+/// [`guard_legacy_version_with_middleware`] spells its condition
+/// `!is_v2_request` and passes `is_init_request` INTO
+/// [`validate_protocol_version_with_error_hook`], which opens with
+/// `if is_init_request { return Ok(()); }`. So **both guards evaluate the same
+/// effective predicate, `!is_init_request && !is_v2_request`** — they just
+/// spell it in different places.
+///
+/// What is genuinely asymmetric, and why there are two helpers:
+///
+/// 1. This path calls the PLAIN [`validate_protocol_version`], which has **no**
+///    init handling of its own — so dropping `!is_init_request` from the
+///    condition here WOULD change behavior. It cannot be "harmonised" toward
+///    the middleware spelling.
+/// 2. The middleware path additionally fires `report_middleware_error` on
+///    failure, which is `async`. That is this file's standard
+///    plain-fn + `*_with_error_hook` split, not a semantic divergence.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10); wording corrected after review.
+fn guard_legacy_version_fast(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    is_init_request: bool,
+    is_v2_request: bool,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    if !is_init_request && !is_v2_request {
+        validate_protocol_version(state, era, session_id, protocol_version)?;
+    }
+    Ok(())
+}
+
+/// Everything the fast path's read-and-classify preamble produces.
+///
+/// SIX fields — a different bundle at a different pipeline stage from
+/// [`FastPathDispatch`], which carries five. Do not conflate them.
+struct FastIngress {
+    /// The request headers, consumed by the v2 gate, session resolution and auth.
+    headers: HeaderMap,
+    /// The read-and-capped body, still needed as raw bytes by the v2 gate.
+    body: String,
+    /// The classified ingress (public request, discover, or subscriptions listen).
+    ingress: HttpIngress,
+    /// `Mcp-Session-Id`, from [`extract_session_and_protocol_headers`].
+    session_id: Option<String>,
+    /// `MCP-Protocol-Version`, from the same call.
+    protocol_version: Option<String>,
+    /// Whether this is an `initialize` request — decides session minting.
+    is_init_request: bool,
+}
+
+/// Read, validate, parse and classify a fast-path POST request.
+///
+/// The first stage of the pipeline: body read under the configured cap, header
+/// validation, transport-message parse, and ingress classification. Every
+/// failure is already a `Response`, including the v2 raw-level id recovery on a
+/// parse error (an unknown v2 method must answer 404 + -32601 with the ORIGINAL
+/// id even though its body never produced a typed request).
+///
+/// Extracted in plan 113.1-05 (D-10): this is a per-path helper by design, NOT
+/// shared with the middleware twin — a shared preamble is the pipeline
+/// unification D-06 rejects, and the two genuinely differ (the middleware path
+/// runs conversion, context-building and the request-middleware chain first).
+async fn read_and_classify_fast(
+    state: &ServerState,
+    request: axum::extract::Request<Body>,
+) -> std::result::Result<FastIngress, Response> {
+    let (parts, body) = request.into_parts();
+    let headers = parts.headers;
+
+    let body = read_body_with_limit(body, state.config.max_request_bytes).await?;
+
+    validate_headers(&headers, "POST")?;
+
+    let ingress = match parse_transport_message_fast(body.as_bytes()) {
+        Ok(i) => i,
+        // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
+        // though its body never produced a typed request (raw-level mapping).
+        Err(response) => {
+            return Err(map_unparsed_body_for_v2(state, body.as_bytes(), response).await)
+        },
+    };
+
+    let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
+    let is_init_request = ingress.is_initialize();
+
+    Ok(FastIngress {
+        headers,
+        body,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    })
 }
 
 /// Fast path handler without HTTP middleware.
@@ -1219,70 +3527,98 @@ async fn handle_fast_path_request(
 /// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
 /// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
 /// with the middleware path.
+///
+/// # The pipeline, in order (plans 113.1-01 and 113.1-05)
+///
+/// 1. [`read_and_classify_fast`] — body read under cap, header validation,
+///    parse, ingress classification (113.1-05)
+/// 2. [`resolve_v2_gate`] — the v2 required-header gate (113.1-01). **Runs
+///    BEFORE session resolution and BEFORE the legacy version check**; see its
+///    own rustdoc for why that ordering is load-bearing
+/// 3. [`resolve_session_for_request`] — session minting / validation
+/// 4. [`guard_legacy_version_fast`] — the v1 protocol-version guard (113.1-05),
+///    asymmetric with its middleware twin BY DESIGN (D-08)
+/// 5. [`extract_and_validate_auth`] — authentication
+/// 6. [`dispatch_message_fast`] — the 4-arm ingress dispatch (113.1-01), which
+///    every arm reaches only downstream of step 5
+///
+/// **Complexity budget: cognitive 4** here plus **0** in
+/// [`handle_post_fast_path_inner`] (pmat 3.15.0), down from 30 before phase
+/// 113.1, against a hard gate of 25 and this phase's stricter target of 20.
+/// The inner fn is a branch-free `?` pipeline, so pmat scores it 0 and does not
+/// list it at all — it reports no cognitive-0 function, which is why a
+/// per-function sweep appears to skip it.
+/// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_fast_path(
     state: ServerState,
     request: axum::extract::Request<Body>,
 ) -> Response {
-    let (parts, body) = request.into_parts();
-    let headers = parts.headers;
-
-    let body = match read_body_with_limit(body, state.config.max_request_bytes).await {
-        Ok(b) => b,
-        Err(response) => return response,
-    };
-
-    if let Err(error_response) = validate_headers(&headers, "POST") {
-        return error_response;
+    // Every stage returns `Result<_, Response>`, so the pipeline is written with
+    // `?` in an inner fn and both arms collapse to the same value here. The
+    // alternative — a four-line `match { Ok(v) => v, Err(r) => return r }` per
+    // stage — is the same control flow spelled out five times.
+    match handle_post_fast_path_inner(state, request).await {
+        Ok(response) | Err(response) => response,
     }
+}
 
-    let message = match parse_transport_message_fast(body.as_bytes()) {
-        Ok(msg) => msg,
-        Err(response) => return response,
-    };
+/// The fast-path pipeline proper. See [`handle_post_fast_path`] for the stage
+/// list and the complexity budget.
+async fn handle_post_fast_path_inner(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> std::result::Result<Response, Response> {
+    let FastIngress {
+        headers,
+        body,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    } = read_and_classify_fast(&state, request).await?;
 
-    let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
-    let is_init_request = is_initialize_request(&message);
+    // v2 required-header gate (VERS-05). The ordering constraints this call
+    // carries — gate BEFORE session resolution and BEFORE the legacy
+    // protocol-version check — are documented on `resolve_v2_gate` itself.
+    let (protocol_context, v2_outbound) =
+        resolve_v2_gate(&state, &headers, body.as_bytes(), &ingress).await?;
+    let is_v2_request = v2_outbound.is_some();
+    let era = protocol_context.as_ref().map(|pc| pc.era);
+    let sessions_on = sessions_active(&state, era);
 
-    let response_session_id = match resolve_session_for_request(
+    let response_session_id = resolve_session_for_request(
         &state,
+        era,
         is_init_request,
         session_id.clone(),
         protocol_version.clone(),
-    ) {
-        Ok(sid) => sid,
-        Err(error_response) => return error_response,
-    };
+    )?;
 
-    if !is_init_request {
-        if let Err(error_response) =
-            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
-        {
-            return error_response;
-        }
-    }
+    guard_legacy_version_fast(
+        &state,
+        era,
+        is_init_request,
+        is_v2_request,
+        session_id.as_ref(),
+        protocol_version.as_ref(),
+    )?;
 
-    let auth_context = match extract_and_validate_auth(&state, &headers).await {
-        Ok(ctx) => ctx,
-        Err(response) => return response,
-    };
+    let auth_context = extract_and_validate_auth(&state, &headers).await?;
 
-    match message {
-        TransportMessage::Request { id, request } => {
-            handle_fast_path_request(
-                &state,
-                id,
-                request,
-                auth_context,
-                is_init_request,
-                response_session_id,
-                session_id.as_ref(),
-            )
-            .await
+    Ok(dispatch_message_fast(
+        &state,
+        ingress,
+        FastPathDispatch {
+            is_init_request,
+            response_session_id,
+            protocol_context,
+            v2_outbound,
+            sessions_on,
         },
-        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
-            StatusCode::ACCEPTED.into_response()
-        },
-    }
+        auth_context,
+        session_id.as_ref(),
+    )
+    .await)
 }
 
 /// Build the HTTP middleware context from a middleware-adapted request.
@@ -1314,7 +3650,7 @@ async fn convert_axum_to_middleware_request(
         .map_err(|e| {
             create_error_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                -32600,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
                 &format!("Request body exceeds limit: {}", e),
             )
         })
@@ -1326,13 +3662,14 @@ async fn convert_axum_to_middleware_request(
 /// branch on `is_init_request` for the error-kind string.
 async fn resolve_session_with_error_hook(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<String>,
     protocol_version: Option<String>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> std::result::Result<Option<String>, Response> {
-    match resolve_session_for_request(state, is_init_request, session_id, protocol_version) {
+    match resolve_session_for_request(state, era, is_init_request, session_id, protocol_version) {
         Ok(sid) => Ok(sid),
         Err(error_response) => {
             let kind = if is_init_request {
@@ -1350,6 +3687,7 @@ async fn resolve_session_with_error_hook(
 /// error hook on failure. A no-op for init requests.
 async fn validate_protocol_version_with_error_hook(
     state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
     is_init_request: bool,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
@@ -1359,7 +3697,8 @@ async fn validate_protocol_version_with_error_hook(
     if is_init_request {
         return Ok(());
     }
-    if let Err(error_response) = validate_protocol_version(state, session_id, protocol_version) {
+    if let Err(error_response) = validate_protocol_version(state, era, session_id, protocol_version)
+    {
         report_middleware_error(
             http_middleware,
             http_context,
@@ -1371,26 +3710,312 @@ async fn validate_protocol_version_with_error_hook(
     Ok(())
 }
 
-/// Dispatch the parsed `TransportMessage` on the middleware path.
+/// Run the v2 required-header gate and fire the middleware error hook on a
+/// gate rejection.
 ///
-/// Handles `Request` (server-handled + response assembly), `Notification`
+/// Wraps [`resolve_v2_gate`] so the middleware path does not have to repeat the
+/// gate's three-arm classification just to add one hook call. The ordering
+/// constraints documented on [`resolve_v2_gate`] apply identically here.
+async fn resolve_v2_gate_with_error_hook(
+    state: &ServerState,
+    headers: &HeaderMap,
+    raw_body: &[u8],
+    ingress: &HttpIngress,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<V2GateResolved, Response> {
+    match resolve_v2_gate(state, headers, raw_body, ingress).await {
+        Ok(resolved) => Ok(resolved),
+        Err(error_response) => {
+            report_middleware_error(http_middleware, http_context, "v2 header gate rejected").await;
+            Err(error_response)
+        },
+    }
+}
+
+/// Per-request dispatch inputs threaded into the middleware-path handler.
+///
+/// The middleware-path twin of [`FastPathDispatch`]: carries the Plan-04-resolved
+/// `ProtocolContext` (CONSUMED at dispatch, never re-resolved) and the optional
+/// v2 outbound headers to echo on success AND error.
+struct MiddlewareDispatch {
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    v2_outbound: Option<(String, String)>,
+    /// [`sessions_active`] for THIS request — gates the `Mcp-Session-Id`
+    /// response header (HTTP-01).
+    sessions_on: bool,
+}
+
+/// Assemble the `server/discover` response on the middleware path (VERS-04).
+///
+/// The middleware-path twin of [`assemble_discover_response_fast`]: projects via
+/// [`Server::handle_discover`](crate::server::Server::handle_discover), stores the
+/// response event, runs the SAME response-middleware assembly every other
+/// response runs ([`build_success_response_with_middleware`]), and echoes the v2
+/// outbound headers on an accepted v2 discover — preserving the original id.
+/// Reached only AFTER session, the v2 matrix, legacy-version validation, and auth
+/// (no bypass). See [`assemble_discover_response_fast`] for the D-10 `-32601@200`
+/// decision on v1 / non-opted-in discover.
+async fn assemble_discover_response_with_middleware(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    shape: InternalResponseShape<'_>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> Response {
+    let InternalResponseShape {
+        response_session_id,
+        v2_outbound,
+        sessions_on,
+    } = shape;
+    let live_id = id.clone();
+    let json_response = {
+        let server = state.server.lock().await;
+        server.handle_discover(id, protocol_context)
+    };
+    let era = protocol_context.map(|pc| pc.era);
+    let v2_status = v2_dispatch_response_status(era, &json_response);
+    // Same structural guarantee as every other direct response (HTTP-05).
+    let response_msg =
+        TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
+
+    store_response_event(state, era, response_session_id, &response_msg).await;
+
+    // Discover is never an init request → compute the outbound version normally.
+    let version_to_send =
+        compute_outbound_protocol_version(state, response_session_id, false, None);
+
+    let mut response = build_success_response_with_middleware(
+        &response_msg,
+        response_session_id,
+        &version_to_send,
+        sessions_on,
+        http_middleware,
+        http_context,
+    )
+    .await;
+
+    if let Some((method, name)) = &v2_outbound {
+        apply_v2_outbound_headers(response.headers_mut(), method, name);
+    }
+    if let Some(status) = v2_status {
+        *response.status_mut() = status;
+    }
+    response
+}
+
+/// Dispatch the classified ingress on the fast path.
+///
+/// Handles a public `Request` (server-handled + response assembly), a
+/// `server/discover` ingress (the VERS-04 per-path assembly), a
+/// `subscriptions/listen` ingress (the HTTP-04 held-open stream), and
+/// `Notification` / `Response` (202 Accepted) in separate arms.
+///
+/// # Calling contract — auth has ALREADY succeeded
+///
+/// This helper assumes authentication is done: its `auth_context` parameter is
+/// the value [`extract_and_validate_auth`] returned, and EVERY arm — including
+/// `SubscriptionsListen` — therefore runs downstream of it. The access-control
+/// property is that the caller invokes this only after that call returned `Ok`;
+/// it is not the textual order of the match arms below, which are mutually
+/// exclusive `HttpIngress` variants.
+///
+/// Extracted in plan 113.1-01 (D-06): the fast path held this match inline
+/// while the middleware path already delegated to
+/// [`dispatch_message_with_middleware`]. The twins now sit adjacent.
+async fn dispatch_message_fast(
+    state: &ServerState,
+    ingress: HttpIngress,
+    dispatch: FastPathDispatch,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    session_id: Option<&String>,
+) -> Response {
+    match ingress {
+        HttpIngress::Public(TransportMessage::Request { id, request }) => {
+            // `dispatch` is forwarded whole: this arm needs every field, so
+            // unpacking it here only to rebuild an identical struct would be an
+            // identity round-trip of a ~1 KiB value. The arms below destructure
+            // with `..` because they need only parts.
+            //
+            // `Box::pin`: the dispatch future crosses clippy's large_future
+            // threshold once the v2 status mapping is threaded through it —
+            // boxing keeps the handler future small without changing behavior
+            // (same treatment the two POST entrypoints already get).
+            Box::pin(handle_fast_path_request(
+                state,
+                id,
+                request,
+                auth_context,
+                dispatch,
+                session_id,
+            ))
+            .await
+        },
+        // Per-path response assembly (finding #3/#4): reached AFTER session, the v2
+        // matrix, legacy-version validation, and auth — never an early return.
+        HttpIngress::Discover { id, .. } => {
+            let FastPathDispatch {
+                response_session_id,
+                protocol_context,
+                v2_outbound,
+                sessions_on,
+                ..
+            } = dispatch;
+            assemble_discover_response_fast(
+                state,
+                id,
+                protocol_context.as_ref(),
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                session_id,
+            )
+            .await
+        },
+        // HTTP-04: the capability-gated listen route. Reached AFTER the same
+        // session / v2-matrix / legacy-version / auth pipeline as every other
+        // ingress — a held-open stream must not be a way around auth.
+        HttpIngress::SubscriptionsListen { id, params } => {
+            let FastPathDispatch {
+                protocol_context,
+                v2_outbound,
+                ..
+            } = dispatch;
+            Box::pin(assemble_subscriptions_listen(
+                state,
+                id,
+                params,
+                protocol_context.as_ref(),
+                v2_outbound,
+                auth_context.as_ref(),
+            ))
+            .await
+        },
+        // TASK-02: the v2 task-input delivery route. Like every other arm here it
+        // is reached AFTER the session / v2-matrix / legacy-version / auth
+        // pipeline, and it carries `auth_context` into the router because the
+        // `-32003` refusal is one of the router's five ordered gates.
+        HttpIngress::TasksUpdate { id, params } => {
+            let FastPathDispatch {
+                response_session_id,
+                protocol_context,
+                v2_outbound,
+                sessions_on,
+                ..
+            } = dispatch;
+            Box::pin(assemble_tasks_update_fast(
+                state,
+                TasksUpdateCall {
+                    id,
+                    params,
+                    protocol_context: protocol_context.as_ref(),
+                    auth_context: auth_context.as_ref(),
+                },
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                session_id,
+            ))
+            .await
+        },
+        HttpIngress::Public(
+            TransportMessage::Notification { .. } | TransportMessage::Response(_),
+        ) => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+/// Dispatch the classified ingress on the middleware path.
+///
+/// Handles a public `Request` (server-handled + response assembly), a
+/// `server/discover` ingress (the VERS-04 per-path assembly), `Notification`
 /// (202 Accepted), and `Response` (202 Accepted) in separate arms.
 async fn dispatch_message_with_middleware(
     state: &ServerState,
-    message: TransportMessage,
-    is_init_request: bool,
-    response_session_id: Option<String>,
+    ingress: HttpIngress,
+    dispatch: MiddlewareDispatch,
     auth_context: Option<crate::server::auth::AuthContext>,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> Response {
-    match message {
-        TransportMessage::Request { id, request } => {
-            let json_response = {
-                let server = state.server.lock().await;
-                server.handle_request(id, request, auth_context).await
-            };
-            let response_msg = TransportMessage::Response(json_response);
+    let MiddlewareDispatch {
+        is_init_request,
+        response_session_id,
+        protocol_context,
+        v2_outbound,
+        sessions_on,
+    } = dispatch;
+    match ingress {
+        HttpIngress::Discover { id, .. } => {
+            assemble_discover_response_with_middleware(
+                state,
+                id,
+                protocol_context.as_ref(),
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                http_middleware,
+                http_context,
+            )
+            .await
+        },
+        // HTTP-04: the capability-gated listen route (see the fast-path twin).
+        HttpIngress::SubscriptionsListen { id, params } => {
+            assemble_subscriptions_listen(
+                state,
+                id,
+                params,
+                protocol_context.as_ref(),
+                v2_outbound,
+                auth_context.as_ref(),
+            )
+            .await
+        },
+        // TASK-02: the v2 task-input delivery route (see the fast-path twin).
+        HttpIngress::TasksUpdate { id, params } => {
+            assemble_tasks_update_with_middleware(
+                state,
+                TasksUpdateCall {
+                    id,
+                    params,
+                    protocol_context: protocol_context.as_ref(),
+                    auth_context: auth_context.as_ref(),
+                },
+                InternalResponseShape {
+                    response_session_id: response_session_id.as_ref(),
+                    v2_outbound,
+                    sessions_on,
+                },
+                http_middleware,
+                http_context,
+            )
+            .await
+        },
+        HttpIngress::Public(TransportMessage::Request { id, request }) => {
+            let era = protocol_context.as_ref().map(|pc| pc.era);
+            // Captured BEFORE dispatch consumes it (see the fast-path twin).
+            let live_id = id.clone();
+            // Thread the ALREADY-RESOLVED ProtocolContext into dispatch (Plan 06
+            // / D-11): never re-resolved downstream. The shared seam also retires
+            // the v2-removed `resources/subscribe`/`unsubscribe` (HTTP-04).
+            let json_response =
+                dispatch_request_or_retire(state, id, request, auth_context, protocol_context)
+                    .await;
+            // Code-driven v2 status (see the fast-path twin).
+            let v2_status = v2_dispatch_response_status(era, &json_response);
+            // Same structural guarantee as every other direct response (HTTP-05).
+            let response_msg = TransportMessage::Response(envelope_for_live_request(
+                json_response.payload,
+                live_id,
+            ));
 
             let negotiated_version = if is_init_request {
                 let version = extract_negotiated_version(&response_msg);
@@ -1400,7 +4025,7 @@ async fn dispatch_message_with_middleware(
                 None
             };
 
-            store_response_event(state, response_session_id.as_ref(), &response_msg).await;
+            store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
 
             let version_to_send = compute_outbound_protocol_version(
                 state,
@@ -1409,19 +4034,162 @@ async fn dispatch_message_with_middleware(
                 negotiated_version.as_deref(),
             );
 
-            build_success_response_with_middleware(
+            let mut response = build_success_response_with_middleware(
                 &response_msg,
                 response_session_id.as_ref(),
                 &version_to_send,
+                sessions_on,
                 http_middleware,
                 http_context,
             )
-            .await
+            .await;
+
+            // v2 outbound headers on BOTH success and structured error (VERS-05).
+            if let Some((method, name)) = &v2_outbound {
+                apply_v2_outbound_headers(response.headers_mut(), method, name);
+            }
+            if let Some(status) = v2_status {
+                *response.status_mut() = status;
+            }
+            response
         },
-        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
-            StatusCode::ACCEPTED.into_response()
-        },
+        HttpIngress::Public(
+            TransportMessage::Notification { .. } | TransportMessage::Response(_),
+        ) => StatusCode::ACCEPTED.into_response(),
     }
+}
+
+/// The middleware path's legacy protocol-version guard.
+///
+/// Condition: `!is_v2_request` **ONLY**, passing `is_init_request` INTO
+/// [`validate_protocol_version_with_error_hook`] rather than testing it here.
+/// That wrapper's own rustdoc reads "A no-op for init requests" — the init check
+/// is folded inside it BY DESIGN, and it also fires `report_middleware_error` on
+/// failure, which the plain fast-path call cannot do.
+///
+/// # The asymmetry with its twin is DELIBERATE (D-08) — but it is not a
+/// # difference in the PREDICATE
+///
+/// [`guard_legacy_version_fast`] spells its condition
+/// `!is_init_request && !is_v2_request` and calls the PLAIN
+/// [`validate_protocol_version`]. Because the wrapper this one calls already
+/// returns early on `is_init_request`, **both guards evaluate the same
+/// effective predicate** — the init test simply lives one layer deeper here.
+///
+/// The real reasons there are two helpers: the fast path's callee has no init
+/// handling (so its condition must state it), and this path needs the `async`
+/// `report_middleware_error` hook. That is the file's standard
+/// plain-fn + `*_with_error_hook` split.
+///
+/// Extracted in plan 113.1-05 (D-08, D-10); wording corrected after review.
+#[allow(clippy::too_many_arguments)]
+async fn guard_legacy_version_with_middleware(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    is_init_request: bool,
+    is_v2_request: bool,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<(), Response> {
+    if !is_v2_request {
+        validate_protocol_version_with_error_hook(
+            state,
+            era,
+            is_init_request,
+            session_id,
+            protocol_version,
+            http_middleware,
+            http_context,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Everything the middleware path's read-and-classify preamble produces.
+///
+/// SIX fields, not eight: the middleware path's headers and body stay reachable
+/// through `server_request` rather than being lifted into separate bindings, so
+/// carrying them again would duplicate state the handler already reads from
+/// there. A different bundle at a different pipeline stage from
+/// [`MiddlewareDispatch`], which carries five.
+struct MwIngress {
+    /// The converted middleware request — this path's headers/body carrier.
+    server_request: crate::server::http_middleware::ServerHttpRequest,
+    /// Built by [`build_middleware_context`]; threaded into every later hook.
+    http_context: ServerHttpContext,
+    /// The classified ingress (public request, discover, or subscriptions listen).
+    ingress: HttpIngress,
+    /// `Mcp-Session-Id`, from [`extract_session_and_protocol_headers`].
+    session_id: Option<String>,
+    /// `MCP-Protocol-Version`, from the same call.
+    protocol_version: Option<String>,
+    /// Whether this is an `initialize` request — decides session minting.
+    is_init_request: bool,
+}
+
+/// Convert, run request middleware, validate, parse and classify a
+/// middleware-path POST request.
+///
+/// The middleware twin of [`read_and_classify_fast`], and deliberately a
+/// SEPARATE function rather than a shared preamble (D-06 rejects pipeline
+/// unification). The divergence is real: this path converts the axum request,
+/// builds the middleware context, runs the request-middleware chain, and hooks
+/// `report_middleware_error` on header-validation failure — none of which the
+/// fast path has.
+///
+/// Two orderings inside are load-bearing and must not be rearranged:
+/// [`build_middleware_context`] runs BEFORE [`run_request_middleware`] (the
+/// chain receives the context), and `report_middleware_error` runs AFTER the
+/// [`validate_headers`] call it reports on.
+///
+/// Extracted in plan 113.1-05 (D-10).
+async fn read_and_classify_with_middleware(
+    state: &ServerState,
+    request: axum::extract::Request<Body>,
+    http_middleware: &ServerHttpMiddlewareChain,
+) -> std::result::Result<MwIngress, Response> {
+    let mut server_request =
+        convert_axum_to_middleware_request(request, state.config.max_request_bytes).await?;
+
+    let http_context = build_middleware_context(&server_request);
+
+    run_request_middleware(http_middleware, &mut server_request, &http_context).await?;
+
+    if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
+        report_middleware_error(http_middleware, &http_context, "Header validation failed").await;
+        return Err(error_response);
+    }
+
+    let ingress = match parse_transport_message_with_middleware(
+        &server_request.body,
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(i) => i,
+        // A v2 unknown method must be 404 + -32601 with the ORIGINAL id, even
+        // though its body never produced a typed request (raw-level mapping).
+        Err(response) => {
+            return Err(map_unparsed_body_for_v2(state, &server_request.body, response).await)
+        },
+    };
+
+    let (session_id, protocol_version) =
+        extract_session_and_protocol_headers(&server_request.headers);
+    let is_init_request = ingress.is_initialize();
+
+    Ok(MwIngress {
+        server_request,
+        http_context,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    })
 }
 
 /// Handler with HTTP middleware integration.
@@ -1432,95 +4200,122 @@ async fn dispatch_message_with_middleware(
 /// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
 /// [`dispatch_message_with_middleware`] so this orchestrator is a thin
 /// early-return pipeline.
+///
+/// # The pipeline, in order (plans 113.1-01 and 113.1-05)
+///
+/// 1. [`read_and_classify_with_middleware`] — conversion, context build,
+///    request-middleware chain, header validation, parse, classification
+///    (113.1-05)
+/// 2. [`resolve_v2_gate_with_error_hook`] — the v2 required-header gate plus the
+///    middleware error hook (113.1-01). **Runs BEFORE session resolution and
+///    BEFORE the legacy version check**; see [`resolve_v2_gate`]'s rustdoc for
+///    why that ordering is load-bearing
+/// 3. [`resolve_session_with_error_hook`] — session minting / validation
+/// 4. [`guard_legacy_version_with_middleware`] — the v1 protocol-version guard
+///    (113.1-05), asymmetric with its fast-path twin BY DESIGN (D-08)
+/// 5. [`extract_auth_with_middleware`] — authentication
+/// 6. [`dispatch_message_with_middleware`] — the ingress dispatch
+///
+/// **Complexity budget: cognitive 4** here plus **0** in
+/// [`handle_post_with_middleware_inner`] (pmat 3.15.0), down from 31 before
+/// phase 113.1, against a hard gate of 25 and this phase's stricter target of
+/// 20. The inner fn is a branch-free `?` pipeline, so pmat scores it 0 and does
+/// not list it at all — see [`handle_post_fast_path`] for the same note.
+/// Recorded so a later phase adding to this handler can see what it is spending.
 async fn handle_post_with_middleware(
     state: ServerState,
     request: axum::extract::Request<Body>,
 ) -> Response {
+    // See [`handle_post_fast_path`] for why the pipeline lives in an inner fn.
+    match handle_post_with_middleware_inner(state, request).await {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+/// The middleware-path pipeline proper. See [`handle_post_with_middleware`] for
+/// the stage list and the complexity budget.
+async fn handle_post_with_middleware_inner(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> std::result::Result<Response, Response> {
     let http_middleware = state
         .config
         .http_middleware
         .as_ref()
         .expect("Middleware chain must exist");
 
-    let mut server_request =
-        match convert_axum_to_middleware_request(request, state.config.max_request_bytes).await {
-            Ok(req) => req,
-            Err(response) => return response,
-        };
+    let MwIngress {
+        server_request,
+        http_context,
+        ingress,
+        session_id,
+        protocol_version,
+        is_init_request,
+    } = read_and_classify_with_middleware(&state, request, http_middleware).await?;
 
-    let http_context = build_middleware_context(&server_request);
-
-    if let Err(response) =
-        run_request_middleware(http_middleware, &mut server_request, &http_context).await
-    {
-        return response;
-    }
-
-    if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
-        report_middleware_error(http_middleware, &http_context, "Header validation failed").await;
-        return error_response;
-    }
-
-    let message = match parse_transport_message_with_middleware(
+    // v2 required-header gate (VERS-05). The ordering constraints this call
+    // carries — gate BEFORE session resolution and BEFORE the legacy
+    // protocol-version check — are documented on `resolve_v2_gate` itself.
+    let (protocol_context, v2_outbound) = resolve_v2_gate_with_error_hook(
+        &state,
+        &server_request.headers,
         &server_request.body,
+        &ingress,
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        Ok(msg) => msg,
-        Err(response) => return response,
-    };
+    .await?;
+    let is_v2_request = v2_outbound.is_some();
+    let era = protocol_context.as_ref().map(|pc| pc.era);
+    let sessions_on = sessions_active(&state, era);
 
-    let (session_id, protocol_version) =
-        extract_session_and_protocol_headers(&server_request.headers);
-    let is_init_request = is_initialize_request(&message);
-
-    let response_session_id = match resolve_session_with_error_hook(
+    let response_session_id = resolve_session_with_error_hook(
         &state,
+        era,
         is_init_request,
         session_id.clone(),
         protocol_version.clone(),
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        Ok(sid) => sid,
-        Err(response) => return response,
-    };
+    .await?;
 
-    if let Err(response) = validate_protocol_version_with_error_hook(
+    guard_legacy_version_with_middleware(
         &state,
+        era,
         is_init_request,
+        is_v2_request,
         session_id.as_ref(),
         protocol_version.as_ref(),
         http_middleware,
         &http_context,
     )
-    .await
-    {
-        return response;
-    }
+    .await?;
 
     let auth_context =
-        match extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
-            .await
-        {
-            Ok(ctx) => ctx,
-            Err(response) => return response,
-        };
+        extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
+            .await?;
 
-    dispatch_message_with_middleware(
+    // `Box::pin` the dispatch future: the discover per-path assembly (Plan 112-10)
+    // grows it past clippy's large_future threshold; boxing keeps the handler
+    // future small without changing behavior. Pre-dates plan 113.1 and is kept —
+    // unlike the fast path's, where an outer box was added by the extraction and
+    // measured unnecessary (see `dispatch_message_fast`'s call site).
+    Ok(Box::pin(dispatch_message_with_middleware(
         &state,
-        message,
-        is_init_request,
-        response_session_id,
+        ingress,
+        MiddlewareDispatch {
+            is_init_request,
+            response_session_id,
+            protocol_context,
+            v2_outbound,
+            sessions_on,
+        },
         auth_context,
         http_middleware,
         &http_context,
-    )
-    .await
+    ))
+    .await)
 }
 
 /// Handle GET requests for SSE streams
@@ -1528,25 +4323,30 @@ async fn handle_post_with_middleware(
 ///
 /// Returns `Ok(session_id)` on success, or an error response (404 unknown
 /// session, 405 stateless-mode).
+/// A GET carries no body and therefore no `_meta`, so the ONLY era signal is the
+/// `MCP-Protocol-Version` header — and a v2 GET is already answered `405` by
+/// [`handle_get_sse`] before this runs. Sessions are therefore evaluated at
+/// `era = None`, which [`sessions_active`] resolves to exactly the pre-113
+/// config-only behavior for the v1 / non-opted-in traffic that can reach here.
 fn resolve_sse_session(
     state: &ServerState,
     incoming_session_id: Option<String>,
 ) -> std::result::Result<String, Response> {
+    let sessions_on = sessions_active(state, None);
     if let Some(sid) = incoming_session_id {
-        if state.config.session_id_generator.is_some() && !state.sessions.read().contains_key(&sid)
-        {
+        if sessions_on && !state.sessions.read().contains_key(&sid) {
             return Err(create_error_response(
                 StatusCode::NOT_FOUND,
-                -32600,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
                 "Unknown session ID",
             ));
         }
         return Ok(sid);
     }
-    let Some(generator) = &state.config.session_id_generator else {
+    let Some(generator) = active_session_generator(state, None) else {
         return Err(create_error_response(
             StatusCode::METHOD_NOT_ALLOWED,
-            -32601,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
             "SSE not supported in stateless mode",
         ));
     };
@@ -1566,22 +4366,33 @@ fn resolve_sse_session(
 
 /// Replay events from the event store after a `Last-Event-ID` header value
 /// into an SSE sender channel. Fire-and-forget on any intermediate failure.
+///
+/// `event_store` comes from [`resumability_store`], so on a v2 request it is
+/// `None` and this function returns before it ever LOOKS at `Last-Event-ID` —
+/// the spec's "ignore it" taken literally, at the only site in the transport that
+/// reads that header (T-113-29).
 async fn replay_sse_events_from_header(
     headers: &HeaderMap,
     tx: &mpsc::UnboundedSender<TransportMessage>,
-    event_store: Option<&Arc<InMemoryEventStore>>,
+    event_store: Option<&EventStoreHandle>,
 ) {
+    // Deliberately FIRST: an era that suppresses resumability must not even parse
+    // an attacker-supplied replay cursor.
+    let Some(store) = event_store else {
+        return;
+    };
     let Some(last_event_id) = headers.get(LAST_EVENT_ID) else {
         return;
     };
     let Ok(last_id) = last_event_id.to_str() else {
         return;
     };
-    let Some(store) = event_store else {
-        return;
-    };
     if let Ok(events) = store.replay_events_after(last_id).await {
         for (_event_id, msg) in events {
+            // A REPLAYED HISTORICAL EVENT is not a direct response: it keeps its
+            // ORIGINAL id, which is correct and is asserted as such by
+            // `v1_replayed_event_retains_original_id`. See the direct-response
+            // audit block above `envelope_for_live_request`.
             let _ = tx.send(msg);
         }
     }
@@ -1589,10 +4400,12 @@ async fn replay_sse_events_from_header(
 
 /// Map a `TransportMessage` to an SSE `Event`, spawning a best-effort event
 /// store write in parallel.
+///
+/// `event_store` comes from [`resumability_store`], so a v2 stream writes nothing.
 fn sse_event_for_message(
     msg: &TransportMessage,
     session_id: &str,
-    event_store: Option<&Arc<InMemoryEventStore>>,
+    event_store: Option<&EventStoreHandle>,
 ) -> Event {
     let event_id = Uuid::new_v4().to_string();
     if let Some(store) = event_store {
@@ -1631,6 +4444,9 @@ fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
 /// [`replay_sse_events_from_header`], [`sse_event_for_message`], and
 /// [`attach_sse_response_headers`] so this orchestrator is a short pipeline.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(rejection) = v2_verb_rejection(&state, &headers, "GET").await {
+        return rejection;
+    }
     if let Err(error_response) = validate_headers(&headers, "GET") {
         return error_response;
     }
@@ -1648,7 +4464,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     if state.sse_streams.read().contains_key(&session_id) {
         return create_error_response(
             StatusCode::CONFLICT,
-            -32600,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
             "SSE stream already exists for this session",
         );
     }
@@ -1659,12 +4475,19 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
         .write()
         .insert(session_id.clone(), tx.clone());
 
-    replay_sse_events_from_header(&headers, &tx, state.config.event_store.as_ref()).await;
+    // A GET carries no body and therefore no `_meta`, so `era = None` — and a v2
+    // GET is already answered `405` at the top of this function, so only v1 /
+    // non-opted-in traffic reaches here. `resumability_store(state, None)` is
+    // therefore exactly the pre-113 config-only read, the same reasoning
+    // [`resolve_sse_session`] records for its `sessions_active(state, None)`.
+    let resumability = resumability_store(&state, None).cloned();
+
+    replay_sse_events_from_header(&headers, &tx, resumability.as_ref()).await;
 
     let stream = UnboundedReceiverStream::new(rx);
     let session_id_for_header = session_id.clone();
     let session_id_for_stream = session_id.clone();
-    let event_store = state.config.event_store.clone();
+    let event_store = resumability;
 
     let sse = Sse::new(stream.map(move |msg| {
         Ok::<_, Infallible>(sse_event_for_message(
@@ -1684,6 +4507,9 @@ async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Some(rejection) = v2_verb_rejection(&state, &headers, "DELETE").await {
+        return rejection;
+    }
     // Extract session ID
     let session_id = headers
         .get(MCP_SESSION_ID)
@@ -1694,9 +4520,16 @@ async fn handle_delete_session(
         // Check if session exists
         let session_exists = state.sessions.read().contains_key(&sid);
 
-        if !session_exists && state.config.session_id_generator.is_some() {
+        // A DELETE carries no body, so `era = None` — and a v2 DELETE is already
+        // answered `405` above, so only v1 / non-opted-in traffic reaches here.
+        // `sessions_active(state, None)` is exactly the pre-113 config-only read.
+        if !session_exists && sessions_active(&state, None) {
             // Unknown session in stateful mode
-            return create_error_response(StatusCode::NOT_FOUND, -32600, "Unknown session ID");
+            return create_error_response(
+                StatusCode::NOT_FOUND,
+                crate::types::protocol::error_codes::INVALID_REQUEST,
+                "Unknown session ID",
+            );
         }
 
         // Remove SSE stream if exists
@@ -1713,13 +4546,100 @@ async fn handle_delete_session(
         (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
     } else {
         // No session to delete
-        create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
+        create_error_response(
+            StatusCode::NOT_FOUND,
+            crate::types::protocol::error_codes::INVALID_REQUEST,
+            "No session ID provided",
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::protocol::Era;
+
+    // -----------------------------------------------------------------------
+    // Session era gate (Plan 113-04, HTTP-01).
+    // -----------------------------------------------------------------------
+
+    /// The full four-row truth table from the plan's `<behavior>` block.
+    #[test]
+    fn sessions_active_truth_table() {
+        // A stateful config + a v2 request → sessions OFF (the whole point of
+        // HTTP-01: the era overrides the build-time config).
+        assert!(!sessions_active_for(true, Some(Era::V2)));
+        // A stateful config + a v1 request → sessions ON, exactly as before.
+        assert!(sessions_active_for(true, Some(Era::V1)));
+        // A stateful config on a server NOT opted into v2 → sessions ON. `None`
+        // means zero era code ran at all (D-04).
+        assert!(sessions_active_for(true, None));
+        // An explicitly `stateless()` server stays stateless in every era.
+        assert!(!sessions_active_for(false, Some(Era::V2)));
+        assert!(!sessions_active_for(false, Some(Era::V1)));
+        assert!(!sessions_active_for(false, None));
+    }
+
+    /// A v2 request NEVER has sessions, whatever the config says.
+    #[test]
+    fn v2_always_suppresses_sessions() {
+        for cfg in [true, false] {
+            assert!(
+                !sessions_active_for(cfg, Some(Era::V2)),
+                "v2 must be session-free with cfg_has_generator = {cfg}"
+            );
+        }
+    }
+
+    /// `apply_session_header` is the ONLY session-header emitter, and it emits
+    /// nothing when sessions are inactive — defense in depth for HTTP-01.
+    #[test]
+    fn session_header_is_never_emitted_when_sessions_are_inactive() {
+        let sid = "sess-123".to_string();
+
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&sid), false);
+        assert!(
+            headers.get(MCP_SESSION_ID).is_none(),
+            "sessions inactive → no Mcp-Session-Id"
+        );
+
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&sid), true);
+        assert_eq!(
+            headers.get(MCP_SESSION_ID).and_then(|v| v.to_str().ok()),
+            Some("sess-123"),
+        );
+
+        // No id to emit → nothing emitted, even with sessions active.
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, None, true);
+        assert!(headers.get(MCP_SESSION_ID).is_none());
+
+        // A header-unrepresentable id is SKIPPED, never unwrapped (T-112-13).
+        let bad = "bad\nvalue".to_string();
+        let mut headers = HeaderMap::new();
+        apply_session_header(&mut headers, Some(&bad), true);
+        assert!(headers.get(MCP_SESSION_ID).is_none());
+    }
+
+    proptest::proptest! {
+        /// The predicate never panics and is EXACTLY the stated boolean
+        /// expression over arbitrary `(bool, Option<Era>)` inputs.
+        #[test]
+        fn sessions_active_is_exactly_its_stated_expression(
+            cfg_has_generator in proptest::prelude::any::<bool>(),
+            era_code in 0u8..3,
+        ) {
+            let era = match era_code {
+                0 => None,
+                1 => Some(Era::V1),
+                _ => Some(Era::V2),
+            };
+            let expected = !matches!(era, Some(Era::V2)) && cfg_has_generator;
+            proptest::prop_assert_eq!(sessions_active_for(cfg_has_generator, era), expected);
+        }
+    }
 
     #[test]
     fn extract_custom_claim_header_inserted_under_cognito_key() {
@@ -1776,5 +4696,1713 @@ mod tests {
         assert_eq!(ctx.subject, "u");
         assert_eq!(ctx.claims["email"], "u@example.com");
         assert_eq!(ctx.claims["custom:tier"], "gold");
+    }
+
+    // ======================================================================
+    // v2 required-header classifier (Plan 112-06, VERS-05 / D-05 / D-06).
+    // Unit + property coverage of the PURE, non-panicking gate helpers.
+    // ======================================================================
+
+    use crate::types::protocol::error_codes::{HEADER_MISMATCH, METHOD_NOT_FOUND};
+    use crate::types::protocol::PROTOCOL_VERSION_2026_07_28 as V2;
+
+    /// Build a `HeaderMap` from `(name, value)` pairs for classifier tests.
+    fn headers_from(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            let name = http::header::HeaderName::from_bytes(k.as_bytes()).unwrap();
+            h.insert(name, HeaderValue::from_str(v).unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn decode_version_header_classifies_each_kind() {
+        assert_eq!(
+            decode_version_header(&headers_from(&[])),
+            HeaderProtocolVersion::Absent
+        );
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, V2)])),
+            HeaderProtocolVersion::V2
+        );
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, "2025-11-25")])),
+            HeaderProtocolVersion::Other
+        );
+        // Oversized value → Malformed, never a panic.
+        let big = "x".repeat(MAX_V2_HEADER_VALUE_LEN + 1);
+        assert_eq!(
+            decode_version_header(&headers_from(&[(MCP_PROTOCOL_VERSION, &big)])),
+            HeaderProtocolVersion::Malformed
+        );
+    }
+
+    #[test]
+    fn classify_era_cell_covers_every_matrix_cell() {
+        // v2/v2 → enforce
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::V2, true),
+            V2Classification::Enforce
+        ));
+        // v1/v1 → legacy
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Other, false),
+            V2Classification::Legacy
+        ));
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Absent, false),
+            V2Classification::Legacy
+        ));
+        // v2-header / non-v2-meta → reject
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::V2, false),
+            V2Classification::Reject(HEADER_MISMATCH, _)
+        ));
+        // non-v2-header / v2-meta → reject
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Absent, true),
+            V2Classification::Reject(HEADER_MISMATCH, _)
+        ));
+        assert!(matches!(
+            classify_era_cell(HeaderProtocolVersion::Malformed, true),
+            V2Classification::Reject(HEADER_MISMATCH, _)
+        ));
+    }
+
+    #[test]
+    fn require_three_headers_needs_all_three() {
+        // All three present → Ok
+        let ok = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        assert_eq!(
+            require_three_headers(&ok).unwrap(),
+            ("tools/call".to_string(), "search".to_string())
+        );
+        // Missing Mcp-Name → Err
+        let missing = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, "tools/call")]);
+        assert!(require_three_headers(&missing).is_err());
+    }
+
+    #[test]
+    fn cross_check_method_and_name_fail_closed() {
+        assert!(cross_check_method("tools/call", Some("tools/call")).is_ok());
+        assert!(cross_check_method("tools/call", Some("resources/read")).is_err());
+        assert!(cross_check_method("tools/call", None).is_err());
+
+        // name-bearing: must match params.name
+        assert!(cross_check_name("search", "tools/call", Some("search")).is_ok());
+        assert!(cross_check_name("search", "tools/call", Some("other")).is_err());
+        assert!(cross_check_name("search", "tools/call", None).is_err());
+        // name-less method: presence-only, body name irrelevant
+        assert!(cross_check_name("anything", "tools/list", None).is_ok());
+    }
+
+    #[test]
+    fn classify_v2_request_accepts_well_formed_v2() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+        assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    #[test]
+    fn classify_v2_request_rejects_method_body_mismatch() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, "search"),
+        ]);
+        // body method disagrees with Mcp-Method (smuggling)
+        let out = classify_v2_request(&h, true, Some("resources/read"), Some("search"));
+        assert!(matches!(
+            out,
+            V2GateOutcome::Reject {
+                code: HEADER_MISMATCH,
+                ..
+            }
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // The locked `Mcp-Name` header rule, in BOTH directions (Plan 113-04).
+    //
+    // RULE (113-SPEC-RECHECK.md § `Mcp-Name Header Rule`, Phase-112 D-05):
+    // `Mcp-Name` MUST be PRESENT on every v2 request; its VALUE is cross-checked
+    // only for the name-bearing methods. Plan 05's client emits exactly this.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn name_less_method_with_empty_mcp_name_is_enforce_ok() {
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/list"),
+            (MCP_NAME, ""),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        assert!(
+            matches!(out, V2GateOutcome::EnforceOk { .. }),
+            "an EMPTY Mcp-Name on a name-less v2 method must be ACCEPTED"
+        );
+    }
+
+    #[test]
+    fn name_less_method_with_absent_mcp_name_is_rejected() {
+        // Header OMITTED entirely — presence is required on EVERY v2 request.
+        let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, "tools/list")]);
+        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        assert!(
+            matches!(
+                out,
+                V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    ..
+                }
+            ),
+            "an ABSENT Mcp-Name must be rejected even for a name-less method"
+        );
+    }
+
+    #[test]
+    fn sentinel_encoded_mcp_name_matches_a_non_ascii_body_name() {
+        let name = "日本語ツール";
+        let encoded = crate::types::mrtr::encode_header_value(name);
+        assert_ne!(encoded, name, "a non-ASCII name must be sentinel-encoded");
+
+        // The pure cross-check decodes before comparing.
+        assert!(cross_check_name(&encoded, "tools/call", Some(name)).is_ok());
+        // ...and still rejects a genuine mismatch.
+        assert!(cross_check_name(&encoded, "tools/call", Some("other")).is_err());
+
+        // End to end through the classifier.
+        let h = headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, "tools/call"),
+            (MCP_NAME, &encoded),
+        ]);
+        let out = classify_v2_request(&h, true, Some("tools/call"), Some(name));
+        assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    #[test]
+    fn malformed_mcp_name_sentinel_is_a_header_mismatch() {
+        // Opens the sentinel but never closes it / is not valid base64.
+        for bad in ["=?base64?not-base64!!", "=?base64?%%%%?="] {
+            assert!(
+                cross_check_name(bad, "tools/call", Some("search")).is_err(),
+                "malformed sentinel `{bad}` must be rejected"
+            );
+            let h = headers_from(&[
+                (MCP_PROTOCOL_VERSION, V2),
+                (MCP_METHOD, "tools/call"),
+                (MCP_NAME, bad),
+            ]);
+            let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+            assert!(matches!(
+                out,
+                V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    ..
+                }
+            ));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // v2 HTTP status mapping (Plan 113-04).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v2_status_table_covers_every_transport_code() {
+        use crate::types::protocol::error_codes as ec;
+        assert_eq!(
+            v2_status_for_code(ec::METHOD_NOT_FOUND),
+            StatusCode::NOT_FOUND
+        );
+        for code in [
+            ec::HEADER_MISMATCH,
+            ec::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            ec::UNSUPPORTED_PROTOCOL_VERSION,
+            ec::PARSE_ERROR,
+            ec::INVALID_REQUEST,
+            ec::INVALID_PARAMS,
+        ] {
+            assert_eq!(
+                v2_status_for_code(code),
+                StatusCode::BAD_REQUEST,
+                "{code} must map to 400 on v2"
+            );
+        }
+        // Handler semantics stay at HTTP 200 with the error in the body.
+        for code in [ec::INTERNAL_ERROR, ec::REQUEST_TIMEOUT, ec::V1_TASK_PENDING] {
+            assert_eq!(v2_status_for_code(code), StatusCode::OK);
+        }
+    }
+
+    #[test]
+    fn status_mapping_is_era_gated_so_v1_is_untouched() {
+        use crate::types::protocol::Era;
+        // v1 and not-opted-in keep the caller's v1 status for EVERY code.
+        for era in [None, Some(Era::V1)] {
+            for code in [
+                METHOD_NOT_FOUND,
+                HEADER_MISMATCH,
+                crate::types::protocol::error_codes::PARSE_ERROR,
+            ] {
+                assert_eq!(status_for_error(era, code, StatusCode::OK), StatusCode::OK);
+            }
+        }
+        // v2 re-maps from the table.
+        assert_eq!(
+            status_for_error(Some(Era::V2), METHOD_NOT_FOUND, StatusCode::OK),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn raw_request_id_survives_a_body_that_never_typed_parses() {
+        // Numeric, string and absent ids, plus adversarial bytes — never panics.
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","id":7,"method":"totally/unknown"}"#),
+            serde_json::json!(7)
+        );
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","id":"abc","method":"nope","params":{}}"#),
+            serde_json::json!("abc")
+        );
+        assert_eq!(
+            raw_request_id(br#"{"jsonrpc":"2.0","method":"notify"}"#),
+            serde_json::Value::Null
+        );
+        assert_eq!(raw_request_id(b"{not json"), serde_json::Value::Null);
+        assert_eq!(raw_request_id(&[0xff, 0xfe, 0x00]), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn v2_dispatch_status_reads_the_code_not_the_call_site() {
+        use crate::types::jsonrpc::{JSONRPCError, ResponsePayload};
+        use crate::types::protocol::Era;
+
+        let error_response = |code: i32| crate::types::JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: crate::types::RequestId::Number(1),
+            payload: ResponsePayload::Error(JSONRPCError {
+                code,
+                message: "x".to_string(),
+                data: None,
+            }),
+        };
+
+        // -32021 is emitted by DISPATCH (plan 09), never by the header gate, so
+        // the mapping must be code-driven to reach it at all.
+        assert_eq!(
+            v2_dispatch_response_status(
+                Some(Era::V2),
+                &error_response(
+                    crate::types::protocol::error_codes::MISSING_REQUIRED_CLIENT_CAPABILITY
+                )
+            ),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            v2_dispatch_response_status(Some(Era::V2), &error_response(METHOD_NOT_FOUND)),
+            Some(StatusCode::NOT_FOUND)
+        );
+        // v1 / not-opted-in → no re-map at all.
+        assert_eq!(
+            v2_dispatch_response_status(Some(Era::V1), &error_response(METHOD_NOT_FOUND)),
+            None
+        );
+        assert_eq!(
+            v2_dispatch_response_status(None, &error_response(METHOD_NOT_FOUND)),
+            None
+        );
+        // A successful result is never re-mapped.
+        let ok = crate::types::JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: crate::types::RequestId::Number(1),
+            payload: ResponsePayload::Result(serde_json::json!({})),
+        };
+        assert_eq!(v2_dispatch_response_status(Some(Era::V2), &ok), None);
+    }
+
+    #[test]
+    fn v2_method_not_allowed_only_fires_on_the_v2_version_header() {
+        // v2 header on a v2-opted-in server → 405 on both verbs.
+        for verb in ["GET", "DELETE"] {
+            let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
+            let response = v2_method_not_allowed(&h, verb, true).expect("v2 must be 405");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
+        // Absent / v1 / unknown / malformed → the v1 handler runs unchanged.
+        assert!(v2_method_not_allowed(&headers_from(&[]), "GET", true).is_none());
+        assert!(v2_method_not_allowed(
+            &headers_from(&[(MCP_PROTOCOL_VERSION, "2025-11-25")]),
+            "GET",
+            true
+        )
+        .is_none());
+        let big = "x".repeat(MAX_V2_HEADER_VALUE_LEN + 1);
+        assert!(v2_method_not_allowed(
+            &headers_from(&[(MCP_PROTOCOL_VERSION, &big)]),
+            "DELETE",
+            true
+        )
+        .is_none());
+        // D-04: a server that never opted into 2026-07-28 runs ZERO era code, so
+        // its v1 GET/DELETE handlers stay reachable no matter what header the
+        // client sends.
+        for verb in ["GET", "DELETE"] {
+            assert!(
+                v2_method_not_allowed(&headers_from(&[(MCP_PROTOCOL_VERSION, V2)]), verb, false)
+                    .is_none(),
+                "{verb}: a non-opted-in server must not answer 405"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_version_reject_carries_a_supported_array() {
+        use crate::types::protocol::context::ProtocolNegotiationError;
+        let accept = vec![ProtocolVersion("2025-11-25".to_string()), v2_version()];
+        let outcome = negotiation_error_to_gate_reject(
+            &ProtocolNegotiationError::UnsupportedVersion("1999-01-01".to_string()),
+            &accept,
+        );
+        let V2GateOutcome::Reject { code, data, .. } = outcome else {
+            panic!("an unsupported version must reject");
+        };
+        assert_eq!(
+            code,
+            crate::types::protocol::error_codes::UNSUPPORTED_PROTOCOL_VERSION
+        );
+        let data = data.expect("UNSUPPORTED_PROTOCOL_VERSION MUST carry structured data");
+        assert!(
+            data["supported"].is_array(),
+            "data.supported must be an ARRAY: {data}"
+        );
+        assert_eq!(data["supported"][0], "2025-11-25");
+        assert_eq!(data["requested"], "1999-01-01");
+
+        // A MALFORMED _meta keeps the shared INVALID_PARAMS mapping, no data.
+        let outcome = negotiation_error_to_gate_reject(
+            &ProtocolNegotiationError::MalformedMeta("bad"),
+            &accept,
+        );
+        let V2GateOutcome::Reject { code, data, .. } = outcome else {
+            panic!("malformed _meta must reject");
+        };
+        assert_eq!(code, crate::types::protocol::error_codes::INVALID_PARAMS);
+        assert!(data.is_none());
+    }
+
+    #[test]
+    fn extract_body_method_and_name_reads_wire_shape() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("tools/call"));
+        assert_eq!(n.as_deref(), Some("search"));
+        // Garbage bytes → (None, None), never a panic.
+        assert_eq!(extract_body_method_and_name(b"not json"), (None, None));
+    }
+
+    #[test]
+    fn extract_body_method_and_name_uses_uri_for_resources_read() {
+        // resources/read carries its logical name in params.uri (NO params.name).
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"mem://greeting"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("resources/read"));
+        assert_eq!(
+            n.as_deref(),
+            Some("mem://greeting"),
+            "resources/read logical name must come from params.uri"
+        );
+
+        // prompts/get still resolves the logical name from params.name.
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"greeting"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("prompts/get"));
+        assert_eq!(n.as_deref(), Some("greeting"));
+
+        // tools/call remains params.name (unchanged).
+        let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search"}}"#;
+        let (m, n) = extract_body_method_and_name(body);
+        assert_eq!(m.as_deref(), Some("tools/call"));
+        assert_eq!(n.as_deref(), Some("search"));
+
+        // A resources/read carrying only uri yields NO name under the old
+        // params.name view — the regression guard for review finding #2.
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"file:///x"}}"#;
+        let (_, n) = extract_body_method_and_name(body);
+        assert_eq!(n.as_deref(), Some("file:///x"));
+    }
+
+    #[test]
+    fn cross_check_name_accepts_resources_read_uri() {
+        // A standards-shaped resources/read cross-checks Mcp-Name against the URI.
+        let uri = "mem://greeting";
+        assert!(cross_check_name(uri, "resources/read", Some(uri)).is_ok());
+        // A disagreeing Mcp-Name is rejected.
+        assert!(cross_check_name(uri, "resources/read", Some("mem://other")).is_err());
+        // Absent body name (would happen if extraction wrongly read params.name)
+        // still fails closed for the name-bearing method.
+        assert!(cross_check_name(uri, "resources/read", None).is_err());
+    }
+
+    #[test]
+    fn apply_v2_outbound_headers_sets_all_three_without_panic() {
+        let mut h = HeaderMap::new();
+        apply_v2_outbound_headers(&mut h, "tools/call", "search");
+        assert_eq!(h.get(MCP_METHOD).unwrap(), "tools/call");
+        assert_eq!(h.get(MCP_NAME).unwrap(), "search");
+        assert_eq!(h.get(MCP_PROTOCOL_VERSION).unwrap(), V2);
+    }
+
+    proptest::proptest! {
+        /// The classifier NEVER panics over arbitrary header bytes + signal
+        /// combinations, and holds the accept/reject invariants (T-112-13).
+        #[test]
+        fn v2_header_gate_proptest(
+            header_kind in 0u8..4,
+            meta_is_v2 in proptest::bool::ANY,
+            have_method in proptest::bool::ANY,
+            have_name in proptest::bool::ANY,
+            method_val in "[a-z/]{0,20}",
+            name_val in "[a-z]{0,20}",
+            body_method in proptest::option::of("[a-z/]{0,20}"),
+            body_name in proptest::option::of("[a-z]{0,20}"),
+        ) {
+            let mut pairs: Vec<(&str, String)> = Vec::new();
+            match header_kind {
+                0 => {}, // absent
+                1 => pairs.push((MCP_PROTOCOL_VERSION, V2.to_string())),
+                2 => pairs.push((MCP_PROTOCOL_VERSION, "2025-11-25".to_string())),
+                _ => pairs.push((MCP_PROTOCOL_VERSION, "\u{ff}bogus".to_string())),
+            }
+            if have_method {
+                pairs.push((MCP_METHOD, method_val.clone()));
+            }
+            if have_name {
+                pairs.push((MCP_NAME, name_val.clone()));
+            }
+            let mut h = HeaderMap::new();
+            for (k, v) in &pairs {
+                if let Ok(hv) = HeaderValue::from_str(v) {
+                    let name = http::header::HeaderName::from_bytes(k.as_bytes()).unwrap();
+                    h.insert(name, hv);
+                }
+            }
+
+            // Must not panic.
+            let out = classify_v2_request(&h, meta_is_v2, body_method.as_deref(), body_name.as_deref());
+
+            let header_is_v2 = decode_version_header(&h) == HeaderProtocolVersion::V2;
+            match out {
+                V2GateOutcome::Passthrough => {
+                    // Only when neither signal is v2.
+                    proptest::prop_assert!(!header_is_v2 && !meta_is_v2);
+                },
+                V2GateOutcome::EnforceOk { .. } => {
+                    // Only when BOTH signals are v2 AND all three headers present.
+                    proptest::prop_assert!(header_is_v2 && meta_is_v2);
+                    proptest::prop_assert!(have_method && have_name);
+                },
+                V2GateOutcome::Reject { code, .. } => {
+                    proptest::prop_assert_eq!(code, HEADER_MISMATCH);
+                },
+            }
+        }
+    }
+
+    // ---- Phase 112 Plan 10: HttpIngress classification + raw-_meta gate ----
+
+    use crate::types::ProtocolVersion;
+
+    fn v2_version() -> ProtocolVersion {
+        ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string())
+    }
+
+    /// Build a `ServerState` whose backing `Server` carries `accept` as its
+    /// supported-protocol accept-list (the only field the raw gate consults).
+    fn state_with_accept(accept: Vec<ProtocolVersion>) -> ServerState {
+        let server = Server::builder()
+            .name("raw-gate-test")
+            .version("1.0.0")
+            .with_supported_protocol_versions(accept)
+            .build()
+            .expect("server builds");
+        make_server_state(
+            Arc::new(tokio::sync::Mutex::new(server)),
+            StreamableHttpServerConfig::default(),
+        )
+    }
+
+    /// `server/discover` is NOT a name-bearing method — its logical name is
+    /// presence-only, so it must not appear in `is_name_bearing_method`.
+    #[test]
+    fn server_discover_is_not_name_bearing() {
+        assert!(!is_name_bearing_method("server/discover"));
+    }
+
+    /// A well-formed `server/discover` body classifies as `HttpIngress::Discover`
+    /// carrying the original id; any other method or malformed input classifies
+    /// as `Public`/`None` (never `Discover`), and never panics.
+    ///
+    /// The `_meta` is NOT captured here — since Plan 113-04 the single
+    /// [`run_v2_header_gate`] reads it from the raw body for every ingress, so a
+    /// copy on this variant would be a duplicate read that could drift.
+    ///
+    /// RENAMED in Phase 114 plan 13 (was `..._server_discover_only`): `only` was
+    /// true when `server/discover` was the sole method reaching the
+    /// `parse_request_or_internal` peek, and `tasks/update` now reaches it too.
+    /// The sibling below covers that method; a name asserting an exclusivity that
+    /// no longer holds is the stale-marker failure class 113-29 recorded.
+    #[test]
+    fn classify_http_ingress_routes_server_discover() {
+        let body = br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+        let ingress = classify_http_ingress(body).expect("server/discover classifies");
+        match ingress {
+            HttpIngress::Discover { id } => {
+                assert_eq!(id, crate::types::RequestId::from(7i64));
+                // The gate reads the era from the SAME bytes, independently.
+                assert_eq!(
+                    raw_params_meta(body).unwrap()["io.modelcontextprotocol/protocolVersion"],
+                    "2026-07-28"
+                );
+            },
+            HttpIngress::Public(_)
+            | HttpIngress::SubscriptionsListen { .. }
+            | HttpIngress::TasksUpdate { .. } => {
+                panic!("server/discover must classify as Discover")
+            },
+        }
+
+        // A normal method is NOT a discover ingress.
+        let tools = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x"}}"#;
+        assert!(classify_http_ingress(tools).is_none());
+        // A notification (no id) is NOT a discover ingress.
+        let notif = br#"{"jsonrpc":"2.0","method":"server/discover"}"#;
+        assert!(classify_http_ingress(notif).is_none());
+        // Garbage never panics and never classifies as Discover.
+        assert!(classify_http_ingress(b"not json").is_none());
+    }
+
+    /// A `tasks/update` body classifies as `HttpIngress::TasksUpdate` carrying the
+    /// ORIGINAL id and its params VERBATIM (Phase 114 plan 13, TASK-02).
+    ///
+    /// The params below are deliberately NOT a well-formed `tasks/update` payload.
+    /// Classifying them anyway is the property: the classifier must never reject a
+    /// body, because a malformed one has to become a `-32602` in the served branch
+    /// AFTER the era, backend, declaration and auth gates — not a parse error
+    /// before them, which is what an unauthenticated caller would otherwise see
+    /// instead of `-32003`.
+    #[test]
+    fn classify_http_ingress_routes_tasks_update_with_raw_params() {
+        let body = br#"{"jsonrpc":"2.0","id":"u-1","method":"tasks/update","params":{"taskId":42,"junk":[1]}}"#;
+        let ingress = classify_http_ingress(body).expect("tasks/update classifies");
+        match ingress {
+            HttpIngress::TasksUpdate { id, params } => {
+                assert_eq!(id, crate::types::RequestId::from("u-1".to_string()));
+                assert_eq!(
+                    params,
+                    serde_json::json!({ "taskId": 42, "junk": [1] }),
+                    "the params must reach the served branch UNDECODED"
+                );
+            },
+            HttpIngress::Public(_)
+            | HttpIngress::Discover { .. }
+            | HttpIngress::SubscriptionsListen { .. } => {
+                panic!("tasks/update must classify as TasksUpdate")
+            },
+        }
+
+        // A notification (no id) is NOT an ingress — it has nothing to answer to.
+        let notif = br#"{"jsonrpc":"2.0","method":"tasks/update","params":{}}"#;
+        assert!(classify_http_ingress(notif).is_none());
+    }
+
+    /// A JSON-RPC body for `method` carrying a v2 `params._meta` under `key`.
+    fn v2_body_bytes(method: &str, key: &str) -> Vec<u8> {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": { key: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// The three headers a v2 request for `method` sends (name-less → empty).
+    fn v2_headers_for(method: &str) -> HeaderMap {
+        headers_from(&[
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, method),
+            (MCP_NAME, ""),
+        ])
+    }
+
+    /// `raw_params_meta` reads the SPEC spelling, accepts the legacy `meta`
+    /// alias, and never panics on adversarial input.
+    #[test]
+    fn raw_params_meta_reads_the_spec_spelling_and_the_legacy_alias() {
+        let expected = serde_json::json!({ "k": "v" });
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"_meta":{"k":"v"}}}"#
+            ),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"meta":{"k":"v"}}}"#
+            ),
+            Some(expected.clone()),
+            "the legacy `meta` spelling is accepted, mirroring the typed serde alias"
+        );
+        // The SPEC spelling wins when both are present.
+        assert_eq!(
+            raw_params_meta(
+                br#"{"jsonrpc":"2.0","id":1,"method":"m","params":{"_meta":{"k":"v"},"meta":{"k":"other"}}}"#
+            ),
+            Some(expected)
+        );
+        // Absent / null / no params / garbage → None, never a panic.
+        assert_eq!(raw_params_meta(br#"{"jsonrpc":"2.0","params":{}}"#), None);
+        assert_eq!(
+            raw_params_meta(br#"{"jsonrpc":"2.0","params":{"_meta":null}}"#),
+            None
+        );
+        assert_eq!(raw_params_meta(br#"{"jsonrpc":"2.0","id":1}"#), None);
+        assert_eq!(raw_params_meta(b"not json"), None);
+        assert_eq!(raw_params_meta(&[0xff, 0xfe, 0x00]), None);
+    }
+
+    // -------------------------------------------------------------------
+    // MRTR params at v2 ingress (Plan 113-06, HTTP-03 / T-113-44).
+    // -------------------------------------------------------------------
+
+    /// An accepted-v2 gate outcome, for the `attach_v2_mrtr_params` tests.
+    fn accepted_v2() -> V2GateOutcome {
+        V2GateOutcome::EnforceOk {
+            method: "tools/call".to_string(),
+            name: "search".to_string(),
+        }
+    }
+
+    /// A v2 `ProtocolContext`, for the `attach_v2_mrtr_params` tests.
+    fn v2_context() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(crate::types::protocol::Era::V2, v2_version())
+    }
+
+    /// The method [`mrtr_body`] builds — one of the three MRTR-ELIGIBLE methods,
+    /// which is what makes the extraction run at all (Phase 114 plan 13).
+    ///
+    /// Spelled through the production predicate rather than asserted by comment:
+    /// if `tools/call` ever left `MRTR_METHODS`, every test below would start
+    /// passing vacuously, and this catches that instead.
+    fn mrtr_test_method() -> &'static str {
+        assert!(
+            crate::types::mrtr::mrtr_eligible("tools/call"),
+            "these tests exercise the MRTR extraction, which only runs for an eligible method"
+        );
+        "tools/call"
+    }
+
+    /// Body bytes for a `tools/call` carrying arbitrary extra top-level params.
+    fn mrtr_body(extra: &serde_json::Value) -> Vec<u8> {
+        let mut params = serde_json::json!({ "name": "search", "arguments": {} });
+        if let (Some(target), Some(source)) = (params.as_object_mut(), extra.as_object()) {
+            for (key, value) in source {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// The MRTR params of an accepted v2 body land on the threaded context.
+    #[test]
+    fn attach_v2_mrtr_params_lands_the_fields_on_the_context() {
+        let body = mrtr_body(&serde_json::json!({
+            "requestState": "opaque-token",
+            "inputResponses": { "user_name": { "action": "accept" } },
+        }));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            Some(mrtr_test_method()),
+        );
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        let ctx = ctx.expect("context survives");
+        assert_eq!(ctx.request_state_token(), Some("opaque-token"));
+        assert!(ctx.input_responses().is_some());
+    }
+
+    /// A v1 / non-accepted body never gets MRTR params extracted (D-04).
+    #[test]
+    fn attach_v2_mrtr_params_skips_a_non_accepted_request() {
+        let body = mrtr_body(&serde_json::json!({ "requestState": "opaque-token" }));
+        let parsed = raw_body_json(&body);
+        for outcome in [
+            V2GateOutcome::Passthrough,
+            V2GateOutcome::Reject {
+                code: crate::types::protocol::error_codes::HEADER_MISMATCH,
+                message: "nope".to_string(),
+                data: None,
+            },
+        ] {
+            let (ctx, _) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                outcome,
+                parsed.as_ref(),
+                Some(mrtr_test_method()),
+            );
+            assert!(
+                ctx.expect("context survives")
+                    .request_state_token()
+                    .is_none(),
+                "MRTR extraction must not run outside the accepted v2 path"
+            );
+        }
+    }
+
+    /// A body with NO MRTR fields yields the default (both absent), which
+    /// dispatch treats identically to no context-carried MRTR at all.
+    #[test]
+    fn attach_v2_mrtr_params_absent_fields_are_the_default() {
+        let body = mrtr_body(&serde_json::json!({}));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            Some(mrtr_test_method()),
+        );
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        let ctx = ctx.expect("context survives");
+        assert!(ctx.request_state_token().is_none());
+        assert!(ctx.input_responses().is_none());
+    }
+
+    /// Every PRESENT-but-unusable MRTR shape is REJECTED with `INVALID_PARAMS`,
+    /// never silently treated as absent (T-113-44).
+    #[test]
+    fn attach_v2_mrtr_params_rejects_every_malformed_shape() {
+        use crate::types::mrtr::{
+            MAX_INPUT_RESPONSES, MAX_INPUT_RESPONSE_BYTES, MAX_INPUT_RESPONSE_DEPTH,
+            MAX_REQUEST_STATE_LEN,
+        };
+        let mut too_many = serde_json::Map::new();
+        for index in 0..=MAX_INPUT_RESPONSES {
+            too_many.insert(
+                format!("k{index}"),
+                serde_json::json!({ "action": "accept" }),
+            );
+        }
+        let mut chunky = serde_json::Map::new();
+        for index in 0..8 {
+            chunky.insert(
+                format!("k{index}"),
+                serde_json::json!({
+                    "action": "accept",
+                    "content": { "v": "z".repeat(MAX_INPUT_RESPONSE_BYTES - 1_000) }
+                }),
+            );
+        }
+        let mut nested = serde_json::json!("leaf");
+        for _ in 0..(MAX_INPUT_RESPONSE_DEPTH + 4) {
+            nested = serde_json::json!({ "n": nested });
+        }
+        let cases = [
+            // requestState not a string
+            serde_json::json!({ "requestState": 42 }),
+            // requestState over the length bound
+            serde_json::json!({ "requestState": "x".repeat(MAX_REQUEST_STATE_LEN + 1) }),
+            // inputResponses not an object
+            serde_json::json!({ "inputResponses": [] }),
+            // too many inputResponses entries
+            serde_json::json!({ "inputResponses": too_many }),
+            // one entry over the per-entry byte bound
+            serde_json::json!({ "inputResponses": {
+                "big": { "action": "accept",
+                         "content": { "v": "y".repeat(MAX_INPUT_RESPONSE_BYTES + 1) } } } }),
+            // entries over the TOTAL byte bound
+            serde_json::json!({ "inputResponses": chunky }),
+            // one entry over the depth bound
+            serde_json::json!({ "inputResponses": {
+                "deep": { "action": "accept", "content": { "v": nested } } } }),
+            // an entry matching none of the three permitted result shapes
+            serde_json::json!({ "inputResponses": { "bad": { "totally": "wrong" } } }),
+        ];
+        for case in cases {
+            let body = mrtr_body(&case);
+            let parsed = raw_body_json(&body);
+            let (_, outcome) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                accepted_v2(),
+                parsed.as_ref(),
+                Some(mrtr_test_method()),
+            );
+            let V2GateOutcome::Reject { code, .. } = outcome else {
+                panic!("a present-but-unusable MRTR field must REJECT, got a pass for {case}");
+            };
+            assert_eq!(
+                code,
+                crate::types::protocol::error_codes::INVALID_PARAMS,
+                "malformed MRTR maps to -32602 for {case}"
+            );
+            // …and -32602 renders as HTTP 400 on the v2 status table.
+            assert_eq!(
+                v2_status_for_code(code),
+                StatusCode::BAD_REQUEST,
+                "a malformed MRTR field is a 400"
+            );
+        }
+    }
+
+    /// A NON-MRTR-eligible method's top-level `inputResponses` / `requestState`
+    /// are IGNORED here, not parsed and not rejected (Phase 114 plan 13).
+    ///
+    /// This is the regression test for the two halves of one rule disagreeing.
+    /// `mrtr_ingest` has always returned `Inert` for a non-eligible method
+    /// ("T-113-23: the spec confines MRTR to three methods"); this EXTRACTION site
+    /// had no method awareness, so it judged every accepted v2 request's params
+    /// against MRTR's bounds at the transport header gate — ahead of every
+    /// dispatch-layer gate, including auth.
+    ///
+    /// `tasks/update` is the method where that mattered: its ENTIRE payload is
+    /// `inputResponses`, so an unauthenticated caller's malformed body produced
+    /// `-32602` where 114-09's order requires `-32003`. The end-to-end proof lives
+    /// in `tests/v2_tasks_update_routing.rs`; this is the unit-level statement of
+    /// the same fact.
+    #[test]
+    fn attach_v2_mrtr_params_ignores_a_non_eligible_method() {
+        // The exact shape that rejects on `tools/call` two tests above.
+        let malformed = serde_json::json!({ "inputResponses": "not-an-object" });
+        for method in ["tasks/update", "tasks/get", "tools/list", "server/discover"] {
+            assert!(
+                !crate::types::mrtr::mrtr_eligible(method),
+                "{method} must be outside MRTR_METHODS for this test to mean anything"
+            );
+            let body = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": method,
+                "params": { "taskId": "t-1", "inputResponses": "not-an-object" },
+            })
+            .to_string()
+            .into_bytes();
+            let parsed = raw_body_json(&body);
+            let (ctx, outcome) = attach_v2_mrtr_params(
+                Some(v2_context()),
+                accepted_v2(),
+                parsed.as_ref(),
+                Some(method),
+            );
+            assert!(
+                matches!(outcome, V2GateOutcome::EnforceOk { .. }),
+                "{method} is not an MRTR method, so its params must not be judged here \
+                 (T-114-63/T-114-64); {malformed} was rejected"
+            );
+            let ctx = ctx.expect("context survives");
+            assert!(
+                ctx.input_responses().is_none(),
+                "{method} must carry NO MRTR-decoded inputResponses on the context"
+            );
+            assert!(
+                ctx.request_state_token().is_none(),
+                "{method} must carry NO MRTR requestState on the context"
+            );
+        }
+    }
+
+    /// A method that is absent, or unresolvable from the body, is treated as NOT
+    /// eligible — fail-closed on the extraction, which is the safe direction here
+    /// because the extraction can only REJECT.
+    #[test]
+    fn attach_v2_mrtr_params_skips_an_unresolvable_method() {
+        let body = mrtr_body(&serde_json::json!({ "requestState": "opaque-token" }));
+        let parsed = raw_body_json(&body);
+        let (ctx, outcome) =
+            attach_v2_mrtr_params(Some(v2_context()), accepted_v2(), parsed.as_ref(), None);
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+        assert!(ctx
+            .expect("context survives")
+            .request_state_token()
+            .is_none());
+    }
+
+    /// The client-facing rejection names the BOUND, never the offending value
+    /// (T-113-10 — no attacker-controlled content echoed back).
+    #[test]
+    fn attach_v2_mrtr_params_rejection_never_echoes_the_offending_value() {
+        let secret = "x".repeat(crate::types::mrtr::MAX_REQUEST_STATE_LEN + 1);
+        let body = mrtr_body(&serde_json::json!({
+            "inputResponses": { "super-secret-key": { "totally": "wrong" } },
+            "requestState": secret,
+        }));
+        let parsed = raw_body_json(&body);
+        let (_, outcome) = attach_v2_mrtr_params(
+            Some(v2_context()),
+            accepted_v2(),
+            parsed.as_ref(),
+            Some(mrtr_test_method()),
+        );
+        let V2GateOutcome::Reject { message, .. } = outcome else {
+            panic!("expected a rejection");
+        };
+        assert!(
+            !message.contains("super-secret-key"),
+            "message leaked an attacker-supplied key: {message}"
+        );
+        assert!(
+            !message.contains(&secret),
+            "message leaked the attacker-supplied value"
+        );
+    }
+
+    /// D-04 ordering: a NON-opted-in server short-circuits to Passthrough EVEN
+    /// WITH a v2 `_meta` present — it must NOT reject as an unsupported version
+    /// (the v2 `_meta` is never inspected).
+    #[tokio::test]
+    async fn v2_gate_non_opted_in_passes_through() {
+        let state = state_with_accept(vec![ProtocolVersion("2025-11-25".to_string())]);
+        let headers = headers_from(&[(MCP_PROTOCOL_VERSION, V2)]);
+        let body = v2_body_bytes("server/discover", "_meta");
+        let (ctx, outcome) = run_v2_header_gate(
+            &state,
+            &headers,
+            &body,
+            Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+        )
+        .await;
+        assert!(ctx.is_none(), "non-opted-in resolves no context");
+        assert!(
+            matches!(outcome, V2GateOutcome::Passthrough),
+            "non-opted-in + v2 _meta must Passthrough, not Reject"
+        );
+    }
+
+    /// D-113-B, the whole point of the raw-body read: EVERY method can be a v2
+    /// request, including the list-shaped ones that carry no typed `_meta` field
+    /// (and cannot be given one without a MAJOR semver break).
+    #[tokio::test]
+    async fn v2_gate_accepts_every_method_from_the_raw_body() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
+        ]);
+        for method in [
+            "tools/list",
+            "prompts/list",
+            "resources/list",
+            "resources/templates/list",
+            "completion/complete",
+        ] {
+            let body = v2_body_bytes(method, "_meta");
+            let (ctx, outcome) =
+                run_v2_header_gate(&state, &v2_headers_for(method), &body, None).await;
+            assert_eq!(
+                ctx.map(|c| c.era),
+                Some(crate::types::protocol::Era::V2),
+                "{method} must resolve to the v2 era from its raw params._meta"
+            );
+            assert!(
+                matches!(outcome, V2GateOutcome::EnforceOk { .. }),
+                "{method} must be accepted as a v2 request"
+            );
+        }
+    }
+
+    /// The discover ingress runs the SAME gate, with its method PINNED by
+    /// classification rather than read from the body.
+    #[tokio::test]
+    async fn v2_gate_discover_pins_its_method() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
+        ]);
+        let headers = v2_headers_for(crate::types::protocol::SERVER_DISCOVER_METHOD);
+        // A body whose `method` field disagrees cannot fool the cross-check:
+        // the override pins how the request was actually routed.
+        let body = v2_body_bytes("tools/call", "_meta");
+        let (ctx, outcome) = run_v2_header_gate(
+            &state,
+            &headers,
+            &body,
+            Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+        )
+        .await;
+        assert_eq!(ctx.map(|c| c.era), Some(crate::types::protocol::Era::V2));
+        assert!(matches!(outcome, V2GateOutcome::EnforceOk { .. }));
+    }
+
+    /// An opted-in server sees a v2 `_meta` with NO `MCP-Protocol-Version` header
+    /// rejected by the SAME matrix cell that rejects a tools/call with the same
+    /// defect.
+    #[tokio::test]
+    async fn v2_gate_v2_meta_without_header_rejects() {
+        let state = state_with_accept(vec![
+            ProtocolVersion("2025-11-25".to_string()),
+            v2_version(),
+        ]);
+        // No MCP-Protocol-Version header → conflict cell → Reject.
+        let headers = headers_from(&[(MCP_METHOD, "tools/list"), (MCP_NAME, "")]);
+        let body = v2_body_bytes("tools/list", "_meta");
+        let (_ctx, outcome) = run_v2_header_gate(&state, &headers, &body, None).await;
+        assert!(matches!(outcome, V2GateOutcome::Reject { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Resumability era gate (Plan 113-08, HTTP-05).
+    // -----------------------------------------------------------------------
+
+    /// A `ServerState` accepting BOTH eras, which every resumability test needs
+    /// (the v1 half is what keeps the v2 zero-traffic assertions non-vacuous).
+    fn dual_era_state() -> ServerState {
+        state_with_accept(vec![
+            ProtocolVersion(crate::LATEST_PROTOCOL_VERSION.to_string()),
+            v2_version(),
+        ])
+    }
+
+    /// Build a POST for the private fast-path handler — the real POST pipeline,
+    /// with no socket in the way.
+    fn post_request(extra: &[(&str, &str)], body: &str) -> axum::extract::Request<Body> {
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(header::CONTENT_TYPE, APPLICATION_JSON)
+            .header(
+                header::ACCEPT,
+                crate::shared::http_constants::ACCEPT_STREAMABLE,
+            );
+        for (name, value) in extra {
+            builder = builder.header(*name, *value);
+        }
+        builder
+            .body(Body::from(body.to_string()))
+            .expect("request builds")
+    }
+
+    /// The three v2 headers plus any extras, as `(&str, &str)` pairs.
+    fn v2_post_headers<'a>(
+        method: &'a str,
+        extra: &[(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut headers = vec![
+            (MCP_PROTOCOL_VERSION, V2),
+            (MCP_METHOD, method),
+            (MCP_NAME, ""),
+        ];
+        headers.extend_from_slice(extra);
+        headers
+    }
+
+    /// An [`EventStore`] that records how many times it was written to and how
+    /// many times it was replayed from.
+    ///
+    /// Asserting "no replay happened" by observing a normal 200 response is weak:
+    /// the response looks identical whether replay ran and produced nothing or
+    /// never ran at all. The spy is the DIRECT evidence, and its v1 counterpart
+    /// (which must record NON-zero) is what keeps the v2 zero assertion honest.
+    #[derive(Debug, Default)]
+    struct SpyEventStore {
+        stores: std::sync::atomic::AtomicUsize,
+        replays: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SpyEventStore {
+        fn stores(&self) -> usize {
+            self.stores.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn replays(&self) -> usize {
+            self.replays.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl EventStore for SpyEventStore {
+        async fn store_event(
+            &self,
+            _stream_id: &str,
+            _event_id: &str,
+            _message: &TransportMessage,
+        ) -> Result<()> {
+            self.stores
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn replay_events_after(
+            &self,
+            _last_event_id: &str,
+        ) -> Result<Vec<(String, TransportMessage)>> {
+            self.replays
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+
+        async fn get_stream_for_event(&self, _event_id: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    /// A dual-era state whose event store is a [`SpyEventStore`].
+    ///
+    /// The spy is injected on `ServerState`, not on the public config, because
+    /// `StreamableHttpServerConfig::event_store` is pinned to the concrete
+    /// `InMemoryEventStore` and widening that public field would be a MAJOR semver
+    /// break (see [`EventStoreHandle`]).
+    fn spy_state() -> (ServerState, Arc<SpyEventStore>) {
+        let spy = Arc::new(SpyEventStore::default());
+        let mut state = dual_era_state();
+        state.event_store = Some(spy.clone() as EventStoreHandle);
+        (state, spy)
+    }
+
+    /// The full four-row truth table from the plan's `<behavior>` block.
+    #[test]
+    fn resumability_active_truth_table() {
+        // A configured store + a v2 request → resumability OFF (HTTP-05).
+        assert!(!resumability_active_for(true, Some(Era::V2)));
+        // A configured store + a v1 request → ON, exactly as before.
+        assert!(resumability_active_for(true, Some(Era::V1)));
+        // A configured store on a server NOT opted into v2 → ON (D-04).
+        assert!(resumability_active_for(true, None));
+        // No store configured → OFF in every era.
+        assert!(!resumability_active_for(false, Some(Era::V2)));
+        assert!(!resumability_active_for(false, Some(Era::V1)));
+        assert!(!resumability_active_for(false, None));
+    }
+
+    /// A v2 request NEVER has resumability, whatever the config says.
+    #[test]
+    fn v2_always_suppresses_resumability() {
+        for cfg in [true, false] {
+            assert!(
+                !resumability_active_for(cfg, Some(Era::V2)),
+                "v2 must be resumability-free with cfg_has_event_store = {cfg}"
+            );
+        }
+    }
+
+    /// [`resumability_store`] is the gated borrow: it hands out the store on v1
+    /// and `None` on v2, from the very SAME state.
+    #[test]
+    fn resumability_store_is_the_gated_borrow() {
+        let (state, _spy) = spy_state();
+        assert!(
+            resumability_store(&state, Some(Era::V1)).is_some(),
+            "v1 keeps the store"
+        );
+        assert!(
+            resumability_store(&state, None).is_some(),
+            "a non-opted-in server keeps the store"
+        );
+        assert!(
+            resumability_store(&state, Some(Era::V2)).is_none(),
+            "v2 can never reach the store"
+        );
+    }
+
+    proptest::proptest! {
+        /// The predicate never panics and is EXACTLY the stated boolean
+        /// expression over arbitrary `(bool, Option<Era>)` inputs.
+        #[test]
+        fn resumability_active_is_exactly_its_stated_expression(
+            cfg_has_event_store in proptest::prelude::any::<bool>(),
+            era_code in 0u8..3,
+        ) {
+            let era = match era_code {
+                0 => None,
+                1 => Some(Era::V1),
+                _ => Some(Era::V2),
+            };
+            let expected = !matches!(era, Some(Era::V2)) && cfg_has_event_store;
+            proptest::prop_assert_eq!(
+                resumability_active_for(cfg_has_event_store, era),
+                expected
+            );
+        }
+    }
+
+    /// A v1 `initialize` exchange writes to the event store — the NON-VACUITY
+    /// anchor for every zero assertion below.
+    #[tokio::test]
+    async fn spy_records_store_traffic_for_a_v1_exchange() {
+        let (state, spy) = spy_state();
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": crate::LATEST_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "v1", "version": "1.0.0" },
+            },
+        })
+        .to_string();
+
+        let response = handle_post_fast_path(state, post_request(&[], &body)).await;
+        assert_eq!(response.status(), StatusCode::OK, "v1 initialize is served");
+        assert!(
+            spy.stores() > 0,
+            "a v1 exchange MUST still write to the event store — otherwise the \
+             v2 zero assertions are vacuous"
+        );
+    }
+
+    /// The direct evidence for HTTP-05: a v2 exchange produces ZERO event-store
+    /// writes and ZERO replays (T-113-29 / T-113-30).
+    #[tokio::test]
+    async fn spy_records_zero_event_store_traffic_for_a_v2_exchange() {
+        let (state, spy) = spy_state();
+
+        let response = handle_post_fast_path(
+            state,
+            post_request(
+                &v2_post_headers("tools/list", &[(LAST_EVENT_ID, "12345")]),
+                &String::from_utf8(v2_body_bytes("tools/list", "_meta")).unwrap(),
+            ),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a v2 request carrying Last-Event-ID is served NORMALLY"
+        );
+        assert_eq!(spy.stores(), 0, "a v2 exchange must write NOTHING");
+        assert_eq!(spy.replays(), 0, "a v2 exchange must replay NOTHING");
+    }
+
+    /// A v1 GET carrying `Last-Event-ID` DOES replay — the non-vacuity anchor
+    /// for the replay half, and the guard that v1 resumability is unchanged
+    /// (T-113-19).
+    #[tokio::test]
+    async fn spy_records_replay_for_a_v1_get_with_last_event_id() {
+        let (state, spy) = spy_state();
+        let headers = headers_from(&[
+            (http::header::ACCEPT.as_str(), TEXT_EVENT_STREAM),
+            (LAST_EVENT_ID, "evt-1"),
+        ]);
+        let response = handle_get_sse(State(state), headers).await.into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            spy.replays(),
+            1,
+            "a v1 GET with Last-Event-ID must still replay"
+        );
+    }
+
+    /// ...while the SAME GET on v2 is `405` and never reaches the store at all.
+    #[tokio::test]
+    async fn spy_records_zero_replay_for_a_v2_get() {
+        let (state, spy) = spy_state();
+        let headers = headers_from(&[
+            (http::header::ACCEPT.as_str(), TEXT_EVENT_STREAM),
+            (MCP_PROTOCOL_VERSION, V2),
+            (LAST_EVENT_ID, "evt-1"),
+        ]);
+        let response = handle_get_sse(State(state), headers).await.into_response();
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(spy.replays(), 0, "a v2 GET must never replay");
+        assert_eq!(spy.stores(), 0);
+    }
+
+    /// Open a real v1 SSE stream and return its minted session id.
+    async fn open_v1_sse_stream(state: &ServerState) -> String {
+        let headers = headers_from(&[(http::header::ACCEPT.as_str(), TEXT_EVENT_STREAM)]);
+        let response = handle_get_sse(State(state.clone()), headers)
+            .await
+            .into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "v1 GET opens an SSE stream"
+        );
+        response
+            .headers()
+            .get(MCP_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .expect("a v1 SSE GET mints and echoes a session id")
+    }
+
+    /// **The discovery-cache bug class, at the transport layer.**
+    ///
+    /// `build_response` routes a reply into `state.sse_streams[sid]` keyed on the
+    /// RAW INBOUND `Mcp-Session-Id` header — not on the era-resolved
+    /// `response_session_id`, which is always `None` on v2. So a v2 POST that
+    /// merely NAMES a v1 caller's open session id had its response delivered into
+    /// THAT caller's stream (and written into the event store on the way), while
+    /// the v2 caller got a bare `202 Accepted`.
+    ///
+    /// That is simultaneously T-113-07 (a response reaching a caller that did not
+    /// issue it), T-113-29 and T-113-30 (v2 traffic reaching the event store).
+    #[tokio::test]
+    async fn v2_response_is_never_routed_into_a_session_sse_stream() {
+        let state = dual_era_state();
+        let victim_session = open_v1_sse_stream(&state).await;
+
+        let response = handle_post_fast_path(
+            state.clone(),
+            post_request(
+                &v2_post_headers("tools/list", &[(MCP_SESSION_ID, victim_session.as_str())]),
+                &String::from_utf8(v2_body_bytes("tools/list", "_meta")).unwrap(),
+            ),
+        )
+        .await;
+
+        assert_ne!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "a v2 response must NEVER be handed to a session SSE stream — \
+             202 Accepted means it went to the v1 caller instead of this one"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the v2 caller must get its OWN response back"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Direct-response id ownership (Plan 113-08, HTTP-05).
+    // -----------------------------------------------------------------------
+
+    /// The constructor takes a PAYLOAD, so a stale envelope's id cannot survive:
+    /// re-enveloping a cached response with a different live id yields the live
+    /// id and the SAME payload, on both the result and error arms.
+    #[test]
+    fn envelope_for_live_request_restamps_a_cached_payload() {
+        use crate::types::jsonrpc::ResponsePayload;
+
+        // A response cached from an EARLIER caller.
+        let cached = crate::types::JSONRPCResponse::success(
+            crate::types::RequestId::Number(1),
+            serde_json::json!({ "cached": true }),
+        );
+        let live = envelope_for_live_request(
+            cached.payload.clone(),
+            crate::types::RequestId::String("caller-2".to_string()),
+        );
+        assert_eq!(live.id, crate::types::RequestId::String("caller-2".into()));
+        assert_eq!(live.jsonrpc, "2.0");
+        match (&cached.payload, &live.payload) {
+            (ResponsePayload::Result(before), ResponsePayload::Result(after)) => {
+                assert_eq!(before, after, "the PAYLOAD survives verbatim");
+            },
+            _ => panic!("the result arm must stay a result"),
+        }
+
+        // The error arm is re-stamped identically.
+        let cached_error = crate::types::JSONRPCResponse::error(
+            crate::types::RequestId::Number(1),
+            crate::types::JSONRPCError::new(
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "nope",
+            ),
+        );
+        let live_error =
+            envelope_for_live_request(cached_error.payload, crate::types::RequestId::Number(99));
+        assert_eq!(live_error.id, crate::types::RequestId::Number(99));
+        let ResponsePayload::Error(error) = live_error.payload else {
+            panic!("the error arm must stay an error");
+        };
+        assert_eq!(
+            error.code,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND
+        );
+    }
+
+    proptest::proptest! {
+        /// Whatever id goes in comes out — the constructor never invents,
+        /// coerces or drops one, and never panics.
+        #[test]
+        fn envelope_for_live_request_always_carries_the_supplied_id(
+            numeric in proptest::prelude::any::<bool>(),
+            number in proptest::prelude::any::<i64>(),
+            text in "[a-zA-Z0-9-]{0,32}",
+            is_error in proptest::prelude::any::<bool>(),
+        ) {
+            let live_id = if numeric {
+                crate::types::RequestId::Number(number)
+            } else {
+                crate::types::RequestId::String(text)
+            };
+            let payload = if is_error {
+                crate::types::jsonrpc::ResponsePayload::Error(
+                    crate::types::JSONRPCError::new(-1, "e"),
+                )
+            } else {
+                crate::types::jsonrpc::ResponsePayload::Result(serde_json::json!({ "k": "v" }))
+            };
+            let response = envelope_for_live_request(payload, live_id.clone());
+            proptest::prop_assert_eq!(response.id, live_id);
+        }
+    }
+
+    proptest::proptest! {
+        /// The raw-body ingress classifier NEVER panics over arbitrary bytes, and
+        /// a non-`server/discover` method NEVER classifies as Discover (T-112-13).
+        #[test]
+        fn classify_http_ingress_never_panics(
+            raw in proptest::collection::vec(proptest::num::u8::ANY, 0..512),
+            method in "[a-z/]{0,24}",
+            oversized in proptest::bool::ANY,
+        ) {
+            // Arbitrary bytes: must not panic.
+            let _ = classify_http_ingress(&raw);
+
+            // A structured request with an arbitrary method: only server/discover
+            // may ever classify as Discover.
+            let meta_val = if oversized { "x".repeat(20_000) } else { "2026-07-28".to_string() };
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": meta_val } }
+            });
+            let bytes = serde_json::to_vec(&body).unwrap();
+            let classified = classify_http_ingress(&bytes);
+            if method != "server/discover" {
+                proptest::prop_assert!(
+                    !matches!(classified, Some(HttpIngress::Discover { .. })),
+                    "non-discover method {} must never classify as Discover",
+                    method
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // `subscriptions/listen` gate + wire frames (Plan 113-10, HTTP-04).
+    //
+    // Nested in a module NAMED after the production surface so
+    // `cargo test --lib -- subscriptions` actually selects these tests rather
+    // than passing vacuously (the plan-09 lesson).
+    // -------------------------------------------------------------------
+    mod subscriptions_listen {
+        use super::*;
+        use crate::types::capabilities::{
+            PromptCapabilities, ResourceCapabilities, ToolCapabilities,
+        };
+        use crate::types::subscriptions::{
+            advertises_subscriptions, SubscriptionFilter, ACKNOWLEDGED_METHOD,
+            SUBSCRIPTIONS_LISTEN_METHOD, SUBSCRIPTION_ID_META_KEY,
+        };
+        use crate::types::{Implementation, RequestId, ServerCapabilities};
+
+        /// A `ServerCapabilities` advertising exactly ONE of the four
+        /// subscription-delivered capabilities, or none for `None`.
+        fn only(which: Option<&str>) -> ServerCapabilities {
+            let mut caps = ServerCapabilities::default();
+            match which {
+                Some("tools.listChanged") => {
+                    caps.tools = Some(ToolCapabilities {
+                        list_changed: Some(true),
+                    });
+                },
+                Some("prompts.listChanged") => {
+                    caps.prompts = Some(PromptCapabilities {
+                        list_changed: Some(true),
+                    });
+                },
+                Some("resources.listChanged") => {
+                    caps.resources = Some(ResourceCapabilities {
+                        subscribe: None,
+                        list_changed: Some(true),
+                    });
+                },
+                Some("resources.subscribe") => {
+                    caps.resources = Some(ResourceCapabilities {
+                        subscribe: Some(true),
+                        list_changed: None,
+                    });
+                },
+                _ => {},
+            }
+            caps
+        }
+
+        /// The capabilities `server/discover` actually PUBLISHES for `caps`.
+        fn projected_capabilities(caps: &ServerCapabilities) -> ServerCapabilities {
+            let response = crate::server::core::build_discover_response(
+                RequestId::Number(1),
+                caps,
+                &Implementation::new("s", "1"),
+                Some(&v2_context()),
+            );
+            let crate::types::jsonrpc::ResponsePayload::Result(value) = response.payload else {
+                panic!("a v2 discover projects a result");
+            };
+            serde_json::from_value(value["capabilities"].clone())
+                .expect("the projection deserializes back into ServerCapabilities")
+        }
+
+        #[test]
+        fn discover_projection_and_listen_gate_read_the_same_predicate() {
+            // THE tripwire, at the unit level: whatever `server/discover`
+            // publishes is exactly what the listen gate reads, for each of the
+            // four capabilities INDIVIDUALLY plus the advertise-nothing default.
+            for which in [
+                None,
+                Some("tools.listChanged"),
+                Some("prompts.listChanged"),
+                Some("resources.listChanged"),
+                Some("resources.subscribe"),
+            ] {
+                let caps = only(which);
+                let expected = which.is_some();
+                assert_eq!(
+                    advertises_subscriptions(&caps),
+                    expected,
+                    "gate verdict for {which:?}"
+                );
+                assert_eq!(
+                    advertises_subscriptions(&projected_capabilities(&caps)),
+                    expected,
+                    "the discover projection must agree with the gate for {which:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn classify_http_ingress_routes_subscriptions_listen() {
+            let body = serde_json::to_vec(&json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": SUBSCRIPTIONS_LISTEN_METHOD,
+                "params": { "notifications": { "toolsListChanged": true } },
+            }))
+            .unwrap();
+            let Some(HttpIngress::SubscriptionsListen { id, params }) =
+                classify_http_ingress(&body)
+            else {
+                panic!("subscriptions/listen classifies as its own ingress");
+            };
+            assert_eq!(id, RequestId::Number(7), "the ORIGINAL id is preserved");
+            assert_eq!(
+                params.expect("params carried through")["notifications"]["toolsListChanged"],
+                json!(true)
+            );
+        }
+
+        #[test]
+        fn classify_http_ingress_leaves_other_methods_alone() {
+            for method in ["tools/call", "resources/subscribe", "initialize"] {
+                let body = serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0", "id": 1, "method": method, "params": {},
+                }))
+                .unwrap();
+                assert!(
+                    !matches!(
+                        classify_http_ingress(&body),
+                        Some(HttpIngress::SubscriptionsListen { .. })
+                    ),
+                    "{method} must not classify as a listen ingress"
+                );
+            }
+        }
+
+        #[test]
+        fn only_the_two_retired_resource_rpcs_are_retired() {
+            let subscribe = Request::Client(Box::new(ClientRequest::Subscribe(
+                crate::types::resources::SubscribeRequest {
+                    uri: "mem://a".to_string(),
+                },
+            )));
+            let unsubscribe = Request::Client(Box::new(ClientRequest::Unsubscribe(
+                crate::types::resources::UnsubscribeRequest {
+                    uri: "mem://a".to_string(),
+                },
+            )));
+            let list = Request::Client(Box::new(ClientRequest::ListTools(
+                crate::types::tools::ListToolsRequest { cursor: None },
+            )));
+            assert_eq!(
+                v2_retired_method_of(&subscribe),
+                Some("resources/subscribe")
+            );
+            assert_eq!(
+                v2_retired_method_of(&unsubscribe),
+                Some("resources/unsubscribe")
+            );
+            assert_eq!(
+                v2_retired_method_of(&list),
+                None,
+                "no other method is retired by HTTP-04"
+            );
+        }
+
+        #[test]
+        fn the_ack_frame_is_the_acknowledged_notification() {
+            let agreed = SubscriptionFilter {
+                tools_list_changed: Some(true),
+                ..SubscriptionFilter::default()
+            };
+            let frame: serde_json::Value =
+                serde_json::from_str(&listen_ack_frame(&agreed, &RequestId::Number(1)))
+                    .expect("the ack frame is JSON");
+            assert_eq!(frame["jsonrpc"], json!("2.0"));
+            assert_eq!(frame["method"], json!(ACKNOWLEDGED_METHOD));
+            assert!(
+                frame.get("id").is_none(),
+                "the acknowledgement is a NOTIFICATION, so it carries no id"
+            );
+            assert_eq!(
+                frame["params"]["notifications"],
+                json!({ "toolsListChanged": true })
+            );
+            assert_eq!(
+                frame["params"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+                json!(1),
+                "the subscriptionId equals the listen request's JSON-RPC id"
+            );
+        }
+
+        #[test]
+        fn the_terminal_result_goes_through_the_shared_v2_envelope() {
+            let info = Implementation::new("listen-server", "9.9");
+            let frame: serde_json::Value = serde_json::from_str(&listen_terminal_result_frame(
+                &RequestId::Number(3),
+                Some(&v2_context()),
+                &info,
+            ))
+            .expect("the terminal frame is JSON");
+            assert_eq!(frame["id"], json!(3), "the response id is the listen id");
+            assert_eq!(
+                frame["result"]["_meta"][SUBSCRIPTION_ID_META_KEY],
+                json!(3),
+                "SubscriptionsListenResult._meta carries the REQUIRED subscriptionId"
+            );
+            assert_eq!(
+                frame["result"]["resultType"],
+                json!("complete"),
+                "resultType comes from the SHARED envelope helper, not a bespoke builder"
+            );
+            assert_eq!(
+                frame["result"]["_meta"][crate::server::core::RESERVED_SERVER_INFO_KEY]["name"],
+                json!("listen-server"),
+                "serverInfo comes from the SHARED envelope helper too"
+            );
+        }
     }
 }

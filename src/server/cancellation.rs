@@ -212,6 +212,23 @@ pub struct RequestHandlerExtra {
     /// `progress_token`/`_task_id`) without a typed dependency on `RequestMeta`.
     /// `None` when the request carried no `_meta`.
     pub request_meta: Option<serde_json::Value>,
+    /// The per-request protocol context resolved once at ingress (MCP v2.5
+    /// version plumbing).
+    ///
+    /// When `Some`, the dispatcher resolved the negotiated protocol version into
+    /// an [`Era`](crate::types::protocol::Era) plus optional self-reported client
+    /// identity and surfaced it here so handlers can era-gate behavior via the
+    /// typed [`era`](RequestHandlerExtra::era) /
+    /// [`protocol_version`](RequestHandlerExtra::protocol_version) /
+    /// [`client_info`](RequestHandlerExtra::client_info) /
+    /// [`client_capabilities`](RequestHandlerExtra::client_capabilities)
+    /// accessors instead of reading ambient session state. `None` when no
+    /// context was resolved (unit-test fixtures, pre-v2.5 dispatch paths).
+    ///
+    /// **Security:** the client identity carried here is SELF-REPORTED and
+    /// informational only — see the accessor rustdoc. It MUST NOT be used as an
+    /// authorization anchor; real identity binds to the OAuth token.
+    pub protocol_context: Option<crate::types::protocol::ProtocolContext>,
     /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
@@ -262,6 +279,7 @@ impl RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             request_meta: None,
+            protocol_context: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -319,6 +337,143 @@ impl RequestHandlerExtra {
     pub fn with_request_meta(mut self, meta: Option<serde_json::Value>) -> Self {
         self.request_meta = meta;
         self
+    }
+
+    /// Attach the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// resolved at ingress (MCP v2.5 version plumbing).
+    ///
+    /// Populated by the dispatch layer (Plan 04) after negotiating the protocol
+    /// version; handlers then read the era and client identity via the typed
+    /// [`era`](Self::era) / [`protocol_version`](Self::protocol_version) /
+    /// [`client_info`](Self::client_info) /
+    /// [`client_capabilities`](Self::client_capabilities) accessors. Pass `None`
+    /// when no context was resolved.
+    #[must_use]
+    pub fn with_protocol_context(
+        mut self,
+        ctx: Option<crate::types::protocol::ProtocolContext>,
+    ) -> Self {
+        self.protocol_context = ctx;
+        self
+    }
+
+    /// Returns the resolved protocol [`Era`](crate::types::protocol::Era) for
+    /// this request, or `None` when no [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// was attached.
+    ///
+    /// **Security:** the era is derived from the negotiated protocol version —
+    /// it is a behavioral switch, NOT an identity or authorization signal.
+    #[must_use]
+    pub fn era(&self) -> Option<crate::types::protocol::Era> {
+        self.protocol_context.as_ref().map(|ctx| ctx.era)
+    }
+
+    /// Returns the exact negotiated
+    /// [`ProtocolVersion`](crate::types::ProtocolVersion) for this request, or
+    /// `None` when no [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// was attached.
+    #[must_use]
+    pub fn protocol_version(&self) -> Option<&crate::types::ProtocolVersion> {
+        self.protocol_context
+            .as_ref()
+            .map(|ctx| &ctx.negotiated_version)
+    }
+
+    /// Returns the client's SELF-REPORTED implementation info, or `None` when
+    /// absent.
+    ///
+    /// **Security — self-reported, not for authorization:** this value is the
+    /// client-supplied `clientInfo` surfaced verbatim from initialization. It is
+    /// informational ONLY (telemetry, feature-hints, logging) and MUST NOT be
+    /// used as an authorization anchor or trusted identity. Real identity binds
+    /// to the OAuth token, enforced in Phase 114 (TASK-05). No authorization
+    /// decision is made from this accessor in this phase.
+    #[must_use]
+    pub fn client_info(&self) -> Option<&crate::types::Implementation> {
+        self.protocol_context
+            .as_ref()
+            .and_then(|ctx| ctx.client_info.as_ref())
+    }
+
+    /// Returns the client's SELF-REPORTED advertised capabilities, or `None`
+    /// when absent.
+    ///
+    /// **Security — self-reported, not for authorization:** like
+    /// [`client_info`](Self::client_info), these capabilities are client-supplied
+    /// and informational ONLY. They MUST NOT be used as an authorization anchor;
+    /// real identity binds to the OAuth token (Phase 114 / TASK-05).
+    #[must_use]
+    pub fn client_capabilities(&self) -> Option<&crate::types::ClientCapabilities> {
+        self.protocol_context
+            .as_ref()
+            .and_then(|ctx| ctx.client_capabilities.as_ref())
+    }
+
+    /// The client's answers to a PREVIOUS round's `inputRequests`
+    /// (MCP 2026-07-28 multi-round-trip elicitation, HTTP-03).
+    ///
+    /// Returns `None` when the request carried no `inputResponses`, on v1, and
+    /// on the re-elicitation path (an unknown-key or expired `requestState` is
+    /// re-run as a pristine FIRST call, so nothing MRTR-shaped is observable).
+    ///
+    /// **Security — CLIENT-SUPPLIED and UNTRUSTED.** Every value here came off
+    /// the wire. It is bounded in count, per-entry size, total size and nesting
+    /// depth at transport ingress, and each entry is proven to be one of the
+    /// three spec-permitted result shapes — but nothing validates it against the
+    /// schema the handler asked for. A handler MUST schema-validate an entry
+    /// before acting on it, exactly as it would validate tool arguments. Compare
+    /// [`mrtr_continuation`](Self::mrtr_continuation), which is server-minted.
+    #[must_use]
+    pub fn input_responses(&self) -> Option<&crate::types::mrtr::InputResponses> {
+        self.protocol_context.as_ref()?.input_responses()
+    }
+
+    /// The DECRYPTED continuation state from a VERIFIED `requestState` token
+    /// (MCP 2026-07-28 multi-round-trip elicitation, HTTP-03).
+    ///
+    /// **Security — SERVER-MINTED and TRUSTED.** This value is whatever the
+    /// handler itself sealed on a previous round. It reaches here only after the
+    /// server-owned AEAD codec authenticated the token against the authenticated
+    /// principal, the live method and a digest of the request's salient
+    /// parameters, so a tampered, cross-principal or cross-request token never
+    /// produces a `Some` — it produces a JSON-RPC error instead.
+    ///
+    /// `None` on a first call, on v1, and inside a re-run handler.
+    #[must_use]
+    pub fn mrtr_continuation(&self) -> Option<&serde_json::Value> {
+        self.protocol_context.as_ref()?.mrtr_continuation()
+    }
+
+    /// The multi-round-trip round counter carried by a verified `requestState`.
+    ///
+    /// A handler uses this to decide it has asked enough times and should fail
+    /// or degrade rather than elicit again (D-09). Counts from `0` for the round
+    /// the FIRST continuation was minted in; `None` on a first call, on v1, and
+    /// inside a re-run handler.
+    #[must_use]
+    pub fn mrtr_round(&self) -> Option<u8> {
+        self.protocol_context.as_ref()?.mrtr_round()
+    }
+
+    /// Extracts the W3C trace-context self-reported in the request `_meta`
+    /// (MCP v2.5, VERS-09), reading the existing
+    /// [`request_meta`](Self::request_meta) — no dedicated field is stored.
+    ///
+    /// Returns `Some` only when `request_meta` carries an in-bounds
+    /// `traceparent` string; `None` when `request_meta` is `None` or lacks a
+    /// valid `traceparent`. Delegates to
+    /// [`TraceContext::from_meta`](crate::types::protocol::TraceContext::from_meta).
+    ///
+    /// **Security — raw, bounded, untrusted:** the returned
+    /// `traceparent`/`tracestate`/`baggage` values are RAW and UNVALIDATED
+    /// self-reported client data, only length-bounded at ingress
+    /// (`MAX_TRACE_VALUE_LEN`) per the Plan-01 contract — see
+    /// [`TraceContext`](crate::types::protocol::TraceContext). They MUST NOT be
+    /// treated as trusted or safe to interpolate into logs/queries without
+    /// independent sanitization.
+    #[must_use]
+    pub fn trace_context(&self) -> Option<crate::types::protocol::TraceContext> {
+        crate::types::protocol::TraceContext::from_meta(self.request_meta.as_ref()?)
     }
 
     /// Returns a reference to the typed extensions map.
@@ -525,6 +680,7 @@ impl Default for RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             request_meta: None,
+            protocol_context: None,
             extensions: http::Extensions::new(),
             #[cfg(not(target_arch = "wasm32"))]
             peer: None,
@@ -625,6 +781,7 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
             .field("request_meta", &self.request_meta)
+            .field("protocol_context", &self.protocol_context)
             .field("extensions", &self.extensions);
         #[cfg(not(target_arch = "wasm32"))]
         debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));
@@ -824,6 +981,66 @@ mod tests {
         assert_eq!(extra.extensions_mut().insert(42u64), None);
         assert_eq!(extra.extensions_mut().insert(99u64), Some(42u64));
         assert_eq!(extra.extensions().get::<u64>(), Some(&99u64));
+    }
+
+    #[tokio::test]
+    async fn test_protocol_context_era_and_identity_accessors() {
+        use crate::types::protocol::{Era, ProtocolContext};
+        use crate::types::{Implementation, ProtocolVersion};
+
+        // No context attached => all accessors return None.
+        let bare = RequestHandlerExtra::new("req-none".to_string(), CancellationToken::new());
+        assert!(bare.era().is_none());
+        assert!(bare.protocol_version().is_none());
+        assert!(bare.client_info().is_none());
+        assert!(bare.client_capabilities().is_none());
+
+        // Attach a v2 ProtocolContext with client identity.
+        let ctx = ProtocolContext::new(Era::V2, ProtocolVersion("2026-07-28".to_string()))
+            .with_client_info(Implementation::new("acme-client", "1.2.3"))
+            .with_client_capabilities(crate::types::ClientCapabilities::default());
+        let extra = RequestHandlerExtra::new("req-v2".to_string(), CancellationToken::new())
+            .with_protocol_context(Some(ctx));
+
+        assert_eq!(extra.era(), Some(Era::V2));
+        assert_eq!(
+            extra.protocol_version().map(ProtocolVersion::as_str),
+            Some("2026-07-28")
+        );
+        let info = extra.client_info().expect("client_info attached");
+        assert_eq!(info.name, "acme-client");
+        assert_eq!(info.version, "1.2.3");
+        assert!(extra.client_capabilities().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_trace_context_from_request_meta() {
+        use serde_json::json;
+
+        // request_meta carrying full W3C trace values round-trips through
+        // trace_context().
+        let extra = RequestHandlerExtra::new("req-trace".to_string(), CancellationToken::new())
+            .with_request_meta(Some(json!({
+                "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                "tracestate": "rojo=00f067aa0ba902b7",
+                "baggage": "userId=alice"
+            })));
+        let tc = extra.trace_context().expect("traceparent present => Some");
+        assert_eq!(
+            tc.traceparent,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        );
+        assert_eq!(tc.tracestate.as_deref(), Some("rojo=00f067aa0ba902b7"));
+        assert_eq!(tc.baggage.as_deref(), Some("userId=alice"));
+
+        // Absent request_meta => None.
+        let bare = RequestHandlerExtra::new("req-bare".to_string(), CancellationToken::new());
+        assert!(bare.trace_context().is_none());
+
+        // request_meta without a traceparent => None.
+        let no_tp = RequestHandlerExtra::new("req-no-tp".to_string(), CancellationToken::new())
+            .with_request_meta(Some(json!({ "tracestate": "a=1" })));
+        assert!(no_tp.trace_context().is_none());
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
-//! `cargo pmcp auth login` — PKCE + optional DCR, cache result.
+//! `cargo pmcp auth login` — PKCE + optional DCR, persisted through the SDK's
+//! credential store.
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -6,15 +7,17 @@ use colored::Colorize;
 use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
 
 use crate::commands::auth_cmd::cache::{
-    default_multi_cache_path, normalize_cache_key, TokenCacheEntry, TokenCacheV1,
+    current_unix_secs, normalize_server_key, open_store, report_migration, CLI_ACCOUNT_SCOPE,
 };
 use crate::commands::GlobalFlags;
 
 /// `cargo pmcp auth login <url> [flags]`
 ///
 /// Runs a full OAuth authorization (PKCE + optional DCR) against the named MCP
-/// server and persists the resulting `AccessToken`/`RefreshToken`/issuer/scopes
-/// under the normalized URL key in `~/.pmcp/oauth-cache.json`.
+/// server. The resulting access token, refresh token, granted scopes and
+/// effective client id are persisted by the SDK under the
+/// `(issuer, account, server)` key in `~/.pmcp/oauth-cache.json`, together with
+/// the authorization server that issued them.
 #[derive(Debug, Args)]
 pub struct LoginArgs {
     /// URL of the MCP server to authenticate against
@@ -43,8 +46,12 @@ pub struct LoginArgs {
 }
 
 /// Execute the `login` subcommand — run the OAuth flow and persist the result.
+///
+/// Persistence happens inside the SDK, through the store injected below: there
+/// is exactly one write, and it records the credentials and the issuer that
+/// issued them in the same update.
 pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> {
-    let key = normalize_cache_key(&args.url)
+    let key = normalize_server_key(&args.url)
         .with_context(|| format!("normalizing login URL {}", args.url))?;
 
     let client_name = args.client.clone().or_else(|| {
@@ -84,29 +91,19 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
         println!();
     }
 
-    let helper = OAuthHelper::new(config.clone()).context("OAuth setup failed")?;
+    let store = open_store();
+    let helper = OAuthHelper::new(config.clone())
+        .context("OAuth setup failed")?
+        .with_credential_store(store.clone())
+        .with_account_scope(CLI_ACCOUNT_SCOPE);
     let result = helper
         .authorize_with_details()
         .await
         .context("OAuth flow failed")?;
 
-    let mut cache = TokenCacheV1::read(&default_multi_cache_path())?;
-    cache.entries.insert(
-        key.clone(),
-        TokenCacheEntry {
-            access_token: result.access_token,
-            refresh_token: result.refresh_token,
-            expires_at: result.expires_at,
-            scopes: if result.scopes.is_empty() {
-                scopes.clone()
-            } else {
-                result.scopes.clone()
-            },
-            issuer: result.issuer.clone(),
-            client_id: result.client_id.clone(),
-        },
-    );
-    cache.write_atomic(&default_multi_cache_path())?;
+    // Reported after the store has actually been read and written, so the
+    // counts describe work that really happened.
+    report_migration(&store).await?;
 
     if global_flags.should_output() {
         let scope_str = if result.scopes.is_empty() {
@@ -124,10 +121,7 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
             .unwrap_or_else(|| "<auto>".to_string());
         let expires_str = match result.expires_at {
             Some(exp) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let now = current_unix_secs();
                 if exp > now {
                     format!("{}s", exp - now)
                 } else {

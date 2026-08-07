@@ -379,11 +379,68 @@ jobs:
     - name: Build pmcp-agent native (HTTP sources + URL connector)
       run: cargo build -p pmcp-agent --features openai-compat,anthropic,url-connector
 
+  # Phase 116 (D-06) wasm32 build fence for the UNGATED OAuth tier.
+  #
+  # `src/shared/oauth_validation.rs` (RFC 9207 `iss` + CSRF `state` decision
+  # table, SEP-2351 discovery-URL derivation) and `src/shared/credential_store.rs`
+  # (SEP-2352's `(issuer, account, server)` key, the document format, the schema
+  # 1 -> 2 migration and the CredentialStore/CredentialStoreAdmin traits) are
+  # ungated ON PURPOSE: a Cloudflare Workers or AWS Lambda platform must be able
+  # to reach them without the `oauth` feature, which pulls in native-only
+  # dependencies that do not build for wasm32. That property is what lets a
+  # platform redirect handler and the CLI share ONE implementation instead of
+  # two that drift.
+  #
+  # Nothing else in CI builds for wasm32, so without this job a future
+  # contributor could add a native-only dependency to either module and break
+  # the property with a green build. The fence is on the EXIT CODE, not the
+  # warning count: `make wasm-build` currently emits ~92 pre-existing dead-code
+  # warnings that are not this gate's business.
+  #
+  # The deliberately GATED counterpart is `src/shared/credential_file.rs` (the
+  # filesystem-backed CredentialStore). Its native-only imports are correct and
+  # it is excluded from the wasm build by feature/target gating — do not "fix"
+  # the split by ungating it or by gating the two modules above.
+  wasm32-purity:
+    name: wasm32 build fence (ungated OAuth tier, Phase 116 D-06)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust (+ wasm32 target)
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Cache cargo
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-wasm32-purity-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-wasm32-purity-
+
+    # Explicit, even though the toolchain action already requested the target:
+    # RESEARCH assumption A5 records that the target's availability on a runner
+    # was never probed, so this must not be assumed. `rustup target add` is a
+    # no-op when the target is already installed.
+    - name: Add wasm32 target
+      run: rustup target add wasm32-unknown-unknown
+
+    # The Makefile target, NOT a bespoke cargo line, so the fence and the
+    # command a developer runs locally can never diverge.
+    - name: Build for wasm32 (make wasm-build)
+      run: make wasm-build
+
   # Unified gate — single required check for org ruleset.
   # Reports as "gate" to match the org ruleset's required status check.
   gate:
     runs-on: ubuntu-latest
-    needs: [test, quality-gate, purity-check, pmcp-agent-targets]
+    needs: [test, quality-gate, purity-check, pmcp-agent-targets, wasm32-purity]
     if: always()
     steps:
       - name: Evaluate required checks
@@ -392,12 +449,14 @@ jobs:
           QG_RESULT: ${{ needs.quality-gate.result }}
           PURITY_RESULT: ${{ needs.purity-check.result }}
           AGENT_TARGETS_RESULT: ${{ needs.pmcp-agent-targets.result }}
+          WASM32_RESULT: ${{ needs.wasm32-purity.result }}
         run: |
           if [[ "$TEST_RESULT" != "success" ]] || \
              [[ "$QG_RESULT" != "success" ]] || \
              [[ "$PURITY_RESULT" != "success" ]] || \
-             [[ "$AGENT_TARGETS_RESULT" != "success" ]]; then
-            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT"
+             [[ "$AGENT_TARGETS_RESULT" != "success" ]] || \
+             [[ "$WASM32_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT, wasm32-purity=$WASM32_RESULT"
             exit 1
           fi
           echo "All required checks passed."

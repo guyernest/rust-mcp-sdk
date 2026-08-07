@@ -4,10 +4,18 @@ use crate::error::{Error, Result};
 use crate::shared::{
     EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
 };
+use crate::types::mrtr::{
+    InputRequests, InputResponses, CALL_TOOL_METHOD, COMPLETE_RESULT_TYPE, GET_PROMPT_METHOD,
+    INPUT_RESPONSES_KEY, READ_RESOURCE_METHOD, RESULT_TYPE_KEY, TASKS_CANCEL_METHOD,
+    TASKS_GET_METHOD, TASKS_UPDATE_METHOD, TASK_ID_KEY, TASK_RESULT_TYPE,
+};
+// `TaskStatus` is consumed only by the native task-polling path; on wasm32 that
+// path is not compiled, so the import is unused THERE and nowhere else.
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 use crate::types::tasks::{
-    resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult,
+    resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult, DetailedTaskV2,
     GetTaskPayloadRequest, GetTaskRequest, GetTaskResult, ListTasksRequest, ListTasksResult, Task,
-    TaskMetadata, TaskPollDecision, TaskStatus, MIN_POLL_MS,
+    TaskDetailV2, TaskMetadata, TaskPollDecision, TaskStatus, TaskV2, MIN_POLL_MS,
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
@@ -42,6 +50,9 @@ pub mod http_middleware;
 pub mod oauth;
 pub mod oauth_middleware;
 mod options;
+/// The client half of the v2 `subscriptions/listen` long-lived stream (HTTP-04).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+pub mod subscriptions;
 pub mod transport;
 
 pub use options::ClientOptions;
@@ -55,13 +66,34 @@ pub use host::{
 ///
 /// When calling [`Client::call_tool_with_task`], the server may return either
 /// an async task (poll with `tasks/get`) or a synchronous result.
+///
+/// # Both eras land in the SAME two variants (Phase 114, plan 19)
+///
+/// This enum is PUBLIC and not `#[non_exhaustive]`, so neither its variants nor
+/// their payload types may change without a MAJOR semver bump. The `2026-07-28`
+/// create result is a FLAT `{taskId,status,createdAt,lastUpdatedAt,ttlMs}` body
+/// where v1's is a NESTED `{"task": {…}}` one, and the two eras also spell two
+/// fields differently (`ttlMs`/`pollIntervalMs` vs `ttl`/`pollInterval`) — but
+/// that difference is absorbed by
+/// [`TaskV2::to_v1`](crate::types::tasks::TaskV2::to_v1) at the decode site, so
+/// [`Task`] stays the one handle type a caller sees on either wire.
+///
+/// A v2 `tasks/get` carries STATUS-CONDITIONAL detail the v1 [`Task`] has no
+/// field for (`result` on `completed`, `error` on `failed`, `inputRequests` on
+/// `input_required`). That detail is reached through the ADDITIVE
+/// [`Client::tasks_get_detailed`] rather than by widening a variant here.
 #[derive(Debug, Clone)]
 pub enum ToolCallResponse {
     /// The server returned a synchronous result (no task created).
     Result(CallToolResult),
     /// The server created an async task. Poll with [`Client::tasks_get`]
-    /// until the task reaches a terminal status, then call
-    /// [`Client::tasks_result`] to get the final `CallToolResult`.
+    /// until the task reaches a terminal status.
+    ///
+    /// - **v1** — then call [`Client::tasks_result`] for the final
+    ///   `CallToolResult`.
+    /// - **v2** — `tasks/result` does not exist; the terminal payload is INLINE
+    ///   in the `tasks/get` result, read through [`Client::tasks_get_detailed`]
+    ///   (or simply let [`Client::wait_for_task`] do both).
     Task(Task),
 }
 
@@ -109,6 +141,163 @@ impl From<TaskMetadata> for WaitForTaskOptions {
     }
 }
 
+/// The reserved `_meta` key carrying the per-request self-reported protocol
+/// version. Spelled `io.modelcontextprotocol/protocolVersion` on the wire.
+///
+/// Sourced from the ONE crate-level table (`types::protocol::context`) that the
+/// SERVER resolver reads, so the two ends cannot drift.
+/// [`Client::v2_request_meta`] emits it on every v2 request.
+const META_PROTOCOL_VERSION: &str = crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
+
+/// The reserved `_meta` key carrying the client's self-reported
+/// `io.modelcontextprotocol/clientInfo`.
+const META_CLIENT_INFO: &str = crate::types::protocol::context::RESERVED_CLIENT_INFO_KEY;
+
+/// The reserved `_meta` key carrying the client's
+/// `io.modelcontextprotocol/clientCapabilities`.
+const META_CLIENT_CAPABILITIES: &str =
+    crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY;
+
+/// The `_meta` object key inside `params` (the SPEC spelling).
+///
+/// Phase-113 D-113-A pinned `_meta` as pmcp's egress spelling on the typed
+/// request structs; the raw v2 injection below uses the same key so a single
+/// request never carries two spellings.
+const PARAMS_META_KEY: &str = crate::types::mrtr::META_KEY;
+
+/// The default MRTR gather→resend round bound (Phase 113, D-09).
+///
+/// Small on purpose: eight rounds is generous for a real multi-round
+/// interaction and short enough that a buggy or hostile server cannot loop a
+/// human (or an autonomous agent) for long. Override with
+/// [`ClientBuilder::mrtr_round_limit`].
+const DEFAULT_MRTR_ROUND_LIMIT: usize = 8;
+
+/// The `sampling/createMessage` method name, sourced from the ONE MRTR kind
+/// table so the v1 host path and the v2 fold cannot spell it differently.
+const SAMPLING_METHOD: &str = crate::types::mrtr::InputRequestKind::Sampling.wire_method();
+
+/// The `elicitation/create` method name. See [`SAMPLING_METHOD`].
+const ELICITATION_METHOD: &str = crate::types::mrtr::InputRequestKind::Elicitation.wire_method();
+
+/// The `roots/list` method name. See [`SAMPLING_METHOD`].
+const ROOTS_METHOD: &str = crate::types::mrtr::InputRequestKind::Roots.wire_method();
+
+/// `tasks/list` — RETIRED on the `2026-07-28` wire (Phase 114, TASK-03).
+///
+/// Deliberately NOT a row of either `types::mrtr` method table: those tables
+/// decide MRTR eligibility and `Mcp-Name` derivation, and this method exists on
+/// v1 ONLY — claiming a v2 routing name for it would be a claim pmcp cannot
+/// support. It is spelled here because exactly two client sites need it: the v1
+/// call and the v2 local refusal.
+const TASKS_LIST_METHOD: &str = "tasks/list";
+
+/// `tasks/result` — RETIRED on the `2026-07-28` wire. See [`TASKS_LIST_METHOD`].
+const TASKS_RESULT_METHOD: &str = "tasks/result";
+
+/// What a v2 caller should reach for instead of the retired `tasks/list`.
+///
+/// There is NO v2 list method — the enumeration primitive was removed as a
+/// security improvement (a server with no list cannot leak the existence of one
+/// caller's tasks to another), so the honest answer is that the client keeps its
+/// own ids. Saying "use `tasks/get`" here would be a lie: `tasks/get` answers
+/// about ONE id the caller already holds.
+const TASKS_LIST_V2_REPLACEMENT: &str = "client-side task tracking";
+
+/// The input-responder type [`Client::wait_for_task`] passes as `None`.
+///
+/// `Client::poll_task_to_terminal` is generic over its responder so that
+/// [`Client::wait_for_task_with_inputs`] can reuse it WHOLESALE rather than
+/// growing a second copy of the loop. A bare `None` leaves both type parameters
+/// unconstrained, so the no-responder caller names this concrete, NEVER-CALLED
+/// function-pointer type instead. `std::future::Ready` is simply the smallest
+/// concrete `Future` that satisfies the bound.
+type NoInputResponder = fn(InputRequests) -> std::future::Ready<Result<InputResponses>>;
+
+/// Why a host request could not be answered.
+///
+/// Shared by the v1 server-initiated dispatch and the v2 MRTR fold so both
+/// consume the SAME pipeline (approval gate, handler preference, result
+/// review) and only differ in how they render the refusal.
+#[derive(Debug)]
+enum HostRefusal {
+    /// No handler is registered for this kind.
+    NoHandler,
+    /// A policy gate (preflight approval or result review) denied it. The
+    /// reason is logged at the denial site and deliberately not carried here —
+    /// local host policy is never forwarded to the remote server.
+    Denied,
+    /// The registered handler or provider itself failed.
+    Failed(Error),
+    /// The handler's result could not be serialized.
+    Serialization,
+}
+
+impl HostRefusal {
+    /// A short, non-sensitive reason string for MRTR fold logging.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::NoHandler => "no registered handler",
+            Self::Denied => "denied by host policy",
+            Self::Failed(_) => "handler returned an error",
+            Self::Serialization => "handler result could not be serialized",
+        }
+    }
+}
+
+/// A sampling completion, still typed as the registered handler produced it.
+///
+/// The shared pipeline returns this rather than a serialized value because the
+/// two entry points render it differently: the v1 host response carries the
+/// tool-aware result in FULL, while an MRTR `inputResponses` value is
+/// spec-typed as a `CreateMessageResult`.
+#[derive(Debug)]
+enum HostSamplingCompletion {
+    /// From a [`host::HostSamplingHandler`].
+    Legacy(CreateMessageResult),
+    /// From a [`host::HostSamplingHandlerWithTools`].
+    WithTools(crate::types::sampling::CreateMessageResultWithTools),
+}
+
+/// The outcome of folding an entire `inputRequests` map into `inputResponses`.
+#[derive(Debug)]
+enum FoldOutcome {
+    /// EVERY entry was answered.
+    Fulfilled(crate::types::mrtr::InputResponses),
+    /// At least one entry could not be answered. All-or-nothing: no partial
+    /// map, no fabricated response, and the client does NOT resend.
+    CannotFulfil,
+}
+
+/// What ONE MRTR round decided.
+#[derive(Debug)]
+enum RoundOutcome {
+    /// A non-`input_required` result — the operation is done.
+    Terminal(serde_json::Value),
+    /// The server needs input this client cannot supply — done, unfulfilled.
+    /// Boxed because the variant is far larger than the others.
+    Unfulfilled(Box<crate::types::mrtr::InputRequiredResult>),
+    /// Resend the original request carrying these MRTR fields.
+    Continue(crate::types::mrtr::MrtrRequestParams),
+}
+
+/// What the whole MRTR loop produced.
+///
+/// A two-variant enum rather than a struct with an `Option`: the struct form
+/// needed six doc lines to state the invariant "`unfulfilled` is `Some` exactly
+/// when `raw_result` is an `input_required` result", and paid a full deep clone
+/// of the server's result body to populate a field that BOTH consumers
+/// provably never read in that case (each returns early on `unfulfilled`).
+/// As an enum the invariant is type-enforced and the clone is unrepresentable.
+#[derive(Debug)]
+enum MrtrLoopOutcome {
+    /// The loop finished: the verbatim `result` object of the final response.
+    Complete(serde_json::Value),
+    /// The loop stopped because no registered handler could answer the server's
+    /// `inputRequests`.
+    Unfulfilled(Box<crate::types::mrtr::InputRequiredResult>),
+}
+
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
@@ -126,6 +315,32 @@ pub struct Client<T: Transport> {
     /// Registered host handlers answering inbound server -> client requests
     /// (sampling / elicitation / roots). Immutable after construction.
     host_registry: crate::client::host::ClientHostRegistry,
+    /// The EXPLICIT per-connection protocol-version selection made via
+    /// [`ClientBuilder::with_protocol_version`] (Phase 113, CLNT-01).
+    ///
+    /// `None` — the default and the only state reachable without that builder
+    /// call — means "behave exactly as pmcp always has": v1, full `initialize`
+    /// handshake, no v2 headers, no per-request `_meta`.
+    negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
+    /// Maximum MRTR gather→resend rounds before giving up (Phase 113, D-09).
+    ///
+    /// See [`ClientBuilder::mrtr_round_limit`]. Dead on a v1 connection.
+    mrtr_round_limit: usize,
+    /// The Extensions-Track capabilities this client DECLARES on v2 (Phase 114,
+    /// D-04), merged into the `extensions` map of the `ClientCapabilities` that
+    /// [`Self::v2_request_meta`] serializes into every request's
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`.
+    ///
+    /// `None` — the default and the only state reachable without
+    /// [`ClientBuilder::with_tasks_extension`] — declares NOTHING, and the
+    /// `extensions` key is then absent from the serialized capabilities
+    /// entirely (the field carries `skip_serializing_if`).
+    ///
+    /// Deliberately NOT read on v1: the v1 `initialize` handshake advertises the
+    /// `ClientCapabilities` the CALLER passed to [`Self::initialize`], and
+    /// injecting an extension there would move the `initialize` bytes of every
+    /// existing caller (Phase-114 D-02).
+    declared_extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -192,6 +407,9 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -236,6 +454,9 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options: ClientOptions::default(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -276,6 +497,9 @@ impl<T: Transport> Client<T> {
             active_requests: Arc::new(RwLock::new(HashMap::new())),
             options,
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
     }
 
@@ -328,6 +552,15 @@ impl<T: Transport> Client<T> {
         &mut self,
         mut capabilities: ClientCapabilities,
     ) -> Result<InitializeResult> {
+        // v2 (2026-07-28) REMOVED the initialize handshake: every request carries
+        // its own `_meta` era signal and there is no session to establish. This
+        // stays callable so existing v1-shaped application code keeps compiling
+        // when it opts into v2, but it sends NOTHING — no `initialize`, no
+        // `notifications/initialized`.
+        if self.is_v2() {
+            self.initialized = true;
+            return Ok(Self::v2_synthetic_initialize_result());
+        }
         if self.initialized {
             return Err(Error::InvalidState("Client already initialized".into()));
         }
@@ -410,15 +643,275 @@ impl<T: Transport> Client<T> {
             }
         }
 
+        // EITHER sampling handler shape can service an inbound
+        // `sampling/createMessage`: `on_sampling_with_tools` sets only
+        // `sampling_with_tools`, and dispatch prefers it. Checking only
+        // `sampling` made a `WithTools`-ONLY client advertise no sampling
+        // capability at all — an under-claim that stops a server from ever
+        // asking, and (on v2) makes the server answer `-32021` instead of
+        // sending the sampling input request the client can in fact fulfil.
         sync_cap(
             &mut capabilities.sampling,
-            self.host_registry.sampling.is_some(),
+            self.host_registry.sampling.is_some()
+                || self.host_registry.sampling_with_tools.is_some(),
         );
         sync_cap(
             &mut capabilities.elicitation,
             self.host_registry.elicitation.is_some(),
         );
         sync_cap(&mut capabilities.roots, self.host_registry.roots.is_some());
+    }
+
+    // =======================================================================
+    // v2 (`2026-07-28`) era plumbing — Phase 113, CLNT-01.
+    // =======================================================================
+
+    /// The era this connection speaks, from the EXPLICIT
+    /// [`ClientBuilder::with_protocol_version`] selection.
+    ///
+    /// A client that never made that call is [`Era::V1`](crate::types::protocol::Era::V1)
+    /// and every v2 branch below is dead for it.
+    fn era(&self) -> crate::types::protocol::Era {
+        self.negotiated_protocol_version
+            .as_ref()
+            .map_or(crate::types::protocol::Era::V1, |version| {
+                crate::types::protocol::protocol_era(version.as_str())
+            })
+    }
+
+    /// Whether this connection speaks the v2 (`2026-07-28`) wire contract.
+    fn is_v2(&self) -> bool {
+        self.era() == crate::types::protocol::Era::V2
+    }
+
+    /// Refuse a method the 2026-07-28 schema RETIRED, on a v2 connection
+    /// (Phase 113, HTTP-04).
+    ///
+    /// `resources/subscribe` and `resources/unsubscribe` no longer exist on the
+    /// v2 wire, and plan 10 made pmcp's own server answer both with `404` +
+    /// `-32601`. Sending them anyway costs a round trip and yields an opaque
+    /// method-not-found; failing here yields a typed error that NAMES the
+    /// replacement (T-113-68).
+    ///
+    /// On v1 this is a no-op, so the legacy path stays byte-identical.
+    fn reject_if_retired_on_v2(&self, method: &str) -> Result<()> {
+        if self.is_v2() {
+            return Err(Error::retired_on_v2(
+                method,
+                crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fail fast and LOCALLY when a v2-only method is called on a v1 connection.
+    ///
+    /// The mirror image of [`Self::reject_if_retired_on_v2`], and the ONE place
+    /// the remedy is spelled — naming `ClientBuilder::with_protocol_version` once
+    /// rather than in every v2-only method, so renaming the builder does not
+    /// leave stale guidance behind in N error strings.
+    fn require_v2(&self, method: &str) -> Result<()> {
+        if self.is_v2() {
+            return Ok(());
+        }
+        Err(Error::InvalidState(format!(
+            "{method} requires the 2026-07-28 era — select it with \
+             ClientBuilder::with_protocol_version"
+        )))
+    }
+
+    /// The `InitializeResult` a v2 client returns from its handshake-free
+    /// [`Self::initialize`].
+    ///
+    /// It is LOCAL and SYNTHETIC: v2 removed `initialize`, so no byte of this
+    /// came from the server. Deliberately it is NOT stored into
+    /// `server_capabilities` — a v2 client learns the server's capabilities only
+    /// from an explicit [`Self::server_discover`] call, and
+    /// [`Self::assert_capability`] depends on that distinction.
+    fn v2_synthetic_initialize_result() -> InitializeResult {
+        InitializeResult {
+            protocol_version: crate::types::ProtocolVersion(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            ),
+            capabilities: ServerCapabilities::default(),
+            server_info: Implementation::new("unknown", "unknown"),
+            instructions: None,
+        }
+    }
+
+    /// The capabilities a v2 client declares in
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`.
+    ///
+    /// DERIVED FROM THE HANDLER REGISTRY, never from a caller-supplied value —
+    /// the same registry-authoritative anti-capability-lie rule
+    /// [`Self::derive_host_capabilities`] applies to the v1 handshake (HOST-05).
+    ///
+    /// This is capability HONESTY, and on v2 it is load-bearing in BOTH
+    /// directions (spec MRTR obligation 7, conformance
+    /// `input-required-result-capability-check`): a server may only put an
+    /// `inputRequests` entry in an `input_required` result for a capability the
+    /// client DECLARED, so an over-claiming client receives requests it cannot
+    /// fulfil and an under-claiming one gets `-32021` where the round could have
+    /// completed.
+    /// # The `sampling.tools` sub-field is declared, not defaulted away
+    ///
+    /// `derive_host_capabilities` inserts `SamplingCapabilities::default()`,
+    /// whose `tools` is `None`. On v1 that is fine — the caller passes its own
+    /// `ClientCapabilities` into `initialize` and any configured detail is
+    /// preserved. On v2 there is NO caller-supplied value at all, so the default
+    /// IS the declaration: a client that registered `on_sampling_with_tools`
+    /// would advertise `{"sampling": {}}`, and the server's
+    /// `missing_client_capabilities` precheck would answer `-32021` for a
+    /// tool-augmented `sampling/createMessage` the client can in fact service.
+    /// That is the same under-claim `derive_host_capabilities` already fixes one
+    /// level up for the `sampling` field itself.
+    ///
+    /// # The `extensions` map is DECLARED, not derived (Phase 114, D-04)
+    ///
+    /// The three host fields above are registry-derived because pmcp can check
+    /// whether a handler exists. An Extensions-Track capability has no such
+    /// local witness — it is a statement about what the APPLICATION does with a
+    /// `resultType:"task"` response — so it is opted into explicitly through
+    /// [`ClientBuilder::with_tasks_extension`] and merged here. A client that
+    /// never opted in gets no `extensions` key at all, because the field carries
+    /// `skip_serializing_if = "Option::is_none"`.
+    fn v2_client_capabilities(&self) -> ClientCapabilities {
+        let mut capabilities = ClientCapabilities::default();
+        self.derive_host_capabilities(&mut capabilities);
+        if self.host_registry.sampling_with_tools.is_some() {
+            if let Some(sampling) = capabilities.sampling.as_mut() {
+                if sampling.tools.is_none() {
+                    sampling.tools = Some(serde_json::Value::Object(serde_json::Map::new()));
+                }
+            }
+        }
+        if let Some(declared) = self.declared_extensions.as_ref() {
+            // MERGE rather than assign: `ClientCapabilities::default()` carries
+            // `extensions: None` today, but a future default that pre-seeded the
+            // map would otherwise be silently discarded here.
+            let slot = capabilities.extensions.get_or_insert_with(HashMap::new);
+            for (key, value) in declared {
+                slot.insert(key.clone(), value.clone());
+            }
+        }
+        capabilities
+    }
+
+    /// Build the reserved `_meta` object every v2 request carries.
+    ///
+    /// Exactly three keys, all read by the server's `resolve_protocol_context`:
+    /// `io.modelcontextprotocol/protocolVersion` (the era channel — a stateless
+    /// v2 request has no handshake, so this is the ONLY one),
+    /// `io.modelcontextprotocol/clientInfo` and
+    /// `io.modelcontextprotocol/clientCapabilities`.
+    ///
+    /// `clientInfo` is SELF-REPORTED and unverified by construction — a server
+    /// must never derive authorization from it (T-113-21).
+    fn v2_request_meta(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            META_PROTOCOL_VERSION.to_string(),
+            serde_json::Value::String(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            ),
+        );
+        if let Ok(info) = serde_json::to_value(&self.info) {
+            meta.insert(META_CLIENT_INFO.to_string(), info);
+        }
+        if let Ok(capabilities) = serde_json::to_value(self.v2_client_capabilities()) {
+            meta.insert(META_CLIENT_CAPABILITIES.to_string(), capabilities);
+        }
+        meta
+    }
+
+    /// MERGE the v2 reserved `_meta` keys into an outgoing request's `params`.
+    ///
+    /// Merge, never replace (T-113-54): a caller-supplied `_meta` — W3C trace
+    /// context (`traceparent` / `tracestate` / `baggage`), a progress token, a
+    /// namespaced extension key — SURVIVES, so plan 07's MRTR retries keep their
+    /// distributed-tracing spans linked. Only the three reserved
+    /// `io.modelcontextprotocol/*` keys are authoritative and overwrite.
+    ///
+    /// A `params` that is absent or not an object is replaced with a fresh
+    /// object carrying only `_meta`: on v2 a request with no `_meta` has no era
+    /// signal at all and would be rejected by the server's header gate.
+    fn splice_v2_meta(&self, params: &mut Option<serde_json::Value>) {
+        let reserved = self.v2_request_meta();
+        if !matches!(params, Some(serde_json::Value::Object(_))) {
+            // Replacing a NON-NULL, non-object `params` DISCARDS it — a JSON-RPC
+            // array (positional) `params` cannot carry a `_meta` sibling. No MCP
+            // method uses that shape, so this is unreachable from this crate's
+            // own request types, but a silent drop of caller data must be
+            // observable rather than inferred from a missing field server-side.
+            if matches!(params, Some(value) if !value.is_null()) {
+                tracing::warn!(
+                    "v2 request params were not a JSON object and have been replaced with one \
+                     carrying only the reserved _meta keys; the original params were discarded"
+                );
+            }
+            *params = Some(serde_json::Value::Object(serde_json::Map::new()));
+        }
+        let Some(serde_json::Value::Object(object)) = params.as_mut() else {
+            return;
+        };
+        let meta = object
+            .entry(PARAMS_META_KEY.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !meta.is_object() {
+            *meta = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let Some(meta) = meta.as_object_mut() else {
+            return;
+        };
+        for (key, value) in reserved {
+            meta.insert(key, value);
+        }
+    }
+
+    /// Ask a v2 server for its capability projection (`server/discover`).
+    ///
+    /// v2 has no `initialize`, so this is how a client learns what the server
+    /// supports. It is EXPLICIT: pmcp never calls it implicitly, and never uses
+    /// it to CHOOSE an era (Phase-113 D-08 forbids exactly that auto-probe).
+    /// Populating capabilities from a call the USER made is a different thing
+    /// from probing to decide which protocol to speak — do not "restore" the
+    /// latter.
+    ///
+    /// Takes `&mut self` because it STORES the returned capabilities: after this
+    /// call `Self::assert_capability` enforces on v2 exactly as it does on v1
+    /// against initialize-learned ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection did not opt into `2026-07-28`
+    /// (`server/discover` does not exist on v1 — a v1 server answers `-32601`),
+    /// when the transport fails, or when the server returns a JSON-RPC error.
+    pub async fn server_discover(
+        &mut self,
+    ) -> Result<crate::types::protocol::ServerDiscoverResult> {
+        self.require_v2(crate::types::protocol::SERVER_DISCOVER_METHOD)?;
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self
+            .send_untyped_request(
+                request_id,
+                crate::types::protocol::SERVER_DISCOVER_METHOD,
+                serde_json::json!({}),
+            )
+            .await?;
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                let discovered = serde_json::from_value::<
+                    crate::types::protocol::ServerDiscoverResult,
+                >(result)
+                .map_err(|e| Error::parse(format!("Invalid server/discover result: {e}")))?;
+                self.server_capabilities = Some(discovered.capabilities.clone());
+                self.server_version = Some(discovered.server_info.clone());
+                Ok(discovered)
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
     }
 
     /// Get server capabilities after initialization.
@@ -574,6 +1067,26 @@ impl<T: Transport> Client<T> {
     /// - The tool name doesn't exist
     /// - The arguments are invalid for the tool
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// On a connection that opted into `2026-07-28`, this method
+    /// auto-orchestrates Multi-Round-Trip Elicitation: an `input_required`
+    /// result is answered from the registered host handlers and the request is
+    /// resent, up to [`ClientBuilder::mrtr_round_limit`] rounds.
+    ///
+    /// Two v2-only error outcomes are therefore possible, both programmatically
+    /// distinguishable:
+    ///
+    /// - [`Error::is_input_required_unfulfilled`] — no handler could answer, so
+    ///   the full result is handed back via [`Error::input_required_result`].
+    ///   It is an ERROR here (rather than a value) because
+    ///   [`CallToolResult::content`] carries `#[serde(default)]` and would
+    ///   otherwise deserialize such a result into a silently EMPTY success. Use
+    ///   [`Self::call_tool_mrtr`] to receive it as a value instead.
+    /// - [`Error::is_mrtr_round_limit_exceeded`] — the server kept asking.
+    ///
+    /// On v1 this method is byte-identical to every prior release.
     pub async fn call_tool(
         &self,
         name: String,
@@ -581,6 +1094,13 @@ impl<T: Transport> Client<T> {
     ) -> Result<CallToolResult> {
         self.ensure_initialized()?;
         self.assert_capability("tools", "tools/call")?;
+
+        if self.is_v2() {
+            let params = Self::call_tool_params(name, arguments)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(CALL_TOOL_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name,
@@ -637,24 +1157,7 @@ impl<T: Transport> Client<T> {
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
-
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
-                // This avoids brittle key-name duck-typing.
-                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
-                {
-                    Ok(ToolCallResponse::Task(task_result.task))
-                } else {
-                    let tool_result: CallToolResult =
-                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                    Ok(ToolCallResponse::Result(tool_result))
-                }
-            },
-            crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
-            },
-        }
+        self.decode_task_augmented_response(response)
     }
 
     /// Call a tool with task augmentation AND custom request `_meta`.
@@ -709,23 +1212,93 @@ impl<T: Transport> Client<T> {
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
+        self.decode_task_augmented_response(response)
+    }
 
-        match response.payload {
-            crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
-                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
-                {
-                    Ok(ToolCallResponse::Task(task_result.task))
-                } else {
-                    let tool_result: CallToolResult =
-                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
-                    Ok(ToolCallResponse::Result(tool_result))
-                }
-            },
+    /// Decode the response of a task-augmented `tools/call`, ERA-AWARE.
+    ///
+    /// The ONE decoder [`Self::call_tool_with_task`] and
+    /// [`Self::call_tool_with_task_and_meta`] share. Those two carried a
+    /// line-for-line identical copy of this arm before Phase 114 plan 19, and
+    /// making them era-aware would have created a third.
+    ///
+    /// # v2 branches on the DISCRIMINATOR, never on the shape
+    ///
+    /// The v1 arm below is the historical "try `CreateTaskResult`, else
+    /// `CallToolResult`" try-first-then-fall-back, kept byte-for-byte because v1
+    /// wire behaviour must not move. Its own comment warns against key-name
+    /// duck-typing, and on v2 the warning becomes load-bearing: the v2 create
+    /// payload is FLAT, so it and an ordinary `CallToolResult` no longer have a
+    /// reliably discriminating key — `CallToolResult::content` carries
+    /// `#[serde(default)]`, so essentially any object decodes as one.
+    ///
+    /// v2 therefore reads [`RESULT_TYPE_KEY`] and compares it to
+    /// [`TASK_RESULT_TYPE`], the SAME constant the server's
+    /// `ResponseDisposition::as_wire_str` emits. An absent or unrecognised
+    /// `resultType` is an ordinary complete result — the absent-means-complete
+    /// rule Phase 112 established for this envelope (T-114-99: a server cannot
+    /// steer a client's decode branch by crafting a task-SHAPED ordinary
+    /// result, because the shape is not consulted).
+    fn decode_task_augmented_response(
+        &self,
+        response: crate::types::JSONRPCResponse,
+    ) -> Result<ToolCallResponse> {
+        let result = match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => result,
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
-                Err(Error::from_jsonrpc_error(error))
+                return Err(Error::from_jsonrpc_error(error))
             },
+        };
+        if self.is_v2() {
+            return Self::decode_v2_task_augmented_result(result);
         }
+        Self::decode_v1_task_augmented_result(result)
+    }
+
+    /// The v2 arm of [`Self::decode_task_augmented_response`].
+    ///
+    /// Every arm is named, including the two that mean the same thing: the
+    /// server's explicit `"complete"` and an ABSENT discriminator are one answer
+    /// (absent-means-complete), and an unrecognised value is that answer too —
+    /// but observably, because a value this client does not know is a protocol
+    /// version skew a developer needs to see, not something to swallow.
+    fn decode_v2_task_augmented_result(result: serde_json::Value) -> Result<ToolCallResponse> {
+        let created_a_task = match result
+            .get(RESULT_TYPE_KEY)
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(TASK_RESULT_TYPE) => true,
+            Some(COMPLETE_RESULT_TYPE) | None => false,
+            Some(unknown) => {
+                tracing::debug!(
+                    target: "mcp.tasks",
+                    result_type = unknown,
+                    "unrecognised {RESULT_TYPE_KEY} on a v2 tools/call result; treating it as a \
+                     complete result (absent-means-complete)"
+                );
+                false
+            },
+        };
+        if !created_a_task {
+            let tool_result: CallToolResult =
+                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+            return Ok(ToolCallResponse::Result(tool_result));
+        }
+        let created: TaskV2 =
+            serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+        Ok(ToolCallResponse::Task(created.to_v1()))
+    }
+
+    /// The v1 arm of [`Self::decode_task_augmented_response`] — FROZEN.
+    fn decode_v1_task_augmented_result(result: serde_json::Value) -> Result<ToolCallResponse> {
+        // Try CreateTaskResult first (more specific), fall back to CallToolResult.
+        // This avoids brittle key-name duck-typing.
+        if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone()) {
+            return Ok(ToolCallResponse::Task(task_result.task));
+        }
+        let tool_result: CallToolResult =
+            serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+        Ok(ToolCallResponse::Result(tool_result))
     }
 
     /// Call a tool (non-task) with custom request `_meta`.
@@ -791,14 +1364,40 @@ impl<T: Transport> Client<T> {
     /// (respecting `task.poll_interval`) until the task reaches a terminal
     /// status (`Completed`, `Failed`, or `Cancelled`).
     ///
+    /// # Era awareness (Phase 114, plan 19)
+    ///
+    /// | Era | Wire shape | How it becomes a [`Task`] |
+    /// |-----|-----------|---------------------------|
+    /// | v1 | NESTED `{"task": {…, "ttl", "pollInterval"}}` | unchanged: decode `GetTaskResult`, return `.task` |
+    /// | v2 | FLAT `{taskId, status, createdAt, lastUpdatedAt, ttlMs, …}` | decode `TaskV2`, then [`TaskV2::to_v1`](crate::types::tasks::TaskV2::to_v1) |
+    ///
+    /// The signature is unchanged on purpose: `ttlMs` lands on [`Task::ttl`] and
+    /// `pollIntervalMs` on [`Task::poll_interval`], so an existing caller's poll
+    /// logic keeps working verbatim against a v2 server.
+    ///
+    /// The v2 arm decodes only the flat BASE task, never the status-discriminated
+    /// `DetailedTask`. That is deliberate: a backend that cannot supply a
+    /// terminal task's `result` degrades to the bare flat `Task`, and a strict
+    /// decode here would turn "I could not read the detail" into "I could not
+    /// read the task at all". Use [`Self::tasks_get_detailed`] when you want the
+    /// inlined detail and want a missing one to be an error.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The server doesn't support tasks
-    /// - The task ID doesn't exist or belongs to another owner
+    /// - The task ID doesn't exist or belongs to another owner. On v2 that is
+    ///   ONE `-32602` answer for absent / wrong-owner / EXPIRED alike — the
+    ///   three are deliberately indistinguishable (no existence oracle), so a
+    ///   client must not try to tell them apart.
     pub async fn tasks_get(&self, task_id: &str) -> Result<Task> {
+        if self.is_v2() {
+            let raw = self.tasks_get_raw_v2(task_id).await?;
+            return Ok(Self::decode_v2_task_base(&raw)?.to_v1());
+        }
+
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/get")?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
             task_id: task_id.to_string(),
@@ -806,18 +1405,89 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        let task_result: GetTaskResult = self.parse_task_payload(response, "tasks/get").await?;
+        let task_result: GetTaskResult =
+            self.parse_task_payload(response, TASKS_GET_METHOD).await?;
         Ok(task_result.task)
     }
 
-    /// Get the final result of a completed task.
+    /// Get a task's status TOGETHER WITH its status-conditional detail — v2 only
+    /// (Phase 114, plan 19).
+    ///
+    /// The additive sibling of [`Self::tasks_get`]. On `2026-07-28` a
+    /// `tasks/get` result is a flat `DetailedTask`: one variant per status,
+    /// each carrying exactly the key its schema variant marks required —
+    /// `result` on `completed`, `error` on `failed`, `inputRequests` on
+    /// `input_required`, nothing extra on `working` / `cancelled`.
+    ///
+    /// This is what removes the second round trip v1 needed: `tasks/result` does
+    /// not exist on v2 because the terminal payload is already here.
+    ///
+    /// # Strict by design
+    ///
+    /// [`DetailedTaskV2::from_wire_value`](crate::types::tasks::DetailedTaskV2::from_wire_value)
+    /// is STATUS-DIRECTED: it reads `status` first and then REQUIRES that
+    /// status's key. A `completed` task with no `result` is an error here rather
+    /// than a best-effort decode into a variant that happens to fit — the same
+    /// discipline the server-side projection applies when it emits.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidState`] when the connection did not opt into
+    ///   `2026-07-28` — NO request is sent.
+    /// - The transport / JSON-RPC errors [`Self::tasks_get`] returns.
+    /// - [`Error::Protocol`] carrying `ErrorCode::PARSE_ERROR` (built by
+    ///   [`Error::parse`]) when the payload's status and detail disagree.
+    pub async fn tasks_get_detailed(&self, task_id: &str) -> Result<DetailedTaskV2> {
+        self.require_v2("Client::tasks_get_detailed")?;
+        let raw = self.tasks_get_raw_v2(task_id).await?;
+        DetailedTaskV2::from_wire_value(&raw).map_err(Error::parse)
+    }
+
+    /// Send one v2 `tasks/get` and hand back the RAW result object.
+    ///
+    /// The single v2 fetch site: [`Self::tasks_get`], [`Self::tasks_get_detailed`]
+    /// and the poll loop all go through it, so the flat payload is fetched ONCE
+    /// per tick and both the base task and the inlined detail are read from the
+    /// SAME bytes. Decoding twice from one value is free; asking the server
+    /// twice is a second round trip and a second chance for the two answers to
+    /// disagree.
+    async fn tasks_get_raw_v2(&self, task_id: &str) -> Result<serde_json::Value> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
+            task_id: task_id.to_string(),
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+        self.parse_task_payload::<serde_json::Value>(response, TASKS_GET_METHOD)
+            .await
+    }
+
+    /// Decode the flat v2 base task out of a raw `tasks/get` payload.
+    fn decode_v2_task_base(raw: &serde_json::Value) -> Result<TaskV2> {
+        serde_json::from_value(raw.clone()).map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// Get the final result of a completed task — **v1 only**.
     ///
     /// For a task-augmented `tools/call`, this returns the `CallToolResult`
     /// that the tool would have returned synchronously. Only valid when
     /// the task status is `Completed`.
+    ///
+    /// # RETIRED on `2026-07-28` (Phase 114, TASK-03 / D-15)
+    ///
+    /// `tasks/result` is absent from the tasks extension: the v2 `tasks/get`
+    /// INLINES the terminal payload, so a second round trip has nothing left to
+    /// do. A v2 server answers this method `-32601`. Calling it on a v2
+    /// connection therefore fails LOCALLY — no bytes leave the process — with an
+    /// [`Error::retired_on_v2`] naming [`Self::tasks_get_detailed`]'s method as
+    /// the replacement. A clear local error beats a round trip to an opaque
+    /// method-not-found.
     pub async fn tasks_result(&self, task_id: &str) -> Result<CallToolResult> {
+        self.reject_retired_tasks_method_on_v2(TASKS_RESULT_METHOD, TASKS_GET_METHOD)?;
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/result")?;
+        self.assert_capability("tasks", TASKS_RESULT_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksResult(
             GetTaskPayloadRequest {
@@ -827,17 +1497,49 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        self.parse_task_payload::<CallToolResult>(response, "tasks/result")
+        self.parse_task_payload::<CallToolResult>(response, TASKS_RESULT_METHOD)
             .await
     }
 
-    /// Poll a task to terminal status, then return its `tasks/result`.
+    /// Refuse a `tasks/*` method the `2026-07-28` tasks extension does not
+    /// declare, LOCALLY and before any bytes go on the wire.
+    ///
+    /// The tasks twin of [`Self::reject_if_retired_on_v2`], kept separate from it
+    /// because the replacement differs per method and because the two families
+    /// were retired by different specs. Both mint the SAME
+    /// [`Error::retired_on_v2`] marker, so a caller has ONE typed check
+    /// ([`Error::is_retired_on_v2`]) for "this method is gone on v2".
+    ///
+    /// On v1 it is a no-op, so the legacy path stays byte-identical.
+    fn reject_retired_tasks_method_on_v2(&self, method: &str, replacement: &str) -> Result<()> {
+        if self.is_v2() {
+            return Err(Error::retired_on_v2(method, replacement));
+        }
+        Ok(())
+    }
+
+    /// Poll a task to terminal status, then return its final result.
     ///
     /// Drives `tasks/get` in a loop until [`TaskStatus::is_terminal`], honoring
     /// the polling interval (caller override, else the task-reported
     /// `pollInterval`, else a built-in default) and an optional overall timeout.
-    /// On terminal status it fetches and returns the persisted
-    /// [`CallToolResult`] via [`Client::tasks_result`].
+    ///
+    /// # Where the terminal result comes from is ERA-SPLIT (Phase 114, plan 19)
+    ///
+    /// | Era | Terminal step |
+    /// |-----|---------------|
+    /// | v1 | a second round trip: [`Client::tasks_result`], exactly as before |
+    /// | v2 | ZERO extra round trips — the result is INLINE in the `tasks/get` payload the loop already fetched |
+    ///
+    /// `tasks/result` does not exist on `2026-07-28` (a v2 server answers
+    /// `-32601`), so the v2 arm must not call it — and does not need to, because
+    /// a v2 `tasks/get` on a `completed` task carries `result` and on a `failed`
+    /// task carries `error`. Nothing else in the loop is era-aware: the
+    /// classifier, the floor, the budget clamp and the clock are shared.
+    ///
+    /// On v2 a task that reaches `failed` surfaces its inlined JSON-RPC `error`
+    /// as a typed client error rather than an empty success, and a `cancelled`
+    /// task is an error too — neither has a result to return.
     ///
     /// # Wasm safety
     ///
@@ -863,7 +1565,9 @@ impl<T: Transport> Client<T> {
     ///   [`TaskStatus::InputRequired`]: that state is NOT terminal and needs
     ///   client-side action (elicitation) this poller cannot provide, so
     ///   polling on would hang forever under the default (unbounded) options.
-    ///   Handle the required input, then resume polling.
+    ///   Handle the required input, then resume polling — or use
+    ///   [`Client::wait_for_task_with_inputs`], which is exactly this poller
+    ///   with a responder attached and IS the answer to that message.
     ///
     /// # Durable and replay consumers
     ///
@@ -901,13 +1605,125 @@ impl<T: Transport> Client<T> {
         task_id: &str,
         opts: WaitForTaskOptions,
     ) -> Result<CallToolResult> {
+        // No responder: the `InputRequired` arm below returns its error, which is
+        // the correct answer for a caller that supplied none. The turbofish names
+        // a concrete never-called callback type because `None` alone leaves both
+        // generic parameters unconstrained.
+        self.poll_task_to_terminal(task_id, opts, None::<NoInputResponder>)
+            .await
+    }
+
+    /// [`Client::wait_for_task`] WITH a responder for `input_required` — v2 only
+    /// (Phase 114, TASK-02).
+    ///
+    /// The same poller, with one behaviour added: when the task pauses for
+    /// input, `responder` is handed the task's `inputRequests` (read from the
+    /// `tasks/get` payload the loop already fetched — no extra round trip), its
+    /// answers are delivered with [`Client::tasks_update`], and polling resumes.
+    ///
+    /// Everything else is [`Client::wait_for_task`] VERBATIM — the same
+    /// `poll_decision()` classifier matched with no wildcard arm, the same
+    /// `MIN_POLL_MS` floor, the same remaining-budget clamp, the same
+    /// `web_time::Instant` clock — because it is literally the same function
+    /// with a responder passed in.
+    ///
+    /// # v2 only
+    ///
+    /// `tasks/update` does not exist on `2026-07-28`'s predecessor, so a v1 call
+    /// fails LOCALLY with no bytes on the wire. Use
+    /// [`Client::wait_for_task`] plus your own elicitation handling there.
+    ///
+    /// # The input rounds are BOUNDED
+    ///
+    /// A server that keeps re-requesting input cannot spin a client forever: the
+    /// number of `input_required` rounds is capped by the SAME configured bound
+    /// the MRTR gather->resend loop uses
+    /// ([`ClientBuilder::mrtr_round_limit`], defaulting to
+    /// `DEFAULT_MRTR_ROUND_LIMIT` = 8). It is deliberately the same knob and not
+    /// a new constant: both bound "how many times will I answer this server's
+    /// questions before I conclude it is not making progress", and two
+    /// independently-tuned answers to one question is how they drift apart.
+    /// Exceeding it returns [`Error::mrtr_round_limit_exceeded`].
+    ///
+    /// # A task is NOT a higher-trust channel
+    ///
+    /// The requests handed to `responder` are ordinary elicitation / sampling /
+    /// roots requests that happen to arrive through a task. Apply the SAME
+    /// consent and policy gates you would for a direct server-initiated request;
+    /// this poller passes values through and executes nothing server-supplied.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`Client::wait_for_task`] returns, plus whatever `responder`
+    /// itself returns (propagated unchanged), plus the round-bound error above.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::client::WaitForTaskOptions;
+    /// use pmcp::types::mrtr::InputResponses;
+    ///
+    /// let result = client
+    ///     .wait_for_task_with_inputs("task-1", WaitForTaskOptions::default(), |requests| async move {
+    ///         let mut answers = InputResponses::new();
+    ///         for (key, request) in &requests {
+    ///             answers.insert(key.clone(), answer_one(request).await?);
+    ///         }
+    ///         Ok(answers)
+    ///     })
+    ///     .await?;
+    /// ```
+    pub async fn wait_for_task_with_inputs<F, Fut>(
+        &self,
+        task_id: &str,
+        opts: WaitForTaskOptions,
+        responder: F,
+    ) -> Result<CallToolResult>
+    where
+        F: FnMut(InputRequests) -> Fut,
+        Fut: std::future::Future<Output = Result<InputResponses>>,
+    {
+        // `tasks/update` is v2-only, so a v1 call could never complete a round.
+        // Refuse locally BEFORE the first `tasks/get` goes out.
+        self.require_v2("Client::wait_for_task_with_inputs")?;
+        self.poll_task_to_terminal(task_id, opts, Some(responder))
+            .await
+    }
+
+    /// The ONE task poll loop, shared by [`Self::wait_for_task`] and
+    /// [`Self::wait_for_task_with_inputs`].
+    ///
+    /// `responder` is the only difference between the two: `None` makes
+    /// `input_required` the terminal error it has always been, `Some` makes it a
+    /// round of the gather->update->resume loop.
+    async fn poll_task_to_terminal<F, Fut>(
+        &self,
+        task_id: &str,
+        opts: WaitForTaskOptions,
+        mut responder: Option<F>,
+    ) -> Result<CallToolResult>
+    where
+        F: FnMut(InputRequests) -> Fut,
+        Fut: std::future::Future<Output = Result<InputResponses>>,
+    {
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/get")?;
+        self.assert_capability("tasks", TASKS_GET_METHOD)?;
 
         // Wasm-safe monotonic clock: IS std::time::Instant on native, browser-safe on wasm.
         let start = web_time::Instant::now();
+        let input_round_limit = self.mrtr_round_limit.max(1);
+        let mut input_rounds = 0usize;
         loop {
-            let task = self.tasks_get(task_id).await?;
+            // ONE fetch per tick on both eras. On v2 the RAW payload is kept:
+            // the terminal `result` / `error` and the pause's `inputRequests` are
+            // INLINE in it, so re-reading it costs nothing while re-ASKING would
+            // be a second round trip against a task that may have moved on.
+            let (task, v2_payload) = if self.is_v2() {
+                let raw = self.tasks_get_raw_v2(task_id).await?;
+                (Self::decode_v2_task_base(&raw)?.to_v1(), Some(raw))
+            } else {
+                (self.tasks_get(task_id).await?, None)
+            };
 
             // Single source of truth for the stop / ask / sleep decision: the
             // `poll_decision()` classifier in src/types/tasks.rs (D-13). No
@@ -917,17 +1733,37 @@ impl<T: Transport> Client<T> {
             // because it is in-crate — a future variant becomes a compile error
             // here, forcing an explicit decision.
             match task.poll_decision() {
-                // Terminal — stop polling and fetch the persisted result below.
-                TaskPollDecision::Terminal { .. } => break,
+                // Terminal — the result comes from the payload already in hand on
+                // v2, and from a second `tasks/result` round trip on v1.
+                TaskPollDecision::Terminal { .. } => {
+                    return match v2_payload {
+                        Some(raw) => Self::terminal_result_from_v2_payload(task_id, &raw),
+                        None => self.tasks_result(task_id).await,
+                    };
+                },
                 // `input_required` is NOT terminal, and the task cannot progress
-                // without client-side action this poller does not perform —
-                // surface it (returning BEFORE any tasks/result fetch) instead
-                // of spinning until a (possibly absent) timeout (CR-01).
+                // without client-side action. With no responder, surface it
+                // (returning BEFORE any tasks/result fetch) instead of spinning
+                // until a (possibly absent) timeout (CR-01).
                 TaskPollDecision::InputRequired => {
-                    return Err(Error::validation(format!(
-                        "task {task_id} is input_required; wait_for_task cannot provide \
-                         input — handle the elicitation, then resume polling"
-                    )));
+                    let Some(callback) = responder.as_mut() else {
+                        return Err(Error::validation(format!(
+                            "task {task_id} is input_required; wait_for_task cannot provide \
+                             input — handle the elicitation, then resume polling"
+                        )));
+                    };
+                    input_rounds += 1;
+                    if input_rounds > input_round_limit {
+                        return Err(Error::mrtr_round_limit_exceeded(input_round_limit));
+                    }
+                    let requests =
+                        Self::input_requests_from_v2_payload(task_id, v2_payload.as_ref())?;
+                    let responses = callback(requests).await?;
+                    self.tasks_update(task_id, responses).await?;
+                    // Poll again immediately: the server has the answers now, so
+                    // sleeping a full interval before asking would only add
+                    // latency. The round bound above is what stops a server that
+                    // keeps re-requesting.
                 },
                 // Still running — resolve the next sleep through the shared
                 // resolver (D-02: caller override, else the server-reported
@@ -957,8 +1793,87 @@ impl<T: Transport> Client<T> {
                 },
             }
         }
+    }
 
-        self.tasks_result(task_id).await
+    /// Read a terminal task's final result out of the v2 `tasks/get` payload the
+    /// poll loop already holds (Phase 114, plan 19).
+    ///
+    /// This is what replaces the v2-retired `tasks/result` round trip. The decode
+    /// is STATUS-DIRECTED, so a `completed` task with no inlined `result` is an
+    /// error rather than a silently EMPTY success — `CallToolResult::content`
+    /// carries `#[serde(default)]`, which is exactly how that lie would slip
+    /// through a permissive decode.
+    fn terminal_result_from_v2_payload(
+        task_id: &str,
+        raw: &serde_json::Value,
+    ) -> Result<CallToolResult> {
+        let detailed = DetailedTaskV2::from_wire_value(raw).map_err(Error::parse)?;
+        // `TaskDetailV2` is deliberately NOT `#[non_exhaustive]` (one variant per
+        // `TaskStatus`), so this match is exhaustive with no wildcard arm.
+        match detailed.detail() {
+            TaskDetailV2::Completed { result } => {
+                serde_json::from_value(serde_json::Value::Object(result.clone()))
+                    .map_err(|e| Error::parse(e.to_string()))
+            },
+            // A failed task carries a JSON-RPC error object, and it must surface
+            // AS an error: returning `Ok` with an empty result would report a
+            // protocol failure as a successful tool call.
+            TaskDetailV2::Failed { error } => {
+                Err(Self::error_from_inlined_task_error(task_id, error.clone()))
+            },
+            TaskDetailV2::Cancelled => Err(Error::validation(format!(
+                "task {task_id} was cancelled; a cancelled task has no result"
+            ))),
+            // Unreachable: `poll_decision()` returned `Terminal`, which only the
+            // three statuses above produce. Reported rather than `unwrap`ed
+            // because it would mean the payload's status and detail disagree.
+            TaskDetailV2::Working | TaskDetailV2::InputRequired { .. } => Err(Error::internal(
+                format!("task {task_id} reported a terminal status with non-terminal detail"),
+            )),
+        }
+    }
+
+    /// Turn a v2 task's INLINED JSON-RPC error object into a typed client error.
+    ///
+    /// Routed through [`Error::from_jsonrpc_error`] so a failed task is
+    /// indistinguishable, to a caller matching on `code`, from the same failure
+    /// delivered synchronously.
+    fn error_from_inlined_task_error(
+        task_id: &str,
+        error: serde_json::Map<String, serde_json::Value>,
+    ) -> Error {
+        match serde_json::from_value::<crate::types::jsonrpc::JSONRPCError>(
+            serde_json::Value::Object(error),
+        ) {
+            Ok(rpc_error) => Error::from_jsonrpc_error(rpc_error),
+            Err(e) => Error::parse(format!(
+                "task {task_id} failed, but its inlined error is malformed: {e}"
+            )),
+        }
+    }
+
+    /// Read a paused task's outstanding `inputRequests` out of the v2
+    /// `tasks/get` payload the poll loop already holds.
+    fn input_requests_from_v2_payload(
+        task_id: &str,
+        raw: Option<&serde_json::Value>,
+    ) -> Result<InputRequests> {
+        let raw = raw.ok_or_else(|| {
+            Error::internal(format!(
+                "task {task_id} paused for input on a connection with no v2 payload"
+            ))
+        })?;
+        let detailed = DetailedTaskV2::from_wire_value(raw).map_err(Error::parse)?;
+        match detailed.detail() {
+            TaskDetailV2::InputRequired { input_requests } => Ok(input_requests.clone()),
+            TaskDetailV2::Working
+            | TaskDetailV2::Completed { .. }
+            | TaskDetailV2::Failed { .. }
+            | TaskDetailV2::Cancelled => Err(Error::internal(format!(
+                "task {task_id} classified as input_required but its payload carries no \
+                 inputRequests"
+            ))),
+        }
     }
 
     /// Poll a task referenced by [`TaskMetadata`] to terminal, then return its
@@ -981,10 +1896,20 @@ impl<T: Transport> Client<T> {
             .await
     }
 
-    /// List tasks owned by the current client.
+    /// List tasks owned by the current client — **v1 only**.
+    ///
+    /// # RETIRED on `2026-07-28` (Phase 114, TASK-03 / D-15)
+    ///
+    /// `tasks/list` is absent from the tasks extension, removed as a SECURITY
+    /// improvement: with no enumeration primitive a server cannot inadvertently
+    /// leak the existence of one caller's tasks to another. There is no
+    /// replacement method — a v2 client keeps the ids it was handed. Calling
+    /// this on a v2 connection fails LOCALLY with an [`Error::retired_on_v2`],
+    /// with no bytes on the wire.
     pub async fn tasks_list(&self, cursor: Option<String>) -> Result<ListTasksResult> {
+        self.reject_retired_tasks_method_on_v2(TASKS_LIST_METHOD, TASKS_LIST_V2_REPLACEMENT)?;
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/list")?;
+        self.assert_capability("tasks", TASKS_LIST_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksList(ListTasksRequest {
             cursor,
@@ -992,14 +1917,41 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        self.parse_task_payload::<ListTasksResult>(response, "tasks/list")
+        self.parse_task_payload::<ListTasksResult>(response, TASKS_LIST_METHOD)
             .await
     }
 
-    /// Cancel a running task.
+    /// Cancel a running task and report the task as the server now sees it.
+    ///
+    /// # Era awareness (Phase 114, plan 19)
+    ///
+    /// v1 answers a cancel with the NESTED `{"task": {…}}` envelope and this
+    /// method returns that task, exactly as it always has.
+    ///
+    /// v2's `CancelTaskResult` is `Result` — an **EMPTY acknowledgement** with no
+    /// task body at all (inventory row 20), so today's `CancelTaskResult` decode
+    /// fails outright against it. Because this method's return type is `Task` and
+    /// cannot change without a MAJOR semver bump, the v2 arm acknowledges the
+    /// cancel through [`Self::tasks_cancel_ack`] and then performs ONE follow-up
+    /// [`Self::tasks_get`]. It does NOT synthesise a `Task`: fabricating
+    /// `status: cancelled` would be inventing status information the server
+    /// deliberately did not send.
+    ///
+    /// # Cancellation is cooperative and eventually consistent
+    ///
+    /// That is the SEMANTICS of the empty ack, not a limitation of this client.
+    /// The returned task MAY still be `working`, and MAY later settle on a
+    /// terminal status other than `cancelled`. Callers that only need the
+    /// acknowledgement — and do not want the extra round trip — should call
+    /// [`Self::tasks_cancel_ack`] directly.
     pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task> {
+        if self.is_v2() {
+            self.tasks_cancel_ack(task_id).await?;
+            return self.tasks_get(task_id).await;
+        }
+
         self.ensure_initialized()?;
-        self.assert_capability("tasks", "tasks/cancel")?;
+        self.assert_capability("tasks", TASKS_CANCEL_METHOD)?;
 
         let request = Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
             task_id: task_id.to_string(),
@@ -1008,9 +1960,106 @@ impl<T: Transport> Client<T> {
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
-        let cancel_result: CancelTaskResult =
-            self.parse_task_payload(response, "tasks/cancel").await?;
+        let cancel_result: CancelTaskResult = self
+            .parse_task_payload(response, TASKS_CANCEL_METHOD)
+            .await?;
         Ok(cancel_result.task)
+    }
+
+    /// Request cancellation and read only the ACKNOWLEDGEMENT (Phase 114).
+    ///
+    /// The zero-invention primitive [`Self::tasks_cancel`] is built on: it
+    /// accepts ANY successful result — including v2's bare `{}` — and returns
+    /// `()`. One round trip, and nothing is claimed about the task's status.
+    ///
+    /// Works on BOTH eras. On v1 the response body carries a `Task` which this
+    /// method DISCARDS; call [`Self::tasks_cancel`] when you want it.
+    ///
+    /// Cancellation is cooperative and eventually consistent: a successful
+    /// acknowledgement means the request was accepted, NOT that the task has
+    /// stopped.
+    pub async fn tasks_cancel_ack(&self, task_id: &str) -> Result<()> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_CANCEL_METHOD)?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
+            task_id: task_id.to_string(),
+            result: None,
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(_) => Ok(()),
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Deliver responses to a paused task's outstanding `inputRequests` — v2
+    /// only (Phase 114, TASK-02).
+    ///
+    /// `tasks/update` is how an `input_required` task is un-paused: each key of
+    /// `responses` MUST correspond to a currently-outstanding `inputRequests`
+    /// key from [`Self::tasks_get_detailed`]. The acknowledgement is EMPTY, so
+    /// this returns `()`.
+    ///
+    /// # It is sent UNTYPED, on purpose
+    ///
+    /// There is no `ClientRequest::TasksUpdate` variant and there must not be
+    /// one: [`ClientRequest`] is public and not `#[non_exhaustive]`, so adding a
+    /// variant is a MAJOR semver break. This goes out through the same raw path
+    /// [`Self::server_discover`] uses.
+    ///
+    /// # A task is NOT a higher-trust channel
+    ///
+    /// The spec is explicit that input requests delivered through a task carry
+    /// exactly the trust of the elicitation / sampling they wrap. Whatever
+    /// produces `responses` must apply the SAME consent and policy gates it
+    /// would for a direct `elicitation/create`; this method transmits the values
+    /// and executes nothing the server supplied.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidState`] on a v1 connection — `tasks/update` does not
+    ///   exist there, and NO bytes are sent.
+    /// - [`Error::UnsupportedCapability`] (built by [`Error::capability`]) when
+    ///   the tasks extension was not negotiated — again with no bytes sent.
+    /// - The server's own JSON-RPC error otherwise (e.g. an unknown or
+    ///   already-answered input key).
+    pub async fn tasks_update(&self, task_id: &str, responses: InputResponses) -> Result<()> {
+        // Order matters only for WHICH local error you get; all three checks are
+        // local, so every refusal below performs ZERO transport sends.
+        self.require_v2(TASKS_UPDATE_METHOD)?;
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", TASKS_UPDATE_METHOD)?;
+
+        let mut params = serde_json::Map::new();
+        params.insert(
+            TASK_ID_KEY.to_string(),
+            serde_json::Value::String(task_id.to_string()),
+        );
+        params.insert(
+            INPUT_RESPONSES_KEY.to_string(),
+            serde_json::to_value(&responses).map_err(|e| Error::parse(e.to_string()))?,
+        );
+
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self
+            .send_untyped_request(
+                request_id,
+                TASKS_UPDATE_METHOD,
+                serde_json::Value::Object(params),
+            )
+            .await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(_) => Ok(()),
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
     }
 
     /// Deserialize a `tasks/*` response payload into `T`, emitting a structured
@@ -1268,6 +2317,14 @@ impl<T: Transport> Client<T> {
     /// - The prompt name doesn't exist
     /// - Required arguments are missing
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// Auto-orchestrates MRTR exactly as [`Self::call_tool`] documents,
+    /// including the [`Error::is_input_required_unfulfilled`] and
+    /// [`Error::is_mrtr_round_limit_exceeded`] outcomes. See
+    /// [`Self::get_prompt_mrtr`] to receive an unfulfilled `input_required` as
+    /// a value. v1 is byte-identical to every prior release.
     pub async fn get_prompt(
         &self,
         name: String,
@@ -1275,6 +2332,13 @@ impl<T: Transport> Client<T> {
     ) -> Result<GetPromptResult> {
         self.ensure_initialized()?;
         self.assert_capability("prompts", "prompts/get")?;
+
+        if self.is_v2() {
+            let params = Self::get_prompt_params(name, arguments)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(GET_PROMPT_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name,
@@ -1789,9 +2853,27 @@ impl<T: Transport> Client<T> {
     /// - The resource URI doesn't exist
     /// - Access to the resource is denied
     /// - Network or protocol errors occur
+    ///
+    /// # v2 (`2026-07-28`) behavior
+    ///
+    /// Auto-orchestrates MRTR exactly as [`Self::call_tool`] documents. This
+    /// method is where the missing return type BIT the hardest:
+    /// `ReadResourceResult.contents` has no serde default, so an
+    /// `input_required` result cannot be deserialized into it at all and would
+    /// surface as an opaque parse error. It now surfaces as an
+    /// [`Error::is_input_required_unfulfilled`] carrying the full result, or —
+    /// via [`Self::read_resource_mrtr`] — as a value. v1 is byte-identical to
+    /// every prior release.
     pub async fn read_resource(&self, uri: String) -> Result<ReadResourceResult> {
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/read")?;
+
+        if self.is_v2() {
+            let params = Self::read_resource_params(uri)?;
+            return Self::mrtr_result_or_error(
+                self.send_with_mrtr(READ_RESOURCE_METHOD, params).await?,
+            );
+        }
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri,
@@ -1838,14 +2920,31 @@ impl<T: Transport> Client<T> {
     /// # }
     /// ```
     ///
+    /// # v2 behavior (2026-07-28)
+    ///
+    /// `resources/subscribe` was REMOVED from the 2026-07-28 schema and replaced
+    /// by the `subscriptions/listen` stream. On a connection that opted into
+    /// that version this method sends NOTHING and returns
+    /// [`Error::retired_on_v2`](crate::Error::retired_on_v2) immediately — a
+    /// v2 server answers the retired RPC with `404` + `-32601`, so the round
+    /// trip can only fail. Use
+    /// [`Client::subscriptions_listen`](Self::subscriptions_listen) with
+    /// [`SubscriptionFilter::resource_subscriptions`](crate::types::subscriptions::SubscriptionFilter::resource_subscriptions)
+    /// instead. The v1 path below is unchanged.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The connection speaks 2026-07-28 (see **v2 behavior** above)
     /// - The client is not initialized
     /// - The server doesn't support resource subscriptions
     /// - The resource URI doesn't exist
     /// - Network or protocol errors occur
     pub async fn subscribe_resource(&self, uri: String) -> Result<()> {
+        // BEFORE `ensure_initialized` and before `assert_capability`: the era is
+        // a property of the connection, and neither of those checks is
+        // meaningful for a method the wire no longer defines.
+        self.reject_if_retired_on_v2("resources/subscribe")?;
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/subscribe")?;
 
@@ -1902,14 +3001,28 @@ impl<T: Transport> Client<T> {
     /// # }
     /// ```
     ///
+    /// # v2 behavior (2026-07-28)
+    ///
+    /// `resources/unsubscribe` was REMOVED from the 2026-07-28 schema along with
+    /// `resources/subscribe`. On a connection that opted into that version this
+    /// method sends NOTHING and returns
+    /// [`Error::retired_on_v2`](crate::Error::retired_on_v2) immediately.
+    /// Unsubscribing on v2 means DROPPING the
+    /// [`SubscriptionStream`](crate::client::subscriptions::SubscriptionStream)
+    /// returned by [`Client::subscriptions_listen`](Self::subscriptions_listen),
+    /// which closes the connection and releases the server's registry slot. The
+    /// v1 path below is unchanged.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The connection speaks 2026-07-28 (see **v2 behavior** above)
     /// - The client is not initialized
     /// - The server doesn't support resource subscriptions
     /// - The resource URI was not previously subscribed to
     /// - Network or protocol errors occur
     pub async fn unsubscribe_resource(&self, uri: String) -> Result<()> {
+        self.reject_if_retired_on_v2("resources/unsubscribe")?;
         self.ensure_initialized()?;
         self.assert_capability("resources", "resources/unsubscribe")?;
 
@@ -2322,7 +3435,42 @@ impl<T: Transport> Client<T> {
     }
 
     /// Assert that the server has a specific capability.
+    ///
+    /// # Era awareness (Phase 113, CLNT-01)
+    ///
+    /// `server_capabilities` is populated ONLY by the `initialize` handshake,
+    /// and v2 (`2026-07-28`) has no handshake. Left unguarded, a v2 client's
+    /// `server_capabilities` is `None`, every `is_some_and(..)` below is `false`,
+    /// and EVERY `call_tool` / `get_prompt` / `read_resource` fails locally
+    /// before a byte leaves the process.
+    ///
+    /// So on v2 with nothing observed, this returns `Ok(())`: the client has not
+    /// learned the server's capabilities and the SERVER is the authority. A v2
+    /// server answers an unsupported method with `-32601` at HTTP 404, which is a
+    /// truthful error from the party that knows, not a fabricated local one.
+    ///
+    /// Once an EXPLICIT [`Self::server_discover`] has stored a projection, v2
+    /// enforcement is exactly as strict as v1. v1 is untouched and still fails
+    /// closed.
+    ///
+    /// # `"tasks"` is era-SPLIT (Phase 114, D-04)
+    ///
+    /// The two eras spell the same capability in two different places, so the
+    /// `"tasks"` arm reads a different field on each:
+    ///
+    /// | Era | Where the server advertises tasks |
+    /// |-----|-----------------------------------|
+    /// | v1 (`2025-11-25`) | `capabilities.tasks` |
+    /// | v2 (`2026-07-28`) | `capabilities.extensions["io.modelcontextprotocol/tasks"]` |
+    ///
+    /// Reading `capabilities.tasks` on v2 would refuse EVERY conformant v2
+    /// server: `core::project_capabilities_for_v2` strips that field from the
+    /// v2 `server/discover` projection precisely because advertising it there
+    /// would be a capability lie. See [`Self::tasks_capability_satisfied_by`].
     fn assert_capability(&self, capability: &str, method: &str) -> Result<()> {
+        if self.is_v2() && self.server_capabilities.is_none() {
+            return Ok(());
+        }
         let has_capability = match capability {
             "tools" => self
                 .server_capabilities
@@ -2347,7 +3495,7 @@ impl<T: Transport> Client<T> {
             "tasks" => self
                 .server_capabilities
                 .as_ref()
-                .is_some_and(|c| c.tasks.is_some()),
+                .is_some_and(|c| self.tasks_capability_satisfied_by(c)),
             // The LLM-server pattern: `create_message` asks a server whose
             // `SamplingHandler` runs the LLM. A pmcp `Server` built with
             // `.sampling(handler)` advertises this by setting
@@ -2379,14 +3527,61 @@ impl<T: Transport> Client<T> {
         if has_capability {
             Ok(())
         } else {
-            Err(Error::capability(format!(
-                "Server does not support {} (required for {})",
-                capability, method
-            )))
+            Err(Error::capability(
+                self.unsupported_capability_message(capability, method),
+            ))
         }
     }
 
-    /// Send a request and wait for response.
+    /// Whether `capabilities` satisfies the `"tasks"` capability ON THIS ERA
+    /// (Phase 114, D-04).
+    ///
+    /// - **v2** — the tasks extension is an Extensions-Track capability, so it
+    ///   is satisfied iff the `extensions` map carries
+    ///   [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY).
+    ///   `capabilities.tasks` is deliberately NOT consulted: a v2 server
+    ///   projects that field away, so reading it would refuse every conformant
+    ///   v2 server.
+    /// - **v1** — unchanged: `capabilities.tasks`.
+    ///
+    /// # PRESENCE, not `{}`-equality
+    ///
+    /// The check is `contains_key`. The draft schema types the value as
+    /// `Record<string, never>` and pmcp's own server advertises exactly `{}`,
+    /// but an operator may configure a richer value, and refusing to CALL a
+    /// server that advertised support with a value we did not expect would be
+    /// the mirror image of the over-removal the server-side v1 projection
+    /// deliberately avoids. Presence is what the negotiation rule tests.
+    fn tasks_capability_satisfied_by(&self, capabilities: &ServerCapabilities) -> bool {
+        if self.is_v2() {
+            return capabilities.extensions.as_ref().is_some_and(|extensions| {
+                extensions.contains_key(crate::types::capabilities::TASKS_EXTENSION_KEY)
+            });
+        }
+        capabilities.tasks.is_some()
+    }
+
+    /// Render the refusal [`assert_capability`](Self::assert_capability) returns.
+    ///
+    /// The v2 `"tasks"` refusal NAMES the extension key (T-114-23: a public,
+    /// non-secret protocol identifier), because the remedy — the server has to
+    /// advertise it, or the caller is talking to a server that does not support
+    /// tasks at all — is not discoverable from "does not support tasks". No
+    /// server state, task id or principal is rendered.
+    fn unsupported_capability_message(&self, capability: &str, method: &str) -> String {
+        let base = format!("Server does not support {capability} (required for {method})");
+        if capability == "tasks" && self.is_v2() {
+            return format!(
+                "{base} — a 2026-07-28 server negotiates tasks through \
+                 capabilities.extensions[\"{key}\"], and this server's server/discover \
+                 projection carries no such entry",
+                key = crate::types::capabilities::TASKS_EXTENSION_KEY,
+            );
+        }
+        base
+    }
+
+    /// Send a TYPED request and wait for its response.
     async fn send_request(
         &self,
         request_id: RequestId,
@@ -2394,6 +3589,54 @@ impl<T: Transport> Client<T> {
     ) -> Result<crate::types::JSONRPCResponse> {
         use crate::shared::protocol_helpers::create_request;
 
+        // `create_request` CONSUMES its argument, so the typed value has to be
+        // cloned to survive for the v1 branch — but the v2 branch of
+        // `dispatch_request` never reads `typed`, and the clone is a full deep
+        // copy of the request (arguments payload and all) held across the whole
+        // network round trip. Branch first so v2 pays nothing; v1 is unchanged.
+        if self.is_v2() {
+            let jsonrpc_request = create_request(request_id.clone(), request);
+            return self
+                .dispatch_request(request_id, None, jsonrpc_request)
+                .await;
+        }
+        let jsonrpc_request = create_request(request_id.clone(), request.clone());
+        self.dispatch_request(request_id, Some(request), jsonrpc_request)
+            .await
+    }
+
+    /// Send a request whose method has NO public [`ClientRequest`] variant.
+    ///
+    /// Today that is exactly `server/discover` (Phase-112 D-10 keeps it out of the
+    /// exhaustive public enums, because adding a variant there is a MAJOR semver
+    /// break). Only reachable on v2, where the raw transport frame is the normal
+    /// path anyway.
+    async fn send_untyped_request(
+        &self,
+        request_id: RequestId,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<crate::types::JSONRPCResponse> {
+        let jsonrpc_request =
+            crate::types::JSONRPCRequest::new(request_id.clone(), method, Some(params));
+        self.dispatch_request(request_id, None, jsonrpc_request)
+            .await
+    }
+
+    /// The ONE place a client request is put on the wire and its response awaited.
+    ///
+    /// `typed` carries the original [`Request`] for the v1 path, which sends the
+    /// typed [`TransportMessage::Request`](crate::types::TransportMessage) exactly
+    /// as it always has. On v2 the already-assembled JSON-RPC frame is stamped
+    /// with the reserved `_meta` keys and sent RAW, which is what lets EVERY
+    /// method — including the ones whose request struct has no `_meta` field —
+    /// carry the era signal (Phase-113 D-113-D).
+    async fn dispatch_request(
+        &self,
+        request_id: RequestId,
+        typed: Option<Request>,
+        mut jsonrpc_request: crate::types::JSONRPCRequest<serde_json::Value>,
+    ) -> Result<crate::types::JSONRPCResponse> {
         // Track request for cancellation
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         self.active_requests
@@ -2414,9 +3657,6 @@ impl<T: Transport> Client<T> {
         // later reused id. The happy path still removes the entry inline when
         // the matching response arrives.
         let result = async {
-            // Convert to JSONRPC request
-            let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
-
             // Process request through middleware chain (read-only access)
             self.middleware_chain
                 .read()
@@ -2424,13 +3664,27 @@ impl<T: Transport> Client<T> {
                 .process_request_with_context(&mut jsonrpc_request, &context)
                 .await?;
 
-            // Send request through transport
-            let message = crate::types::TransportMessage::Request {
-                id: request_id.clone(),
-                request,
-            };
-
-            self.transport.write().await.send(message).await?;
+            if self.is_v2() {
+                // v2: stamp the reserved `_meta` keys onto the assembled frame
+                // and send it verbatim. The transport derives `Mcp-Method` /
+                // `Mcp-Name` from these SAME bytes, so header and body cannot
+                // desync (T-113-08).
+                self.splice_v2_meta(&mut jsonrpc_request.params);
+                let body = serde_json::to_vec(&jsonrpc_request)
+                    .map_err(|e| Error::parse(format!("Failed to serialize v2 request: {e}")))?;
+                self.transport.write().await.send_raw(body).await?;
+            } else {
+                // v1: byte-identical to every prior release — the typed message
+                // is re-serialized by the transport exactly as before.
+                let request = typed.ok_or_else(|| {
+                    Error::InvalidState("untyped requests require the 2026-07-28 era".to_string())
+                })?;
+                let message = crate::types::TransportMessage::Request {
+                    id: request_id.clone(),
+                    request,
+                };
+                self.transport.write().await.send(message).await?;
+            }
 
             // Wait for response, dispatching any unsolicited notifications along the way
             loop {
@@ -2576,15 +3830,6 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        // At least one sampling handler (legacy or WithTools) must be registered.
-        if self.host_registry.sampling.is_none() && self.host_registry.sampling_with_tools.is_none()
-        {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
-        }
         let Some(params) = Self::extract_sampling_params(request) else {
             return Self::host_error(
                 id,
@@ -2592,6 +3837,27 @@ impl<T: Transport> Client<T> {
                 "Method not found",
             );
         };
+        Self::host_response(id, SAMPLING_METHOD, self.answer_host_sampling(params).await)
+    }
+
+    /// The FULL host sampling pipeline: handler presence, the preflight
+    /// approval gate, handler preference, and the result-review gate.
+    ///
+    /// ONE implementation with TWO entry points — the v1 server-initiated
+    /// [`Self::answer_host_sampling`] and the v2 MRTR
+    /// [`Self::answer_mrtr_sampling`]. Routing MRTR through here is what stops
+    /// the v2 path from silently bypassing `on_sampling_approval` /
+    /// `on_sampling_result_review` (T-113-57). The two entry points differ only
+    /// in how they RENDER the completion, which is why this returns it typed.
+    async fn run_host_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<HostSamplingCompletion, HostRefusal> {
+        // At least one sampling handler (legacy or WithTools) must be registered.
+        if self.host_registry.sampling.is_none() && self.host_registry.sampling_with_tools.is_none()
+        {
+            return Err(HostRefusal::NoHandler);
+        }
 
         // (1) PREFLIGHT approval gate — runs BEFORE any handler so a denial
         // prevents the LLM call entirely (no tokens billed). It operates on the
@@ -2600,11 +3866,7 @@ impl<T: Transport> Client<T> {
         if let Some(approval) = &self.host_registry.approval {
             if let ApprovalDecision::Deny(reason) = approval(params.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host preflight");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
@@ -2612,18 +3874,53 @@ impl<T: Transport> Client<T> {
         // A client that registered only a legacy handler keeps its EXACT current
         // wire behavior (serializes a `CreateMessageResult`).
         if self.host_registry.sampling_with_tools.is_some() {
-            self.answer_sampling_with_tools(id, params).await
+            self.answer_sampling_with_tools(params)
+                .await
+                .map(HostSamplingCompletion::WithTools)
         } else {
-            self.answer_sampling_legacy(id, params).await
+            self.answer_sampling_legacy(params)
+                .await
+                .map(HostSamplingCompletion::Legacy)
+        }
+    }
+
+    /// The v1 host rendering of a sampling completion: the tool-aware result is
+    /// serialized in FULL, exactly as before this pipeline was shared.
+    async fn answer_host_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        match self.run_host_sampling(params).await? {
+            HostSamplingCompletion::Legacy(result) => Self::host_value(&result),
+            HostSamplingCompletion::WithTools(result) => Self::host_value(&result),
+        }
+    }
+
+    /// The MRTR rendering of a sampling completion.
+    ///
+    /// An `inputResponses` value for a `sampling/createMessage` entry is
+    /// SPEC-TYPED as a `CreateMessageResult`, so a tool-aware completion is
+    /// projected down through the SAME projection the result-review gate uses.
+    /// Without this a `WithTools`-only client would advertise the `sampling`
+    /// capability (it can service the request) and then fail to produce a
+    /// decodable answer — an under-supply the server would re-request forever.
+    async fn answer_mrtr_sampling(
+        &self,
+        params: CreateMessageParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        match self.run_host_sampling(params).await? {
+            HostSamplingCompletion::Legacy(result) => Self::host_value(&result),
+            HostSamplingCompletion::WithTools(result) => {
+                Self::host_value(&Self::project_with_tools_to_legacy(&result))
+            },
         }
     }
 
     /// Legacy single-content sampling answer path (unchanged behavior).
     async fn answer_sampling_legacy(
         &self,
-        id: RequestId,
         params: CreateMessageParams,
-    ) -> crate::types::JSONRPCResponse {
+    ) -> std::result::Result<CreateMessageResult, HostRefusal> {
         let handler = self
             .host_registry
             .sampling
@@ -2639,25 +3936,21 @@ impl<T: Transport> Client<T> {
             .is_some()
             .then(|| params.clone());
 
-        let result = match handler.handle_create_message(params).await {
-            Ok(result) => result,
-            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
-        };
+        let result = handler
+            .handle_create_message(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
 
         // Optional post-generation review (default pass-through). `review_params`
         // is `Some` exactly when `result_review` is `Some`, so the pair matches.
         if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
             if let ApprovalDecision::Deny(reason) = review(params, result.clone()).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
-        Self::host_ok(id, &result)
+        Ok(result)
     }
 
     /// Tool-aware (`WithTools`) sampling answer path.
@@ -2670,9 +3963,9 @@ impl<T: Transport> Client<T> {
     /// value remains the full `CreateMessageResultWithTools`.
     async fn answer_sampling_with_tools(
         &self,
-        id: RequestId,
         params: CreateMessageParams,
-    ) -> crate::types::JSONRPCResponse {
+    ) -> std::result::Result<crate::types::sampling::CreateMessageResultWithTools, HostRefusal>
+    {
         let handler = self
             .host_registry
             .sampling_with_tools
@@ -2685,31 +3978,30 @@ impl<T: Transport> Client<T> {
             .is_some()
             .then(|| params.clone());
 
-        let result = match handler.handle_create_message_with_tools(params).await {
-            Ok(result) => result,
-            Err(e) => return Self::host_handler_error(id, "sampling/createMessage", &e),
-        };
+        let result = handler
+            .handle_create_message_with_tools(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
 
         if let (Some(review), Some(params)) = (&self.host_registry.result_review, review_params) {
-            let projected = Self::project_with_tools_for_review(&result);
+            let projected = Self::project_with_tools_to_legacy(&result);
             if let ApprovalDecision::Deny(reason) = review(params, projected).await {
                 tracing::warn!(%reason, "sampling denied by host result review");
-                return Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "request denied by host policy",
-                );
+                return Err(HostRefusal::Denied);
             }
         }
 
-        Self::host_ok(id, &result)
+        Ok(result)
     }
 
     /// Project a [`CreateMessageResultWithTools`] into a single-content
-    /// [`CreateMessageResult`] for the (optional) result-review gate. Tool
-    /// blocks have no single-`Content` counterpart, so they are rendered as a
-    /// short text marker; the reviewer still sees enough to allow or deny.
-    fn project_with_tools_for_review(
+    /// [`CreateMessageResult`]. Tool blocks have no single-`Content`
+    /// counterpart, so they are rendered as a short text marker.
+    ///
+    /// TWO consumers: the optional result-review gate (which must still see the
+    /// completion so it can deny it), and the MRTR fold (whose
+    /// `inputResponses` value is spec-typed as a `CreateMessageResult`).
+    fn project_with_tools_to_legacy(
         result: &crate::types::sampling::CreateMessageResultWithTools,
     ) -> crate::types::sampling::CreateMessageResult {
         use crate::types::sampling::SamplingMessageContent as Smc;
@@ -2741,13 +4033,6 @@ impl<T: Transport> Client<T> {
         id: RequestId,
         request: Request,
     ) -> crate::types::JSONRPCResponse {
-        let Some(handler) = &self.host_registry.elicitation else {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
-        };
         // Extract the single elicitation parse variant inline (server-side
         // `elicitation/create`); anything else is not routable here.
         let Request::Server(server) = request else {
@@ -2764,25 +4049,428 @@ impl<T: Transport> Client<T> {
                 "Method not found",
             );
         };
-        match handler.handle_elicitation(*params).await {
-            Ok(result) => Self::host_ok(id, &result),
-            Err(e) => Self::host_handler_error(id, "elicitation/create", &e),
-        }
+        Self::host_response(
+            id,
+            ELICITATION_METHOD,
+            self.answer_host_elicitation(*params).await,
+        )
+    }
+
+    /// The host elicitation pipeline. ONE implementation, two entry points —
+    /// the v1 server-initiated dispatch and the v2 MRTR fold (D-06: app authors
+    /// write ONE elicitation callback that serves both eras).
+    async fn answer_host_elicitation(
+        &self,
+        params: crate::types::elicitation::ElicitRequestParams,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        let Some(handler) = &self.host_registry.elicitation else {
+            return Err(HostRefusal::NoHandler);
+        };
+        let result = handler
+            .handle_elicitation(params)
+            .await
+            .map_err(HostRefusal::Failed)?;
+        Self::host_value(&result)
     }
 
     /// Answer a classified `roots/list` request from the registered provider.
     async fn dispatch_host_roots(&self, id: RequestId) -> crate::types::JSONRPCResponse {
+        Self::host_response(id, ROOTS_METHOD, self.answer_host_roots().await)
+    }
+
+    /// The host roots pipeline. ONE implementation, two entry points.
+    async fn answer_host_roots(&self) -> std::result::Result<serde_json::Value, HostRefusal> {
         let Some(provider) = &self.host_registry.roots else {
-            return Self::host_error(
-                id,
-                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
-                "Method not found",
-            );
+            return Err(HostRefusal::NoHandler);
         };
-        match provider().await {
-            Ok(result) => Self::host_ok(id, &result),
-            Err(e) => Self::host_handler_error(id, "roots/list", &e),
+        let result = provider().await.map_err(HostRefusal::Failed)?;
+        Self::host_value(&result)
+    }
+
+    // =======================================================================
+    // MRTR `inputRequests` fold (Phase 113, CLNT-02).
+    // =======================================================================
+
+    /// Answer an entire `inputRequests` map from the registered host handlers.
+    ///
+    /// ALL-OR-NOTHING (T-113-26): either every entry is answered, or the result
+    /// is [`FoldOutcome::CannotFulfil`] and the caller does NOT resend. A
+    /// partially-filled map and a fabricated response are both forbidden — the
+    /// former would let a server harvest partial answers, the latter would
+    /// synthesize consent for a capability the client never registered.
+    ///
+    /// Every refusal path emits a `tracing::warn!` naming the entry key, so a
+    /// handler failure is observable rather than swallowed into "the caller got
+    /// the original result back".
+    async fn fold_input_requests(
+        &self,
+        requests: &crate::types::mrtr::InputRequests,
+    ) -> FoldOutcome {
+        use crate::types::mrtr::{InputRequest, InputResponse};
+
+        // PREFLIGHT FIRST: prove every kind is fulfillable BEFORE invoking
+        // anything. Otherwise a map whose second entry has no handler would
+        // first prompt a human (or spend an agent's tokens) on the fulfillable
+        // first entry, and then discard that work.
+        if let Err(kind) = self.host_registry.preflight_input_requests(requests) {
+            tracing::warn!(
+                ?kind,
+                "MRTR: no registered handler for a requested input kind — not resending"
+            );
+            return FoldOutcome::CannotFulfil;
         }
+
+        let mut responses = crate::types::mrtr::InputResponses::new();
+        for (key, request) in requests {
+            let kind = request.kind();
+            // Routed through the SAME helpers the v1 host dispatch uses, so the
+            // approval and result-review hooks apply identically (T-113-57).
+            let answered = match request {
+                InputRequest::Elicitation(params) => {
+                    self.answer_host_elicitation((**params).clone()).await
+                },
+                InputRequest::Sampling(params) => {
+                    self.answer_mrtr_sampling((**params).clone()).await
+                },
+                InputRequest::ListRoots => self.answer_host_roots().await,
+            };
+            let value = match answered {
+                Ok(value) => value,
+                Err(refusal) => {
+                    tracing::warn!(
+                        key = %key,
+                        reason = refusal.reason(),
+                        "MRTR: could not fulfil an inputRequests entry — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                },
+            };
+            // KIND-DIRECTED decode: the three response shapes overlap on the
+            // wire, so decoding by the ORIGINATING kind is what stops a
+            // misclassification (T-113-46).
+            let response = match InputResponse::decode_for(kind, value) {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(
+                        key = %key,
+                        %error,
+                        "MRTR: a host handler produced a response that does not match the \
+                         requested kind — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                },
+            };
+            // A declined/cancelled elicitation is a legitimate v1 answer but is
+            // NOT a fulfilled MRTR input: the user said no, so the client must
+            // not resend on their behalf (D-06).
+            if let InputResponse::Elicitation(result) = &response {
+                if result.action != crate::types::elicitation::ElicitAction::Accept {
+                    tracing::warn!(
+                        key = %key,
+                        action = ?result.action,
+                        "MRTR: elicitation was not accepted — not resending"
+                    );
+                    return FoldOutcome::CannotFulfil;
+                }
+            }
+            // The server-assigned key is preserved VERBATIM: it is how the
+            // server correlates the answer with its own continuation state.
+            responses.insert(key.clone(), response);
+        }
+        FoldOutcome::Fulfilled(responses)
+    }
+
+    // =======================================================================
+    // The bounded MRTR gather→resend loop (Phase 113, CLNT-02).
+    // =======================================================================
+
+    /// Drive one MRTR round: read the result, and decide what happens next.
+    ///
+    /// Extracted from [`Self::send_with_mrtr`] so the loop body stays small.
+    async fn mrtr_round_step(&self, result: serde_json::Value) -> RoundOutcome {
+        use crate::types::mrtr::{
+            InputRequiredResult, MrtrRequestParams, INPUT_REQUIRED_RESULT_TYPE,
+        };
+
+        // Anything that is not `input_required` is TERMINAL — including a
+        // `resultType` this build has never heard of (e.g. Phase 114's
+        // `"task"`), and including a result with no `resultType` at all. That
+        // is what lets later result types compose without touching this loop.
+        if result
+            .get(crate::types::mrtr::RESULT_TYPE_KEY)
+            .and_then(serde_json::Value::as_str)
+            != Some(INPUT_REQUIRED_RESULT_TYPE)
+        {
+            return RoundOutcome::Terminal(result);
+        }
+
+        let parsed = match <InputRequiredResult as serde::Deserialize>::deserialize(&result) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                // A malformed `input_required` is not something a retry can
+                // fix — hand the raw result back rather than resending blind.
+                //
+                // It must NOT go back as `Terminal`: the caller would then
+                // deserialize it into the concrete result type, and
+                // `CallToolResult::content` is `#[serde(default)]`, so a result
+                // the server explicitly marked `input_required` would arrive as
+                // a silently EMPTY success — the exact failure this whole type
+                // exists to prevent. Carry the VERBATIM object instead, so the
+                // caller receives `Error::input_required_unfulfilled` and can
+                // read `raw`.
+                tracing::warn!(%error, "MRTR: could not parse an input_required result");
+                return RoundOutcome::Unfulfilled(Box::new(InputRequiredResult {
+                    result_type: INPUT_REQUIRED_RESULT_TYPE.to_string(),
+                    input_requests: None,
+                    request_state: None,
+                    meta: None,
+                    raw: result,
+                }));
+            },
+        };
+
+        // `requestState` is ECHOED VERBATIM. The spec forbids the client
+        // inspecting, parsing or modifying it (it is the server's sealed,
+        // principal-bound continuation), so it is only ever moved — never read.
+        let request_state = parsed.request_state.clone();
+
+        // Borrowed, not cloned: `fold_input_requests` takes `&InputRequests` and
+        // `parsed` keeps its own copy. Cloning here deep-copied every elicitation
+        // schema and every `CreateMessageParams` once per round, purely to dodge
+        // a borrow/move conflict with the `Unfulfilled(Box::new(parsed))` arm —
+        // which binding the fold result to a local resolves under NLL.
+        let Some(requests) = parsed.input_requests.as_ref() else {
+            // Server-side load shedding: `requestState` only, no questions.
+            // The client MAY retry immediately, and no handler is invoked.
+            //
+            // Only when a token is actually present. The spec requires an
+            // `input_required` result to carry at least one of `inputRequests`
+            // or `requestState`; a result with NEITHER gives the retry nothing
+            // new to send, so resending the byte-identical request would just
+            // burn the whole round budget on identical round trips before
+            // reporting a misleading "round limit exceeded".
+            if request_state.is_none() {
+                tracing::warn!(
+                    "MRTR: an input_required result carried neither inputRequests nor \
+                     requestState — nothing to resend with"
+                );
+                return RoundOutcome::Unfulfilled(Box::new(parsed));
+            }
+            return RoundOutcome::Continue(MrtrRequestParams {
+                input_responses: None,
+                // EGRESS: `splice_mrtr_params` serializes the TYPED map, so the
+                // raw retention has no meaning on the client's write path. It
+                // exists only for the server's kind-directed re-decode at
+                // ingress (D-113-O).
+                input_responses_raw: None,
+                request_state,
+            });
+        };
+
+        match self.fold_input_requests(requests).await {
+            FoldOutcome::Fulfilled(responses) => RoundOutcome::Continue(MrtrRequestParams {
+                input_responses: Some(responses),
+                // EGRESS — see the sibling arm above.
+                input_responses_raw: None,
+                request_state,
+            }),
+            // D-06: no handler, or a decline/error — do NOT resend, and do NOT
+            // fabricate. The caller receives the result.
+            FoldOutcome::CannotFulfil => RoundOutcome::Unfulfilled(Box::new(parsed)),
+        }
+    }
+
+    /// Send `method` with `params`, auto-orchestrating MRTR until the server
+    /// completes the operation, the client cannot fulfil, or the bound trips.
+    ///
+    /// Only reachable on v2: it sends RAW frames through
+    /// [`Self::send_untyped_request`], which is the only path that can carry
+    /// `params.inputResponses` / `params.requestState` (the typed request
+    /// structs deliberately have no such fields — D-113-D).
+    async fn send_with_mrtr(
+        &self,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<MrtrLoopOutcome> {
+        // A zero limit would send nothing at all and report a round-limit
+        // breach for a request that never left, which is a confusing lie.
+        let limit = self.mrtr_round_limit.max(1);
+        for _round in 0..limit {
+            // A FRESH id every iteration. Spec MUST: "the JSON-RPC id MUST be
+            // different between the initial request and the retry" — they are
+            // independent requests, and reusing one re-creates the id-replay
+            // bug class HTTP-05 exists to close (T-113-07).
+            let request_id = RequestId::String(Uuid::new_v4().to_string());
+            let response = self
+                .send_untyped_request(request_id, method, params.clone())
+                .await?;
+            let result = match response.payload {
+                crate::types::jsonrpc::ResponsePayload::Result(result) => result,
+                crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                    return Err(Error::from_jsonrpc_error(error))
+                },
+            };
+            match self.mrtr_round_step(result).await {
+                RoundOutcome::Terminal(raw_result) => {
+                    return Ok(MrtrLoopOutcome::Complete(raw_result))
+                },
+                RoundOutcome::Unfulfilled(parsed) => {
+                    return Ok(MrtrLoopOutcome::Unfulfilled(parsed))
+                },
+                RoundOutcome::Continue(mrtr) => {
+                    // `splice_mrtr_params` REMOVES both keys before inserting,
+                    // so no earlier round's `inputResponses` / `requestState`
+                    // can survive into this one (T-113-28). Everything else on
+                    // `params` — including the caller's `_meta` trace context —
+                    // is untouched, so spans stay linked across rounds.
+                    crate::types::mrtr::splice_mrtr_params(&mut params, &mrtr);
+                },
+            }
+        }
+        // The bound tripped. No handler ran for this round (the loop exits
+        // BEFORE sending), and the error is programmatically distinguishable.
+        Err(Error::mrtr_round_limit_exceeded(limit))
+    }
+
+    /// Deserialize a completed MRTR result, or convert an unfulfilled one into
+    /// the typed client-local error the EXISTING methods return.
+    fn mrtr_result_or_error<R: serde::de::DeserializeOwned>(outcome: MrtrLoopOutcome) -> Result<R> {
+        match outcome {
+            MrtrLoopOutcome::Unfulfilled(unfulfilled) => {
+                Err(Error::input_required_unfulfilled(*unfulfilled))
+            },
+            MrtrLoopOutcome::Complete(raw) => {
+                serde_json::from_value(raw).map_err(|e| Error::parse(e.to_string()))
+            },
+        }
+    }
+
+    /// Map a loop outcome onto the additive [`MrtrOutcome`] return type.
+    fn mrtr_outcome<R: serde::de::DeserializeOwned>(
+        outcome: MrtrLoopOutcome,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<R>> {
+        match outcome {
+            MrtrLoopOutcome::Unfulfilled(unfulfilled) => {
+                Ok(crate::types::mrtr::MrtrOutcome::InputRequired(*unfulfilled))
+            },
+            MrtrLoopOutcome::Complete(raw) => serde_json::from_value(raw)
+                .map(crate::types::mrtr::MrtrOutcome::Complete)
+                .map_err(|e| Error::parse(e.to_string())),
+        }
+    }
+
+    /// The `tools/call` params object, byte-identical to what the typed path
+    /// would have serialized.
+    fn call_tool_params(name: String, arguments: serde_json::Value) -> Result<serde_json::Value> {
+        serde_json::to_value(CallToolRequest {
+            name,
+            arguments,
+            _meta: None,
+            task: None,
+        })
+        .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// The `prompts/get` params object.
+    fn get_prompt_params(
+        name: String,
+        arguments: HashMap<String, String>,
+    ) -> Result<serde_json::Value> {
+        serde_json::to_value(GetPromptRequest {
+            name,
+            arguments,
+            _meta: None,
+        })
+        .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// The `resources/read` params object.
+    fn read_resource_params(uri: String) -> Result<serde_json::Value> {
+        serde_json::to_value(ReadResourceRequest { uri, _meta: None })
+            .map_err(|e| Error::parse(e.to_string()))
+    }
+
+    /// Call a tool, auto-orchestrating MRTR, and observe an unfulfilled
+    /// `input_required` result instead of losing it (Phase 113, CLNT-02).
+    ///
+    /// The additive sibling of [`Self::call_tool`]. Use it whenever a
+    /// `MrtrOutcome::InputRequired` is a normal outcome for your application
+    /// rather than an error — for example when your client wants to surface the
+    /// server's `inputRequests` in its own UI instead of registering a
+    /// [`ClientBuilder::on_elicitation`] handler.
+    ///
+    /// On a v1 connection there is no MRTR, so this simply delegates to
+    /// [`Self::call_tool`] and always returns `MrtrOutcome::Complete`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call_tool`], plus [`Error::mrtr_round_limit_exceeded`] when
+    /// the server keeps asking for input past
+    /// [`ClientBuilder::mrtr_round_limit`].
+    pub async fn call_tool_mrtr(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<CallToolResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("tools", "tools/call")?;
+        if !self.is_v2() {
+            return self
+                .call_tool(name, arguments)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::call_tool_params(name, arguments)?;
+        Self::mrtr_outcome(self.send_with_mrtr(CALL_TOOL_METHOD, params).await?)
+    }
+
+    /// Get a prompt, auto-orchestrating MRTR. See [`Self::call_tool_mrtr`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_prompt`], plus [`Error::mrtr_round_limit_exceeded`].
+    pub async fn get_prompt_mrtr(
+        &self,
+        name: String,
+        arguments: HashMap<String, String>,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<GetPromptResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("prompts", "prompts/get")?;
+        if !self.is_v2() {
+            return self
+                .get_prompt(name, arguments)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::get_prompt_params(name, arguments)?;
+        Self::mrtr_outcome(self.send_with_mrtr(GET_PROMPT_METHOD, params).await?)
+    }
+
+    /// Read a resource, auto-orchestrating MRTR. See [`Self::call_tool_mrtr`].
+    ///
+    /// This one matters even more than the others: `ReadResourceResult.contents`
+    /// has no serde default, so an `input_required` result cannot be
+    /// deserialized into it at all — without this method (or
+    /// [`Error::input_required_unfulfilled`]) the outcome would surface as an
+    /// opaque parse error.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read_resource`], plus [`Error::mrtr_round_limit_exceeded`].
+    pub async fn read_resource_mrtr(
+        &self,
+        uri: String,
+    ) -> Result<crate::types::mrtr::MrtrOutcome<ReadResourceResult>> {
+        self.ensure_initialized()?;
+        self.assert_capability("resources", "resources/read")?;
+        if !self.is_v2() {
+            return self
+                .read_resource(uri)
+                .await
+                .map(crate::types::mrtr::MrtrOutcome::Complete);
+        }
+        let params = Self::read_resource_params(uri)?;
+        Self::mrtr_outcome(self.send_with_mrtr(READ_RESOURCE_METHOD, params).await?)
     }
 
     /// Extract [`CreateMessageParams`] from either inbound sampling parse
@@ -2800,18 +4488,45 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    /// Build a successful host response, serializing the handler result.
-    fn host_ok<S: serde::Serialize>(id: RequestId, value: &S) -> crate::types::JSONRPCResponse {
-        match serde_json::to_value(value) {
-            Ok(v) => crate::types::JSONRPCResponse::success(id, v),
-            Err(e) => {
-                tracing::error!("failed to serialize host response: {e}");
-                Self::host_error(
-                    id,
-                    crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
-                    "Internal error handling host request",
-                )
-            },
+    /// Serialize a handler result into the wire value both entry points use.
+    fn host_value<S: serde::Serialize>(
+        value: &S,
+    ) -> std::result::Result<serde_json::Value, HostRefusal> {
+        serde_json::to_value(value).map_err(|e| {
+            tracing::error!("failed to serialize host response: {e}");
+            HostRefusal::Serialization
+        })
+    }
+
+    /// Turn a shared host-pipeline outcome into the v1 JSON-RPC response.
+    ///
+    /// The wire mapping is unchanged from before the pipeline was shared:
+    /// no handler => `-32601`, a policy denial or a serialization failure =>
+    /// a sanitized `-32603`, a handler failure => a sanitized `-32603` with the
+    /// raw error logged locally.
+    fn host_response(
+        id: RequestId,
+        method: &str,
+        outcome: std::result::Result<serde_json::Value, HostRefusal>,
+    ) -> crate::types::JSONRPCResponse {
+        match outcome {
+            Ok(value) => crate::types::JSONRPCResponse::success(id, value),
+            Err(HostRefusal::NoHandler) => Self::host_error(
+                id,
+                crate::error::ErrorCode::METHOD_NOT_FOUND.as_i32(),
+                "Method not found",
+            ),
+            Err(HostRefusal::Denied) => Self::host_error(
+                id,
+                crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                "request denied by host policy",
+            ),
+            Err(HostRefusal::Failed(error)) => Self::host_handler_error(id, method, &error),
+            Err(HostRefusal::Serialization) => Self::host_error(
+                id,
+                crate::error::ErrorCode::INTERNAL_ERROR.as_i32(),
+                "Internal error handling host request",
+            ),
         }
     }
 
@@ -2855,6 +4570,150 @@ impl<T: Transport> Client<T> {
     }
 }
 
+// ===========================================================================
+// `subscriptions/listen` — the v2 change-notification stream (HTTP-04).
+// ===========================================================================
+
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+impl<T> Client<T>
+where
+    T: Transport + crate::client::subscriptions::EventStreamTransport,
+{
+    /// Open a v2 `subscriptions/listen` stream and receive change notifications
+    /// (HTTP-04).
+    ///
+    /// The 2026-07-28 schema REMOVED `resources/subscribe` and
+    /// `resources/unsubscribe` and replaced both with this single long-lived
+    /// stream. The returned [`SubscriptionStream`](crate::client::subscriptions::SubscriptionStream)
+    /// has already consumed the server's mandatory acknowledgement — read the
+    /// AGREED filter from
+    /// [`acknowledged()`](crate::client::subscriptions::SubscriptionStream::acknowledged)
+    /// before polling — and then yields one item per delivered notification.
+    ///
+    /// Dropping the returned stream closes the underlying HTTP response, which
+    /// is what releases the server's registry slot; there is no `close()` to
+    /// forget.
+    ///
+    /// # Every call mints a FRESH subscription id
+    ///
+    /// The subscription id IS the JSON-RPC request id of this call, and this
+    /// method mints a fresh `Uuid::new_v4()` for it every time. It is never
+    /// derived from the transport, from a counter, or from a previous stream.
+    ///
+    /// That is a CONTRACT, not an implementation detail, and it is what makes a
+    /// pmcp client structurally immune to the reconnect collision: the server
+    /// refuses a second LIVE registration under a `(principal, subscriptionId)`
+    /// pair it already holds, and it CANNOT tell an ungracefully disconnected
+    /// peer from a live one (the receiver and the registry guard live in one
+    /// stream-state tuple, so the entry survives until Hyper drops the response
+    /// body — at which moment RAII reclaims it anyway). A client that reused its
+    /// id when reconnecting would therefore be refused for the remainder of the
+    /// server's keep-alive window. Because every call here mints a fresh id, a
+    /// reconnect after ANY disconnect — graceful or not — can never collide with
+    /// the incumbent the server may still consider live.
+    ///
+    /// The guard against a future refactor making ids sticky is the live
+    /// tripwire `successive_listen_calls_mint_distinct_subscription_ids` in
+    /// `tests/v2_subscriptions_client.rs`, which opens two streams from ONE
+    /// client and asserts their acknowledged ids DIFFER.
+    ///
+    /// A third-party client that does reuse an id is refused with the RETRYABLE
+    /// `RATE_LIMITED` (`-32005`, delivered at HTTP 200), so backing off and
+    /// retrying is the correct response — but minting a fresh id, as this method
+    /// does, is strictly better.
+    ///
+    /// # D-11: polling remains the RECOMMENDED enterprise mechanism
+    ///
+    /// Polling over the Tasks mechanism stays pmcp's recommended mechanism for
+    /// enterprise remote deployments. This stream is the spec-conformant OPT-IN:
+    /// its server side is documented single-instance / sticky-routed only,
+    /// because the server's subscription registry is instance-local. Behind a
+    /// non-sticky load balancer a subscriber silently under-receives.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use futures::StreamExt;
+    /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+    /// use pmcp::shared::StreamableHttpTransport;
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    /// use pmcp::types::subscriptions::SubscriptionFilter;
+    /// use pmcp::ClientBuilder;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let url = url::Url::parse("https://example.invalid/mcp").unwrap();
+    /// let transport =
+    ///     StreamableHttpTransport::new(StreamableHttpTransportConfigBuilder::new(url).build());
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .build();
+    ///
+    /// let filter = SubscriptionFilter {
+    ///     tools_list_changed: Some(true),
+    ///     ..SubscriptionFilter::default()
+    /// };
+    /// let mut stream = client.subscriptions_listen(filter).await?;
+    /// println!("agreed: {:?}", stream.acknowledged().notifications);
+    ///
+    /// while let Some(notification) = stream.next().await {
+    ///     println!("{:?}", notification?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    /// - the connection did not opt into `2026-07-28` — NO request is sent, and
+    ///   the message names `ClientBuilder::with_protocol_version`;
+    /// - the server rejected the request, in which case its own JSON-RPC error
+    ///   is returned UNCHANGED (a server advertising no subscription-delivered
+    ///   capability answers `-32601`, which is how "this server does not do
+    ///   subscriptions" is distinguished from a transport fault);
+    /// - the first frame on the stream is not the mandatory acknowledgement, or
+    ///   is tagged with a different `subscriptionId`.
+    pub async fn subscriptions_listen(
+        &self,
+        notifications: crate::types::subscriptions::SubscriptionFilter,
+    ) -> Result<crate::client::subscriptions::SubscriptionStream> {
+        use crate::types::subscriptions::{SubscriptionsListenParams, SUBSCRIPTIONS_LISTEN_METHOD};
+
+        // Fail fast and LOCALLY: `subscriptions/listen` does not exist on v1, so
+        // a request from a v1 client cannot succeed and must not be sent.
+        self.require_v2(SUBSCRIPTIONS_LISTEN_METHOD)?;
+
+        // A FRESH id per call, never a sticky or derived one — see this method's
+        // docs. Making this constant, or reusing a previous stream's id, breaks
+        // the reconnect contract and fails
+        // `successive_listen_calls_mint_distinct_subscription_ids`.
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let params = serde_json::to_value(SubscriptionsListenParams::new(notifications))
+            .map_err(|e| Error::parse(format!("Failed to serialize listen params: {e}")))?;
+        let mut jsonrpc_request = crate::types::JSONRPCRequest::new(
+            request_id.clone(),
+            SUBSCRIPTIONS_LISTEN_METHOD,
+            Some(params),
+        );
+        // The SAME reserved `_meta` every other v2 request carries: the transport
+        // derives `Mcp-Method` / `Mcp-Name` from these very bytes, so the header
+        // and the body cannot desync (T-113-08), and `Mcp-Name` comes out EMPTY
+        // because `subscriptions/listen` is not name-bearing.
+        self.splice_v2_meta(&mut jsonrpc_request.params);
+        let body = serde_json::to_vec(&jsonrpc_request)
+            .map_err(|e| Error::parse(format!("Failed to serialize v2 request: {e}")))?;
+
+        let frames = {
+            // A READ lock: the stream outlives this call and owns its own HTTP
+            // response, so nothing here may hold the transport for the lifetime
+            // of the subscription.
+            let transport = self.transport.read().await;
+            transport.open_event_stream(body).await?
+        };
+        crate::client::subscriptions::SubscriptionStream::open(request_id, frames).await
+    }
+}
+
 /// Builder for creating clients with custom configuration.
 ///
 /// # Examples
@@ -2893,6 +4752,15 @@ pub struct ClientBuilder<T: Transport> {
     options: ProtocolOptions,
     middleware_chain: EnhancedMiddlewareChain,
     host_registry: crate::client::host::ClientHostRegistry,
+    /// The EXPLICIT per-connection protocol-version selection (Phase 113,
+    /// CLNT-01). `None` with no [`ClientBuilder::with_protocol_version`] call.
+    negotiated_protocol_version: Option<crate::types::ProtocolVersion>,
+    /// The MRTR round bound (Phase 113, D-09). See
+    /// [`ClientBuilder::mrtr_round_limit`].
+    mrtr_round_limit: usize,
+    /// The Extensions-Track capabilities the built client DECLARES on v2
+    /// (Phase 114, D-04). See [`ClientBuilder::with_tasks_extension`].
+    declared_extensions: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -2912,7 +4780,183 @@ impl<T: Transport> ClientBuilder<T> {
             options: ProtocolOptions::default(),
             middleware_chain: EnhancedMiddlewareChain::new(),
             host_registry: crate::client::host::ClientHostRegistry::default(),
+            negotiated_protocol_version: None,
+            mrtr_round_limit: DEFAULT_MRTR_ROUND_LIMIT,
+            declared_extensions: None,
         }
+    }
+
+    /// Opt into an EXPLICIT per-connection protocol version (Phase 113, CLNT-01).
+    ///
+    /// The client twin of
+    /// [`Server::with_supported_protocol_versions`](crate::ServerBuilder::with_supported_protocol_versions).
+    /// **With no call, the client behaves exactly as it does today** — v1, full
+    /// `initialize` handshake, no v2 headers, no per-request `_meta`. There is no
+    /// auto-detection: the selection is EXPLICIT and PER-CONNECTION, and the
+    /// client NEVER probes `server/discover` to CHOOSE an era (Phase-113 D-08).
+    ///
+    /// Selecting [`PROTOCOL_VERSION_2026_07_28`](crate::types::protocol::PROTOCOL_VERSION_2026_07_28)
+    /// switches the connection to the v2 wire contract:
+    ///
+    /// - no `initialize` / `notifications/initialized` (v2 has no handshake),
+    /// - every request carries `params._meta` with the reserved
+    ///   `io.modelcontextprotocol/*` keys,
+    /// - every request carries `MCP-Protocol-Version`, `Mcp-Method` and
+    ///   `Mcp-Name` (empty for a name-less method),
+    /// - no `Mcp-Session-Id`, in either direction.
+    ///
+    /// The selection is pushed into the transport EXACTLY ONCE at
+    /// [`ClientBuilder::build`] time via
+    /// [`Transport::set_negotiated_protocol_version`]. A transport with no wire
+    /// representation for it (stdio, WebSocket) logs a `tracing::warn!` at build
+    /// time — v2-over-stdio is out of scope for this phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::validation`](crate::Error::validation) when `version` is
+    /// neither a member of [`SUPPORTED_PROTOCOL_VERSIONS`](crate::types::SUPPORTED_PROTOCOL_VERSIONS)
+    /// nor `2026-07-28`. Validating here (rather than silently emitting an
+    /// arbitrary `MCP-Protocol-Version` header) closes T-113-52.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    ///
+    /// # fn main() -> Result<(), pmcp::Error> {
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .build();
+    /// # Ok(()) }
+    /// ```
+    pub fn with_protocol_version(mut self, version: crate::types::ProtocolVersion) -> Result<Self> {
+        if !Self::is_selectable_protocol_version(version.as_str()) {
+            return Err(Error::validation(format!(
+                "unsupported protocol version {:?}: pmcp clients may select one of {:?} or {:?}",
+                version.as_str(),
+                crate::types::SUPPORTED_PROTOCOL_VERSIONS,
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28,
+            )));
+        }
+        self.negotiated_protocol_version = Some(version);
+        Ok(self)
+    }
+
+    /// The versions [`Self::with_protocol_version`] accepts.
+    ///
+    /// `SUPPORTED_PROTOCOL_VERSIONS` deliberately does NOT list `2026-07-28`
+    /// (Phase-112 Pitfall 1: v2 is reachable only via explicit opt-in, so it must
+    /// never be picked by the v1 negotiation fallback), which is why the v2
+    /// constant is unioned in here rather than added to that table.
+    fn is_selectable_protocol_version(version: &str) -> bool {
+        // Union via the `protocol_era` classifier rather than an equality check
+        // against the v2 constant, so a second v2-generation version becomes
+        // selectable automatically instead of silently failing opt-in.
+        crate::types::SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+            || crate::types::protocol::protocol_era(version) == crate::types::protocol::Era::V2
+    }
+
+    /// Bound the MRTR gather→resend loop (Phase 113, CLNT-02 / D-09).
+    ///
+    /// **With no call, the client behaves exactly as today**: the default is
+    /// `8`, and on a v1 connection the bound is dead code because MRTR does not
+    /// exist there.
+    ///
+    /// # Why a bound exists at all
+    ///
+    /// The spec tells a server to RE-REQUEST rather than error when a client
+    /// under-supplies (`input_required` obligation 9), so a buggy or hostile
+    /// server can answer `input_required` forever. The bound protects BOTH
+    /// first-class client shapes (D-07):
+    ///
+    /// - an **AI-chat client** with a human behind the handler, who would
+    ///   otherwise be re-prompted indefinitely;
+    /// - an **autonomous agent client** whose handler answers programmatically
+    ///   from other MCP servers, which would otherwise spin (and spend) forever.
+    ///
+    /// Exceeding it returns [`Error::mrtr_round_limit_exceeded`] — a
+    /// programmatically distinguishable error — **without** invoking any
+    /// handler for the round that trips it. Rounds are counted per LOGICAL
+    /// round, so an `inputRequests` map with five entries still costs one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    ///
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .mrtr_round_limit(3)
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn mrtr_round_limit(mut self, limit: usize) -> Self {
+        self.mrtr_round_limit = limit;
+        self
+    }
+
+    /// DECLARE the tasks extension (`io.modelcontextprotocol/tasks`) on v2
+    /// (Phase 114, D-04 / TASK-01).
+    ///
+    /// Inserts [`TASKS_EXTENSION_KEY`](crate::types::capabilities::TASKS_EXTENSION_KEY)
+    /// → `{}` into the client capabilities' `extensions` map. **With no call the
+    /// client behaves exactly as today** and declares nothing.
+    ///
+    /// # This is a PER-REQUEST declaration, not a handshake
+    ///
+    /// v2 (`2026-07-28`) removed `initialize`, so there is no negotiation round
+    /// to carry it. The declaration therefore travels on EVERY request, inside
+    /// `params._meta["io.modelcontextprotocol/clientCapabilities"].extensions`,
+    /// and the server reads it out of the request it is answering. On a v1
+    /// connection this setter changes nothing on the wire: v1 advertises the
+    /// `ClientCapabilities` the caller passed to [`Client::initialize`], and
+    /// injecting here would move the `initialize` bytes of every existing
+    /// caller.
+    ///
+    /// # What declaring it means
+    ///
+    /// It is what the spec requires before a server may answer a task-capable
+    /// tool call with a task handle: the declaration is the server's CREATE
+    /// trigger. A client that declares it is announcing that it can handle a
+    /// `resultType:"task"` response — poll `tasks/get`, fetch `tasks/result` —
+    /// instead of the ordinary synchronous result. A client that cannot do that
+    /// must NOT declare it, or it will receive task handles it cannot follow.
+    ///
+    /// # It is SELF-REPORTED (T-114-22)
+    ///
+    /// The `extensions` map says what this client can HANDLE. It is unverified
+    /// and forgeable by construction, exactly like
+    /// `io.modelcontextprotocol/clientInfo`. A server may read it to decide what
+    /// may be SERVED; it must never read it as identity, and never derive
+    /// authorization from it. Owner binding reads the authenticated principal
+    /// (`AuthContext`), never this map.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
+    ///
+    /// # fn main() -> Result<(), pmcp::Error> {
+    /// let client = ClientBuilder::new(StdioTransport::new())
+    ///     .with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))?
+    ///     .with_tasks_extension()
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_tasks_extension(mut self) -> Self {
+        self.declared_extensions
+            .get_or_insert_with(HashMap::new)
+            .insert(
+                crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+                serde_json::to_value(
+                    crate::types::capabilities::TasksExtensionCapability::default(),
+                )
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+            );
+        self
     }
 
     /// Set whether to enforce strict capabilities.
@@ -3131,8 +5175,29 @@ impl<T: Transport> ClientBuilder<T> {
 
     /// Build the client.
     pub fn build(self) -> Client<T> {
+        let mut transport = self.transport;
+        // The mode-propagation seam (Phase 113, CLNT-01): the selection crosses
+        // into the transport EXACTLY ONCE, and only when the caller actually made
+        // one — a non-opted-in build never touches the transport at all, so its
+        // wire bytes are byte-identical to every prior release.
+        if let Some(version) = self.negotiated_protocol_version.as_ref() {
+            transport.set_negotiated_protocol_version(Some(version.as_str().to_string()));
+            if version.as_str() == crate::types::protocol::PROTOCOL_VERSION_2026_07_28
+                && !transport.supports_negotiated_protocol_version()
+            {
+                // T-113-53: an inert v2 selection would otherwise emit requests
+                // no v2 server accepts, with no local signal at all.
+                tracing::warn!(
+                    transport = transport.transport_type(),
+                    "protocol version 2026-07-28 was selected but this transport has no wire \
+                     representation for it — the selection is INERT (v2 is streamable-HTTP only \
+                     in this release)"
+                );
+            }
+        }
+
         let mut client = Client::with_options(
-            self.transport,
+            transport,
             Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
             self.options,
         );
@@ -3140,6 +5205,15 @@ impl<T: Transport> ClientBuilder<T> {
         client.middleware_chain = Arc::new(RwLock::new(self.middleware_chain));
         // Thread the configured host registry onto the client.
         client.host_registry = self.host_registry;
+        client.negotiated_protocol_version = self.negotiated_protocol_version;
+        client.mrtr_round_limit = self.mrtr_round_limit;
+        client.declared_extensions = self.declared_extensions;
+        // v2 has NO handshake, so a v2 client is ready the moment it is built.
+        // `ensure_initialized` therefore passes without an `initialize` round
+        // trip, which is the whole point of the stateless era.
+        if client.is_v2() {
+            client.initialized = true;
+        }
         client
     }
 }
@@ -3160,6 +5234,9 @@ impl<T: Transport> Clone for Client<T> {
             active_requests: self.active_requests.clone(),
             options: self.options.clone(),
             host_registry: self.host_registry.clone(),
+            negotiated_protocol_version: self.negotiated_protocol_version.clone(),
+            mrtr_round_limit: self.mrtr_round_limit,
+            declared_extensions: self.declared_extensions.clone(),
         }
     }
 }
@@ -3647,6 +5724,305 @@ mod tests {
             Some(serde_json::json!(true)),
             "experimental must be preserved"
         );
+    }
+
+    // =======================================================================
+    // MRTR `inputRequests` fold (Phase 113, CLNT-02).
+    // =======================================================================
+
+    mod mrtr_fold {
+        use super::*;
+        use crate::types::content::Role;
+        use crate::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
+        use crate::types::mrtr::{InputRequest, InputRequests, InputResponse};
+        use crate::types::roots::{ListRootsResult, Root};
+        use crate::types::sampling::{CreateMessageResultWithTools, SamplingMessageContent};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// An elicitation handler that counts invocations and returns a
+        /// configurable action.
+        struct CountingElicitation {
+            calls: Arc<AtomicUsize>,
+            action: ElicitAction,
+        }
+
+        #[async_trait]
+        impl host::HostElicitationHandler for CountingElicitation {
+            async fn handle_elicitation(
+                &self,
+                _params: ElicitRequestParams,
+            ) -> Result<ElicitResult> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let mut content = HashMap::new();
+                content.insert("user_name".to_string(), serde_json::json!("ada"));
+                Ok(ElicitResult {
+                    action: self.action,
+                    content: matches!(self.action, ElicitAction::Accept).then_some(content),
+                })
+            }
+        }
+
+        /// A sampling handler that counts invocations.
+        struct CountingSampling {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl host::HostSamplingHandler for CountingSampling {
+            async fn handle_create_message(
+                &self,
+                _params: CreateMessageParams,
+            ) -> Result<CreateMessageResult> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(CreateMessageResult::new(
+                    crate::types::Content::text("sampled"),
+                    "test-model",
+                ))
+            }
+        }
+
+        struct WithToolsSampling;
+
+        #[async_trait]
+        impl host::HostSamplingHandlerWithTools for WithToolsSampling {
+            async fn handle_create_message_with_tools(
+                &self,
+                _params: CreateMessageParams,
+            ) -> Result<CreateMessageResultWithTools> {
+                Ok(CreateMessageResultWithTools::new(
+                    "with-tools-model",
+                    Role::Assistant,
+                    vec![SamplingMessageContent::Text {
+                        text: "sampled with tools".to_string(),
+                        meta: None,
+                    }],
+                ))
+            }
+        }
+
+        fn elicitation_request() -> InputRequest {
+            InputRequest::Elicitation(Box::new(ElicitRequestParams::Form {
+                message: "who?".to_string(),
+                requested_schema: serde_json::json!({}),
+            }))
+        }
+
+        fn sampling_request() -> InputRequest {
+            InputRequest::Sampling(Box::new(CreateMessageParams::new(Vec::new())))
+        }
+
+        fn requests(entries: Vec<(&str, InputRequest)>) -> InputRequests {
+            entries
+                .into_iter()
+                .map(|(key, request)| (key.to_string(), request))
+                .collect()
+        }
+
+        /// All three kinds are answered from the already-registered Phase-106
+        /// registry, and the server-assigned keys are preserved VERBATIM.
+        #[tokio::test]
+        async fn folds_all_three_kinds_preserving_keys() {
+            let elicit_calls = Arc::new(AtomicUsize::new(0));
+            let sample_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_elicitation(CountingElicitation {
+                    calls: elicit_calls.clone(),
+                    action: ElicitAction::Accept,
+                })
+                .on_sampling(CountingSampling {
+                    calls: sample_calls.clone(),
+                })
+                .on_roots(|| async {
+                    Ok(ListRootsResult {
+                        roots: vec![Root {
+                            uri: "file:///tmp".to_string(),
+                            name: None,
+                        }],
+                    })
+                })
+                .build();
+
+            let map = requests(vec![
+                ("server_key_a", elicitation_request()),
+                ("server_key_b", sampling_request()),
+                ("server_key_c", InputRequest::ListRoots),
+            ]);
+            let FoldOutcome::Fulfilled(responses) = client.fold_input_requests(&map).await else {
+                panic!("every kind has a registered handler");
+            };
+
+            assert_eq!(responses.len(), 3);
+            // Keys are the SERVER's, verbatim — never re-derived.
+            assert!(matches!(
+                responses.get("server_key_a"),
+                Some(InputResponse::Elicitation(_))
+            ));
+            assert!(matches!(
+                responses.get("server_key_b"),
+                Some(InputResponse::Sampling(_))
+            ));
+            assert!(matches!(
+                responses.get("server_key_c"),
+                Some(InputResponse::Roots(_))
+            ));
+            assert_eq!(elicit_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(sample_calls.load(Ordering::SeqCst), 1);
+        }
+
+        /// `on_sampling_with_tools` alone can answer a sampling entry — the
+        /// same precedence the v1 dispatch applies.
+        #[tokio::test]
+        async fn folds_a_with_tools_only_sampling_handler() {
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling_with_tools(WithToolsSampling)
+                .build();
+            let map = requests(vec![("k", sampling_request())]);
+            let FoldOutcome::Fulfilled(responses) = client.fold_input_requests(&map).await else {
+                panic!("a WithTools handler must satisfy a sampling entry");
+            };
+            assert!(matches!(
+                responses.get("k"),
+                Some(InputResponse::Sampling(_))
+            ));
+        }
+
+        /// PREFLIGHT: the map's FIRST entry is fulfillable and the SECOND is
+        /// not, so ZERO handlers may run — otherwise a human is prompted (or an
+        /// agent's tokens are spent) for work the all-or-nothing fold discards.
+        #[tokio::test]
+        async fn preflight_failure_invokes_zero_handlers() {
+            let elicit_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_elicitation(CountingElicitation {
+                    calls: elicit_calls.clone(),
+                    action: ElicitAction::Accept,
+                })
+                .build();
+
+            // BTreeMap ordering: "a" (fulfillable) is visited before "b".
+            let map = requests(vec![
+                ("a", elicitation_request()),
+                ("b", sampling_request()),
+            ]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                elicit_calls.load(Ordering::SeqCst),
+                0,
+                "no handler may run once ANY kind is known unfulfillable"
+            );
+        }
+
+        /// A rejecting `on_sampling_approval` gate reaches the MRTR path — the
+        /// fold must not bypass the wallet gate (T-113-57).
+        #[tokio::test]
+        async fn rejecting_approval_yields_cannot_fulfil() {
+            let sample_calls = Arc::new(AtomicUsize::new(0));
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(CountingSampling {
+                    calls: sample_calls.clone(),
+                })
+                .on_sampling_approval(|_params| async {
+                    host::ApprovalDecision::Deny("policy".to_string())
+                })
+                .build();
+
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                sample_calls.load(Ordering::SeqCst),
+                0,
+                "the preflight approval gate must prevent the LLM call"
+            );
+        }
+
+        /// The post-generation `on_sampling_result_review` gate also runs on
+        /// the MRTR path.
+        #[tokio::test]
+        async fn result_review_runs_on_a_sampling_result() {
+            let reviewed = Arc::new(AtomicUsize::new(0));
+            let seen = reviewed.clone();
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(CountingSampling {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                })
+                .on_sampling_result_review(move |_params, result| {
+                    let seen = seen.clone();
+                    async move {
+                        assert_eq!(
+                            result.model, "test-model",
+                            "the reviewer sees the completion"
+                        );
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        host::ApprovalDecision::Deny("no".to_string())
+                    }
+                })
+                .build();
+
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+            assert_eq!(
+                reviewed.load(Ordering::SeqCst),
+                1,
+                "the result review must have run on the MRTR path"
+            );
+        }
+
+        /// A declined (or cancelled) elicitation is a legitimate v1 answer but
+        /// is NOT a fulfilled MRTR input — the client must not resend.
+        #[tokio::test]
+        async fn declined_elicitation_yields_cannot_fulfil() {
+            for action in [ElicitAction::Decline, ElicitAction::Cancel] {
+                let client = ClientBuilder::new(MockTransport::new())
+                    .on_elicitation(CountingElicitation {
+                        calls: Arc::new(AtomicUsize::new(0)),
+                        action,
+                    })
+                    .build();
+                let map = requests(vec![("k", elicitation_request())]);
+                assert!(
+                    matches!(
+                        client.fold_input_requests(&map).await,
+                        FoldOutcome::CannotFulfil
+                    ),
+                    "{action:?} must not be treated as a fulfilled input"
+                );
+            }
+        }
+
+        /// A handler that ERRORS yields `CannotFulfil` — never a partial map
+        /// and never a fabricated response.
+        #[tokio::test]
+        async fn handler_error_yields_cannot_fulfil() {
+            let client = ClientBuilder::new(MockTransport::new())
+                .on_sampling(FailingHostSampling)
+                .build();
+            let map = requests(vec![("k", sampling_request())]);
+            assert!(matches!(
+                client.fold_input_requests(&map).await,
+                FoldOutcome::CannotFulfil
+            ));
+        }
+
+        /// An empty map folds to an empty (but fulfilled) response map.
+        #[tokio::test]
+        async fn an_empty_map_is_trivially_fulfilled() {
+            let client = ClientBuilder::new(MockTransport::new()).build();
+            let FoldOutcome::Fulfilled(responses) =
+                client.fold_input_requests(&InputRequests::new()).await
+            else {
+                panic!("nothing to fulfil");
+            };
+            assert!(responses.is_empty());
+        }
     }
 
     // === Typed-helper unit tests ===
@@ -4615,5 +6991,688 @@ mod tests {
                 .any(|e| e.fields.get("method").map(String::as_str) == Some("tasks/get")),
             "no task-deserialize WARN must fire on a well-formed response"
         );
+    }
+
+    // =======================================================================
+    // Phase 113 / CLNT-01 — the v2 (`2026-07-28`) client era.
+    // =======================================================================
+
+    mod v2_era {
+        use super::*;
+        use crate::types::protocol::{
+            Era, ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
+        };
+        use crate::types::ServerCapabilities;
+
+        /// A transport that RECORDS the mode-propagation seam calls and every
+        /// raw frame, so the wiring can be asserted without a socket.
+        #[derive(Debug, Default, Clone)]
+        struct ModeRecordingTransport {
+            mode_calls: Arc<Mutex<Vec<Option<String>>>>,
+            raw_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+            typed_sends: Arc<Mutex<usize>>,
+            supports_mode: bool,
+        }
+
+        impl ModeRecordingTransport {
+            fn http_like() -> Self {
+                Self {
+                    supports_mode: true,
+                    ..Self::default()
+                }
+            }
+        }
+
+        #[async_trait]
+        impl Transport for ModeRecordingTransport {
+            async fn send(&mut self, _message: TransportMessage) -> Result<()> {
+                *self.typed_sends.lock().unwrap() += 1;
+                Ok(())
+            }
+
+            async fn receive(&mut self) -> Result<TransportMessage> {
+                Err(Error::protocol_msg("no responses"))
+            }
+
+            async fn close(&mut self) -> Result<()> {
+                Ok(())
+            }
+
+            fn transport_type(&self) -> &'static str {
+                "mode-recording"
+            }
+
+            fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
+                self.mode_calls.lock().unwrap().push(version);
+            }
+
+            fn supports_negotiated_protocol_version(&self) -> bool {
+                self.supports_mode
+            }
+
+            async fn send_raw(&mut self, body: Vec<u8>) -> Result<()> {
+                self.raw_bodies.lock().unwrap().push(body);
+                Ok(())
+            }
+        }
+
+        fn v2() -> ProtocolVersion {
+            ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string())
+        }
+
+        fn v2_client() -> Client<ModeRecordingTransport> {
+            ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .build()
+        }
+
+        // ---- the propagation seam -----------------------------------------
+
+        #[test]
+        fn v2_selection_reaches_the_transport_exactly_once() {
+            let transport = ModeRecordingTransport::http_like();
+            let calls = transport.mode_calls.clone();
+            let client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .build();
+
+            let calls = calls.lock().unwrap();
+            assert_eq!(
+                &*calls,
+                &[Some(PROTOCOL_VERSION_2026_07_28.to_string())],
+                "the selected version must cross into the transport exactly once"
+            );
+            assert_eq!(client.era(), Era::V2);
+        }
+
+        #[test]
+        fn a_non_opted_in_build_never_touches_the_transport_mode_seam() {
+            let transport = ModeRecordingTransport::http_like();
+            let calls = transport.mode_calls.clone();
+            let client = ClientBuilder::new(transport).build();
+
+            assert!(
+                calls.lock().unwrap().is_empty(),
+                "a client that never called with_protocol_version must be byte-identical to today"
+            );
+            assert_eq!(client.era(), Era::V1);
+            assert!(!client.initialized, "v1 still requires the handshake");
+        }
+
+        #[test]
+        fn a_v2_client_is_ready_without_a_handshake() {
+            assert!(
+                v2_client().initialized,
+                "v2 has no initialize, so the client is ready on construction"
+            );
+        }
+
+        // ---- version validation (T-113-52) --------------------------------
+
+        #[test]
+        fn with_protocol_version_accepts_the_two_documented_versions() {
+            for accepted in [PROTOCOL_VERSION_2026_07_28, LATEST_PROTOCOL_VERSION] {
+                assert!(
+                    ClientBuilder::new(MockTransport::new())
+                        .with_protocol_version(ProtocolVersion(accepted.to_string()))
+                        .is_ok(),
+                    "{accepted} must be selectable"
+                );
+            }
+        }
+
+        #[test]
+        fn with_protocol_version_rejects_an_unsupported_version() {
+            let error = ClientBuilder::new(MockTransport::new())
+                .with_protocol_version(ProtocolVersion("1999-01-01".to_string()))
+                .expect_err("an unknown version must be rejected, never silently emitted");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("1999-01-01") && rendered.contains(PROTOCOL_VERSION_2026_07_28),
+                "the error must name both the offending and the accepted values: {rendered}"
+            );
+        }
+
+        // ---- reserved `_meta` emission -------------------------------------
+
+        /// The literal wire spellings, restated here on purpose: this test is the
+        /// drift guard between the client emitter and the server resolver.
+        #[test]
+        fn v2_meta_carries_exactly_the_three_reserved_keys() {
+            let client = v2_client();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let meta = params.as_ref().unwrap()["_meta"].clone();
+            assert_eq!(
+                meta["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+            assert_eq!(
+                meta["io.modelcontextprotocol/clientInfo"]["name"],
+                "pmcp-client"
+            );
+            assert!(meta
+                .get("io.modelcontextprotocol/clientCapabilities")
+                .is_some());
+        }
+
+        #[test]
+        fn v2_meta_injection_preserves_caller_trace_context() {
+            let client = v2_client();
+            let mut params = Some(json!({
+                "name": "search",
+                "_meta": { "traceparent": "00-abc-def-01", "progressToken": 7 },
+            }));
+            client.splice_v2_meta(&mut params);
+
+            let params = params.unwrap();
+            assert_eq!(params["_meta"]["traceparent"], "00-abc-def-01");
+            assert_eq!(params["_meta"]["progressToken"], 7);
+            assert_eq!(
+                params["_meta"]["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+            assert_eq!(params["name"], "search", "sibling params are untouched");
+        }
+
+        #[test]
+        fn v2_meta_injection_creates_params_when_absent() {
+            let client = v2_client();
+            let mut params = None;
+            client.splice_v2_meta(&mut params);
+            assert_eq!(
+                params.unwrap()["_meta"]["io.modelcontextprotocol/protocolVersion"],
+                "2026-07-28"
+            );
+        }
+
+        // ---- extension declaration (Phase 114, D-04) -----------------------
+
+        /// The declared `extensions` map reaches the per-request `_meta`.
+        ///
+        /// Asserted as EQUALITY with `{}` rather than presence: a presence-only
+        /// check passes on precisely the regression that would matter (a value
+        /// that is `null`, `true`, or a populated settings object none of which
+        /// the draft schema admits).
+        #[test]
+        fn a_declaring_v2_client_emits_the_tasks_extension_on_every_request() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .with_tasks_extension()
+                .build();
+
+            // TWO different requests, because the v2 declaration is per-request
+            // and a mechanism that only stamped the first would still pass a
+            // single-frame assertion.
+            for params in [json!({}), json!({ "name": "search" })] {
+                let mut params = Some(params);
+                client.splice_v2_meta(&mut params);
+                let declared = params.as_ref().unwrap()["_meta"]
+                    ["io.modelcontextprotocol/clientCapabilities"]["extensions"]
+                    [crate::types::capabilities::TASKS_EXTENSION_KEY]
+                    .clone();
+                assert_eq!(
+                    declared,
+                    json!({}),
+                    "the tasks extension must be declared as EXACTLY {{}}"
+                );
+            }
+        }
+
+        /// Absence is asserted as key ABSENCE, never as a falsy value.
+        ///
+        /// `ClientCapabilities::extensions` carries
+        /// `skip_serializing_if = "Option::is_none"`, so a regression that
+        /// started emitting `"extensions": null` would satisfy any check written
+        /// against the VALUE.
+        #[test]
+        fn a_non_declaring_v2_client_emits_no_extensions_key_at_all() {
+            let client = v2_client();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let capabilities = params.as_ref().unwrap()["_meta"]
+                ["io.modelcontextprotocol/clientCapabilities"]
+                .clone();
+            assert!(
+                capabilities.get("extensions").is_none(),
+                "a client that never opted in must emit NO extensions key, got {capabilities}"
+            );
+        }
+
+        /// The declaration is threaded through the emission that SERIALIZES
+        /// `ClientCapabilities`, not through a hand-built `json!` object.
+        ///
+        /// If `v2_request_meta` ever hand-builds the capabilities value, this
+        /// test fails: a field added to `ClientCapabilities` would then be
+        /// invisible on the wire, which is exactly how the client and the
+        /// server's `ProtocolContext::client_capabilities` come to disagree.
+        #[test]
+        fn the_emitted_capabilities_deserialize_back_into_client_capabilities() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("2026-07-28 is selectable")
+                .with_tasks_extension()
+                .build();
+            let mut params = Some(json!({}));
+            client.splice_v2_meta(&mut params);
+
+            let raw = params.as_ref().unwrap()["_meta"]
+                ["io.modelcontextprotocol/clientCapabilities"]
+                .clone();
+            let round_tripped: ClientCapabilities =
+                serde_json::from_value(raw).expect("the emitted value IS a ClientCapabilities");
+            assert_eq!(
+                round_tripped
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.get(crate::types::capabilities::TASKS_EXTENSION_KEY)),
+                Some(&json!({})),
+            );
+        }
+
+        /// A v1 client's `initialize` bytes do not move (Phase-114 D-02).
+        #[test]
+        fn the_declaration_never_reaches_a_v1_initialize() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_tasks_extension()
+                .build();
+            assert_eq!(client.era(), Era::V1);
+
+            // v1 advertises the CALLER's capabilities verbatim (modulo the
+            // registry-derived host fields), so the declaration is inert.
+            let mut capabilities = ClientCapabilities::default();
+            client.derive_host_capabilities(&mut capabilities);
+            let serialized = serde_json::to_string(&capabilities).expect("serializes");
+            assert!(
+                !serialized.contains("extensions"),
+                "a v1 initialize must carry no extensions key, got {serialized}"
+            );
+        }
+
+        // ---- capability honesty (T-113-12) ---------------------------------
+
+        struct NoopElicitation;
+
+        #[async_trait]
+        impl host::HostElicitationHandler for NoopElicitation {
+            async fn handle_elicitation(
+                &self,
+                _params: crate::types::elicitation::ElicitRequestParams,
+            ) -> Result<crate::types::elicitation::ElicitResult> {
+                Ok(crate::types::elicitation::ElicitResult {
+                    action: crate::types::elicitation::ElicitAction::Cancel,
+                    content: None,
+                })
+            }
+        }
+
+        #[test]
+        fn client_capabilities_are_empty_for_an_empty_registry() {
+            let capabilities = v2_client().v2_client_capabilities();
+            let value = serde_json::to_value(capabilities).unwrap();
+            assert_eq!(
+                value,
+                json!({}),
+                "a client with no host handlers must claim nothing"
+            );
+        }
+
+        #[test]
+        fn client_capabilities_declare_elicitation_once_registered() {
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .on_elicitation(NoopElicitation)
+                .build();
+            let value = serde_json::to_value(client.v2_client_capabilities()).unwrap();
+            assert!(value.get("elicitation").is_some(), "got {value}");
+            assert!(value.get("sampling").is_none(), "must not over-claim");
+            assert!(value.get("roots").is_none(), "must not over-claim");
+        }
+
+        #[test]
+        fn client_capabilities_declare_sampling_for_the_with_tools_handler() {
+            struct ToolAwareHost;
+            #[async_trait]
+            impl host::HostSamplingHandlerWithTools for ToolAwareHost {
+                async fn handle_create_message_with_tools(
+                    &self,
+                    _params: crate::types::sampling::CreateMessageParams,
+                ) -> Result<crate::types::sampling::CreateMessageResultWithTools> {
+                    Err(Error::internal("unused"))
+                }
+            }
+
+            let client = ClientBuilder::new(ModeRecordingTransport::http_like())
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .on_sampling_with_tools(ToolAwareHost)
+                .build();
+            let value = serde_json::to_value(client.v2_client_capabilities()).unwrap();
+            assert!(
+                value.get("sampling").is_some(),
+                "a WithTools-only client CAN service sampling and must say so: {value}"
+            );
+        }
+
+        // ---- era-aware capability enforcement ------------------------------
+
+        #[test]
+        fn v2_without_discovery_does_not_block_locally() {
+            let client = v2_client();
+            assert!(client.server_capabilities.is_none());
+            assert!(
+                client.assert_capability("tools", "tools/call").is_ok(),
+                "a v2 client never learned capabilities — the server is the authority"
+            );
+        }
+
+        #[test]
+        fn v1_without_capabilities_still_fails_closed() {
+            let client = ClientBuilder::new(MockTransport::new()).build();
+            assert!(
+                client.assert_capability("tools", "tools/call").is_err(),
+                "v1 enforcement must be unchanged"
+            );
+        }
+
+        #[test]
+        fn v2_enforces_once_discovery_has_stored_a_projection() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            assert!(
+                client.assert_capability("tools", "tools/call").is_err(),
+                "after server_discover stored a projection, v2 is as strict as v1"
+            );
+
+            client.server_capabilities = Some(ServerCapabilities::tools_only());
+            assert!(client.assert_capability("tools", "tools/call").is_ok());
+        }
+
+        // ---- tasks negotiation, era-split (Phase 114, D-04) -----------------
+
+        /// A `ServerCapabilities` advertising the tasks extension the v2 way.
+        fn v2_tasks_capabilities() -> ServerCapabilities {
+            let mut extensions = HashMap::new();
+            extensions.insert(
+                crate::types::capabilities::TASKS_EXTENSION_KEY.to_string(),
+                json!({}),
+            );
+            ServerCapabilities {
+                extensions: Some(extensions),
+                ..ServerCapabilities::default()
+            }
+        }
+
+        #[test]
+        fn v2_tasks_capability_is_satisfied_by_the_extensions_entry() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(v2_tasks_capabilities());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "a v2 server advertising the extension must be callable"
+            );
+        }
+
+        /// The refusal NAMES the key, or the remedy is undiscoverable.
+        #[test]
+        fn v2_tasks_capability_is_refused_when_the_extensions_entry_is_absent() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            let error = client
+                .assert_capability("tasks", "tasks/get")
+                .expect_err("a v2 server that did not advertise the extension must be refused");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(crate::types::capabilities::TASKS_EXTENSION_KEY),
+                "the refusal must name the extension key: {rendered}"
+            );
+        }
+
+        /// The v1 field is NOT the v2 signal.
+        ///
+        /// Non-vacuity guard for the arm above: a v2 server projects
+        /// `capabilities.tasks` away, so an implementation that kept reading it
+        /// would refuse every conformant v2 server. This is the fixture that
+        /// would pass under the old arm and must now fail.
+        #[test]
+        fn v2_tasks_capability_ignores_the_v1_tasks_field() {
+            let mut client = v2_client();
+            client.server_capabilities = Some(ServerCapabilities {
+                tasks: Some(crate::types::capabilities::ServerTasksCapability::default()),
+                ..ServerCapabilities::default()
+            });
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "capabilities.tasks is the v1 spelling and must not satisfy v2"
+            );
+        }
+
+        /// The escape hatch is NOT narrowed for tasks.
+        #[test]
+        fn v2_tasks_capability_passes_without_a_stored_projection() {
+            let client = v2_client();
+            assert!(client.server_capabilities.is_none());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "a v2 client that never called server_discover has no basis to refuse"
+            );
+        }
+
+        /// v1 still gates on `capabilities.tasks`, in BOTH directions.
+        #[test]
+        fn v1_tasks_capability_still_gates_on_the_tasks_field() {
+            let mut client = ClientBuilder::new(MockTransport::new()).build();
+            client.server_capabilities = Some(ServerCapabilities::default());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "v1 with no tasks field must still fail closed"
+            );
+
+            client.server_capabilities = Some(ServerCapabilities {
+                tasks: Some(crate::types::capabilities::ServerTasksCapability::default()),
+                ..ServerCapabilities::default()
+            });
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_ok(),
+                "v1 behaviour is untouched"
+            );
+
+            // And the v2 spelling must NOT satisfy v1 — the two tables stay
+            // era-separated in both directions.
+            client.server_capabilities = Some(v2_tasks_capabilities());
+            assert!(
+                client.assert_capability("tasks", "tasks/get").is_err(),
+                "an extensions entry is the v2 spelling and must not satisfy v1"
+            );
+        }
+
+        /// "Fails fast" is MEASURED, not assumed: zero bytes leave the process.
+        #[test]
+        fn an_un_negotiated_v2_tasks_call_sends_nothing() {
+            let transport = ModeRecordingTransport::http_like();
+            let typed = transport.typed_sends.clone();
+            let raw = transport.raw_bodies.clone();
+            let mut client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .with_tasks_extension()
+                .build();
+            client.server_capabilities = Some(ServerCapabilities::default());
+
+            let error = futures::executor::block_on(client.tasks_get("task-1"))
+                .expect_err("an un-negotiated tasks call must be refused locally");
+            assert!(error
+                .to_string()
+                .contains(crate::types::capabilities::TASKS_EXTENSION_KEY));
+            assert_eq!(
+                *typed.lock().unwrap(),
+                0,
+                "the refusal must precede the round trip"
+            );
+            assert!(
+                raw.lock().unwrap().is_empty(),
+                "the refusal must precede the round trip"
+            );
+        }
+
+        // ---- no handshake on the wire ---------------------------------------
+
+        #[test]
+        fn initialize_on_v2_sends_nothing() {
+            let transport = ModeRecordingTransport::http_like();
+            let typed = transport.typed_sends.clone();
+            let raw = transport.raw_bodies.clone();
+            let mut client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .build();
+
+            let result =
+                futures::executor::block_on(client.initialize(ClientCapabilities::default()))
+                    .expect("v2 initialize is a local no-op");
+
+            assert_eq!(
+                result.protocol_version.as_str(),
+                PROTOCOL_VERSION_2026_07_28
+            );
+            assert_eq!(*typed.lock().unwrap(), 0, "no typed frame may be sent");
+            assert!(
+                raw.lock().unwrap().is_empty(),
+                "no initialize and no notifications/initialized on v2"
+            );
+        }
+
+        #[test]
+        fn a_v2_request_travels_as_a_raw_frame_carrying_meta() {
+            let transport = ModeRecordingTransport::http_like();
+            let raw = transport.raw_bodies.clone();
+            let typed = transport.typed_sends.clone();
+            let client = ClientBuilder::new(transport)
+                .with_protocol_version(v2())
+                .expect("selectable")
+                .build();
+
+            // `receive` errors, so the call fails AFTER the frame was sent —
+            // which is exactly the observation this test wants.
+            let _ = futures::executor::block_on(client.list_tools(None));
+
+            assert_eq!(*typed.lock().unwrap(), 0, "v2 never uses the typed path");
+            let bodies = raw.lock().unwrap();
+            let body: serde_json::Value =
+                serde_json::from_slice(&bodies[0]).expect("valid JSON frame");
+            assert_eq!(body["method"], "tools/list");
+            assert_eq!(
+                body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28",
+                "tools/list has no typed _meta field, so the raw frame is the only era channel"
+            );
+        }
+
+        #[test]
+        fn server_discover_is_refused_on_v1() {
+            let mut client = ClientBuilder::new(MockTransport::new()).build();
+            let error = futures::executor::block_on(client.server_discover())
+                .expect_err("server/discover does not exist on v1");
+            assert!(error.to_string().contains("2026-07-28"), "{error}");
+        }
+
+        // ---- the retired subscription RPCs (Phase 113-13, HTTP-04) ---------
+
+        /// A v2 `subscribe_resource` fails LOCALLY: nothing reaches the wire.
+        ///
+        /// The send counters are the proof. The typed counter is `0` because v2
+        /// never uses the typed path, and the RAW counter is `0` because the
+        /// gate returns before `dispatch_request` is ever reached — an
+        /// un-gated method WOULD have pushed a body there (see
+        /// `a_v2_request_travels_as_a_raw_frame_carrying_meta` above).
+        #[test]
+        fn v2_subscribe_resource_is_retired_and_sends_nothing() {
+            for method in ["resources/subscribe", "resources/unsubscribe"] {
+                let transport = ModeRecordingTransport::http_like();
+                let raw = transport.raw_bodies.clone();
+                let typed = transport.typed_sends.clone();
+                let client = ClientBuilder::new(transport)
+                    .with_protocol_version(v2())
+                    .expect("selectable")
+                    .build();
+
+                let uri = "mem://greeting".to_string();
+                let error = if method == "resources/subscribe" {
+                    futures::executor::block_on(client.subscribe_resource(uri))
+                } else {
+                    futures::executor::block_on(client.unsubscribe_resource(uri))
+                }
+                .expect_err("the method is gone from the 2026-07-28 schema");
+
+                assert!(error.is_retired_on_v2(), "{method}: {error}");
+                assert_eq!(error.retired_method(), Some(method));
+                assert!(
+                    error.to_string().contains("subscriptions/listen"),
+                    "{method}: the error names the replacement: {error}"
+                );
+                assert_eq!(
+                    raw.lock().unwrap().len(),
+                    0,
+                    "{method}: NO raw frame may reach the transport"
+                );
+                assert_eq!(
+                    *typed.lock().unwrap(),
+                    0,
+                    "{method}: NO typed frame may reach the transport either"
+                );
+            }
+        }
+
+        /// A v1 `subscribe_resource` is byte-identical to today: it still sends
+        /// exactly one typed request, with the same capability assertion.
+        #[test]
+        fn v1_subscribe_resource_still_sends_exactly_one_request() {
+            for method in ["resources/subscribe", "resources/unsubscribe"] {
+                let transport = ModeRecordingTransport::default();
+                let raw = transport.raw_bodies.clone();
+                let typed = transport.typed_sends.clone();
+                let mut client = ClientBuilder::new(transport).build();
+
+                // A v1 client learns capabilities from `initialize`; short-circuit
+                // that here so the capability assertion passes and the send path
+                // is reached.
+                client.initialized = true;
+                client.server_capabilities = Some(ServerCapabilities {
+                    resources: Some(crate::types::ResourceCapabilities {
+                        subscribe: Some(true),
+                        list_changed: Some(true),
+                    }),
+                    ..ServerCapabilities::default()
+                });
+
+                let uri = "mem://greeting".to_string();
+                // `receive` errors, so the call fails AFTER the send — which is
+                // exactly the observation this test wants.
+                let result = if method == "resources/subscribe" {
+                    futures::executor::block_on(client.subscribe_resource(uri))
+                } else {
+                    futures::executor::block_on(client.unsubscribe_resource(uri))
+                };
+
+                assert!(
+                    !result.as_ref().err().is_some_and(Error::is_retired_on_v2),
+                    "{method}: v1 must NOT be gated: {result:?}"
+                );
+                assert_eq!(
+                    *typed.lock().unwrap(),
+                    1,
+                    "{method}: v1 still sends exactly one typed request"
+                );
+                assert!(
+                    raw.lock().unwrap().is_empty(),
+                    "{method}: v1 never uses the raw path"
+                );
+            }
+        }
     }
 }

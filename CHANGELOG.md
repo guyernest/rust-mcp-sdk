@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] - Unreleased
+
+SEP-2352 credential storage and OAuth discovery hardening (Phase 116). `pmcp`
+gains a credential-storage seam addressed by `(issuer, account, server)`, and
+`cargo-pmcp` 0.19.0 drops its own parallel token cache onto it — one machine,
+one credential store, one format. Additive on the `pmcp` side; the two
+behaviour changes are called out below because both are visible to operators.
+
+### Added
+
+- `pmcp::shared::credential_store` (ungated, I/O-free): `CredentialKey`,
+  `StoredCredentials`, `CredentialSnapshot`, `parse_credential_snapshot`,
+  `normalize_server_key`, `MigrationReport` / `DroppedEntry`, the
+  `CredentialStore` platform seam and its `CredentialStoreAdmin` sibling, and
+  `InMemoryCredentialStore`.
+- `pmcp::shared::credential_file` (`oauth`, non-wasm): `FileCredentialStore` —
+  the default on-disk store, one serialized read-modify-write per mutation,
+  `0o600` files in a `0o700` parent — and `default_credential_path`.
+- `OAuthHelper::with_credential_store` / `with_account_scope` /
+  `with_interactivity`, and `Interactivity::RefreshOnly` for callers (scripts,
+  CI) that must never be handed a browser.
+
+### Changed
+
+- **RFC 8414 §3.3: a trailing-slash issuer is now REFUSED when the
+  authorization server's discovery document declares a slash-free `issuer`**
+  (and vice versa). The specification requires the document's `issuer` to be
+  byte-identical to the value its metadata URL was built from, and this anchor
+  deliberately does **not** normalise — a lenient comparison is precisely what
+  the rule exists to prevent. The URL *derivation* still normalises a trailing
+  slash away, so the two halves of discovery disagree on purpose and a test
+  pins the disagreement. An operator who configures `https://as.example/pool/`
+  against a provider whose document declares `https://as.example/pool` now gets
+  a hard refusal naming BOTH values, where before they got a working provider;
+  configure the issuer exactly as the provider publishes it. Real providers are
+  unaffected: Auth0 declares its trailing slash, and Cognito, Google, Okta and
+  Entra all publish slash-free issuers. Affects `GenericOidcProvider`,
+  `CognitoProvider` and the client discovery path.
+- `cargo pmcp auth` (cargo-pmcp 0.19.0) stores credentials through
+  `FileCredentialStore`, at the same `~/.pmcp/oauth-cache.json` as before. An
+  existing login that recorded its issuer is migrated in place on the first
+  WRITE; a read-only command leaves the file byte-identical. An entry with no
+  recorded issuer cannot be re-keyed without guessing which authorization server
+  issued it, so it is dropped, named and counted, and that one server needs a
+  fresh `cargo pmcp auth login`.
+- `cargo pmcp auth refresh` renews an EXPIRED token instead of posting to the
+  token endpoint unconditionally, because the expiry decision now lives in the
+  SDK alone rather than in two implementations. It reports which of the two
+  happened rather than announcing a refresh it did not perform.
+
 ## [2.17.0] - Unreleased
 
 Hosted-agent loop enablement (Phase 108). Three paired, fully **additive** core

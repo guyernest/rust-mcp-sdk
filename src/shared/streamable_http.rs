@@ -1,18 +1,20 @@
 use crate::error::{Error, Result, TransportError};
 use crate::shared::http_constants::{
-    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, LAST_EVENT_ID, MCP_PROTOCOL_VERSION,
-    MCP_SESSION_ID, TEXT_EVENT_STREAM,
+    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, LAST_EVENT_ID, MCP_METHOD, MCP_NAME,
+    MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
 };
 use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
+use crate::types::mrtr::encode_header_value;
 use async_trait::async_trait;
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::{Method, Request, Response as HyperResponse, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use parking_lot::RwLock;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
@@ -275,6 +277,75 @@ impl StreamableHttpTransportConfigBuilder {
     }
 }
 
+/// Default cap on ONE fully-collected HTTP response body, in bytes (16 MiB).
+///
+/// # What this bounds
+///
+/// Exactly one thing: the size of a single response body that
+/// [`StreamableHttpTransport`] reads into memory in one piece. Every one of this
+/// transport's response reads is a whole-body read — the POST response, the GET
+/// SSE stream and the v2 structured-error envelope — and the peer chooses how
+/// many bytes it sends.
+///
+/// # Why it exists
+///
+/// The SSE parser's complete-body entry point deliberately performs NO bound
+/// check of its own: the body handed to it was already read into memory in one
+/// piece, so the parser's incremental in-flight bound is meaningless there. That
+/// makes this cap the ONLY thing standing between a hostile or merely broken peer
+/// and an unbounded allocation in this process (T-113-84). Before Phase 113-20
+/// the precondition was stated but not met — every call site used a bare,
+/// uncapped `collect()`.
+///
+/// Enforcement is a STREAMING bound, not a post-hoc check: a peer-declared
+/// `Content-Length` over the cap is refused before a single body byte is read,
+/// and the bytes actually delivered are read through `Limited`, which stops at
+/// the cap. A peer that understates or omits `Content-Length` therefore gains
+/// nothing (T-113-93). Collecting the whole body and only then measuring it would
+/// perform exactly the allocation this cap exists to prevent.
+///
+/// # Deliberately NOT the same limit as the SSE in-flight ceiling
+///
+/// [`crate::shared::http::DEFAULT_HTTP_SSE_BUFFERED_BYTES`] bounds INCREMENTAL
+/// in-flight retention inside a long-lived `HttpTransport` reader — a running
+/// total across many chunks, on a different transport. This constant bounds a
+/// ONE-SHOT collected body on `StreamableHttpTransport`. They are two different
+/// quantities on two different types and share no configuration surface; do not
+/// "unify" them.
+///
+/// # What breaks at this boundary
+///
+/// A response larger than the configured cap now fails with
+/// [`TransportError::Request`] instead of being delivered. That is a real
+/// behaviour change. MCP `image`/`audio` content is unconstrained base64 and
+/// base64 expands by ~4/3, so a 12 MiB binary is ALREADY 16 MiB once encoded,
+/// before the JSON envelope — such a payload does NOT fit under this default.
+/// [`StreamableHttpTransport::with_max_collected_body_bytes`] is the escape
+/// hatch.
+pub const DEFAULT_MAX_COLLECTED_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Build the over-cap refusal shared by every collected-body read.
+///
+/// Names the LIMIT and the observed size, and deliberately echoes no body
+/// content: the refusal must not become a channel for the very bytes it refused.
+/// `declared` is `Some` only when the peer's `Content-Length` was itself over the
+/// cap; when the peer understated or omitted it the read is stopped mid-flight
+/// and no total is knowable, so the message says so rather than inventing one.
+///
+/// Lives in the same [`TransportError::Request`] family the collect sites already
+/// used, so a caller matching on the error family sees no new shape.
+fn collected_body_over_cap(max_bytes: usize, declared: Option<usize>) -> Error {
+    let observed = match declared {
+        Some(bytes) => format!("declares Content-Length {bytes}"),
+        None => "delivered more than the cap (Content-Length absent or understated)".to_string(),
+    };
+    Error::Transport(TransportError::Request(format!(
+        "response body {observed}, over this transport's {max_bytes}-byte collected-body cap \
+         (DEFAULT_MAX_COLLECTED_BODY_BYTES); raise it with \
+         StreamableHttpTransport::with_max_collected_body_bytes"
+    )))
+}
+
 /// A streamable HTTP transport for MCP.
 ///
 /// This transport supports both stateless and stateful operation modes:
@@ -298,10 +369,35 @@ pub struct StreamableHttpTransport {
     sender: mpsc::UnboundedSender<TransportMessage>,
     /// Protocol version negotiated with server
     protocol_version: Arc<RwLock<Option<String>>>,
+    /// Whether the CLIENT explicitly selected the v2 (`2026-07-28`) era
+    /// (Phase 113, CLNT-01).
+    ///
+    /// Written ONLY by [`Transport::set_negotiated_protocol_version`], i.e. once
+    /// at `ClientBuilder::build` time. Deliberately separate from
+    /// [`Self::protocol_version`], which [`Self::process_response_headers`]
+    /// overwrites from whatever the SERVER echoed: a rogue or confused server
+    /// replying `MCP-Protocol-Version: 2026-07-28` must not be able to flip a v1
+    /// client into v2 emission mode (which would suppress its session id and
+    /// break the connection).
+    v2_mode: Arc<AtomicBool>,
     /// Abort controller for SSE streams
     abort_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// Last event ID for resumability
     last_event_id: Arc<RwLock<Option<String>>>,
+    /// Cap on ONE fully-collected response body, defaulted from
+    /// [`DEFAULT_MAX_COLLECTED_BODY_BYTES`] and overridable through
+    /// [`Self::with_max_collected_body_bytes`].
+    ///
+    /// A PRIVATE field on the transport rather than a `pub` field on
+    /// [`StreamableHttpTransportConfig`]: that config struct is externally
+    /// constructible with all-`pub` fields and no `Default` derive, and its own
+    /// rustdoc carries three struct-literal examples enumerating every field, so
+    /// adding a field to it fails `cargo semver-checks`'s
+    /// `constructible_struct_adds_field` and would force pmcp to a MAJOR
+    /// version. Measured, not assumed — see plan 113-17's
+    /// `<config_surface_decision>`. Every field of THIS struct is already
+    /// private, so adding one here is invisible to semver (T-113-95).
+    max_collected_body_bytes: usize,
 }
 
 impl Debug for StreamableHttpTransport {
@@ -310,6 +406,7 @@ impl Debug for StreamableHttpTransport {
             .field("config", &self.config)
             .field("protocol_version", &self.protocol_version)
             .field("last_event_id", &self.last_event_id)
+            .field("max_collected_body_bytes", &self.max_collected_body_bytes)
             .finish()
     }
 }
@@ -376,9 +473,109 @@ impl StreamableHttpTransport {
             receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
             sender,
             protocol_version: Arc::new(RwLock::new(None)),
+            v2_mode: Arc::new(AtomicBool::new(false)),
             abort_handle: Arc::new(RwLock::new(None)),
             last_event_id: Arc::new(RwLock::new(None)),
+            max_collected_body_bytes: DEFAULT_MAX_COLLECTED_BODY_BYTES,
         }
+    }
+
+    /// Override the cap on ONE fully-collected response body.
+    ///
+    /// Defaults to [`DEFAULT_MAX_COLLECTED_BODY_BYTES`] (16 MiB). Raise it for a
+    /// deployment whose responses are legitimately larger — base64 `image` /
+    /// `audio` content expands by ~4/3, so a 12 MiB binary does NOT fit under the
+    /// default once encoded.
+    ///
+    /// Additive by construction: an inherent method on a struct whose fields are
+    /// all private, rather than a field on the externally-constructible
+    /// [`StreamableHttpTransportConfig`] (see `Self::max_collected_body_bytes`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::shared::streamable_http::{
+    ///     StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+    /// };
+    /// use url::Url;
+    ///
+    /// let config =
+    ///     StreamableHttpTransportConfigBuilder::new(Url::parse("http://localhost:8080").unwrap())
+    ///         .build();
+    /// let transport =
+    ///     StreamableHttpTransport::new(config).with_max_collected_body_bytes(64 * 1024 * 1024);
+    /// ```
+    #[must_use]
+    pub fn with_max_collected_body_bytes(mut self, max_collected_body_bytes: usize) -> Self {
+        self.max_collected_body_bytes = max_collected_body_bytes;
+        self
+    }
+
+    /// Collect a response body, refusing anything over `max_bytes`.
+    ///
+    /// The ONE place this transport turns a peer-controlled response into an
+    /// in-memory buffer. Two independently-sufficient refusals:
+    ///
+    /// 1. A declared `Content-Length` over the cap is refused before a single
+    ///    body byte is read. The header is a peer-controlled OPTIMISATION, never
+    ///    the authority.
+    /// 2. The bytes actually delivered are read through `Limited`, which stops at
+    ///    the cap. A peer that understates or omits `Content-Length` therefore
+    ///    gains nothing (T-113-93), and the allocation is bounded DURING the read
+    ///    rather than measured after it.
+    ///
+    /// A body of exactly `max_bytes` is admitted; one byte over is refused.
+    async fn collect_body_within_cap(
+        response: HyperResponse<hyper::body::Incoming>,
+        max_bytes: usize,
+    ) -> Result<Bytes> {
+        let declared = response
+            .headers()
+            .get(hyper::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok());
+        if let Some(declared) = declared {
+            if declared > max_bytes {
+                return Err(collected_body_over_cap(max_bytes, Some(declared)));
+            }
+        }
+
+        match Limited::new(response.into_body(), max_bytes)
+            .collect()
+            .await
+        {
+            Ok(collected) => Ok(collected.to_bytes()),
+            Err(error) if error.is::<LengthLimitError>() => {
+                Err(collected_body_over_cap(max_bytes, None))
+            },
+            Err(error) => Err(Error::Transport(TransportError::Request(error.to_string()))),
+        }
+    }
+
+    /// [`Self::collect_body_within_cap`] at THIS transport's configured cap.
+    ///
+    /// The seam the `subscriptions/listen` client uses for the ONE collected-body
+    /// read that lives outside this module: `open_event_stream`'s non-stream
+    /// REJECTION path, which reads a peer-controlled error envelope off the same
+    /// response `post_streaming` returned. Routing it here rather than through a
+    /// bare `body.collect()` is what keeps "every one of this transport's
+    /// whole-body reads is capped" true (review CR-01, T-113-84) — and doing it
+    /// through the transport's own configured value means
+    /// [`Self::with_max_collected_body_bytes`] raises this cap too, rather than
+    /// leaving one read pinned to a constant a deployment cannot move.
+    pub(crate) async fn collect_capped_body(
+        &self,
+        response: HyperResponse<hyper::body::Incoming>,
+    ) -> Result<Bytes> {
+        Self::collect_body_within_cap(response, self.max_collected_body_bytes).await
+    }
+
+    /// Whether this connection speaks the v2 (`2026-07-28`) wire contract.
+    ///
+    /// See [`Self::v2_mode`] for why this is not derived from
+    /// [`Self::protocol_version`].
+    fn is_v2(&self) -> bool {
+        self.v2_mode.load(Ordering::Relaxed)
     }
 
     /// Get the current session ID
@@ -472,12 +669,14 @@ impl StreamableHttpTransport {
         // Process response headers
         self.process_response_headers(&response);
 
-        // Collect body (for now - could be streamed in future)
-        let body_bytes = response
-            .collect()
-            .await
-            .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
-            .to_bytes();
+        // Collect body under this transport's collected-body cap (T-113-84).
+        //
+        // Enforced HERE, before any of it reaches the parser: the parser's
+        // complete-body entry point performs no bound check of its own, so this
+        // is the only thing bounding the allocation on this path. See
+        // `DEFAULT_MAX_COLLECTED_BODY_BYTES`.
+        let body_bytes =
+            Self::collect_body_within_cap(response, self.max_collected_body_bytes).await?;
 
         // Fast path: Check if middleware exists before creating temp response
         let modified_body = if self.config.read().http_middleware_chain.is_some() {
@@ -502,8 +701,15 @@ impl StreamableHttpTransport {
             let mut sse_parser = SseParser::new();
             let body = String::from_utf8_lossy(&modified_body);
 
-            // Parse SSE events
-            let events = sse_parser.feed(&body);
+            // Parse SSE events.
+            //
+            // Deliberately the COMPLETE-body entry point rather than `feed`:
+            // this body was already read into memory in one piece, not a chunk
+            // of a live stream, so the parser's incremental in-flight bound does
+            // not apply to it. Its byte-cap precondition is SATISFIED above by
+            // `collect_body_within_cap` at `self.max_collected_body_bytes` — an
+            // over-cap body never reaches this task at all.
+            let events = sse_parser.feed_complete_body(&body);
             for event in events {
                 // Update last event ID and notify callback
                 if let Some(id) = &event.id {
@@ -527,6 +733,38 @@ impl StreamableHttpTransport {
 
         *self.abort_handle.write() = Some(handle);
         Ok(())
+    }
+
+    /// Emit the two v2-only routing headers onto an outbound request builder
+    /// (Phase 113, CLNT-01 / VERS-05).
+    ///
+    /// Mirrors the SERVER-side emitter
+    /// (`streamable_http_server.rs::apply_v2_outbound_headers`): every insert
+    /// goes through `HeaderValue::from_str` and a pathological value SKIPS its
+    /// header rather than panicking (T-113-20).
+    ///
+    /// `MCP-Protocol-Version` is emitted by the existing per-request block, not
+    /// here, so a v1 request keeps exactly the headers it has today.
+    fn apply_v2_outbound_headers(
+        mut builder: hyper::http::request::Builder,
+        method: &str,
+        name: &str,
+    ) -> hyper::http::request::Builder {
+        if let Ok(value) = hyper::header::HeaderValue::from_str(method) {
+            builder = builder.header(MCP_METHOD, value);
+        }
+        // `Mcp-Name` is emitted on EVERY v2 request, with the EMPTY STRING for a
+        // method that carries no logical name. Provenance: `113-SPEC-RECHECK.md`
+        // § `Mcp-Name Header Rule` and Phase-112 D-05 — the server's
+        // `require_three_headers` demands PRESENCE on every v2 request and only
+        // `cross_check_name` compares the VALUE, and then only for the three
+        // name-bearing methods. Omitting the header would 400 every `tools/list`
+        // this client sends. pmcp is deliberately stricter than the draft
+        // transport spec here (Phase-113 DRIFT-1).
+        if let Ok(value) = hyper::header::HeaderValue::from_str(name) {
+            builder = builder.header(MCP_NAME, value);
+        }
+        builder
     }
 
     /// Build a `hyper::Request` with middleware integration.
@@ -571,15 +809,38 @@ impl StreamableHttpTransport {
             false
         };
 
-        // Add session ID header if we have one
+        let is_v2 = self.is_v2();
+
+        // Add session ID header if we have one.
+        //
+        // NEVER on v2: `2026-07-28` has no session at all, and a session id
+        // surviving into the v2 path is exactly the identity-collapse failure
+        // class HTTP-01/HTTP-05 exist to close (T-113-06). The suppression is
+        // unconditional — a value left over from a v1 exchange on the same
+        // transport must not leak either.
         if let Some(session_id) = &session_id {
-            request_builder = request_builder.header(MCP_SESSION_ID, session_id.as_str());
+            if !is_v2 {
+                request_builder = request_builder.header(MCP_SESSION_ID, session_id.as_str());
+            }
         }
 
         // Add protocol version header if we have one
         if let Some(protocol_version) = self.protocol_version.read().as_ref() {
             request_builder =
                 request_builder.header(MCP_PROTOCOL_VERSION, protocol_version.as_str());
+        }
+
+        // v2 routing headers, DERIVED from the body this request is about to
+        // carry — the same `logical_name_key` table the server's
+        // `extract_body_method_and_name` reads. Deriving them here (rather than
+        // threading a name down from `Client`) is what makes the header and the
+        // body incapable of desyncing (T-113-08). A body with no `method` (a
+        // JSON-RPC response, or the empty GET/SSE body) yields `None` and emits
+        // neither header.
+        if is_v2 {
+            if let Some((method, name)) = v2_routing_headers(&body) {
+                request_builder = Self::apply_v2_outbound_headers(request_builder, &method, &name);
+            }
         }
 
         // Build temporary request to extract headers for middleware
@@ -672,10 +933,18 @@ impl StreamableHttpTransport {
 
     /// Process response headers and extract session/protocol information
     fn process_response_headers(&self, response: &HyperResponse<impl hyper::body::Body>) {
-        // Update session ID from response header
-        if let Some(session_id) = response.headers().get(MCP_SESSION_ID) {
-            if let Ok(session_id_str) = session_id.to_str() {
-                self.config.write().session_id = Some(session_id_str.to_string());
+        // Update session ID from response header.
+        //
+        // NEVER on v2 (T-113-06): there is no session in `2026-07-28`, so a
+        // response that carries `Mcp-Session-Id` anyway (a misconfigured
+        // intermediary, a dual-stack server echoing v1 state) must not be able
+        // to plant one that the outbound path would then have to suppress.
+        // Refusing to STORE it is the belt to the outbound braces.
+        if !self.is_v2() {
+            if let Some(session_id) = response.headers().get(MCP_SESSION_ID) {
+                if let Ok(session_id_str) = session_id.to_str() {
+                    self.config.write().session_id = Some(session_id_str.to_string());
+                }
             }
         }
 
@@ -701,17 +970,53 @@ impl StreamableHttpTransport {
 
         // Use JSON-RPC compatibility layer for serialization
         let body_bytes = crate::shared::StdioTransport::serialize_message(&message)?;
-        // Clone body_bytes so we can retry with the identical payload on 401.
-        let body_bytes_snapshot = body_bytes.clone();
+        let is_notification = matches!(message, TransportMessage::Notification { .. });
+        self.post_body(body_bytes, is_notification).await
+    }
 
-        let url = self.config.read().url.clone();
+    /// Read the JSON-RPC ERROR envelope out of a non-2xx response body (D-113-E).
+    ///
+    /// Returns `Some(TransportMessage::Response)` only when the body is a
+    /// well-formed JSON-RPC 2.0 frame carrying an `error` member — i.e. the
+    /// server deliberately answered with a structured protocol error that plan
+    /// 04 mapped onto a 4xx status. A proxy's HTML error page, a bare
+    /// `{"message":"..."}`, or a `result`-carrying frame all return `None`, so
+    /// the caller falls back to the status-only transport error.
+    ///
+    /// Deliberately strict about `jsonrpc == "2.0"` **and** the presence of
+    /// `error`: an intermediary's JSON error document must never be laundered
+    /// into what a caller reads as a server-authored protocol error.
+    async fn jsonrpc_error_envelope(
+        response: HyperResponse<hyper::body::Incoming>,
+        max_collected_body_bytes: usize,
+    ) -> Option<TransportMessage> {
+        // The THIRD whole-body read on this transport, capped for the same reason
+        // as the other two (T-113-84). An error envelope is still a
+        // peer-controlled body, and an over-cap one is simply not an envelope:
+        // `None` here falls back to the status-only transport error, which is
+        // exactly what a malformed body already did.
+        let body = Self::collect_body_within_cap(response, max_collected_body_bytes)
+            .await
+            .ok()?;
+        let value = serde_json::from_slice::<serde_json::Value>(&body).ok()?;
+        if value.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+            || value.get("error").is_none()
+        {
+            return None;
+        }
+        match crate::shared::StdioTransport::parse_message(&body) {
+            Ok(message @ TransportMessage::Response(_)) => Some(message),
+            _ => None,
+        }
+    }
 
-        // Build POST request with middleware integration
-        let mut request = self
-            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes)
-            .await?;
-
-        // Add request-specific headers
+    /// Insert the two per-request POST headers every JSON-RPC frame carries.
+    ///
+    /// Factored out of [`Self::post_once`] so the first attempt and the 401
+    /// retry cannot drift: the retry MUST preserve the original method, body and
+    /// headers, and the only way to guarantee that is for both to build them
+    /// from one place.
+    fn apply_post_headers(request: &mut Request<Full<Bytes>>) -> Result<()> {
         request.headers_mut().insert(
             CONTENT_TYPE,
             APPLICATION_JSON.parse().map_err(|e| {
@@ -730,6 +1035,33 @@ impl StreamableHttpTransport {
                 )))
             })?,
         );
+        Ok(())
+    }
+
+    /// Build, send, and (on a `401` with a configured auth provider) retry ONCE
+    /// an already-serialized POST body, returning the raw HTTP response with its
+    /// body UNREAD.
+    ///
+    /// The shared head of [`Self::post_body`] and [`Self::post_streaming`].
+    /// Extracted because a long-lived `subscriptions/listen` stream (HTTP-04)
+    /// must go through the SAME header emission and the SAME single-shot 401
+    /// refresh as every other request — a second, hand-rolled POST path would
+    /// silently miss the auth retry.
+    ///
+    /// The retry is structurally at-most-once: it returns directly from this
+    /// function, so there is no loop to go around twice. A second `401` on the
+    /// retry is returned to the caller unchanged.
+    async fn post_once(&self, body_bytes: Vec<u8>) -> Result<HyperResponse<hyper::body::Incoming>> {
+        // Clone body_bytes so we can retry with the identical payload on 401.
+        let body_bytes_snapshot = body_bytes.clone();
+
+        let url = self.config.read().url.clone();
+
+        // Build POST request with middleware integration
+        let mut request = self
+            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes)
+            .await?;
+        Self::apply_post_headers(&mut request)?;
 
         // Send first attempt.
         let response = self
@@ -738,56 +1070,66 @@ impl StreamableHttpTransport {
             .await
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?;
 
-        // 401 retry — exactly once, only when an auth provider is configured.
-        // `retried_unauthorized` is implicit: the retry path returns directly from
-        // this expression, so we structurally cannot loop back and retry again.
-        // A second 401 on the retry is returned to the caller unchanged.
-        // The retry preserves the original request body, method, and all headers
-        // (except Authorization, which is recomputed from a freshly-vended token).
-        let retried_unauthorized = response.status() == StatusCode::UNAUTHORIZED;
-        let response = if retried_unauthorized {
-            let auth_provider = self.config.read().auth_provider.clone();
-            if let Some(provider) = auth_provider {
-                // Step 1: purge cached token (on_unauthorized BEFORE get_access_token — Test 5).
-                provider.on_unauthorized().await?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
 
-                // Step 2: rebuild the request using the byte-identical body snapshot.
-                let mut retry_request = self
-                    .build_request_with_middleware(Method::POST, url.as_str(), body_bytes_snapshot)
-                    .await?;
-
-                // Re-apply the same per-request headers.
-                retry_request.headers_mut().insert(
-                    CONTENT_TYPE,
-                    APPLICATION_JSON.parse().map_err(|e| {
-                        Error::Transport(TransportError::InvalidMessage(format!(
-                            "Invalid header: {}",
-                            e
-                        )))
-                    })?,
-                );
-                retry_request.headers_mut().insert(
-                    ACCEPT,
-                    ACCEPT_STREAMABLE.parse().map_err(|e| {
-                        Error::Transport(TransportError::InvalidMessage(format!(
-                            "Invalid header: {}",
-                            e
-                        )))
-                    })?,
-                );
-
-                // Step 3: send retry — do NOT retry again on a second 401.
-                self.client
-                    .request(retry_request)
-                    .await
-                    .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
-            } else {
-                // No auth provider — cannot retry; return the 401 as-is.
-                response
-            }
-        } else {
-            response
+        // No auth provider — cannot retry; return the 401 as-is.
+        let auth_provider = self.config.read().auth_provider.clone();
+        let Some(provider) = auth_provider else {
+            return Ok(response);
         };
+
+        // Step 1: purge cached token (on_unauthorized BEFORE get_access_token — Test 5).
+        provider.on_unauthorized().await?;
+
+        // Step 2: rebuild the request using the byte-identical body snapshot.
+        let mut retry_request = self
+            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes_snapshot)
+            .await?;
+        Self::apply_post_headers(&mut retry_request)?;
+
+        // Step 3: send retry — do NOT retry again on a second 401.
+        self.client
+            .request(retry_request)
+            .await
+            .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))
+    }
+
+    /// POST an already-serialized frame and hand back the response with its body
+    /// STILL UNREAD, so a long-lived `text/event-stream` can be consumed
+    /// incrementally (HTTP-04, `subscriptions/listen`).
+    ///
+    /// [`Self::post_body`] collects the body to completion, which would hang
+    /// forever on a stream that never ends. This is the streaming sibling: same
+    /// request construction, same 401 retry, same response-header processing —
+    /// and then the caller owns the body.
+    ///
+    /// The HTTP response-middleware chain is deliberately NOT run here, for the
+    /// same reason the server side does not run its own over a listen stream:
+    /// the chain processes a complete `Vec<u8>` body, and a stream has none by
+    /// construction.
+    pub(crate) async fn post_streaming(
+        &self,
+        body_bytes: Vec<u8>,
+    ) -> Result<HyperResponse<hyper::body::Incoming>> {
+        let response = self.post_once(body_bytes).await?;
+        self.process_response_headers(&response);
+        Ok(response)
+    }
+
+    /// POST an ALREADY-SERIALIZED JSON-RPC frame.
+    ///
+    /// The shared tail of [`Self::send_with_options`] and
+    /// [`Transport::send_raw`]: the v2 client path assembles its own frame (so
+    /// it can stamp `params._meta` on methods whose typed struct has no `_meta`
+    /// field), and both paths must go through the SAME header emission, 401
+    /// retry, and response handling.
+    ///
+    /// `is_notification` only selects the 202-Accepted behavior; it is not
+    /// re-derived from the bytes so the typed path keeps its exact semantics.
+    async fn post_body(&self, body_bytes: Vec<u8>, is_notification: bool) -> Result<()> {
+        let response = self.post_once(body_bytes).await?;
 
         // Process headers for session and protocol info
         self.process_response_headers(&response);
@@ -797,11 +1139,45 @@ impl StreamableHttpTransport {
             // Special handling for 202 Accepted (notification acknowledged)
             if response.status() == StatusCode::ACCEPTED {
                 // For initialization messages, try to start SSE stream
-                if matches!(message, TransportMessage::Notification { .. }) {
+                if is_notification {
                     // Try to start GET SSE (tolerate 405)
                     let _ = self.start_sse(None).await;
                 }
                 return Ok(());
+            }
+
+            // D-113-E: on v2 a STRUCTURED JSON-RPC error rides a 4xx.
+            //
+            // Phase-113 plan 04 maps the v2 error codes onto HTTP statuses
+            // (`-32601` at 404; `-32020`/`-32021`/`-32022`/`-32602` at 400), so
+            // erroring on the status alone discards the very `error.code` the
+            // caller has to dispatch on — an MRTR retry loop cannot tell an
+            // expired-token `-32602` from a transport fault, and plan 09's
+            // `-32021 MissingRequiredClientCapability` becomes unactionable.
+            // When the body IS a JSON-RPC error envelope, feed it through the
+            // normal response channel so it surfaces as `Error::Protocol`.
+            //
+            // v2 ONLY: v1's behavior is byte-identical to every prior release.
+            if self.is_v2() {
+                let status = response.status();
+                match Self::jsonrpc_error_envelope(response, self.max_collected_body_bytes).await {
+                    Some(message) => {
+                        tracing::debug!(
+                            %status,
+                            "v2 non-2xx carried a JSON-RPC error envelope — surfacing it structurally"
+                        );
+                        self.sender
+                            .send(message)
+                            .map_err(|e| Error::Transport(TransportError::Send(e.to_string())))?;
+                        return Ok(());
+                    },
+                    None => {
+                        return Err(Error::Transport(TransportError::Request(format!(
+                            "Request failed with status: {}",
+                            status
+                        ))));
+                    },
+                }
             }
 
             return Err(Error::Transport(TransportError::Request(format!(
@@ -824,12 +1200,15 @@ impl StreamableHttpTransport {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
 
-        // Collect response body
-        let body_bytes = response
-            .collect()
-            .await
-            .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
-            .to_bytes();
+        // Collect response body under this transport's collected-body cap
+        // (T-113-84).
+        //
+        // Enforced HERE, before any of it reaches the parser: the parser's
+        // complete-body entry point performs no bound check of its own, so this
+        // is the only thing bounding the allocation on this path. See
+        // `DEFAULT_MAX_COLLECTED_BODY_BYTES`.
+        let body_bytes =
+            Self::collect_body_within_cap(response, self.max_collected_body_bytes).await?;
 
         // Debug logging for response diagnostics
         tracing::debug!(
@@ -840,8 +1219,18 @@ impl StreamableHttpTransport {
             "HTTP response received"
         );
 
-        // Fast path: Check if middleware exists before creating temp response
-        let modified_body = if self.config.read().http_middleware_chain.is_some() {
+        // Fast path: Check if middleware exists before creating temp response.
+        // The URL is read from the SAME acquisition rather than eagerly at entry:
+        // `post_once` already owns the request build, so the no-middleware path
+        // (the common one) pays no config lock and no `Url` clone here.
+        let middleware_url = {
+            let config = self.config.read();
+            config
+                .http_middleware_chain
+                .is_some()
+                .then(|| config.url.clone())
+        };
+        let modified_body = if let Some(url) = middleware_url {
             // Run response middleware (create a minimal response for middleware processing)
             let temp_response = HyperResponse::builder()
                 .status(status_code)
@@ -952,8 +1341,16 @@ impl StreamableHttpTransport {
                 let mut sse_parser = SseParser::new();
                 let body = String::from_utf8_lossy(&modified_body);
 
-                // Parse the SSE body
-                let events = sse_parser.feed(&body);
+                // Parse the SSE body.
+                //
+                // Deliberately the COMPLETE-body entry point rather than `feed`:
+                // this body was already read into memory in one piece, not a
+                // chunk of a live stream, so the parser's incremental in-flight
+                // bound does not apply to it. Its byte-cap precondition is
+                // SATISFIED above by `collect_body_within_cap` at
+                // `self.max_collected_body_bytes` — an over-cap body never
+                // reaches this task at all.
+                let events = sse_parser.feed_complete_body(&body);
                 for event in events {
                     // Update last event ID and notify callback
                     if let Some(id) = &event.id {
@@ -1039,6 +1436,79 @@ impl Transport for StreamableHttpTransport {
         // we can make requests. There's no persistent connection.
         true
     }
+
+    fn transport_type(&self) -> &'static str {
+        "streamable-http"
+    }
+
+    /// Receive the client's per-connection era selection (Phase 113, CLNT-01).
+    ///
+    /// Delegates to the existing inherent
+    /// [`Self::set_protocol_version`], which writes the field the
+    /// `MCP-Protocol-Version` request header is emitted from, AND latches the
+    /// separate `Self::v2_mode` flag that gates every v2-only behavior. The
+    /// two are distinct on purpose — see that field's docs.
+    fn set_negotiated_protocol_version(&mut self, version: Option<String>) {
+        // Classify through `protocol_era`, the single source of truth, NOT by
+        // string equality against the v2 constant. `Client::era()` already goes
+        // through it, and the two MUST agree: if a second v2-generation version
+        // string is ever added to the classifier, an equality check here would
+        // leave the client stamping `_meta` and calling `send_raw` while the
+        // transport silently stayed in v1 emission mode — no `Mcp-Method` /
+        // `Mcp-Name`, session id leaked back on — and every request would 400
+        // with `HEADER_MISMATCH`. Compile-time silent, runtime total.
+        let is_v2 = version.as_deref().map(crate::types::protocol::protocol_era)
+            == Some(crate::types::protocol::Era::V2);
+        self.set_protocol_version(version);
+        self.v2_mode.store(is_v2, Ordering::Relaxed);
+    }
+
+    /// This transport DOES have a wire representation for the negotiated version
+    /// (the `MCP-Protocol-Version` header plus the v2 routing headers).
+    fn supports_negotiated_protocol_version(&self) -> bool {
+        true
+    }
+
+    async fn send_raw(&mut self, body: Vec<u8>) -> Result<()> {
+        self.post_body(body, false).await
+    }
+}
+
+/// Derive the `(Mcp-Method, Mcp-Name)` pair a v2 request must carry, from the
+/// JSON-RPC frame that request is about to send (Phase 113, CLNT-01 / VERS-05).
+///
+/// Returns `None` when the body is not a JSON-RPC frame with a `method` — a
+/// response, or the empty body of a GET/DELETE — in which case no v2 routing
+/// header is emitted.
+///
+/// The logical name is resolved METHOD-AWARELY through
+/// [`crate::types::mrtr::name_bearing_key`], the SAME combined lookup the server's
+/// `extract_body_method_and_name` reads: `tools/call` and `prompts/get` carry it
+/// in `params.name`, `resources/read` in `params.uri`, `tasks/get` /
+/// `tasks/update` / `tasks/cancel` in `params.taskId` (Phase 114, DQ4 — the spec
+/// makes this a client **MUST** so an intermediary can route to the instance
+/// holding the task state), and every other method has none — for which the
+/// returned name is the EMPTY STRING, never an omission.
+///
+/// The tasks rows come from a SEPARATE table
+/// ([`crate::types::mrtr::TASK_NAME_BEARING_METHODS`]) precisely so that naming
+/// them does not make them MRTR-eligible; see that table's rustdoc.
+///
+/// The value is run through [`crate::types::mrtr::encode_header_value`], so a
+/// non-header-safe name (non-ASCII, or an RFC 9110 field-value delimiter) travels
+/// in the `=?base64?…?=` sentinel form the server's decoder understands
+/// (T-113-47). The empty string round-trips unchanged.
+///
+/// Pure and non-panicking on arbitrary bytes.
+fn v2_routing_headers(body: &[u8]) -> Option<(String, String)> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    // Derived through the ONE shared routing-pair reader, so the emitting half
+    // and the server's cross-checking half cannot drift apart.
+    let (method, name) = crate::types::mrtr::frame_routing_pair(&value)?;
+    Some((
+        method.to_string(),
+        encode_header_value(name.as_deref().unwrap_or_default()),
+    ))
 }
 
 /// A trait for providing authentication tokens.
@@ -1485,5 +1955,723 @@ mod tests {
             "get_access_token must be called AFTER on_unauthorized; order = {:?}",
             order
         );
+    }
+
+    // ==================================================================
+    // Phase 113 / CLNT-01 — v2 (`2026-07-28`) outbound headers.
+    // ==================================================================
+
+    mod v2_outbound {
+        use super::*;
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use serde_json::json;
+
+        fn body(method: &str, params: &serde_json::Value) -> Vec<u8> {
+            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+                .to_string()
+                .into_bytes()
+        }
+
+        /// A transport with the v2 era selected through the PRODUCTION seam.
+        fn v2_transport(session_id: Option<&str>) -> StreamableHttpTransport {
+            let mut config = StreamableHttpTransportConfigBuilder::new(
+                Url::parse("http://127.0.0.1:1/").unwrap(),
+            )
+            .build();
+            config.session_id = session_id.map(str::to_string);
+            let mut transport = StreamableHttpTransport::new(config);
+            transport
+                .set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
+            transport
+        }
+
+        fn v1_transport(session_id: Option<&str>) -> StreamableHttpTransport {
+            let mut config = StreamableHttpTransportConfigBuilder::new(
+                Url::parse("http://127.0.0.1:1/").unwrap(),
+            )
+            .build();
+            config.session_id = session_id.map(str::to_string);
+            StreamableHttpTransport::new(config)
+        }
+
+        async fn headers_for(
+            transport: &StreamableHttpTransport,
+            body: Vec<u8>,
+        ) -> hyper::HeaderMap {
+            transport
+                .build_request_with_middleware(Method::POST, "http://127.0.0.1:1/", body)
+                .await
+                .expect("request builds")
+                .headers()
+                .clone()
+        }
+
+        fn header(map: &hyper::HeaderMap, name: &str) -> Option<String> {
+            map.get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        }
+
+        // ---- the pure derivation --------------------------------------
+
+        #[test]
+        fn routing_headers_read_name_for_tools_call() {
+            let derived = v2_routing_headers(&body("tools/call", &json!({ "name": "search" })));
+            assert_eq!(
+                derived,
+                Some(("tools/call".to_string(), "search".to_string()))
+            );
+        }
+
+        #[test]
+        fn routing_headers_read_name_for_prompts_get() {
+            let derived = v2_routing_headers(&body("prompts/get", &json!({ "name": "greeting" })));
+            assert_eq!(
+                derived,
+                Some(("prompts/get".to_string(), "greeting".to_string()))
+            );
+        }
+
+        /// `resources/read` carries its logical name in `params.uri` — a
+        /// `ReadResourceRequest` has NO `name` field, so reading `params.name`
+        /// would emit an empty value and fail the server's body cross-check.
+        #[test]
+        fn routing_headers_read_uri_for_resources_read() {
+            let derived =
+                v2_routing_headers(&body("resources/read", &json!({ "uri": "mem://greeting" })));
+            assert_eq!(
+                derived,
+                Some(("resources/read".to_string(), "mem://greeting".to_string()))
+            );
+        }
+
+        /// The spec MUST: `Mcp-Name` carries `params.taskId` (Phase 114, DQ4).
+        ///
+        /// pmcp emitted `Mcp-Name: ""` here before this change, which Phase
+        /// 118's conformance run grades.
+        #[test]
+        fn routing_headers_read_task_id_for_the_three_tasks_methods() {
+            for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+                let derived = v2_routing_headers(&body(method, &json!({ "taskId": "abc" })));
+                assert_eq!(
+                    derived,
+                    Some((method.to_string(), "abc".to_string())),
+                    "{method} must route on its taskId"
+                );
+            }
+        }
+
+        /// `tasks/list` is NOT in the tasks routing table, so it keeps emitting
+        /// the empty name every non-name-bearing method emits.
+        ///
+        /// The negative half of the assertion above: without it, an
+        /// implementation that made every `tasks/*` method name-bearing would
+        /// pass.
+        #[test]
+        fn routing_headers_are_empty_for_tasks_list_and_tasks_result() {
+            for method in ["tasks/list", "tasks/result"] {
+                let derived = v2_routing_headers(&body(method, &json!({ "taskId": "abc" })));
+                assert_eq!(
+                    derived,
+                    Some((method.to_string(), String::new())),
+                    "{method} is not name-bearing"
+                );
+            }
+        }
+
+        #[test]
+        fn routing_headers_are_none_for_a_body_without_a_method() {
+            assert_eq!(
+                v2_routing_headers(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
+                None
+            );
+            assert_eq!(v2_routing_headers(b"not json"), None);
+            assert_eq!(v2_routing_headers(b""), None);
+        }
+
+        #[test]
+        fn routing_headers_sentinel_encode_a_non_ascii_name() {
+            let (_, name) = v2_routing_headers(&body("tools/call", &json!({ "name": "поиск" })))
+                .expect("derived");
+            assert!(
+                name.starts_with(crate::types::mrtr::HEADER_SENTINEL_PREFIX),
+                "a non-header-safe name must travel as a sentinel, got {name}"
+            );
+            assert_eq!(
+                crate::types::mrtr::decode_header_value(&name).as_deref(),
+                Some("поиск"),
+                "the shared codec must round-trip"
+            );
+        }
+
+        // ---- emission on the actual request builder ---------------------
+
+        #[tokio::test]
+        async fn v2_tools_call_emits_all_three_headers() {
+            let transport = v2_transport(None);
+            let map = headers_for(
+                &transport,
+                body("tools/call", &json!({ "name": "search", "arguments": {} })),
+            )
+            .await;
+
+            assert_eq!(header(&map, MCP_METHOD).as_deref(), Some("tools/call"));
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some("search"));
+            assert_eq!(
+                header(&map, MCP_PROTOCOL_VERSION).as_deref(),
+                Some(PROTOCOL_VERSION_2026_07_28)
+            );
+        }
+
+        /// The locked cross-plan rule: PRESENT, EMPTY — never omitted. If the
+        /// client skipped the header, the server's `require_three_headers` would
+        /// 400 every `tools/list` it sends.
+        #[tokio::test]
+        async fn v2_nameless_method_emits_an_empty_mcp_name() {
+            let transport = v2_transport(None);
+            let map = headers_for(&transport, body("tools/list", &json!({}))).await;
+
+            assert_eq!(header(&map, MCP_METHOD).as_deref(), Some("tools/list"));
+            assert!(
+                map.contains_key(MCP_NAME),
+                "Mcp-Name must be PRESENT on every v2 request"
+            );
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some(""));
+        }
+
+        #[tokio::test]
+        async fn v2_resources_read_puts_the_uri_in_mcp_name() {
+            let transport = v2_transport(None);
+            let map = headers_for(
+                &transport,
+                body("resources/read", &json!({ "uri": "mem://greeting" })),
+            )
+            .await;
+            assert_eq!(header(&map, MCP_NAME).as_deref(), Some("mem://greeting"));
+        }
+
+        #[tokio::test]
+        async fn v2_lists_both_accept_content_types() {
+            // `Accept` is set on the POST itself (both content types, because a
+            // v2 POST may be answered with JSON or an SSE stream).
+            assert_eq!(ACCEPT_STREAMABLE, "application/json, text/event-stream");
+        }
+
+        // ---- session-id suppression (T-113-06) ---------------------------
+
+        #[tokio::test]
+        async fn v2_never_emits_a_stored_session_id() {
+            let transport = v2_transport(Some("left-over-from-v1"));
+            let map = headers_for(&transport, body("tools/list", &json!({}))).await;
+            assert!(
+                !map.contains_key(MCP_SESSION_ID),
+                "a session id must never reach the v2 wire, even when one is stored"
+            );
+        }
+
+        #[test]
+        fn v2_does_not_store_a_session_id_from_a_response() {
+            let transport = v2_transport(None);
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_SESSION_ID, "planted")
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert_eq!(
+                transport.session_id(),
+                None,
+                "a v2 response's Mcp-Session-Id must not be stored"
+            );
+        }
+
+        #[test]
+        fn v1_still_stores_a_session_id_from_a_response() {
+            let transport = v1_transport(None);
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_SESSION_ID, "kept")
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert_eq!(transport.session_id().as_deref(), Some("kept"));
+        }
+
+        /// A rogue server echoing the v2 version header must NOT be able to flip
+        /// a v1 client into v2 emission mode (which would suppress its session).
+        #[test]
+        fn a_server_echo_cannot_flip_a_v1_client_into_v2() {
+            let transport = v1_transport(Some("s1"));
+            let response = HyperResponse::builder()
+                .status(StatusCode::OK)
+                .header(MCP_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            transport.process_response_headers(&response);
+            assert!(!transport.is_v2(), "only the client selects the era");
+        }
+
+        // ---- v1 is unchanged ---------------------------------------------
+
+        #[tokio::test]
+        async fn v1_emits_no_v2_routing_headers_and_keeps_its_session() {
+            let transport = v1_transport(Some("session-123"));
+            let map = headers_for(
+                &transport,
+                body("tools/call", &json!({ "name": "search", "arguments": {} })),
+            )
+            .await;
+
+            assert!(!map.contains_key(MCP_METHOD));
+            assert!(!map.contains_key(MCP_NAME));
+            assert_eq!(header(&map, MCP_SESSION_ID).as_deref(), Some("session-123"));
+        }
+
+        // ---- non-panicking emission (T-113-20) ---------------------------
+
+        proptest::proptest! {
+            #[test]
+            fn header_emission_never_panics_for_any_method_or_name(
+                method in ".{0,64}",
+                name in ".{0,64}",
+            ) {
+                let frame = body(&method, &json!({ "name": name, "uri": name }));
+                // Derivation is total and non-panicking...
+                let derived = v2_routing_headers(&frame);
+                // ...and so is emission, for whatever it produced.
+                if let Some((m, n)) = derived {
+                    let builder = Request::builder().method(Method::POST).uri("http://127.0.0.1:1/");
+                    let _ = StreamableHttpTransport::apply_v2_outbound_headers(builder, &m, &n);
+                }
+            }
+        }
+    }
+
+    // ==================================================================
+    // Phase 113 / D-113-E — a structured JSON-RPC error on a v2 non-2xx.
+    // ==================================================================
+
+    mod v2_error_envelope {
+        use super::*;
+        use crate::types::jsonrpc::ResponsePayload;
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+
+        /// The exact shape plan 04 puts on the wire for an expired/tampered
+        /// `requestState`: `-32602` at HTTP 400.
+        const INVALID_PARAMS_BODY: &str = r#"{"jsonrpc":"2.0","id":"abc","error":{"code":-32602,"message":"requestState could not be accepted"}}"#;
+
+        fn transport_for(url: &str, v2: bool) -> StreamableHttpTransport {
+            let config =
+                StreamableHttpTransportConfigBuilder::new(Url::parse(url).unwrap()).build();
+            let mut transport = StreamableHttpTransport::new(config);
+            if v2 {
+                transport
+                    .set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
+            }
+            transport
+        }
+
+        /// A `-32602` at HTTP 400 reaches the CLIENT as a JSON-RPC error, not as
+        /// an opaque `TransportError::Request("… status: 400 …")`. Without this
+        /// the MRTR retry loop cannot dispatch on `error.code` at all.
+        #[tokio::test]
+        async fn v2_surfaces_a_jsonrpc_error_carried_on_a_400() {
+            let mut server = MockServer::new_async().await;
+            let mock = server
+                .mock("POST", "/")
+                .with_status(400)
+                .with_header("content-type", "application/json")
+                .with_body(INVALID_PARAMS_BODY)
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), true);
+            transport
+                .send_raw(br#"{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"x","arguments":{}}}"#.to_vec())
+                .await
+                .expect("a structured error must NOT be a transport failure");
+
+            let message = transport
+                .receive()
+                .await
+                .expect("the envelope is delivered");
+            let TransportMessage::Response(response) = message else {
+                panic!("expected a response, got {message:?}");
+            };
+            let ResponsePayload::Error(error) = response.payload else {
+                panic!("expected the error payload");
+            };
+            assert_eq!(error.code, -32602);
+            mock.assert_async().await;
+        }
+
+        /// A non-JSON-RPC 4xx body (a proxy's error page) still fails loudly on
+        /// the status — nothing is laundered into a "server-authored" error.
+        #[tokio::test]
+        async fn v2_falls_back_to_the_status_error_for_a_non_envelope_body() {
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(502)
+                .with_header("content-type", "text/html")
+                .with_body("<html>bad gateway</html>")
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), true);
+            let error = transport
+                .send_raw(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.to_vec())
+                .await
+                .expect_err("a proxy error page is still a transport failure");
+            assert!(
+                error.to_string().contains("502"),
+                "the status must survive: {error}"
+            );
+        }
+
+        /// v1 is UNCHANGED: a 400 is still an opaque transport error there.
+        #[tokio::test]
+        async fn v1_still_errors_on_the_status_alone() {
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(400)
+                .with_header("content-type", "application/json")
+                .with_body(INVALID_PARAMS_BODY)
+                .create_async()
+                .await;
+
+            let mut transport = transport_for(&server.url(), false);
+            let error = transport
+                .send(list_tools_message())
+                .await
+                .expect_err("v1 behavior must be byte-identical to prior releases");
+            assert!(
+                error.to_string().contains("400"),
+                "v1 must still report the status: {error}"
+            );
+        }
+    }
+
+    // ==================================================================
+    // Phase 113-20 / T-113-84 — the collected-body cap.
+    //
+    // Every one of this transport's response reads is a WHOLE-BODY read, and
+    // the SSE parser's complete-body entry point performs no bound check of its
+    // own. These tests are what make that entry point's precondition an
+    // established fact rather than a hope.
+    //
+    // The two parser-feeding sites are SEPARATE `collect()` call sites, so each
+    // gets its OWN over-cap test and its OWN negative control. A single shared
+    // test would pass with one of them uncapped.
+    // ==================================================================
+
+    mod collected_body_cap {
+        use super::*;
+        use std::time::Duration;
+
+        /// Small enough that these tests cost bytes, not megabytes.
+        const CAP: usize = 512;
+
+        /// A parseable JSON-RPC response, so the under-cap tests can prove the
+        /// body reached the parser rather than merely failing to error.
+        const RESPONSE_JSON: &str = r#"{"jsonrpc":"2.0","id":42,"result":{"tools":[]}}"#;
+
+        /// How long to wait before concluding nothing was dispatched. Only ever
+        /// used to prove ABSENCE; the positive assertions await a real message.
+        const QUIET_WINDOW: Duration = Duration::from_millis(250);
+
+        fn capped_transport(url: &str, cap: usize) -> StreamableHttpTransport {
+            let config =
+                StreamableHttpTransportConfigBuilder::new(Url::parse(url).unwrap()).build();
+            StreamableHttpTransport::new(config).with_max_collected_body_bytes(cap)
+        }
+
+        /// An SSE body of EXACTLY `len` bytes carrying one parseable frame.
+        ///
+        /// Padding rides an SSE COMMENT line (`:` … `\n`), which the parser
+        /// ignores, so `len` changes the byte count and nothing else — the same
+        /// body is expected to parse identically at any size.
+        fn sse_body_of(len: usize) -> String {
+            let frame = format!("event: message\ndata: {RESPONSE_JSON}\n\n");
+            let padding = len
+                .checked_sub(frame.len())
+                .expect("requested length must fit one frame");
+            let comment = match padding {
+                0 => String::new(),
+                1 => panic!("a comment line costs at least two bytes"),
+                n => format!(":{}\n", "p".repeat(n - 2)),
+            };
+            let body = format!("{comment}{frame}");
+            assert_eq!(body.len(), len, "the body must be exactly {len} bytes");
+            body
+        }
+
+        /// Assert the refusal names the limit and leaks no body content.
+        fn assert_over_cap_refusal(error: &Error, cap: usize) {
+            let text = error.to_string();
+            assert!(
+                text.contains(&cap.to_string()),
+                "the refusal must NAME the limit: {text}"
+            );
+            assert!(
+                !text.contains("jsonrpc") && !text.contains("pppppppp"),
+                "the refusal must not echo body content: {text}"
+            );
+        }
+
+        // --------------------------------------------------------------
+        // Site 1 of 2: the POST response (`post_body`).
+        // --------------------------------------------------------------
+
+        /// One byte over the cap on the POST-response path is refused, and
+        /// NOTHING is dispatched — asserted on the returned `Err` and on the
+        /// silence of the message channel, never on a log line.
+        #[tokio::test]
+        async fn post_response_one_byte_over_the_cap_is_refused_before_the_parser() {
+            let mut server = MockServer::new_async().await;
+            let body = sse_body_of(CAP + 1);
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                // Chunked: no `Content-Length` at all, so the refusal can only
+                // come from the authoritative streaming bound (T-113-93).
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            let error = transport
+                .send(list_tools_message())
+                .await
+                .expect_err("a body over the cap must be refused");
+            assert_over_cap_refusal(&error, CAP);
+
+            assert!(
+                tokio::time::timeout(QUIET_WINDOW, transport.receive())
+                    .await
+                    .is_err(),
+                "an over-cap body must never reach the parser, so nothing can be dispatched"
+            );
+        }
+
+        /// Exactly the cap is ADMITTED and parses normally — pinning that the
+        /// comparison is `>`, not `>=`.
+        #[tokio::test]
+        async fn post_response_at_the_cap_parses_normally() {
+            let mut server = MockServer::new_async().await;
+            let body = sse_body_of(CAP);
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            transport
+                .send(list_tools_message())
+                .await
+                .expect("a body at the cap must be accepted");
+
+            let message = tokio::time::timeout(QUIET_WINDOW, transport.receive())
+                .await
+                .expect("the parsed event must be dispatched")
+                .expect("the parsed event must be a message");
+            assert!(
+                matches!(message, TransportMessage::Response(_)),
+                "expected the parsed response, got {message:?}"
+            );
+        }
+
+        // --------------------------------------------------------------
+        // Site 2 of 2: the GET SSE stream (`start_sse`).
+        // --------------------------------------------------------------
+
+        /// The same one-byte-over refusal on the GET path. This is a SEPARATE
+        /// `collect()` call site; without its own test, uncapping it would go
+        /// unnoticed.
+        #[tokio::test]
+        async fn start_sse_one_byte_over_the_cap_is_refused_before_the_parser() {
+            let mut server = MockServer::new_async().await;
+            let body = sse_body_of(CAP + 1);
+            let _mock = server
+                .mock("GET", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            let error = transport
+                .start_sse(None)
+                .await
+                .expect_err("a body over the cap must be refused");
+            assert_over_cap_refusal(&error, CAP);
+
+            assert!(
+                tokio::time::timeout(QUIET_WINDOW, transport.receive())
+                    .await
+                    .is_err(),
+                "an over-cap body must never reach the parser, so nothing can be dispatched"
+            );
+        }
+
+        /// Exactly the cap is admitted on the GET path too.
+        #[tokio::test]
+        async fn start_sse_at_the_cap_parses_normally() {
+            let mut server = MockServer::new_async().await;
+            let body = sse_body_of(CAP);
+            let _mock = server
+                .mock("GET", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            transport
+                .start_sse(None)
+                .await
+                .expect("a body at the cap must be accepted");
+
+            let message = tokio::time::timeout(QUIET_WINDOW, transport.receive())
+                .await
+                .expect("the parsed event must be dispatched")
+                .expect("the parsed event must be a message");
+            assert!(
+                matches!(message, TransportMessage::Response(_)),
+                "expected the parsed response, got {message:?}"
+            );
+        }
+
+        // --------------------------------------------------------------
+        // The peer-declared hint, the escape hatch, and the default wiring.
+        // --------------------------------------------------------------
+
+        /// A `Content-Length` over the cap is refused BEFORE the body is read.
+        /// The header is an optimisation; the refusal names the declared size.
+        #[tokio::test]
+        async fn a_declared_content_length_over_the_cap_is_refused_early() {
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                // `with_body` sets `Content-Length`.
+                .with_body(sse_body_of(CAP + 1))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            let error = transport
+                .send(list_tools_message())
+                .await
+                .expect_err("an over-cap Content-Length must be refused");
+            assert_over_cap_refusal(&error, CAP);
+            assert!(
+                error.to_string().contains(&(CAP + 1).to_string()),
+                "the early refusal must name the DECLARED size: {error}"
+            );
+        }
+
+        /// The seam is wired, not decorative: the body refused above is accepted
+        /// once the cap is raised through the additive inherent builder.
+        #[tokio::test]
+        async fn raising_the_cap_admits_a_body_the_lower_one_refuses() {
+            let mut server = MockServer::new_async().await;
+            let body = sse_body_of(CAP + 1);
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", TEXT_EVENT_STREAM)
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .expect_at_least(1)
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP * 4);
+            transport
+                .send(list_tools_message())
+                .await
+                .expect("the raised cap must admit the body the lower one refused");
+
+            let message = tokio::time::timeout(QUIET_WINDOW, transport.receive())
+                .await
+                .expect("the parsed event must be dispatched")
+                .expect("the parsed event must be a message");
+            assert!(
+                matches!(message, TransportMessage::Response(_)),
+                "expected the parsed response, got {message:?}"
+            );
+        }
+
+        /// Every construction path defaults the cap from the NAMED constant, and
+        /// the builder overrides it. Scaled-down siblings above prove the
+        /// behaviour; this proves the default they scale down FROM, without
+        /// allocating 16 MiB in a unit test.
+        #[test]
+        fn every_constructor_defaults_the_cap_to_the_named_constant() {
+            let url = Url::parse("http://127.0.0.1:1/").unwrap();
+            let config = StreamableHttpTransportConfigBuilder::new(url).build();
+
+            assert_eq!(
+                StreamableHttpTransport::new(config.clone()).max_collected_body_bytes,
+                DEFAULT_MAX_COLLECTED_BODY_BYTES,
+                "`new` must default from the named constant"
+            );
+            assert_eq!(
+                StreamableHttpTransport::new_with_http2(config.clone()).max_collected_body_bytes,
+                DEFAULT_MAX_COLLECTED_BODY_BYTES,
+                "`new_with_http2` must default from the named constant"
+            );
+            assert_eq!(
+                StreamableHttpTransport::new(config)
+                    .with_max_collected_body_bytes(CAP)
+                    .max_collected_body_bytes,
+                CAP,
+                "the builder must override the default"
+            );
+        }
+
+        /// The THIRD whole-body read — the v2 structured-error envelope — is
+        /// capped too. An over-cap envelope is not an envelope: the caller falls
+        /// back to the status-only transport error rather than allocating it.
+        #[tokio::test]
+        async fn an_over_cap_v2_error_envelope_falls_back_to_the_status_error() {
+            let padding = "z".repeat(CAP);
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","id":"abc","error":{{"code":-32602,"message":"{padding}"}}}}"#
+            );
+            assert!(body.len() > CAP);
+
+            let mut server = MockServer::new_async().await;
+            let _mock = server
+                .mock("POST", "/")
+                .with_status(400)
+                .with_header("content-type", APPLICATION_JSON)
+                .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+                .create_async()
+                .await;
+
+            let mut transport = capped_transport(&server.url(), CAP);
+            transport.set_negotiated_protocol_version(Some(
+                crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string(),
+            ));
+            let error = transport
+                .send_raw(
+                    br#"{"jsonrpc":"2.0","id":"abc","method":"tools/list","params":{}}"#.to_vec(),
+                )
+                .await
+                .expect_err("an over-cap envelope cannot be surfaced structurally");
+            assert!(
+                error.to_string().contains("400"),
+                "the status must survive: {error}"
+            );
+        }
     }
 }

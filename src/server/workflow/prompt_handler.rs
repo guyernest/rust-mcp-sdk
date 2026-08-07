@@ -1952,6 +1952,8 @@ mod tests {
                 Ok(crate::types::ListResourcesResult {
                     resources: vec![],
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                 })
             }
         }
@@ -2086,6 +2088,8 @@ mod tests {
                 Ok(crate::types::ListResourcesResult {
                     resources: vec![],
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                 })
             }
         }
@@ -2222,6 +2226,8 @@ mod tests {
                 Ok(crate::types::ListResourcesResult {
                     resources: vec![],
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                 })
             }
         }

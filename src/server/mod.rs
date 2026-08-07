@@ -27,6 +27,12 @@ use std::sync::Arc;
 use crate::runtime::RwLock;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
+// Scrubs the by-value `[u8; 32]` / `Vec<[u8; 32]>` setter parameters on
+// `ServerBuilder` after their contents move into the zeroizing fields (D-113-P,
+// copy 2 of 3). `zeroize` is only compiled in under `streamable-http`, so the
+// import carries the same gate as the fields it serves.
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+use zeroize::Zeroize;
 
 // Core modules (currently native-only due to dependencies)
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,6 +40,14 @@ pub mod adapters;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod builder;
 #[cfg(not(target_arch = "wasm32"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod core;
 pub mod limits;
 
@@ -55,9 +69,23 @@ pub mod http_middleware;
 /// Middleware executor abstraction for consistent tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod middleware_executor;
+// Warn-only emit-time validation of `structuredContent` against a declared
+// `outputSchema` (no-op unless the `validation` feature is enabled).
+//
+// Deliberately NOT gated by target: the module compiles everywhere so dispatcher
+// call sites stay plain one-liners. The second `#[cfg]` widens the module's
+// visibility for the `fuzzing` feature ONLY, so
+// `fuzz/fuzz_targets/fuzz_schema_draft_pin.rs` can reach
+// `output_validation::fuzz_support` without any item becoming part of the
+// shipped public API (`fuzzing` is in neither `default` nor `full`, so
+// `cargo public-api` never sees it). This is verbatim the shape
+// `server::request_state` and `server::task_dispatch` already use.
+#[cfg(not(feature = "fuzzing"))]
+pub(crate) mod output_validation;
 /// Warn-only emit-time validation of `structuredContent` against a declared
 /// `outputSchema` (no-op unless the `validation` feature is enabled).
-pub(crate) mod output_validation;
+#[cfg(feature = "fuzzing")]
+pub mod output_validation;
 /// Concrete `PeerHandle` implementation delegating to the
 /// `ServerRequestDispatcher`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,6 +95,21 @@ pub mod preset;
 /// Progress reporting support for long-running operations.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod progress;
+// Server-owned `requestState` AEAD continuation tokens (Phase 113, HTTP-02).
+//
+// D-14 locks MRTR AEAD to native + `streamable-http`: `ring` is only enabled by
+// that feature and the wasm server (`WasmServerCore`) gets no MRTR this phase.
+// The second `#[cfg]` widens the module's visibility for the `fuzzing` feature
+// ONLY, so `fuzz/fuzz_targets/fuzz_request_state.rs` can reach
+// `request_state::fuzz_support` without any item becoming part of the shipped
+// public API (`fuzzing` is in neither `default` nor `full`).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[cfg(not(feature = "fuzzing"))]
+pub(crate) mod request_state;
+/// Server-owned `requestState` AEAD continuation tokens (Phase 113, HTTP-02).
+#[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
+#[cfg(feature = "fuzzing")]
+pub mod request_state;
 /// Outbound server-to-client request dispatcher with response correlation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod server_request_dispatcher;
@@ -79,9 +122,30 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
+//
+// The second `#[cfg]` widens the module's visibility for the `fuzzing` feature
+// ONLY, so `fuzz/fuzz_targets/fuzz_tasks_update.rs` can reach
+// `task_dispatch::fuzz_support` without any item becoming part of the shipped
+// public API (`fuzzing` is in neither `default` nor `full`, so `cargo public-api`
+// never sees it). This is verbatim the shape `server::request_state` already uses
+// for `fuzz_request_state`, so the crate has ONE convention for a fuzz seam
+// rather than two.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(feature = "fuzzing"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
+pub(crate) mod task_dispatch;
 /// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod task_dispatch;
+#[cfg(feature = "fuzzing")]
+pub mod task_dispatch;
 /// SDK-level task store trait and in-memory implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod task_store;
@@ -157,7 +221,11 @@ pub mod path_validation;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_typed_tool;
 
-// For WASM, provide a simple stub for RequestHandlerExtra
+/// wasm32 stand-in for the native cancellation module.
+///
+/// wasm32 has no cancellation support, so this exposes only a zero-field
+/// [`cancellation::RequestHandlerExtra`] so handler signatures stay identical
+/// across targets.
 #[cfg(target_arch = "wasm32")]
 pub mod cancellation {
     /// Stub for WASM - no cancellation support
@@ -180,6 +248,14 @@ pub mod roots;
 #[cfg(all(not(target_arch = "wasm32"), feature = "streamable-http"))]
 pub mod streamable_http_server;
 #[cfg(not(target_arch = "wasm32"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod subscriptions;
 /// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
 #[cfg(feature = "streamable-http")]
@@ -408,8 +484,17 @@ pub struct Server {
     cancellation_manager: cancellation::CancellationManager,
     /// Roots manager for directory/URI registration
     roots_manager: Arc<RwLock<roots::RootsManager>>,
-    /// Subscription manager for resource subscriptions
+    /// Subscription manager for resource subscriptions (v1 `resources/subscribe`)
     subscription_manager: Arc<RwLock<subscriptions::SubscriptionManager>>,
+    /// The v2 `subscriptions/listen` stream registry (Phase 113, HTTP-04).
+    ///
+    /// Shared by the streamable-HTTP transport (which REGISTERS a stream) and
+    /// [`send_notification`](Self::send_notification) (which FANS OUT to it), so
+    /// a change notification emitted through the server's real notification path
+    /// reaches every live listen stream whose agreed filter covers it. Empty —
+    /// and therefore a no-op — on any server that never served a v2 listen
+    /// request, which is every v1 server.
+    listen_registry: Arc<subscriptions::ListenRegistry>,
     /// Elicitation manager for user input requests
     elicitation_manager: Option<Arc<elicitation::ElicitationManager>>,
     /// Outbound server-to-client request dispatcher with response correlation.
@@ -446,6 +531,19 @@ pub struct Server {
     /// IDENTICAL set so both dispatchers consult the same suppression rule.
     #[cfg(not(target_arch = "wasm32"))]
     suppress_double_wrap: HashSet<String>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02). Mirrors
+    /// `ServerCore`'s field so this high-level `Server` dispatch site resolves the
+    /// per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// through the SAME shared resolver. Default is v1-only (excludes
+    /// `2026-07-28`) — an un-opted-in server is byte-for-byte unchanged.
+    supported_protocol_versions: Vec<ProtocolVersion>,
+    /// The server-owned `requestState` codec (Phase 113, HTTP-02), resolved
+    /// EXACTLY ONCE at [`ServerBuilder::build`] time. `None` for a server that
+    /// did not opt into v2 — such a server reads no MRTR env var and pays
+    /// nothing (D-04). Deliberately an instance field, never a process-global:
+    /// see [`request_state`] for why.
+    #[cfg(feature = "streamable-http")]
+    request_state_codec: Option<Arc<request_state::RequestStateCodec>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -463,8 +561,44 @@ impl std::fmt::Debug for Server {
     }
 }
 
+// Every accessor in this block is read by the transport dispatch (the v2 envelope
+// and the `subscriptions/listen` + `tasks/update` paths). A transport-less build
+// compiles the block with no readers, which is a property of the feature set, not
+// of the code.
+#[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
 #[cfg(not(target_arch = "wasm32"))]
 impl Server {
+    /// The server-owned `requestState` codec, or `None` when this server did not
+    /// opt into the v2 (`2026-07-28`) era.
+    ///
+    /// Resolved once at build time; the production consumers
+    /// (`core::mrtr_ingest`'s `verify` and `core::mrtr_egress`'s `mint`) borrow
+    /// it from server state rather than reaching for a process-global.
+    #[cfg(feature = "streamable-http")]
+    pub(crate) fn request_state_codec(&self) -> Option<&request_state::RequestStateCodec> {
+        self.request_state_codec.as_deref()
+    }
+
+    /// The server's already-computed capabilities.
+    ///
+    /// A READ-ONLY borrow — the SAME value
+    /// [`handle_discover`](Self::handle_discover) projects onto the wire. The
+    /// `subscriptions/listen` gate reads it through
+    /// [`advertises_subscriptions`](crate::types::subscriptions::advertises_subscriptions)
+    /// so the advertisement and the implementation cannot drift (HTTP-04).
+    pub(crate) fn capabilities(&self) -> &ServerCapabilities {
+        &self.capabilities
+    }
+
+    /// The server's own [`Implementation`] identity.
+    ///
+    /// Borrowed by the v2 response envelope so a `subscriptions/listen` terminal
+    /// result carries the same `io.modelcontextprotocol/serverInfo` every other
+    /// v2 result carries.
+    pub(crate) fn info(&self) -> &Implementation {
+        &self.info
+    }
+
     /// Check if a tool exists
     pub fn has_tool(&self, name: &str) -> bool {
         self.tools.contains_key(name)
@@ -755,9 +889,51 @@ impl Server {
     /// # }
     /// ```
     pub async fn send_notification(&self, notification: ServerNotification) {
+        // HTTP-04: fan out to every live v2 `subscriptions/listen` stream FIRST,
+        // then take the existing v1 transport path unchanged. The registry is
+        // empty on any server that never served a listen request, so this is a
+        // map lookup on a v1 server and no wire byte changes there.
+        self.listen_registry.fan_out(&notification);
         if let Some(tx) = &self.notification_tx {
             let _ = tx.send(Notification::Server(notification)).await;
         }
+    }
+
+    /// Gracefully close every open `subscriptions/listen` stream (HTTP-04).
+    ///
+    /// Call this from a shutdown handler: each stream receives its
+    /// [`SubscriptionsListenResult`](crate::types::subscriptions::SubscriptionsListenResult)
+    /// as the JSON-RPC response and is then ended. This is the ONLY one of the
+    /// three closure triggers that can send a terminal result — a client
+    /// disconnect cannot (the peer is gone) and the buffer-overflow policy cannot
+    /// (the buffer is full); both simply end the stream.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = pmcp::Server::builder()
+    ///     .name("example-server")
+    ///     .version("1.0.0")
+    ///     .build()?;
+    ///
+    /// // ... on shutdown:
+    /// server.close_subscription_streams();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn close_subscription_streams(&self) {
+        self.listen_registry.close_all();
+    }
+
+    /// The v2 `subscriptions/listen` registry this server fans notifications out
+    /// to.
+    ///
+    /// The streamable-HTTP transport clones this `Arc` to register a stream; the
+    /// `Arc` is cloned under the server lock and the lock is released
+    /// immediately, so a held-open stream never holds the server mutex.
+    pub(crate) fn listen_registry(&self) -> &Arc<subscriptions::ListenRegistry> {
+        &self.listen_registry
     }
 
     /// Get client capabilities.
@@ -1241,13 +1417,263 @@ impl Server {
         Ok(())
     }
 
+    /// Resolve the per-request [`ProtocolContext`](crate::types::protocol::ProtocolContext)
+    /// ONCE at this dispatch site's ingress via the SAME shared resolver
+    /// `ServerCore` uses — the twin wiring (Pitfall 3). `Ok(None)` for a
+    /// non-opted-in server (zero era-detection, D-04).
+    ///
+    /// `pub(crate)` so the streamable-HTTP layer (Plan 06) can resolve ONCE for
+    /// its header gate and thread the SAME value into
+    /// [`handle_request_with_context`](Self::handle_request_with_context) — the
+    /// HTTP layer CONSUMES the resolved era, it never runs a second resolver
+    /// (D-11 / Pitfall 2).
+    /// The server's configured protocol-version accept-list.
+    ///
+    /// `pub(crate)` so the streamable-HTTP layer can put it in an
+    /// `UNSUPPORTED_PROTOCOL_VERSION` (-32022) rejection's
+    /// `error.data.supported` — the spec requires the rejection to tell the
+    /// client which versions it COULD have asked for, so it can pick a mutually
+    /// supported one instead of probing.
+    pub(crate) fn supported_protocol_versions(&self) -> &[ProtocolVersion] {
+        &self.supported_protocol_versions
+    }
+
+    pub(crate) fn resolve_ingress_protocol_context(
+        &self,
+        request: &Request,
+    ) -> std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    > {
+        crate::server::core::resolve_ingress_protocol_context(
+            &self.supported_protocol_versions,
+            request,
+        )
+    }
+
+    /// Resolve the per-request `ProtocolContext` from a request's RAW
+    /// `params._meta` value.
+    ///
+    /// # This is the era resolver the streamable-HTTP transport uses, for EVERY method
+    ///
+    /// Introduced in Phase 112 for the `server/discover` ingress (which has no
+    /// parsed [`Request`] to read a typed field from), and generalized in Phase
+    /// 113 plan 04 to every method (finding D-113-B).
+    ///
+    /// The typed
+    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context)
+    /// can only see the three request structs that carry a `_meta` FIELD, so a
+    /// stateless v2 `tools/list` — which has no handshake and therefore no other
+    /// era channel — could not be expressed at all. Widening those `pub` structs
+    /// would have been a MAJOR semver break (`cargo semver-checks`
+    /// `constructible_struct_adds_field`), and the v2.5 milestone is scoped
+    /// additive; reading the raw body needs no public API change and covers every
+    /// method, so the HTTP transport routes ALL era detection through here.
+    ///
+    /// Mirrors the same non-opted-in short-circuit (D-04): a server that has NOT
+    /// opted into v2 returns `Ok(None)` WITHOUT inspecting `_meta` at all, so the
+    /// v1 request path runs zero era detection.
+    pub(crate) fn resolve_raw_meta_protocol_context(
+        &self,
+        raw_meta: Option<&serde_json::Value>,
+    ) -> std::result::Result<
+        Option<crate::types::protocol::ProtocolContext>,
+        crate::types::protocol::context::ProtocolNegotiationError,
+    > {
+        if !crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions) {
+            return Ok(None);
+        }
+        crate::types::protocol::context::resolve_protocol_context(
+            &self.supported_protocol_versions,
+            raw_meta,
+        )
+    }
+
+    /// Handle the v2 `server/discover` request (Phase 112, VERS-04, D-09/D-10).
+    ///
+    /// The production discover caller: the streamable-HTTP transport classifies a
+    /// `server/discover` POST as `HttpIngress::Discover` and, at the per-path
+    /// response-assembly step, calls this THIN delegate. It projects the server's
+    /// already-computed capabilities (incl. the `extensions` map) read-only via
+    /// the ONE shared [`build_discover_response`](crate::server::core::build_discover_response)
+    /// free fn — one projection/one envelope path, no duplicate capability type,
+    /// no `is_initialized` mutation. The era gate inside the free fn yields the v2
+    /// projection for an `Era::V2` context and `-32601` for v1 / non-opted-in.
+    pub(crate) fn handle_discover(
+        &self,
+        id: RequestId,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        crate::server::core::build_discover_response(
+            id,
+            &self.capabilities,
+            &self.info,
+            protocol_context,
+        )
+    }
+
+    /// Handle the v2 `tasks/update` request (Phase 114 plan 13, TASK-02).
+    ///
+    /// The production `tasks/update` caller, and a THIN delegate exactly like
+    /// [`handle_discover`](Self::handle_discover) beside it: the streamable-HTTP
+    /// transport classifies a `tasks/update` POST as `HttpIngress::TasksUpdate`
+    /// and, at the per-path response-assembly step, calls this. It constructs the
+    /// SHARED [`TaskDispatch`](crate::server::task_dispatch::TaskDispatch) over
+    /// this server's own backends — the same borrow-struct
+    /// [`handle_client_request`](Self::handle_client_request) builds for the four
+    /// `ClientRequest` tasks methods — and hands off.
+    ///
+    /// **It defines no gate of its own.** The era gate, the backend gate, the
+    /// `-32021` client-declaration gate, the `-32003` identity table, the `-32602`
+    /// params check, the four `inputResponses` bounds and the kind-directed decode
+    /// all live in
+    /// [`TaskDispatch::route_tasks_update`](crate::server::task_dispatch::TaskDispatch::route_tasks_update),
+    /// in that order. This function's entire job is to pass the ALREADY-RESOLVED
+    /// `auth_context` and `ProtocolContext` through unchanged, which is also what
+    /// keeps it from ever re-reading `params._meta` for a second answer.
+    ///
+    /// `params` are the RAW value the classifier carried. Nothing between the wire
+    /// and the router deserializes them, so a malformed body becomes a structured
+    /// `-32602` AFTER the gates rather than a parse error before them — and the
+    /// `inputResponses` map reaches the route UNDECODED, which is what lets the
+    /// route bound it and then type it against the kinds the SERVER recorded
+    /// rather than against whichever overlapping shape happened to fit (D-113-O).
+    ///
+    /// `async` since plan 114-14: the delivery reads the task record and writes
+    /// the responses.
+    ///
+    /// # The v2 result envelope is injected HERE, for the same reason `server/discover`'s is
+    ///
+    /// `tasks/update` rides the crate-private internal-request route, so it does
+    /// NOT pass through `process_client_request`, which is where every
+    /// `ClientRequest` result gets its `resultType` + `_meta.serverInfo`. Left
+    /// alone, the `UpdateTaskResult` acknowledgement would reach the wire as a
+    /// bare `{}` — and the extension says its `resultType` field MUST be
+    /// `"complete"`. `build_discover_response` solved the identical problem the
+    /// identical way (Phase 112), so the internal route has ONE shape rather than
+    /// two.
+    ///
+    /// [`ReservedFieldOwner::None`](crate::server::core::ReservedFieldOwner) is
+    /// named explicitly and is correct: the acknowledgement is EMPTY, so this
+    /// route mints no reserved result field at all — no `inputRequests` (that is
+    /// `tasks/get`'s, plan 114-11) and no `requestState` (the tasks surface has no
+    /// continuation token, D-17). A future change that made this ack non-empty
+    /// would have to state its own owner here rather than inherit one.
+    ///
+    /// The call is a no-op on v1 and for every ERROR payload, so all seven of the
+    /// route's refusals are byte-unchanged by it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn handle_tasks_update(
+        &self,
+        id: RequestId,
+        params: &serde_json::Value,
+        auth_context: Option<&auth::AuthContext>,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        let mut response = self
+            .task_dispatch()
+            .route_tasks_update(id, params, auth_context, protocol_context)
+            .await;
+        crate::server::core::inject_v2_result_envelope(
+            &mut response,
+            protocol_context,
+            &self.info,
+            crate::server::core::ResponseDisposition::Complete,
+            crate::server::core::ReservedFieldOwner::None,
+            // The `tasks/update` acknowledgement is an `UpdateTaskResult`, which
+            // does NOT extend `CacheableResult` — the tasks surface carries no
+            // caching hint at all in the 2026-07-28 schema (D-07), and the
+            // `ttlMs` that DOES live on `TaskV2` is a task LIFETIME, a different
+            // concept in a different module (D-10). So this route gains neither
+            // key, on either era.
+            crate::types::caching::Cacheable::No,
+        );
+        response
+    }
+
     async fn handle_request(
         &self,
         id: RequestId,
         request: Request,
         auth_context: Option<auth::AuthContext>,
     ) -> JSONRPCResponse {
-        match request {
+        // Resolve the per-request ProtocolContext ONCE at ingress (opted-in
+        // only — D-04), through the single shared resolver, and thread it into
+        // dispatch. Never re-derived downstream (D-11).
+        let protocol_context = match self.resolve_ingress_protocol_context(&request) {
+            Ok(ctx) => ctx,
+            Err(negotiation_error) => {
+                let (code, message) =
+                    crate::server::core::negotiation_error_to_rejection(&negotiation_error);
+                return JSONRPCResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    payload: crate::types::jsonrpc::ResponsePayload::Error(
+                        crate::types::jsonrpc::JSONRPCError {
+                            code,
+                            message,
+                            data: None,
+                        },
+                    ),
+                };
+            },
+        };
+        self.handle_request_with_context(id, request, auth_context, protocol_context)
+            .await
+    }
+
+    /// Dispatch a request with an ALREADY-RESOLVED `ProtocolContext` threaded in.
+    ///
+    /// This is the pass-through seam Plan 06 relies on: the streamable-HTTP layer
+    /// resolves the `ProtocolContext` ONCE (via
+    /// [`resolve_ingress_protocol_context`](Self::resolve_ingress_protocol_context))
+    /// for its header gate, then passes that SAME value here so dispatch does NOT
+    /// re-resolve `_meta` — one authoritative era per request (D-11 / Pitfall 2).
+    /// [`handle_request`](Self::handle_request) is the thin wrapper that resolves
+    /// then calls this.
+    pub(crate) async fn handle_request_with_context(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
+    ) -> JSONRPCResponse {
+        // MRTR ingress (Plan 113-06, HTTP-03) — the SAME shared helper
+        // `ServerCore` calls (twin-site parity; this site never defines its
+        // own). Verifies a presented `requestState` against the live principal
+        // and originating request, then folds the D-15 verdict into the context
+        // threaded into dispatch. Inert on v1 / non-opted-in / non-eligible
+        // requests, so the legacy path is byte-for-byte unchanged.
+        #[cfg(feature = "streamable-http")]
+        let (mrtr, protocol_context) = match crate::server::core::MrtrRound::begin(
+            &request,
+            protocol_context,
+            auth_context.as_ref().map(|ctx| ctx.subject.as_str()),
+            self.auth_provider.is_some(),
+            self.request_state_codec(),
+        ) {
+            Ok(resolved) => resolved,
+            // The single-source envelope builder, rather than a hand-written
+            // `JSONRPCResponse` literal re-spelling `"2.0"` and `data: None`.
+            Err((code, message)) => {
+                return crate::server::task_dispatch::error_response(id, code, message)
+            },
+        };
+
+        // Capture the cacheability claim BEFORE the `match` below: arm 1 binds
+        // `ref boxed_req` but arm 2 MOVES `boxed_req`, so `request` is gone by
+        // the time the injection at the bottom of this function runs. Twin of
+        // the `ServerCore` capture — and it CALLS the shared classifier in
+        // `core.rs` rather than defining a second table, which is the twin-site
+        // parity rule this file follows everywhere else.
+        let cacheable = crate::server::core::request_is_cacheable(&request);
+
+        // The SECOND envelope claimant (Phase 114 plan 11), twin of the
+        // `ServerCore` site: the `tasks/*` routes and the `tools/call` create
+        // path state their own `resultType` and reserved-field ownership from the
+        // site that writes them. `NONE` for every other dispatch.
+        let mut dispatch_claim = crate::server::core::DispatchEnvelopeClaim::NONE;
+        let mut response = match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
             {
@@ -1263,7 +1689,14 @@ impl Server {
 
                 let result = InitializeResult {
                     protocol_version: ProtocolVersion(negotiated_version.to_string()),
-                    capabilities: self.capabilities.clone(),
+                    // Twin-site parity (114-05, D-02): the SAME shared v1
+                    // projection `ServerCore::handle_initialize` uses — this
+                    // site never defines its own. Without it the build-time
+                    // tasks-extension entry, which is the v2 negotiation home,
+                    // leaks onto the v1 `initialize` wire of every tasks server.
+                    capabilities: crate::server::core::project_capabilities_for_v1(
+                        &self.capabilities,
+                    ),
                     server_info: self.info.clone(),
                     instructions: None,
                 };
@@ -1275,22 +1708,74 @@ impl Server {
                     ),
                 }
             },
+            // `Box::pin`: the MRTR ingress/egress locals (Plan 113-06) push this
+            // dispatch future past clippy's `large_futures` threshold. Boxing the
+            // inner future keeps every CALLER of this method small without
+            // changing behavior — the same treatment the two POST entrypoints and
+            // the discover assembly already get.
             Request::Client(boxed_req) => {
-                self.handle_client_request(id, *boxed_req, auth_context)
-                    .await
+                Box::pin(self.handle_client_request(
+                    id,
+                    *boxed_req,
+                    auth_context,
+                    protocol_context.clone(),
+                    &mut dispatch_claim,
+                ))
+                .await
             },
             Request::Server(_) => JSONRPCResponse {
                 jsonrpc: "2.0".to_string(),
                 id,
                 payload: crate::types::jsonrpc::ResponsePayload::Error(
                     crate::types::jsonrpc::JSONRPCError {
-                        code: -32601,
+                        code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
                         message: "Server requests not supported by server".to_string(),
                         data: None,
                     },
                 ),
             },
-        }
+        };
+
+        // Twin-site MRTR egress (Plan 113-06): the SAME shared helper `ServerCore`
+        // calls. Converts a handler's "I need more input" signal into an
+        // `input_required` result carrying a freshly minted `requestState`, and
+        // STRIPS the pmcp-internal signal key on every other path.
+        #[cfg(feature = "streamable-http")]
+        let (disposition, reserved_field_owner) = mrtr.finish(
+            &mut response,
+            protocol_context.as_ref(),
+            self.request_state_codec(),
+        );
+        #[cfg(not(feature = "streamable-http"))]
+        let (disposition, reserved_field_owner) = {
+            // No `mrtr_egress` on this build — strip the reserved signal key
+            // here so it cannot reach the wire (see `core::scrub_mrtr_signal`).
+            crate::server::core::scrub_mrtr_signal(&mut response);
+            (
+                crate::server::core::ResponseDisposition::Complete,
+                crate::server::core::ReservedFieldOwner::None,
+            )
+        };
+
+        // Twin-site v2 envelope injection (VERS-07 / D-07 / D-08) plus the
+        // caching-hint projection (SCHM-03): the ONE shared helper in `core.rs`
+        // — the envelope half is v2-only, object-results-only, collision-safe,
+        // so v1 / non-opted-in responses stay byte-identical; the caching half
+        // runs on both eras, ensuring on v2 and STRIPPING on v1 (D-11). The
+        // reserved-field owner comes from the egress that minted the fields,
+        // never from the disposition (Phase 114 plan 10) — folded with the
+        // dispatch's own claim through the SAME named rule `ServerCore` uses
+        // (Phase 114 plan 11).
+        let claim = dispatch_claim.or_egress(disposition, reserved_field_owner);
+        crate::server::core::inject_v2_result_envelope(
+            &mut response,
+            protocol_context.as_ref(),
+            &self.info,
+            claim.disposition,
+            claim.owner,
+            cacheable,
+        );
+        response
     }
 
     async fn handle_client_request(
@@ -1298,6 +1783,8 @@ impl Server {
         id: RequestId,
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> JSONRPCResponse {
         // ADAPTER (a) — tasks/* dispatch at the post-auth assembly layer.
         //
@@ -1322,24 +1809,58 @@ impl Server {
                 | ClientRequest::TasksList(_)
                 | ClientRequest::TasksCancel(_)
         ) {
-            return self
+            let (response, claim) = self
                 .task_dispatch()
-                .route_tasks_endpoint(id, &request, auth_context.as_ref())
+                .route_tasks_endpoint(
+                    id,
+                    &request,
+                    auth_context.as_ref(),
+                    // The context resolved ONCE at transport ingress, CONSUMED
+                    // here. Its `era` is read by the `tasks/result` pending
+                    // refusal, so that a v2 request cannot elicit the
+                    // spec-prohibited `-32002` (Finding 11;
+                    // `task_dispatch::is_v1_task_era`), and by the two v2
+                    // retirement gates for `tasks/list` / `tasks/result`
+                    // (TASK-03; `task_dispatch::tasks_list_serves_on_era`); its
+                    // `client_capabilities` are read by the v2
+                    // extension-declaration gate (TASK-05). Passing the whole
+                    // context is what keeps this dispatcher from ever re-reading
+                    // `params._meta` for a second answer. Every gate lives in
+                    // `task_dispatch`, never here.
+                    protocol_context.as_ref(),
+                )
                 .await;
+            // The claim travels WITH the response: a v2 `tasks/get` on an
+            // `input_required` task owns the top-level `inputRequests` the
+            // reserved-field registry would otherwise strip (114-10 row 23).
+            *dispatch_claim = claim;
+            return response;
         }
 
         let result = self
-            .process_client_request(id.clone(), request, auth_context)
+            .process_client_request(
+                id.clone(),
+                request,
+                auth_context,
+                protocol_context,
+                dispatch_claim,
+            )
             .await;
         Self::create_response(id, result)
     }
 
     /// Process a client request and return the result.
+    ///
+    /// `dispatch_claim` is the out-param the `tools/call` create path writes its
+    /// v2 envelope claim into (Phase 114 plan 11); every other arm leaves it as
+    /// the caller set it.
     async fn process_client_request(
         &self,
         request_id: RequestId,
         request: ClientRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> Result<serde_json::Value> {
         match request {
             ClientRequest::Initialize(_) => {
@@ -1348,18 +1869,26 @@ impl Server {
             },
             ClientRequest::ListTools(req) => self.handle_list_tools(req),
             ClientRequest::CallTool(req) => {
-                self.handle_call_tool(request_id, req, auth_context).await
+                self.handle_call_tool(
+                    request_id,
+                    req,
+                    auth_context,
+                    protocol_context,
+                    dispatch_claim,
+                )
+                .await
             },
             ClientRequest::ListPrompts(req) => self.handle_list_prompts(req),
             ClientRequest::GetPrompt(req) => {
-                self.handle_get_prompt(request_id, req, auth_context).await
+                self.handle_get_prompt(request_id, req, auth_context, protocol_context)
+                    .await
             },
             ClientRequest::ListResources(req) => {
                 self.handle_list_resources(request_id, req, auth_context)
                     .await
             },
             ClientRequest::ReadResource(req) => {
-                self.handle_read_resource(request_id, req, auth_context)
+                self.handle_read_resource(request_id, req, auth_context, protocol_context)
                     .await
             },
             ClientRequest::ListResourceTemplates(req) => {
@@ -1397,6 +1926,11 @@ impl Server {
         crate::server::task_dispatch::TaskDispatch {
             task_store: &self.task_store,
             task_router: &self.task_router,
+            // The EXISTING public accessor, not a new field and not a widened
+            // one — the same read `listen_server_view` makes for
+            // `subscriptions/listen` (D-113-N), now feeding the SAME identity
+            // table for `tasks/*` (TASK-05).
+            has_auth_provider: self.get_auth_provider().is_some(),
         }
     }
 
@@ -1413,7 +1947,7 @@ impl Server {
                 id,
                 payload: crate::types::jsonrpc::ResponsePayload::Error(
                     crate::types::jsonrpc::JSONRPCError {
-                        code: -32603,
+                        code: crate::types::protocol::error_codes::INTERNAL_ERROR,
                         message: e.to_string(),
                         data: None,
                     },
@@ -1428,6 +1962,8 @@ impl Server {
         Ok(serde_json::to_value(ListToolsResult {
             tools,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -1436,6 +1972,8 @@ impl Server {
         request_id: RequestId,
         req: CallToolRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
+        dispatch_claim: &mut crate::server::core::DispatchEnvelopeClaim,
     ) -> Result<Value> {
         let handler = self
             .tools
@@ -1444,13 +1982,20 @@ impl Server {
 
         // Capture the create-path inputs BEFORE `req` is partially moved
         // (arguments are consumed by the middleware/handler below). The
-        // create-path gate (Phase 102) reads:
-        //   - whether the client requested task augmentation (`req.task`), and
+        // create-path gate reads:
+        //   - the ERA's create trigger — `req.task` on v1, the client's
+        //     per-request tasks-extension declaration on v2 (plan 114-12), and
         //   - the tool's declared `TaskSupport` (from the cached `tool_infos`).
         // The SHARED `maybe_build_task_created` enforces the FULL gate
         // internally — we pass these RAW facts, never a pre-filtered precondition.
+        // `CreateTrigger::resolve` is the ONE place the era picks a trigger, so
+        // this dispatcher cannot implement a trigger `ServerCore` misses.
         #[cfg(not(target_arch = "wasm32"))]
-        let task_requested = req.task.is_some();
+        let create_trigger = crate::server::task_dispatch::CreateTrigger::resolve(
+            protocol_context.as_ref().map(|ctx| ctx.era),
+            req.task.is_some(),
+            protocol_context.as_ref(),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         let tool_task_support = self
             .tool_infos
@@ -1516,14 +2061,25 @@ impl Server {
         #[cfg(not(target_arch = "wasm32"))]
         let create_path_auth = validated_auth_context.clone();
 
+        // Capture the ALREADY-RESOLVED era before `protocol_context` is moved into
+        // `extra` below, so the create-path owner binding reads the SAME ingress
+        // value the handler does and never re-parses `params._meta` (Phase 112).
+        // The twin of the `ServerCore` capture on its own `CallTool` arm.
+        #[cfg(not(target_arch = "wasm32"))]
+        let create_path_era = protocol_context.as_ref().map(|ctx| ctx.era);
+
+        // Same capture-before-move reason: the emit-time outputSchema validator
+        // is era-branched (Phase 115 D-01) and `protocol_context` is moved into
+        // `extra` below. UN-cfg'd — unlike `create_path_era` — because the
+        // validation call site compiles on wasm32 too. The twin of the
+        // `ServerCore` capture on its own `CallTool` arm.
+        let validation_era = protocol_context.as_ref().map(|ctx| ctx.era);
+
         // Propagate the request's `_meta` object (raw JSON incl. namespaced
         // `other` keys) so handlers can read it via `extra.request_meta` in the
         // high-level `Server` path too (ServerCore already wires this at core.rs).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let request_meta_value = req
-            ._meta
-            .as_ref()
-            .and_then(|m| serde_json::to_value(m).ok());
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
 
         let mut extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
@@ -1537,7 +2093,11 @@ impl Server {
             // path too (ServerCore already wires this at core.rs). Additive: the
             // dispatcher's own task-creation decision still reads `req.task`.
             .with_task_request(req.task.clone())
-            .with_request_meta(request_meta_value),
+            .with_request_meta(request_meta_value)
+            // Thread the once-at-ingress resolved protocol context (Phase 112) —
+            // the twin of the ServerCore wiring so handlers read the SAME
+            // era/identity on both dispatch sites.
+            .with_protocol_context(protocol_context),
         );
 
         // D-03.3 (TOUT-01): clone the interior-mutable result-`_meta` slot BEFORE
@@ -1645,18 +2205,20 @@ impl Server {
             },
         };
 
-        // CREATE-PATH (Phase 102, HTASK-02): a task-augmented `tools/call` over
-        // the high-level `Server` mints a store task and returns a
-        // `CreateTaskResult` envelope. The SHARED `maybe_build_task_created`
-        // gate is the SINGLE source of truth: it returns `Some` ONLY when the
-        // client requested a task AND a store backend exists AND the tool's
-        // `TaskSupport ∈ {Required, Optional}` AND the produced value is
-        // task-shaped (`taskId` + `status`); otherwise `None` (fall through to a
-        // normal `CallToolResult`, no leakage — incl. `Forbidden`/`None`).
+        // CREATE-PATH (Phase 102, HTASK-02; era-aware trigger from plan 114-12):
+        // a `tools/call` whose era trigger fired over the high-level `Server`
+        // mints a store task and returns a `CreateTaskResult` envelope. The
+        // SHARED `maybe_build_task_created` gate is the SINGLE source of truth:
+        // it returns `Some` ONLY when the era's trigger fired (v1: the `task`
+        // field; v2: the client's tasks-extension declaration) AND a store
+        // backend exists AND the tool's `TaskSupport ∈ {Required, Optional}` AND
+        // the produced value is task-shaped (`taskId` + `status`); otherwise
+        // `None` (fall through to a normal `CallToolResult`, no leakage — incl.
+        // `Forbidden`/`None`).
         //
         // The store mints the canonical id (D-STORE-MINTS-ID); the tool's
         // fabricated `taskId` is never trusted on the wire. We pass the RAW
-        // facts (`task_requested`, `tool_task_support`) — the gate enforces the
+        // facts (`create_trigger`, `tool_task_support`) — the gate enforces the
         // complete precondition internally. The gate returns a full
         // `JSONRPCResponse`; we decompose it back into this fn's `Result<Value>`
         // contract (the caller re-wraps with the SAME request id via
@@ -1664,17 +2226,22 @@ impl Server {
         // surface as JSON-RPC errors).
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(response) = self
+            if let Some((response, claim)) = self
                 .task_dispatch()
                 .maybe_build_task_created(
                     create_path_id,
                     &result,
                     tool_task_support,
-                    task_requested,
+                    create_trigger,
                     create_path_auth.as_ref(),
+                    create_path_era,
                 )
                 .await
             {
+                // On v2 this is the ONE response in the whole surface that earns
+                // `resultType: "task"`; the claim is what carries that fact past
+                // the `Result<Value>` contract this fn is bound to.
+                *dispatch_claim = claim;
                 return match response.payload {
                     crate::types::jsonrpc::ResponsePayload::Result(value) => Ok(value),
                     // The create-path only emits `-32603` store errors here; the
@@ -1716,7 +2283,12 @@ impl Server {
             // (via widget enrichment or the schema bridge) — validate the value
             // against it regardless of which branch does the emitting.
             if let Some(schema) = &info.output_schema {
-                output_validation::warn_on_schema_mismatch(&req.name, schema, &result);
+                output_validation::warn_on_schema_mismatch(
+                    &req.name,
+                    schema,
+                    &result,
+                    validation_era,
+                );
             }
             if info.widget_meta().is_some() {
                 call_result = call_result.with_widget_enrichment(info, result);
@@ -1757,6 +2329,8 @@ impl Server {
         Ok(serde_json::to_value(ListPromptsResult {
             prompts,
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -1765,6 +2339,7 @@ impl Server {
         request_id: RequestId,
         req: GetPromptRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .prompts
@@ -1796,13 +2371,23 @@ impl Server {
                 })
             });
 
+        // Propagate the request `_meta` (raw JSON) and the once-at-ingress
+        // resolved protocol context so prompt handlers read
+        // era/client_info/trace_context via `extra` on the high-level `Server`
+        // path too — the twin of the ServerCore wiring (Phase 112, mirrors the
+        // handle_call_tool twin).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
+
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            .with_request_meta(request_meta_value)
+            .with_protocol_context(protocol_context),
         );
         let result = match handler.handle(req.arguments, extra).await {
             Ok(v) => {
@@ -1868,6 +2453,8 @@ impl Server {
             Ok(serde_json::to_value(ListResourcesResult {
                 resources: vec![],
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })?)
         }
     }
@@ -1877,6 +2464,7 @@ impl Server {
         request_id: RequestId,
         req: ReadResourceRequest,
         auth_context: Option<auth::AuthContext>,
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .resources
@@ -1908,13 +2496,22 @@ impl Server {
                 })
             });
 
+        // Propagate the request `_meta` (raw JSON) and the once-at-ingress
+        // resolved protocol context so resource handlers read
+        // era/client_info/trace_context via `extra` on the high-level `Server`
+        // path too — the twin of the ServerCore wiring (Phase 112).
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
+        let request_meta_value = crate::server::core::request_meta_to_value(req._meta.as_ref());
+
         let extra = self.attach_peer(
             crate::server::cancellation::RequestHandlerExtra::new(
                 request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context)
-            .with_progress_reporter(progress_reporter),
+            .with_progress_reporter(progress_reporter)
+            .with_request_meta(request_meta_value)
+            .with_protocol_context(protocol_context),
         );
         let mut result = match handler.read(&req.uri, extra).await {
             Ok(v) => {
@@ -1949,6 +2546,8 @@ impl Server {
         Ok(serde_json::to_value(ListResourceTemplatesResult {
             resource_templates: vec![],
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })?)
     }
 
@@ -2307,6 +2906,33 @@ pub struct ServerBuilder {
     /// consulted at the Payload wrap site.
     #[cfg(not(target_arch = "wasm32"))]
     suppress_double_wrap: HashSet<String>,
+    /// Configured protocol-version accept-list (Phase 112, VERS-01/02). Defaults
+    /// to the v1-only legacy set (excludes `2026-07-28`); overridden via
+    /// [`Self::with_supported_protocol_versions`].
+    supported_protocol_versions: Vec<ProtocolVersion>,
+    /// Explicit `requestState` minting key (Phase 113, HTTP-02), set via
+    /// [`Self::with_request_state_key`]. When present it overrides
+    /// `PMCP_REQUEST_STATE_KEY` entirely.
+    ///
+    /// Copy 1 of 3 (D-113-P): held as a
+    /// [`SecretKey`](crate::server::request_state::SecretKey), never as bare
+    /// `[u8; 32]`, so the destructor rides on the value and scrubs on drop —
+    /// including on every early-`?` path out of [`Self::build`]. Reverting this
+    /// to bare bytes is caught at COMPILE time by
+    /// `server_builder_request_state_key_field_is_the_zeroizing_type`.
+    #[cfg(feature = "streamable-http")]
+    request_state_key: Option<request_state::SecretKey>,
+    /// Rotated-out `requestState` keys accepted for VERIFICATION only, set via
+    /// [`Self::with_request_state_previous_keys`].
+    ///
+    /// Copy 1 of 3 (D-113-P), the rotated-out half: each element scrubs itself
+    /// when the `Vec` drops.
+    #[cfg(feature = "streamable-http")]
+    request_state_previous_keys: Vec<request_state::SecretKey>,
+    /// Explicit continuation lifetime, set via [`Self::with_request_state_ttl`].
+    /// Beats both the 300-second default and `PMCP_REQUEST_STATE_TTL_SECS` (D-05).
+    #[cfg(feature = "streamable-http")]
+    request_state_ttl: Option<std::time::Duration>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2376,7 +3002,95 @@ impl ServerBuilder {
             task_store: None,
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: HashSet::new(),
+            supported_protocol_versions: crate::types::protocol::context::default_accept_list(),
+            #[cfg(feature = "streamable-http")]
+            request_state_key: None,
+            #[cfg(feature = "streamable-http")]
+            request_state_previous_keys: Vec::new(),
+            #[cfg(feature = "streamable-http")]
+            request_state_ttl: None,
         }
+    }
+
+    /// Configure the shared `requestState` minting key (Phase 113, HTTP-02, D-03).
+    ///
+    /// With no call, the key is resolved from `PMCP_REQUEST_STATE_KEY`; when that
+    /// variable is unset the server generates a per-process key and WARNs at build
+    /// time (D-04). Calling this overrides the environment entirely, which is what
+    /// makes deterministic integration tests and multiple differently-configured
+    /// servers in one process possible.
+    ///
+    /// The key must be shared byte-for-byte by every instance behind a load
+    /// balancer that should be able to resume each other's multi-round-trip
+    /// requests.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    ///
+    /// The parameter type is deliberately still `[u8; 32]`: the SDK owns the
+    /// copy it takes, not the caller's (D-113-P, T-113-121).
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_key(mut self, mut key: [u8; 32]) -> Self {
+        // Closes copy 1 of 3 (D-113-P): the FIELD now scrubs on drop.
+        self.request_state_key = Some(request_state::SecretKey::new(key));
+        // Closes copy 2 of 3 (D-113-P): this by-value parameter's OWN stack
+        // slot. `[u8; 32]` is `Copy`, so the line above copied out of it and
+        // left the caller's key bytes sitting here.
+        key.zeroize();
+        self
+    }
+
+    /// Accept rotated-out `requestState` keys for VERIFICATION only.
+    ///
+    /// Tokens minted under a listed key still verify, but new tokens are always
+    /// minted under the current key — so a rotation does not strand in-flight
+    /// continuations. With no call, only the current key is accepted.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_previous_keys(mut self, mut keys: Vec<[u8; 32]>) -> Self {
+        // Closes copy 1 of 3 (D-113-P), rotated-out half.
+        self.request_state_previous_keys = keys
+            .iter()
+            .copied()
+            .map(request_state::SecretKey::new)
+            .collect();
+        // Closes copy 2 of 3 (D-113-P): the by-value `Vec`'s own heap buffer,
+        // which the copy above read out of and would otherwise return to the
+        // allocator holding every rotated-out key in the clear. `Vec::zeroize`
+        // scrubs the initialized elements AND the spare capacity.
+        keys.zeroize();
+        self
+    }
+
+    /// Configure the `requestState` continuation lifetime (D-05).
+    ///
+    /// With no call, the lifetime is `PMCP_REQUEST_STATE_TTL_SECS` if parseable,
+    /// else 300 seconds. A builder value beats both.
+    ///
+    /// Has no effect on a server that did not opt into the v2 (`2026-07-28`) era.
+    #[cfg(feature = "streamable-http")]
+    #[must_use]
+    pub fn with_request_state_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.request_state_ttl = Some(ttl);
+        self
+    }
+
+    /// Opt into a protocol-version accept-list (Phase 112, VERS-01/02; D-02/D-04).
+    ///
+    /// The high-level `Server` twin of
+    /// [`ServerCoreBuilder::with_supported_protocol_versions`](crate::server::builder::ServerCoreBuilder::with_supported_protocol_versions).
+    /// With no call, the server is v1-only and behaves exactly as today. An empty
+    /// accept-list falls back to the v1-only default (never all-reject).
+    #[must_use]
+    pub fn with_supported_protocol_versions(
+        mut self,
+        versions: impl IntoIterator<Item = ProtocolVersion>,
+    ) -> Self {
+        self.supported_protocol_versions =
+            crate::types::protocol::context::normalize_accept_list(versions);
+        self
     }
 
     /// Set the server name.
@@ -4114,9 +4828,14 @@ impl ServerBuilder {
     ///   support) in `initialize` — the mere presence of a store flips the
     ///   capability on, unless an explicit `tasks` capability was already
     ///   configured (additive-only; an explicit value is preserved verbatim).
-    /// - Handles `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
-    ///   requests via the store
-    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    /// - Handles the `tasks/*` surface via the store. The method set is
+    ///   ERA-DEPENDENT (Phase 114): v1 (2025-11-25) serves `tasks/get`,
+    ///   `tasks/result`, `tasks/list` and `tasks/cancel`; v2 (2026-07-28)
+    ///   serves `tasks/get`, `tasks/update` and `tasks/cancel`, and answers
+    ///   `-32601` for the two retired methods
+    /// - Resolves task owner from auth context. **v1** falls back through OAuth
+    ///   subject → client ID → session ID; **v2** has no session to fall back
+    ///   to and binds fail-closed on an auth-configured server (TASK-05, D-07)
     ///
     /// A tool declaring
     /// [`TaskSupport::Required`](crate::types::tools::TaskSupport::Required)
@@ -4180,6 +4899,12 @@ impl ServerBuilder {
     ///
     /// Registering a router auto-configures the `experimental.tasks` capability
     /// from the router's `task_capabilities()`.
+    ///
+    /// **That advertisement is v1-only (Phase 114).** `experimental.tasks` is
+    /// the 2025-11-25 spelling; a v2 (2026-07-28) client never sees it, because
+    /// `project_capabilities_for_v2` strips both `experimental` and
+    /// `capabilities.tasks` and v2 declares tasks through the `extensions` map
+    /// key `io.modelcontextprotocol/tasks` instead (plan 114-05).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_task_store(mut self, router: Arc<dyn crate::server::tasks::TaskRouter>) -> Self {
         // Auto-configure experimental.tasks capability from the router.
@@ -4321,6 +5046,52 @@ impl ServerBuilder {
         #[cfg(not(feature = "skills"))]
         let final_resources = self.resources;
 
+        // HTTP-04: advertising ANY subscription-delivered capability opts this
+        // server into serving `subscriptions/listen`, whose registry is
+        // INSTANCE-LOCAL. Warn at BUILD time — this is startup, and a silent
+        // under-delivery behind a load balancer surfaces no error at runtime
+        // (T-113-64).
+        //
+        // Gated on the v2 opt-in as well as the capability: `subscriptions/listen`
+        // is a 2026-07-28-only route, so a v1-only server can never serve it and
+        // the warning would be FALSE. It is not a rare corner either —
+        // `ServerCapabilities::tools_only()` sets `tools.listChanged = true`, so
+        // without this gate essentially every existing pmcp server would print a
+        // warning about a stream it does not implement (D-04: zero era behaviour
+        // on a non-opted-in server).
+        if crate::types::protocol::context::is_v2_opted_in(&self.supported_protocol_versions)
+            && crate::types::subscriptions::advertises_subscriptions(&self.capabilities)
+        {
+            tracing::warn!(
+                target: "mcp.subscriptions",
+                "a subscription-delivered capability is advertised, so subscriptions/listen \
+                 will be SERVED; its registry is INSTANCE-LOCAL, so notifications generated on \
+                 another instance are not delivered — supported for single-instance or \
+                 sticky-routed deployments only. Polling over Tasks remains the recommended \
+                 pmcp enterprise mechanism (D-11)."
+            );
+        }
+
+        // Resolve the server-owned `requestState` codec EXACTLY ONCE, here at
+        // BUILD time (Phase 113, HTTP-02). A malformed CONFIGURED key fails the
+        // build; an UNSET key falls back to a per-process key with a WARN emitted
+        // from inside `from_env`, which is a genuine STARTUP warning because this
+        // is startup. A v1-only server gets `None` and reads no env var at all.
+        //
+        // Both key arguments go BY REFERENCE, which closes copy 3 of 3
+        // (D-113-P): the by-value form manufactured an unscrubbed stack copy on
+        // every call. Because they are borrowed rather than moved, the two
+        // fields are still owned by `self` here and drop through the zeroizing
+        // destructor — on this path AND on every early `?` above, none of which
+        // moves the key material anywhere.
+        #[cfg(feature = "streamable-http")]
+        let request_state_codec = request_state::resolve_codec_at_build(
+            &self.supported_protocol_versions,
+            self.request_state_key.as_ref(),
+            &self.request_state_previous_keys,
+            self.request_state_ttl,
+        )?;
+
         Ok(Server {
             info: {
                 let mut info = Implementation::new(&name, &version);
@@ -4345,6 +5116,7 @@ impl ServerBuilder {
             cancellation_manager: self.cancellation_manager,
             roots_manager: Arc::new(RwLock::new(self.roots_manager)),
             subscription_manager: Arc::new(RwLock::new(subscriptions::SubscriptionManager::new())),
+            listen_registry: Arc::new(subscriptions::ListenRegistry::new()),
             elicitation_manager: None,
             server_request_dispatcher: None,
             peer_handle: None,
@@ -4360,6 +5132,9 @@ impl ServerBuilder {
             task_store: self.task_store,
             #[cfg(not(target_arch = "wasm32"))]
             suppress_double_wrap: self.suppress_double_wrap,
+            supported_protocol_versions: self.supported_protocol_versions,
+            #[cfg(feature = "streamable-http")]
+            request_state_codec,
         })
     }
 }
@@ -4383,6 +5158,69 @@ mod tests {
     use serde_json::json;
     use std::sync::{Arc, Mutex};
     use tokio::time::timeout;
+
+    // -- requestState key material (D-113-P) --------------------------------
+
+    /// COMPILE-LEVEL guard on the FIELD TYPES, not on behaviour.
+    ///
+    /// The twin of `builder.rs`'s `request_state_key_field_is_the_zeroizing_type`.
+    /// D-113-P named only `ServerCoreBuilder`; `ServerBuilder` carried the
+    /// identical defect on the path most users actually take, so both need the
+    /// guard. Reverting either field to bare `[u8; 32]` fails to compile here.
+    #[cfg(feature = "streamable-http")]
+    #[test]
+    fn server_builder_request_state_key_field_is_the_zeroizing_type() {
+        use crate::server::request_state::SecretKey;
+        let builder = ServerBuilder::new()
+            .with_request_state_key([0x11; 32])
+            .with_request_state_previous_keys(vec![[0x22; 32]]);
+
+        let key: &Option<SecretKey> = &builder.request_state_key;
+        let previous: &Vec<SecretKey> = &builder.request_state_previous_keys;
+
+        assert_eq!(key.as_deref(), Some(&[0x11u8; 32]));
+        assert_eq!(previous.len(), 1);
+        assert_eq!(**previous.first().expect("one previous key"), [0x22u8; 32]);
+    }
+
+    /// The plumbing regression guard for `ServerBuilder`: a server configured
+    /// with a key plus a rotated-out key must still mint under the current key
+    /// and verify.
+    #[cfg(feature = "streamable-http")]
+    #[test]
+    fn a_server_with_zeroizing_key_fields_still_mints_and_verifies() {
+        use crate::server::request_state::{key_id_of, RequestBinding, Verdict};
+
+        const CURRENT: [u8; 32] = [0x11; 32];
+        const ROTATED: [u8; 32] = [0x22; 32];
+
+        let server = Server::builder()
+            .name("t")
+            .version("1")
+            .with_supported_protocol_versions([
+                ProtocolVersion("2026-07-28".to_string()),
+                ProtocolVersion("2025-11-25".to_string()),
+            ])
+            .with_request_state_key(CURRENT)
+            .with_request_state_previous_keys(vec![ROTATED])
+            .build()
+            .expect("server builds");
+
+        let codec = server
+            .request_state_codec()
+            .expect("a v2 server has a codec");
+        let params = json!({ "name": "t", "arguments": { "a": 1 } });
+        let binding = RequestBinding::from_request("alice", "tools/call", &params)
+            .expect("a two-level fixture is far inside the canonical depth cap");
+        let token = codec
+            .mint(&json!({ "step": 1 }), &binding, 0, None)
+            .expect("mint");
+        assert!(
+            matches!(codec.verify(&token, &binding), Verdict::Ok(_)),
+            "the zeroizing field type must not disturb the key plumbing"
+        );
+        assert!(codec.accepting_key_ids().contains(&key_id_of(&ROTATED)));
+    }
 
     /// Mock transport for testing
     #[derive(Debug)]
@@ -4530,6 +5368,8 @@ mod tests {
             Ok(crate::types::ListResourcesResult {
                 resources: self.resources.clone(),
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })
         }
     }
@@ -4728,6 +5568,158 @@ mod tests {
         }
     }
 
+    /// Tool that reports the ingress-resolved era back through its result so a
+    /// dispatch test can prove ingress→handler protocol-context threading on the
+    /// high-level `Server` dispatch site.
+    struct EraProbeServerTool;
+
+    #[async_trait]
+    impl ToolHandler for EraProbeServerTool {
+        async fn handle(
+            &self,
+            _args: Value,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<Value> {
+            Ok(json!({ "era": extra.era().map(|e| format!("{e:?}")) }))
+        }
+    }
+
+    fn probe_server_era(result: &Value) -> Value {
+        let text = result["content"][0]["text"]
+            .as_str()
+            .expect("probe result carries text content");
+        serde_json::from_str::<Value>(text).expect("probe text is JSON")["era"].clone()
+    }
+
+    fn v2_probe_call() -> Request {
+        let meta = crate::types::protocol::RequestMeta::new().with_meta(
+            "io.modelcontextprotocol/protocolVersion",
+            json!("2026-07-28"),
+        );
+        Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "probe".to_string(),
+            arguments: json!({}),
+            _meta: Some(meta),
+            task: None,
+        })))
+    }
+
+    /// Cross-site parity: the high-level `Server` dispatch site resolves the SAME
+    /// v2 era as `ServerCore` for identical `_meta` (both use the one shared
+    /// resolver), visible in the handler (Pitfall 3, twin wiring).
+    #[tokio::test]
+    async fn test_server_dispatch_resolves_v2_era_parity() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = Server::builder()
+            .name("probe-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                assert_eq!(probe_server_era(&result), json!("V2"));
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
+        }
+    }
+
+    /// Twin-site envelope parity (VERS-07): the high-level `Server` dispatch
+    /// site injects the SAME v2 `resultType`/`serverInfo` envelope `ServerCore`
+    /// does — via the ONE shared `core::inject_v2_result_envelope` helper — on a
+    /// v2 object result.
+    #[tokio::test]
+    async fn test_server_dispatch_injects_v2_result_envelope_parity() {
+        use crate::types::protocol::PROTOCOL_VERSION_2026_07_28;
+        use crate::types::ProtocolVersion;
+
+        let server = Server::builder()
+            .name("envelope-server")
+            .version("3.2.1")
+            .tool("probe", EraProbeServerTool)
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        // v2 request → envelope injected.
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert_eq!(v["resultType"], "complete");
+        // Plan 113-09 Task 3: the schema places server identity INSIDE
+        // `result._meta`, not at the top level.
+        let server_info = &v["_meta"][crate::server::core::RESERVED_SERVER_INFO_KEY];
+        assert_eq!(server_info["name"], "envelope-server");
+        assert_eq!(server_info["version"], "3.2.1");
+        assert!(
+            v.get("serverInfo").is_none(),
+            "the envelope must not write a top-level serverInfo: {v}"
+        );
+    }
+
+    /// v1 byte-identity at the twin site: a non-opted-in `Server` gains NO
+    /// `resultType`/`serverInfo` even with a v2 `_meta` signal (D-07).
+    #[tokio::test]
+    async fn test_server_dispatch_v1_no_envelope() {
+        let server = Server::builder()
+            .name("v1-envelope-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        let ResponsePayload::Result(v) = response.payload else {
+            panic!("expected result");
+        };
+        assert!(v.get("resultType").is_none(), "v1 must not gain resultType");
+        assert!(v.get("serverInfo").is_none(), "v1 must not gain serverInfo");
+        assert!(
+            v.get("_meta").is_none(),
+            "v1 must not gain the _meta the v2 envelope creates: {v}"
+        );
+    }
+
+    /// A non-opted-in high-level `Server` runs zero era-detection: the handler
+    /// reads `era()==None` even with a v2 `_meta` signal (D-04 parity).
+    #[tokio::test]
+    async fn test_server_dispatch_non_opted_in_yields_none() {
+        let server = Server::builder()
+            .name("v1-server")
+            .version("1.0.0")
+            .tool("probe", EraProbeServerTool)
+            .build()
+            .unwrap();
+
+        let response = server
+            .handle_request(RequestId::from(1i64), v2_probe_call(), None)
+            .await;
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                assert_eq!(probe_server_era(&result), Value::Null);
+            },
+            ResponsePayload::Error(e) => panic!("probe call failed: {}", e.message),
+        }
+    }
+
     #[tokio::test]
     async fn test_handle_call_tool_rejected_is_iserror_not_protocol_error() {
         // A handler returning `Error::tool_rejected` must surface through the
@@ -4888,6 +5880,231 @@ mod tests {
             },
             ResponsePayload::Error(_) => panic!("Expected success response"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 112-09 (Gap B): the high-level `Server` twin threads protocol_context
+    // + request_meta into prompt/resource handlers. Enters through the REAL
+    // dispatch entrypoint (`process_client_request`), NOT the leaf handlers.
+    // -----------------------------------------------------------------------
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct DispatchCaptured {
+        era: Option<crate::types::protocol::Era>,
+        has_client_info: bool,
+        traceparent: Option<String>,
+    }
+
+    struct DispatchCapturingPrompt(Arc<Mutex<Option<DispatchCaptured>>>);
+
+    #[async_trait]
+    impl PromptHandler for DispatchCapturingPrompt {
+        async fn handle(
+            &self,
+            _args: HashMap<String, String>,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::GetPromptResult> {
+            *self.0.lock().unwrap() = Some(DispatchCaptured {
+                era: extra.era(),
+                has_client_info: extra.client_info().is_some(),
+                traceparent: extra.trace_context().map(|t| t.traceparent),
+            });
+            Ok(crate::types::GetPromptResult::new(vec![], None))
+        }
+    }
+
+    struct DispatchCapturingResource(Arc<Mutex<Option<DispatchCaptured>>>);
+
+    #[async_trait]
+    impl ResourceHandler for DispatchCapturingResource {
+        async fn read(
+            &self,
+            _uri: &str,
+            extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::ReadResourceResult> {
+            *self.0.lock().unwrap() = Some(DispatchCaptured {
+                era: extra.era(),
+                has_client_info: extra.client_info().is_some(),
+                traceparent: extra.trace_context().map(|t| t.traceparent),
+            });
+            Ok(crate::types::ReadResourceResult::new(vec![
+                crate::types::Content::text("ok"),
+            ]))
+        }
+
+        async fn list(
+            &self,
+            _cursor: Option<String>,
+            _extra: crate::server::cancellation::RequestHandlerExtra,
+        ) -> Result<crate::types::ListResourcesResult> {
+            Ok(crate::types::ListResourcesResult {
+                resources: vec![],
+                next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
+            })
+        }
+    }
+
+    fn dispatch_v2_meta() -> crate::types::protocol::RequestMeta {
+        crate::types::protocol::RequestMeta::new().with_meta(
+            "traceparent",
+            serde_json::json!("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+        )
+    }
+
+    fn dispatch_v2_context() -> crate::types::protocol::ProtocolContext {
+        crate::types::protocol::ProtocolContext::new(
+            crate::types::protocol::Era::V2,
+            ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+        )
+        .with_client_info(crate::types::Implementation::new("test-client", "9.9.9"))
+    }
+
+    #[tokio::test]
+    async fn prompt_resource_protocol_context_via_dispatch_server() {
+        use crate::types::protocol::Era;
+
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+
+        // --- v2 dispatch through process_client_request: era==V2, client_info,
+        // and a populated trace_context (proves .with_request_meta threading).
+        server
+            .process_client_request(
+                RequestId::from(1i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: Some(dispatch_v2_meta()),
+                }),
+                None,
+                Some(dispatch_v2_context()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(2i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: Some(dispatch_v2_meta()),
+                }),
+                None,
+                Some(dispatch_v2_context()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+
+        for cap in [&pcap, &rcap] {
+            let c = cap.lock().unwrap().clone().expect("handler ran");
+            assert_eq!(c.era, Some(Era::V2));
+            assert!(c.has_client_info);
+            assert_eq!(
+                c.traceparent.as_deref(),
+                Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+            );
+        }
+
+        // --- opted-in v1 fallback: era==Some(V1) (distinct from None).
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .with_supported_protocol_versions([
+                ProtocolVersion("2025-11-25".to_string()),
+                ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+            ])
+            .build()
+            .unwrap();
+        let v1 = crate::types::protocol::ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion("2025-11-25".to_string()),
+        );
+        server
+            .process_client_request(
+                RequestId::from(3i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: None,
+                }),
+                None,
+                Some(v1.clone()),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(4i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: None,
+                }),
+                None,
+                Some(v1),
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+        assert_eq!(rcap.lock().unwrap().clone().unwrap().era, Some(Era::V1));
+
+        // --- non-opted-in (protocol_context == None): era==None.
+        let pcap = Arc::new(Mutex::new(None));
+        let rcap = Arc::new(Mutex::new(None));
+        let server = Server::builder()
+            .name("dispatch-server")
+            .version("1.0.0")
+            .prompt("greeting", DispatchCapturingPrompt(pcap.clone()))
+            .resources(DispatchCapturingResource(rcap.clone()))
+            .build()
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(5i64),
+                ClientRequest::GetPrompt(GetPromptRequest {
+                    name: "greeting".to_string(),
+                    arguments: HashMap::new(),
+                    _meta: None,
+                }),
+                None,
+                None,
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+        server
+            .process_client_request(
+                RequestId::from(6i64),
+                ClientRequest::ReadResource(ReadResourceRequest {
+                    uri: "mem://greeting".to_string(),
+                    _meta: None,
+                }),
+                None,
+                None,
+                &mut crate::server::core::DispatchEnvelopeClaim::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pcap.lock().unwrap().clone().unwrap().era, None);
+        assert_eq!(rcap.lock().unwrap().clone().unwrap().era, None);
     }
 
     #[tokio::test]

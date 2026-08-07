@@ -30,7 +30,19 @@ syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 [dependencies.pmcp]
 path = ".."
 default-features = false
-features = ["oauth"]
+# `streamable-http` gates `src/server/request_state.rs` (D-14 locks the MRTR AEAD
+# to native + that feature); `fuzzing` widens the module and exposes the
+# `fuzz_support::verify_bytes` seam. `fuzzing` is in neither `default` nor `full`,
+# so enabling it here adds nothing to the shipped public API.
+#
+# `validation` (Phase 115-09, SCHM-01) gates the `jsonschema` validator inside
+# `src/server/output_validation.rs`: without it `compile_for_era` does not exist
+# and `output_validation::fuzz_support` compiles to nothing, so
+# `fuzz_schema_draft_pin` would have no seam to reach. `fuzzing` widens the
+# MODULE, `validation` supplies its CONTENTS — both are required, which is why
+# the seam itself is gated `#[cfg(all(feature = "fuzzing", feature =
+# "validation"))]`.
+features = ["oauth", "streamable-http", "fuzzing", "validation"]
 
 [dependencies.pmcp-code-mode]
 path = "../crates/pmcp-code-mode"
@@ -134,6 +146,83 @@ bench = false
 [[bin]]
 name = "pkce_helper"
 path = "fuzz_targets/pkce_helper.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trace_context_from_meta"
+path = "fuzz_targets/trace_context_from_meta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_request_state"
+path = "fuzz_targets/fuzz_request_state.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 113-13 (HTTP-04): the `subscriptions/listen` CLIENT frame decoder runs on
+# bytes supplied by a remote server, so it is fuzzed at that boundary.
+[[bin]]
+name = "subscription_listen_frames"
+path = "fuzz_targets/subscription_listen_frames.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 114-14 (TASK-02): the RAW `tasks/update` params boundary. `inputResponses`
+# is the ENTIRE request payload and its decode is the one place in the tasks
+# surface where guessing at overlapping result shapes is actively wrong (D-113-O),
+# so the untrusted bytes are fuzzed where they arrive. Registration only — this
+# target adds NO dependency; it reaches `task_dispatch::fuzz_support` through the
+# `fuzzing` feature already enabled on the `pmcp` dependency above.
+[[bin]]
+name = "fuzz_tasks_update"
+path = "fuzz_targets/fuzz_tasks_update.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 116-08 (AUTH-01 / AUTH-03): the authorization-response callback query and
+# the issuer identifier are BOTH fully attacker-controlled — a hostile
+# authorization server picks every byte of the callback URL, and a hostile
+# `mcp_server_url` picks every byte of the issuer that reaches the discovery URL
+# arithmetic. Registration only: this target adds NO dependency. Both entry points
+# live in the UNGATED pure tier `src/shared/oauth_validation.rs`, so it reaches
+# them through the `pmcp` dependency above with no feature flag at all.
+[[bin]]
+name = "oauth_authorization_response"
+path = "fuzz_targets/oauth_authorization_response.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 116-08 (AUTH-02 / AUTH-03): the credential document that reaches
+# `parse_credential_snapshot` comes off DISK before any authentication has
+# happened, so a corrupt or attacker-planted `~/.pmcp/oauth-cache.json` is
+# untrusted input with nothing in front of it; and a DCR response is bytes from a
+# registration endpoint the client has, by construction, not yet authenticated.
+# Registration only: this target adds NO dependency. All three entry points are
+# pure ungated functions reached through the `pmcp` dependency above.
+[[bin]]
+name = "oauth_credential_and_dcr"
+path = "fuzz_targets/oauth_credential_and_dcr.rs"
+test = false
+doc = false
+bench = false
+
+# Phase 115-09 (SCHM-01): the era-branched `outputSchema` validation path. A tool
+# author's declared schema and a handler's emitted value are both arbitrary JSON,
+# and emit-time validation runs on every structured result — a panic there is a
+# remotely reachable unwind. Registration only: this target adds NO dependency, it
+# reaches `output_validation::fuzz_support` through the `fuzzing` + `validation`
+# features already enabled on the `pmcp` dependency above.
+[[bin]]
+name = "fuzz_schema_draft_pin"
+path = "fuzz_targets/fuzz_schema_draft_pin.rs"
 test = false
 doc = false
 bench = false

@@ -321,6 +321,9 @@ impl ResourceHandler for ResourceCollection {
         if let Some(resource) = self.resources.get(uri) {
             return Ok(ReadResourceResult {
                 contents: vec![resource.content.clone()],
+                _meta: None,
+                ttl_ms: None,
+                cache_scope: None,
             });
         }
 
@@ -350,6 +353,9 @@ impl ResourceHandler for ResourceCollection {
                     mime_type: Some(contents.mime_type.clone()),
                     meta,
                 }],
+                _meta: None,
+                ttl_ms: None,
+                cache_scope: None,
             });
         }
 
@@ -374,6 +380,8 @@ impl ResourceHandler for ResourceCollection {
         Ok(ListResourcesResult {
             resources: self.list(),
             next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
         })
     }
 }
