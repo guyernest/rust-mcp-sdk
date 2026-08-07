@@ -712,6 +712,516 @@ touch. The substantive criterion — zero `planned` ENTRIES — is met, and it i
 
 ---
 
+## Phase 116 Deferred Register
+
+Written by `116-15` Task 4. Everything Phase 116 chose NOT to do, every amendment it adopted, every
+limitation it ships with, and every cross-AI review finding it DECLINED — each with a stable
+identifier, a statement, evidence, a named owner and a status. **An item with no owner says
+UNASSIGNED explicitly rather than leaving it implicit.** Nothing below should be discoverable only
+by re-reading sixteen plans.
+
+The per-plan findings from `## D-116-EX` onward are the raw log; this register is the index over it
+plus the items no plan logged.
+
+### A. Owner-deferred, from `116-CONTEXT.md` § Deferred Ideas (2026-08-02)
+
+---
+
+**`DEF-116-01` — RFC 9728 Protected Resource Metadata discovery**
+
+**Statement:** an MCP-spec client **MUST** that `pmcp` does not implement. It derives the
+authorization server from the MCP base URL directly (`src/client/oauth.rs:366-390`) instead of
+discovering it from protected resource metadata.
+**Evidence / NAMED DEPENDENCY:** this is not a generic deferral — see `D-116-PRM` in this file for
+the full measurement. SEP-2352 specifies authorization-server-change detection as *"detected via
+updated protected resource metadata"*, so `116-11`'s D-18 detection uses the provenance signal
+available today (comparing the issuer RESOLVED for a server URL against the one last recorded)
+instead of the spec's stated mechanism. Second consequence, and the one that reaches AUTH-03's
+booking: with the AS derived from the MCP origin and `116-07`'s RFC 8414 §3.3 anchor forcing one
+issuer per origin, **the D-116-R1 two-servers-one-authorization-server case is not constructible
+through the live flow**, so `116-11`'s collision test seeds the second server's entry (stated in
+that test file's module doc).
+**Owner:** **Guy.** Needs a roadmap slot; it is a new network surface with its own threat register,
+`.well-known` probe order and caching rules, so it is not a wiring change.
+**Status:** OPEN — deferred by owner decision, quoted in AUTH-03's booking as a precondition.
+
+---
+
+**`DEF-116-02` — RFC 8707 `resource` parameter on authorization and token requests**
+
+**Statement:** the other MCP-spec client **MUST** this phase does not implement; `pmcp` sends no
+`resource` parameter (`src/client/oauth.rs:664-672`).
+**Evidence / SECOND NAMED CONSEQUENCE, discovered by cross-AI review:** deferring it removed the
+AUDIENCE BINDING that would have prevented two MCP servers sharing one authorization server from
+colliding. That is precisely why the credential key was widened to `(issuer, account, server)`
+instead (`D-116-R1`) — the key now carries the binding the `resource` parameter would have carried.
+Recorded in `contracts/binding.yaml`'s `CredentialKey::new` note as well, so a reader of the contract
+meets the same fact.
+**Owner:** **Guy.** Ships together with `DEF-116-01`; the two are one feature.
+**Status:** OPEN — deferred by owner decision `b2bf9157`.
+
+---
+
+**`DEF-116-03` — SEP-2350 step-up scope accumulation**
+
+**Statement:** deferred **WHOLE, both halves together**, and now **EXPLICITLY OUT OF SCOPE** for
+AUTH-03 per the requirement text amended in `0aebf7f6`. Recorded here as a DEFERRAL and deliberately
+NOT as a limitation of AUTH-03 — listing an out-of-scope item as a limitation of the requirement it
+sits outside of is what made the previous revision of that booking unbookable.
+**Evidence, including RESEARCH's correction to the original rationale:** CONTEXT argued the client
+half "would have nothing to trigger it". RESEARCH corrected that — **the client half CAN be
+triggered by a non-pmcp server** returning an `insufficient_scope` challenge, so it is implementable
+standalone. The deferral therefore stands as a COHERENCE decision (ship the server-side
+`WWW-Authenticate` challenge builder and the client-side scope-union re-auth as one feature) rather
+than as "nothing would trigger it". `pmcp` emits zero `WWW-Authenticate` anywhere today — one
+comment at `task_dispatch.rs:584`, no code.
+**Owner:** UNASSIGNED — needs its own phase and a roadmap slot.
+**Status:** OPEN.
+
+---
+
+**`DEF-116-04` — `UpstreamAuthDecorator` + `HEADER_UPSTREAM_AUTH` SDK extraction**
+
+**Statement:** a standing request written into the durable agent's own source (its `D-12`); the
+module was authored to be copy-pasted into `rust-mcp-sdk` and re-exported without rewriting call
+sites. Tiny, but new public surface unrelated to AUTH-01..03.
+**Owner:** UNASSIGNED.
+**Status:** OPEN.
+
+---
+
+**`DEF-116-05` — the outbound-OAuth vending core (`OutboundOAuthCore`)**
+
+**Statement:** per-server token vending, TTL cache, `OnceCell` inflight-dedup stampede prevention,
+`reauth_required` → `ConsentRequired` on both the discovery and tool-call paths. **~987 lines**
+hand-rolled in the durable agent.
+**Evidence:** `docs/design/agents-teams-sdk-extraction-plan.md` Phases A–F contain **NO phase for
+it**, so it needs a roadmap slot rather than an assumption that Phase 117 absorbs it. Related open
+question, left open on purpose: whether the store trait carries token REFRESH itself or only
+load/save/delete — a deliberate answer belongs with this extraction, not before it.
+**Owner:** UNASSIGNED — needs a roadmap slot.
+**Status:** OPEN.
+
+---
+
+**`DEF-116-06` — Cognito internal/external providers and the CognitoExternal→CognitoInternal
+fallback chain**
+
+**Statement:** platform-specific policy (AbsentCustody / RefreshRevoked ⇒ M2M bearer, InfraDenied ⇒
+loud propagated error). Stays in pmcp.run; not SDK surface.
+**Owner:** pmcp.run (out of this repository).
+**Status:** OPEN by design — recorded so nobody re-proposes lifting it.
+
+---
+
+**`DEF-116-07` — token-at-rest encryption in core**
+
+**Statement:** the platform uses KMS; a plaintext `~/.pmcp/oauth-cache.json` is the status quo and
+this phase does not change it. What this phase DID add is 0600/0700 enforcement and an atomic
+same-directory rename (`binary(oauth_credential_file)::save_sets_0600_on_the_file_and_0700_on_the_parent_it_creates`,
+`::a_pre_existing_loose_file_is_tightened_by_the_next_save`) — file-permission hygiene, not
+encryption.
+**Owner:** UNASSIGNED.
+**Status:** OPEN.
+
+---
+
+**`DEF-116-08` — typed accessors for the other RFC 7591 fields `DcrResponse` drops into `extra`**
+
+**Statement:** same mechanism as D-09 and as `application_type` itself — inherent accessors over the
+`#[serde(flatten)] extra` carrier, which is the semver-safe shape this phase proved. Only
+`application_type` was given accessors, because only it was in scope.
+**Owner:** UNASSIGNED.
+**Status:** OPEN.
+
+### B. Owner decisions taken in response to cross-AI review — ADOPTED, with provenance
+
+---
+
+**`D-116-R1` — the credential key widened from `(issuer, account)` to `(issuer, account, server)`**
+
+**Statement:** SUPERSEDES CONTEXT's `D-07`, and was amended into AUTH-03's requirement text by
+`0aebf7f6`. Two MCP servers can share one authorization server and one account while holding
+different DCR registrations, client IDs and granted scopes; under the narrower key one server's
+`logout` deletes the other's credentials and a migration can overwrite one with the other.
+**Provenance:** `116-REVIEWS.md` § Consensus Summary, **Codex HIGH #1**. Gemini's review did not
+surface it (Gemini: APPROVED, 0 HIGH; Codex: 9 HIGH) — the divergence is itself worth remembering.
+**Evidence:** `binary(oauth_store_wiring)::two_mcp_servers_sharing_one_authorization_server_and_account_stay_disjoint_d_116_r1`,
+`binary(auth_integration)::logout_of_one_server_leaves_a_second_sharing_one_issuer_working_d_116_r1`.
+**Status:** ADOPTED and shipped. Carries `DEF-116-01`'s precondition on the SCENARIO, not on the key.
+
+---
+
+**`D-116-R2` — `CredentialStoreAdmin` added alongside `CredentialStore`**
+
+**Statement:** the five originally declared trait methods could not support `auth status`,
+`auth logout --all`, accurate deletion counts or migration reporting. The admin surface is a separate
+trait so a minimal implementor still gets working defaults
+(`binary(oauth_credential_store)::a_minimal_implementor_gets_working_defaults`).
+**Provenance:** Codex **HIGH #2**.
+**Status:** ADOPTED and shipped.
+
+---
+
+**`D-116-R3` — AUTH-01 and AUTH-03 requirement text amended (`0aebf7f6`)**
+
+**Statement:** AUTH-01's "strict on v2, lenient on v1" could not be booked honestly, because
+`IssPresence::Optional` still rejects a mismatch and `Client::era()` does not exist pre-connection;
+the flag-keyed rule is what the code can implement and is strictly SAFER for v1. AUTH-03's "the
+three clarifications" included the deferred SEP-2350 and so could never reach `[x]`.
+**Provenance:** Codex **HIGH #4** and **#5**.
+**Status:** ADOPTED — and the bookings in `.planning/REQUIREMENTS.md` are against the amended text,
+with the amended prose byte-identical after the booking.
+
+---
+
+**`D-116-R4` — callback validation moved INSIDE the listener, before the response is committed**
+
+**Statement:** so the page the user's browser receives can never claim success for a callback that
+was rejected. **Provenance:** Codex **HIGH #3**.
+**Evidence:** `binary(oauth_iss_integration)::an_error_description_behind_a_wrong_iss_reaches_neither_the_error_nor_the_browser`.
+**Status:** ADOPTED and shipped.
+
+---
+
+**`D-116-R5` — `offline_access` moved to the authorization request, recorded only if granted, never
+introduced at refresh**
+
+**Provenance:** Codex **HIGH #6**.
+**Evidence:** `binary(oauth_dcr_integration)::the_authorization_url_requests_offline_access_when_the_server_advertises_it`,
+`binary(oauth_refresh)::an_advertised_but_never_granted_offline_access_is_absent_from_the_refresh`,
+`::a_refresh_never_widens_beyond_the_granted_scope_rfc6749_section_6`.
+**Status:** ADOPTED and shipped.
+
+---
+
+**`D-116-R6` — the discovery outcome matrix, plus the per-issuer candidate-index cache**
+
+**Statement:** anchor mismatch, over-cap body and malformed security metadata are **TERMINAL**;
+availability failures fall back or retry. The per-issuer candidate-index cache folds in Gemini's
+latency finding (2 extra 404 round-trips for path-bearing issuers such as Entra ID) without
+weakening the security rule — a cache hit STILL runs the anchor check.
+**Provenance:** the union of Codex **HIGH #7** and **Gemini risk 1** — the only concern both
+reviewers raised, from opposite angles, and neither alone specified the matrix.
+**Evidence:** `binary(oauth_discovery_urls)::row_issuer_mismatch_is_terminal` and siblings;
+`binary(oauth_discovery_validation)::a_second_probe_for_the_same_issuer_requests_the_remembered_candidate_first`,
+`::a_failing_cached_candidate_restarts_the_full_ordered_sequence_from_candidate_one`,
+`::a_cache_hit_still_runs_the_anchor_check`.
+**Status:** ADOPTED and shipped.
+
+---
+
+**`D-116-R7` — the OAuth contract equations authored in wave 1 and resolved in wave 10**
+
+**Provenance:** Codex **HIGH #8** ("The contract-first plan conflicts with repository policy").
+**Status:** ADOPTED and CLOSED — see § Contract-First Closure above: 8/8 bindings resolved, 24/24
+invariants fenced, four signature divergences recorded rather than absorbed.
+
+---
+
+**`D-116-R8` — the two-class gate acceptance policy**
+
+**Statement:** replaces the self-contradictory "any gate red ⇒ stop" rule that coexisted with "and
+`doc-check` stays red at 28".
+**Provenance:** Codex **HIGH #9**.
+**Status:** ADOPTED and EXERCISED — see § Phase-End Gate Results. It did real work: A3 went red for
+a genuine reason and was fixed rather than reclassified, while Class B's 28 was accepted on its
+stated delta.
+
+---
+
+**`D-116-R9` — the tripwire anti-vacuity control run in the meaningful direction, with full
+relative paths**
+
+**Statement:** the control that proves something is removing a path from `EXTRA_SCOPE` while KEEPING
+it in `REQUIRED_FILES` (must FAIL); the reverse only weakens the guard and passes silently.
+`REQUIRED_FILES` converted from 5 base names to 9 FULL RELATIVE PATHS, with the matcher moved from
+`file_name()` to `rel()` in the same edit — nine tracked files share `auth.rs`'s base name and two
+live under `src/`.
+**Provenance:** Codex **MEDIUM**.
+**Status:** ADOPTED and shipped in `43b3dde8`; all three controls run and recorded in `116-14`,
+including the third labelled explicitly as a LIMIT rather than as evidence.
+
+### C. Review findings DECLINED, with the owner's reasons — do not re-raise these
+
+---
+
+**`DECLINED-116-01` — "the phase is very broad, ten serial waves" (Codex LOW)**
+
+**Reason:** declined by owner. The wave structure is DEPENDENCY-DERIVED, not stylistic; collapsing
+it would put unrelated file sets in one wave and lose the ordering that let each plan measure against
+its predecessor's recorded anchor.
+**Status:** DECLINED.
+
+---
+
+**`DECLINED-116-02` — "split credential-store and cargo-pmcp migration into a separate phase"
+(Codex suggestion)**
+
+**Reason:** declined by owner. The key was widened and the store STAYS in this phase. The context
+cost of `D-116-R1`/`D-116-R2` was absorbed by adding plan `116-16` within the existing wave
+structure instead of by moving work out.
+**Status:** DECLINED.
+
+### D. Amendments this phase ADOPTED from RESEARCH — recorded as facts, not deferrals
+
+---
+
+**`A1`** — the RFC 9207 flag did **NOT** go on `OidcDiscoveryMetadata`. It rides a new
+`AuthorizationServerExtras` sibling type returned by `discover_with_extras`, because adding a field
+to a published, all-pub-field, non-`#[non_exhaustive]` struct is a MAJOR semver break.
+**Status:** ADOPTED. Fence: `binary(oauth_discovery_validation)::discover_returns_exactly_what_the_extras_call_returns_minus_the_extras`.
+
+**`A2`** — the three marker identities ride `Error::Protocol`, **not** `Error::Authentication`,
+which has no `data` member to carry them. **Status:** ADOPTED.
+
+**`A3`** — SEP-2351 landed as an **ORDERED PROBE**, not an append-to-insert swap, because the swap
+was measured to 404 against Microsoft Entra ID; and SEP-2207's actual content (`grant_types` +
+`offline_access`) landed **IN ADDITION** to D-14's three defects, not instead of them.
+**Status:** ADOPTED.
+
+**`A4`** — D-18 branches on credential PROVENANCE: warn-and-re-register for DCR-issued credentials,
+a typed `reauth_required` error for pre-registered ones. **Status:** ADOPTED. Fences:
+`binary(oauth_store_wiring)::an_issuer_change_with_dcr_credentials_warns_naming_both_issuers_and_proceeds`,
+`::an_issuer_change_with_a_pre_registered_client_id_is_reauth_required_and_starts_no_flow`.
+
+### E. Refinements and known limitations this phase ships with
+
+---
+
+**`LIM-116-01` — D-17 refinement: schema-1 entries recording NO issuer are DROPPED, not guessed**
+
+**Statement, stated explicitly against D-17's own wording.** D-17 says *"every existing login is
+preserved"*. That is **narrowed**: a schema-1 `cargo-pmcp` entry that records no issuer cannot be
+re-keyed without GUESSING one, SEP-2352 forbids inferring it, and adopting a guess would bind a
+token to an authority that never minted it. Such entries are DROPPED, with a named report entry and
+a reported count, and the user is told.
+**The good news the widened key brought, which is why the narrowing is small:** the v1 map key WAS
+the normalized server URL, so the THIRD key component is populated **losslessly** from data v1
+already recorded — the widening is a lossless migration, not a lossy re-key.
+**Evidence:** `binary(oauth_credential_store)::a_schema_1_entry_without_an_issuer_is_dropped_and_reported`,
+`::the_schema_1_map_key_becomes_the_server_component`,
+`binary(auth_integration)::a_previous_format_entry_with_no_issuer_is_dropped_and_both_counts_are_reported`.
+**Owner:** UNASSIGNED (informational — the behaviour is intended; the wording delta is the record).
+**Status:** SHIPPED, named in AUTH-03's booking as in-scope limitation 2.
+
+---
+
+**`LIM-116-02` — forward-compat trap: an installed `cargo-pmcp` 0.18.0 hard-errors on
+`schema_version: 2`**
+
+**Statement:** `cache.rs:74-80` in the RELEASED 0.18.0 rejects the new document with an "upgrade
+cargo-pmcp" message. It is already actionable for the user, and **nothing in this repository can
+change a binary someone already installed.**
+**Owner:** **cargo-pmcp release notes.**
+**Status:** RELEASED-BEHAVIOUR NOTE. Named in AUTH-03's booking as in-scope limitation 3.
+
+---
+
+**`LIM-116-03` — the file store's advisory lock is COOPERATIVE, with a 30-second staleness window**
+
+**Statement:** a different program writing `oauth-cache.json` directly still clobbers it. Acceptable
+for a per-user credential file; the `CredentialStore` TRAIT is the answer for a real multi-writer
+runtime (DynamoDB, a KV store), which is exactly why the trait exists.
+**Evidence:** `binary(oauth_credential_file)::a_stale_lock_is_broken_so_a_crash_cannot_wedge_the_store`,
+`::a_waiter_reads_the_document_the_lock_holder_left_behind`.
+**Owner:** UNASSIGNED, informational.
+**Status:** SHIPPED as designed.
+
+---
+
+**`LIM-116-04` — SEP-837's optional retry with an adjusted `application_type` was deliberately NOT
+adopted**
+
+**Statement:** it is a MAY that sits beside a MUST to surface a meaningful error, and an automatic
+retry would defeat the obligation next to it — the operator would see a registration that eventually
+succeeded under a type they did not choose.
+**Owner:** UNASSIGNED (a deliberate non-adoption, not a gap).
+**Status:** DECIDED. Named in AUTH-02's booking.
+
+---
+
+**`LIM-116-05` — Client ID Metadata Documents (CIMD, PR #2858) deprecate DCR**
+
+**Statement:** the specification now DEPRECATES Dynamic Client Registration in favour of Client ID
+Metadata Documents, while RETAINING DCR for backwards compatibility. This phase hardens DCR, which
+remains correct and remains the interoperable path today; CIMD support is out of scope and needs its
+own slot.
+**Owner:** UNASSIGNED — needs a roadmap slot.
+**Status:** OPEN.
+
+---
+
+**`LIM-116-06` — `make doc-check` is RED at HEAD and blocks the org-required `gate`**
+
+**Statement:** 28 pre-existing rustdoc errors, **none in this phase's files**. **This phase NEITHER
+CAUSED NOR CLEARED IT.**
+**Measured B1/B2 delta, repeated here rather than summarised:** total `^error` count **28 at HEAD
+vs 28 at the anchor** — B1 PASS; per-file distribution IDENTICAL, file for file; **zero** errors
+attributable to this phase — B2 PASS on attribution. The single hit in a file this phase modified is
+`src/error/mod.rs`'s pre-existing ambiguous-link error, whose source line exists verbatim at
+`b2bf9157:src/error/mod.rs:573` in a region none of this phase's three hunks touches.
+**Identifiers:** cross-referenced to the EXISTING `D-113-W` / `D-114-V`. **No new identifier is
+minted here** — this entry is a pointer, deliberately.
+**Owner:** UNASSIGNED (inherited).
+**Status:** OPEN, and now three phases old.
+
+---
+
+**`LIM-116-07` — `make check-unwraps` and `make unused-deps` are no-op stubs, and two real
+`unwrap()`s are uncovered**
+
+**Statement:** `check-unwraps` (`Makefile:776-780`) prints "✓ No unwrap() calls in production code"
+without inspecting a file; `unused-deps` (`Makefile:210-214`) prints "cargo machete not installed -
+skipping" with the real invocation commented out. Both run inside `make quality-gate` and both
+appear in this phase's gate transcript. **Neither proves anything and neither may be cited.**
+**The real, uncovered item:** the two `.duration_since(UNIX_EPOCH).unwrap()` calls in
+`src/client/oauth.rs` PRODUCTION paths. They are pre-existing and outside this phase's scope to fix,
+but they are exactly what a working `check-unwraps` would have caught.
+**Owner:** UNASSIGNED.
+**Status:** OPEN.
+
+---
+
+**`LIM-116-08` — `PHASE_116_EQUATIONS` is retained after the flip, so `planned` stays permitted on
+three equations**
+
+**Statement:** `116-15` took the "leave them with a written reason" branch of `116-01`'s hand-off
+(reasons in § Contract-First Closure Step 3: Phase 115 precedent in the same file, the
+`phase_116_records >= 8` anti-vacuity floor defined over the constant, and the constant's own doc
+already stating the expected end state). **Residual exposure, named:** a future phase could add a
+`planned` binding on one of the three Phase-116 equations without the deliberate conversation that
+test exists to force. Today the measured state is 0 `planned` entries.
+**Owner:** UNASSIGNED.
+**Status:** OPEN, narrow.
+
+---
+
+**`LIM-116-09` — `Cargo.lock` is not git-tracked, so no lockfile assertion is possible here**
+
+**Statement:** `.gitignore:3` ignores it and `git ls-files --error-unmatch Cargo.lock` fails. Every
+"the dependency tree did not move" claim in this phase is therefore made over `Cargo.toml` only.
+Codex's MEDIUM ("Version changes omit `Cargo.lock`") is right in general and wrong for this repo,
+and the same untracked lockfile is the mechanism behind the recorded CI purity-gate drift (transitive
+versions moving between runs).
+**Owner:** UNASSIGNED — a repository-level decision, not this phase's.
+**Status:** OPEN.
+
+---
+
+**`LIM-116-10` — `D-116-LINT-OAUTH`'s named owner was `116-15`, and `116-15` cannot discharge it**
+
+**Statement, recorded because leaving it would create a silent orphan.** The existing
+`D-116-LINT-OAUTH` entry below names its owner as "`116-15`, unchanged — clear the 17, then add
+`--features "full,oauth"` to `make lint` AND to the gate's test stage, as a PAIR." **`116-15` is the
+booking plan: its four tasks are the gates, the contracts, the bookings and this register, and none
+of them touches the `Makefile`.** So the owner assignment cannot be honoured by this plan and is
+REASSIGNED here rather than allowed to lapse.
+**Measured at HEAD by this plan, in both halves:**
+- **clippy half — still exactly 17**, all in `src/client/oauth.rs`, ZERO new from `116-13`, `116-14`
+  or `116-15` (the anchor moved 29 → 24 → 21 → 17 and has now held across three plans).
+- **test half — 143 tests, the largest measurement yet** (was 81 after `116-11`, 102 after
+  `116-12`): 117 core tests in six `#![cfg(feature = "oauth")]` binaries that the gate RUNS and
+  reports as `0 passed`, plus 26 `cargo-pmcp` tests the gate does not run at all. The gate's
+  `test-unit` population is **still 1880**, byte-identical across five consecutive plans.
+- **and a new severity**: `116-15` A3 found the hole hiding an actual `-D clippy::all` HARD ERROR
+  (`clippy::err_expect` in `tests/oauth_iss_integration.rs`), not merely pedantic warnings. Every
+  prior instance was warnings.
+**Owner:** **UNASSIGNED** — needs a roadmap slot, and it is a Makefile/CI change plus 17 lint fixes,
+which is a plan of its own. The pairing requirement stands: clear the 17 FIRST, then add the feature
+to `make lint` and to the gate's test stage TOGETHER, because adding the feature alone turns the gate
+red on 17 pre-existing diagnostics.
+**Status:** OPEN, REASSIGNED from `116-15`.
+
+---
+
+**`LIM-116-11` — there is NO pre-commit hook installed in this clone**
+
+**Statement:** `.git/hooks/pre-commit` does not exist, so CLAUDE.md's "ALL commits are blocked until
+quality gates pass" is a **discipline, not a mechanism**, in this working copy. Combined with
+`LIM-116-10`, this is the full mechanism by which `75c4d088`'s /simplify refactor broke a test
+assertion with nothing noticing until an explicit `--features full,oauth` run: the gate could not see
+the file, and no hook forced the gate.
+**Owner:** UNASSIGNED.
+**Status:** OPEN. Recorded so no plan books the pre-commit gate as an enforced control.
+
+---
+
+**`D-116-GREP` — sixth and seventh instances, both in `116-15`'s own acceptance criteria**
+
+**Statement:** the pattern is now seven-for-seven across this phase — a plan writes an acceptance
+`grep` that cannot pass at any HEAD.
+- **Sixth (Task 1/Task 4):** `grep -rn 'TODO\|FIXME\|HACK\|XXX' src/ cargo-pmcp/src/` "must return
+  nothing". It returns **9**, and returned the identical 9 at `b2bf9157` — 7 in
+  `cargo-pmcp/src/commands/validate.rs` (TEMPLATE TEXT emitted into a user's generated test file)
+  and 2 in `cargo-pmcp/src/deployment/targets/cloudflare/init.rs`. The REAL gate,
+  `make check-todos`, scopes to `src/` and exits 0. **Zero attributable.**
+- **Seventh (Task 2):** `test "$(grep -c 'status: planned' contracts/binding.yaml)" = "0"`. The
+  unanchored grep matches PROSE: it counted **10** before the flip (8 entries + 2 comment lines) and
+  **1** after. The substantive criterion is the ANCHORED `grep -c '^  status: planned'` = **0**,
+  which is the form `116-BASELINES.md` itself used.
+**Owner:** UNASSIGNED — a planning-discipline finding, not a code one. The lesson for a future plan
+author: an acceptance `grep` must be RUN against the current tree before it is written into a plan.
+**Status:** OPEN as a pattern; both instances resolved on their substantive readings.
+
+### F. Closed by this phase
+
+---
+
+**`D-113-V` — the auth surface's whole-body reads are unbounded — CLOSED by `116-14`**
+
+**Cross-reference forward, so a reader of
+`.planning/phases/113-stateless-http-multi-round-trip-elicitation/deferred-items.md:1301` can follow
+the thread:** `D-113-V` was opened by plan `113.1-04` with **Owner: Phase 116 (Auth Hardening SEPs)**
+and **Status: OPEN**. **It is CLOSED**, by commit `43b3dde8`.
+
+**The tripwire's zero report.** `src/client/auth.rs`, `src/client/oauth.rs` and
+`src/server/auth/providers/{generic_oidc,cognito}.rs` are PERMANENTLY in `EXTRA_SCOPE`, and the
+fence that would have reported the **33** whole-body sites `116-BASELINES.md` observed now reports
+**ZERO**. `WHOLE_BODY_ALLOWLIST` is still `&[]` — closed by BOUNDING the reads across
+`116-06`/`116-07`/`116-11`/`116-12`, never by writing exemptions. Re-measured by `116-15` gate A2:
+`binary(v2_bounded_reads_tripwire)` → `13 tests run: 13 passed`, under `--features full,oauth` AND
+under plain `--features full`.
+
+**The two controls that FIRED** (the third is recorded by `116-14` as a measured LIMIT, not as
+evidence):
+1. **Negative control** — `read_token_body` in `src/client/auth.rs` temporarily reverted to
+   `.bytes().await`: `no_unbounded_whole_body_read_over_peer_supplied_bytes` fired at
+   `tests/v2_bounded_reads_tripwire.rs:695`, naming `src/client/auth.rs:828` — and matched a chain
+   rustfmt had broken across two lines, demonstrating the split-chain handling on a real auth file
+   rather than inferring it from the scanner's own unit test.
+2. **Anti-vacuity control, in the direction that CAN fail** — `cognito.rs` dropped from
+   `EXTRA_SCOPE` while its full path was RETAINED in `REQUIRED_FILES`: **four** tests failed at
+   `:170` with "scope discovery lost src/server/auth/providers/cognito.rs".
+
+**One correction `D-113-V` needs, for anyone reading it forward:** it does not mention the
+ACCUMULATION population at all, and widening the fence dragged **13** `push_str(` sites into the
+change detector. `116-BASELINES.md` predicted 7 — measured 2026-08-02, before `116-06`/`07`/`12`
+added the `rendered_source_chain` helpers. **`116-BASELINES.md` § D-15's accumulation count of 7 is
+STALE by four plans; the measured figure is 13**, and this register is where that annotation lives.
+Four `ALLOWLIST` entries with distinct written justifications are the DESIGNED closure for that
+change detector — not the forbidden move, which is `WHOLE_BODY_ALLOWLIST`, whose empty state is its
+floor.
+**Status:** ✅ **CLOSED** by `116-14`, commit `43b3dde8`.
+
+---
+
+**`D-116-EX` — the ALWAYS-EXAMPLE requirement — CLOSED by `116-08`**
+
+`cargo run --example c11_oauth_iss_state_validation` exits 0 both with and without
+`--features full,oauth`, with byte-identical stdout, re-measured at HEAD by gate A8. FUZZ, PROPERTY
+and UNIT were already discharged. **Status:** ✅ CLOSED (see the full entry below).
+
+---
+
+**`RESEARCH A2` — "`make quality-gate` exits 0 at this branch HEAD", carried unmeasured since
+`116-01` — CLOSED by `116-15`**
+
+Measured, not carried: **exit 0**, single-writer log, one success banner, zero `Terminated` lines,
+20 min 10 s. **Status:** ✅ CLOSED (gate A1).
+
+---
+
 ## D-116-EX — No plan in Phase 116 owns CLAUDE.md's ALWAYS-**EXAMPLE** requirement
 
 **Found during:** `116-02` (Task 2), while checking CLAUDE.md's "ALWAYS Requirements for New

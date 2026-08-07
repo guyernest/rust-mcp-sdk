@@ -1309,7 +1309,19 @@ bytes, not a claim that the reads are harmless: a compromised, misconfigured or
 MITM'd IdP endpoint reaches the same `Vec` growth, and an `unwrap_or_default()`
 error-path read will happily allocate a multi-gigabyte "error message".
 **Owner:** **Phase 116 (Auth Hardening SEPs)**
-**Status:** OPEN
+**Status:** ✅ **CLOSED by Phase 116 plan `116-14`, commit `43b3dde8`.** All four auth files are
+PERMANENTLY in the tripwire's `EXTRA_SCOPE`, the fence that would have reported the 33 whole-body
+sites now reports **ZERO**, and `WHOLE_BODY_ALLOWLIST` is still `&[]` — closed by BOUNDING the reads
+(`116-06`/`07`/`11`/`12`), never by writing exemptions. Two controls fired: the negative control
+(`read_token_body` reverted to `.bytes().await` → violation named at `src/client/auth.rs:828`,
+matching a rustfmt-split chain) and the anti-vacuity control in the direction that can fail
+(`cognito.rs` dropped from `EXTRA_SCOPE` while retained in `REQUIRED_FILES` → 4 tests failed at
+`:170`). Re-measured at Phase 116's end: `binary(v2_bounded_reads_tripwire)` → 13 tests run,
+13 passed, under both `--features full,oauth` and `--features full`. **One correction to the entry
+below: it does not mention the ACCUMULATION population, and widening the fence dragged 13
+`push_str(` sites into `every_peer_byte_accumulation_is_reviewed` — closed with four justified
+`ALLOWLIST` entries, which is that list's designed closure. Full write-up:
+`.planning/phases/116-auth-hardening-seps/deferred-items.md` § Phase 116 Deferred Register § F.**
 
 ### Measured population
 
