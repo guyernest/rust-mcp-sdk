@@ -659,7 +659,7 @@ checkboxes a verifier can fail on.
 
 ### Auth Hardening (AUTH)
 
-- [ ] **AUTH-01**: OAuth callback validates RFC 9207 `iss` — validation is **strict whenever the
+- [x] **AUTH-01**: OAuth callback validates RFC 9207 `iss` — validation is **strict whenever the
   authorization server advertises `authorization_response_iss_parameter_supported` or emits `iss`**,
   and a present-but-mismatched `iss` is rejected on every era. The v1 leniency is narrower than
   "lenient" implies: it tolerates only an **absent** `iss` from a v1 authorization server that never
@@ -669,8 +669,91 @@ checkboxes a verifier can fail on.
   breaks regardless of era. `Client::era()` does not exist pre-connection; the flag-keyed rule above
   is what the code can actually implement, and is strictly safer for v1 than the original text asked
   for.)*
-- [ ] **AUTH-02**: Dynamic client registration sends/accepts `application_type`
-- [ ] **AUTH-03**: The remaining auth-hardening SEPs — credential storage keyed by
+
+> **Booked by Phase 116 (plan `116-15`, 2026-08-07).** Every Class-A gate exited 0 at HEAD and
+> Class B (`make doc-check`) held its baseline delta; all counts below are PARSED from a
+> `Summary [...] N tests run` line under a `binary(...)` selector, recorded in
+> `.planning/phases/116-auth-hardening-seps/deferred-items.md` § Phase-End Gate Results.
+>
+> **Artifacts:** `src/shared/oauth_validation.rs` (the whole decision table, ungated and
+> wasm-clean), `src/client/oauth.rs` (the loopback callback listener and the flow), `src/error/mod.rs`
+> (the three marker-const error identities on `Error::Protocol`, chosen because
+> `Error::Authentication` has no `data` member — RESEARCH amendment A2).
+>
+> **Evidence per clause of the amended text.** The requirement was amended in `0aebf7f6` to the rule
+> the code can actually implement, so this booking DEMONSTRATES conformance rather than narrating a
+> gap.
+>
+> | Clause | Evidence |
+> |---|---|
+> | "strict whenever the AS advertises the flag" | the `IssPresence::Required` rows — `binary(oauth_iss_validation)::row1_required_and_present_and_equal_is_accepted` and `::row2_required_and_absent_is_rejected_with_no_actual_issuer` — and the live advertised-flag refusal `binary(oauth_iss_integration)::an_absent_iss_against_an_advertising_server_is_refused` |
+> | **"or emits `iss`"** — the clause that makes v1 **STRICTLY SAFER than before** | `binary(oauth_iss_validation)::optional_with_a_present_but_different_iss_is_still_rejected`: `IssPresence::Optional` plus a present-and-different `iss` returns `Err`. A v1 deployment whose AS emits `iss` now gets it VALIDATED where previously nothing was checked at all. End-to-end: `binary(oauth_iss_integration)::a_present_but_different_iss_is_refused_even_when_nothing_was_advertised` |
+> | "tolerates only an ABSENT `iss`" | `binary(oauth_iss_validation)::row4_optional_and_absent_proceeds` and `binary(oauth_iss_integration)::an_absent_iss_against_a_silent_server_proceeds` — the D-01 floor: absent flag plus absent `iss` proceeds, so no existing v1 deployment breaks |
+>
+> **Counts (parsed, all non-zero):** `binary(oauth_iss_validation)` **27**,
+> `binary(oauth_state_csrf)` **12**, `binary(oauth_iss_integration)` **13**,
+> `binary(oauth_discovery_validation)` **19**. `oauth_iss_validation` reports 27 under **both**
+> `--features full,oauth` and plain `--features full` — the ungated tier is inside
+> `make quality-gate`, not merely adjacent to it.
+>
+> **Two things the requirement did not ask for and got anyway.** (1) **RFC 8414 §3.3 anchor
+> validation** (RESEARCH Pitfall 1): without it the `iss` comparison would have been decorative,
+> because the expected issuer itself came from an unvalidated document — fenced by
+> `binary(oauth_discovery_urls)::the_anchor_comparison_matches_only_identical_strings` and
+> `binary(oauth_discovery_validation)::a_document_that_lies_about_its_issuer_is_rejected_naming_both_values`.
+> (2) **Validate-before-respond ordering in the loopback listener** (Codex HIGH #3): validation moved
+> INSIDE the listener, before the response is committed, so the page the user sees can never claim
+> success for a callback that was rejected —
+> `binary(oauth_iss_integration)::an_error_description_behind_a_wrong_iss_reaches_neither_the_error_nor_the_browser`
+> and `::both_pages_are_byte_identical_to_the_pages_this_module_has_always_served`.
+>
+> **Limitation named, not buried.** The four RFC 3986 no-normalization properties are generated
+> against `IssPresence::Optional` only; that is the harder (lenient) era, so `Required` follows a
+> fortiori, but it is an argument rather than a second measurement.
+
+- [x] **AUTH-02**: Dynamic client registration sends/accepts `application_type`
+
+> **Booked by Phase 116 (plan `116-15`, 2026-08-07).**
+>
+> **Artifacts:** `src/server/auth/provider.rs` (the `DcrRequest`/`DcrResponse` carrier and the
+> exported `DCR_APPLICATION_TYPE_KEY`), `src/shared/oauth_validation.rs` (`derive_application_type`),
+> `src/client/oauth.rs` (the registration construction site that finally CALLS it).
+>
+> **Counts (parsed, non-zero):** `binary(oauth_application_type)` **14**,
+> `binary(oauth_dcr_integration)` **24** — a before/after, since that binary held **5** at the phase
+> base `b2bf9157` (`116-BASELINES.md` item 3 lists those five by name).
+>
+> **`application_type` is asserted on the WIRE BODY, not on the in-memory struct.** That distinction
+> is the requirement: a field set on a Rust value that never reaches the registration request would
+> satisfy a struct assertion and fail the specification. The fences read the HTTP body a mock server
+> received — `binary(oauth_dcr_integration)::the_dcr_wire_body_carries_the_derived_native_application_type`,
+> `::an_https_non_loopback_registration_derives_web`,
+> `::an_explicit_application_type_reaches_the_wire_instead_of_the_derivation`.
+>
+> **The semver gate stayed additive** because the value rides the existing `#[serde(flatten)] extra`
+> carrier rather than a new public field: `DcrRequest`/`DcrResponse` are public, all-pub-field and
+> NOT `#[non_exhaustive]` with ten in-repo struct-literal construction sites, so adding a field would
+> have tripped `constructible_struct_adds_field` = MAJOR. Measured:
+> `cargo semver-checks check-release -p pmcp --baseline-rev b2bf9157` → exit 0, 196 pass / 0 fail.
+>
+> **"accepts"** is the echo half: RFC 7591 §3.2.1 permits the server to modify requested metadata, so
+> a divergent echo WARNS and never fails —
+> `binary(oauth_dcr_integration)::an_echoed_application_type_that_diverges_still_registers_the_client`,
+> `::an_omitted_application_type_echo_is_not_divergence_and_registration_succeeds`,
+> `::an_identical_application_type_echo_registers_without_incident`.
+>
+> **One obligation deliberately NOT adopted, with its reason.** SEP-837's optional retry with an
+> adjusted `application_type` is a MAY, and it sits beside a MUST to "surface a meaningful error". An
+> automatic retry would DEFEAT the obligation next to it: the operator would see a registration that
+> eventually succeeded under a type they did not choose, instead of the mismatch they need to fix.
+> The rejection path instead names the status, the server's parsed `error`/`error_description`, the
+> `application_type` sent and the `redirect_uris` sent —
+> `::a_rejected_registration_names_the_status_the_sent_type_and_the_sent_redirect_uri` — read under
+> the 1 MiB cap and with the echo-channel absence assertions
+> `::a_rejected_registration_does_not_echo_unparsed_fields_of_the_body` and
+> `::a_rejected_registration_with_a_non_json_body_reproduces_none_of_it`.
+
+- [x] **AUTH-03**: The remaining auth-hardening SEPs — credential storage keyed by
   `(issuer, account, server)` per SEP-2352's "MUST NOT reuse across authorization servers", plus the
   **two adopted clarifications** SEP-2351 (`.well-known` discovery probe sequence) and SEP-2207
   (refresh-token/`offline_access` handling) — are applied without breaking existing v1 OAuth
@@ -683,6 +766,145 @@ checkboxes a verifier can fail on.
   `(issuer, account, server)` because two MCP servers sharing one authorization server and account
   would otherwise collide, and the deferral of RFC 8707 (`b2bf9157`) removed the audience binding
   that would have mitigated it.)*
+
+> **Booked by Phase 116 (plan `116-15`, 2026-08-07).**
+>
+> **Artifacts:** `src/shared/credential_store.rs` (`CredentialKey`, the `CredentialStore` /
+> `CredentialStoreAdmin` traits, the pure `parse_credential_snapshot` migration),
+> `src/shared/credential_file.rs` (`FileCredentialStore`, the default on-disk implementation),
+> `src/shared/oauth_validation.rs` (the SEP-2351 probe order and the discovery outcome matrix),
+> `src/client/oauth.rs` (`with_credential_store`, `with_account_scope`, the refresh path),
+> `cargo-pmcp/src/commands/auth_cmd/` (which now carries no credential format, reader or writer of
+> its own).
+>
+> **Clause 1 — the three-part `(issuer, account, server)` key.**
+> `binary(oauth_credential_store)` **54**, including the cross-issuer test
+> `::credentials_from_a_different_authorization_server_are_a_cache_miss_sep_2352`'s unit siblings
+> `::load_with_a_different_issuer_is_a_miss`, `::load_with_a_different_server_is_a_miss` and
+> `::load_with_a_different_account_is_a_miss`. The two-servers-one-authorization-server collision
+> test, **named because it is the reason the key was widened**:
+> `binary(oauth_store_wiring)::two_mcp_servers_sharing_one_authorization_server_and_account_stay_disjoint_d_116_r1`
+> (`binary(oauth_store_wiring)` **18**), with the CLI end of the same property at
+> `binary(auth_integration)::logout_of_one_server_leaves_a_second_sharing_one_issuer_working_d_116_r1`
+> (`binary(auth_integration)` **20**).
+>
+> **Why the key was widened from CONTEXT's original `(issuer, account)`:** two MCP servers can share
+> one authorization server and one account while holding different DCR registrations, different
+> client IDs and different granted scopes; under the narrower key one server's `logout` deletes the
+> other's credentials and a migration can overwrite one with the other. RFC 8707's `resource`
+> audience binding would have mitigated it and is deferred by owner decision `b2bf9157`, so the KEY
+> carries the binding instead. Provenance: `116-REVIEWS.md` § Consensus Summary, Codex HIGH #1 — the
+> change was measured, not stylistic, and Gemini's review did not surface it at all.
+>
+> **⚠ THE NAMED PRECONDITION ON THIS CLAUSE (`D-116-PRM`), quoted rather than summarised.** RFC 9728
+> Protected Resource Metadata is a deferred MCP-spec client MUST, and it is a NAMED DEPENDENCY of
+> what is booked here, not a generic deferral. From
+> `.planning/phases/116-auth-hardening-seps/deferred-items.md` § D-116-PRM:
+>
+> > **The D-116-R1 collision is not CONSTRUCTIBLE through the live flow.** Two MCP servers at two
+> > different origins always resolve two different issuers, and two MCP servers at ONE origin
+> > normalize to one `server` key (`normalize_server_key` drops the path). So "two MCP servers
+> > sharing one authorization server and one account" — the case AUTH-03's amended text was written
+> > for, and the case the third key component exists to keep apart — cannot arise until the
+> > authorization server is discovered independently of the MCP origin. That is RFC 9728 Protected
+> > Resource Metadata. `116-11`'s collision test therefore SEEDS the second server's entry, which is
+> > recorded in the test file's own module doc rather than left for a reader to infer. The key shape
+> > is correct and proven; the scenario it defends is currently reachable only by a platform that
+> > drives the store itself.
+>
+> So, exactly: **the key shape is delivered and proven at the store, the trait and the helper; the
+> SCENARIO it defends has no end-to-end coverage and cannot have any until RFC 9728 lands.** The
+> mechanism is `pmcp` deriving the authorization server from the MCP base URL
+> (`get_metadata_with_extras` → `discover_metadata_with_extras` → `extract_base_url`), which
+> `116-07`'s RFC 8414 §3.3 anchor then forces to one issuer per origin.
+>
+> **Clause 2 — SEP-2351 (`.well-known` discovery probe sequence).**
+> `binary(oauth_discovery_urls)` **38**, `binary(oauth_discovery_validation)` **19**,
+> `binary(oauth_provider_discovery)` **15**. It landed as an ORDERED PROBE, not an append-to-insert
+> swap, because the appended OIDC form was measured to be the only one Microsoft Entra ID answers
+> 200 for a path-carrying issuer (RESEARCH amendment A3) —
+> `::the_oidc_appended_form_is_present_for_every_issuer`,
+> `::the_microsoft_entra_id_form_survives_as_the_last_candidate`. The terminal-not-fallback outcome
+> matrix is the security half: `::row_issuer_mismatch_is_terminal`, `::row_body_over_cap_is_terminal`,
+> `::row_malformed_security_metadata_is_terminal`, and
+> `::an_untrusted_document_never_falls_through_and_availability_is_never_terminal`, with the live
+> counterparts `binary(oauth_discovery_validation)::a_lying_document_aborts_the_probe_instead_of_downgrading_to_a_later_candidate`
+> and `::an_oversized_body_aborts_the_probe_instead_of_downgrading_to_a_later_candidate`.
+>
+> **Clause 3 — SEP-2207 (refresh-token / `offline_access` handling).** `binary(oauth_refresh)` **21**,
+> including D-14's three defect tests
+> (`::an_omitted_refresh_token_in_the_response_preserves_the_stored_one`,
+> `::a_refresh_response_that_supplies_a_new_refresh_token_replaces_the_stored_one`,
+> `::a_refresh_response_that_omits_expires_in_does_not_corrupt_the_stored_expiry`), the granted-scope
+> containment property `::a_refresh_never_widens_beyond_the_granted_scope_rfc6749_section_6` with
+> `::the_refresh_body_carries_exactly_the_stored_granted_scopes_in_order` and
+> `::an_advertised_but_never_granted_offline_access_is_absent_from_the_refresh`. `offline_access` is
+> requested at BOTH stages where asking means something and at neither refresh nor the device-code
+> grant — `binary(oauth_dcr_integration)::the_dcr_wire_body_registers_offline_access_when_the_server_advertises_it`,
+> `::the_authorization_url_requests_offline_access_when_the_server_advertises_it`, and their
+> omits-when-not-advertised siblings (Codex HIGH #6).
+>
+> **Clause 4 — no v1 breakage.** The D-01 floor holds: an absent flag plus an absent `iss` proceeds
+> (`binary(oauth_iss_validation)::row4_optional_and_absent_proceeds`,
+> `binary(oauth_iss_integration)::an_absent_iss_against_a_silent_server_proceeds`). The documented
+> proxy exception is UNTOUCHED — `git diff --name-only b2bf9157..HEAD -- src/` contains no transport
+> or origin file, so `stateless()` (`src/server/streamable_http_server.rs:250`) and
+> `AllowedOrigins::any()` are byte-identical to the phase base. The legacy flat token cache is never
+> read and never overwritten
+> (`binary(oauth_store_wiring)::the_legacy_issuer_less_token_cache_is_never_read_and_is_left_in_place`,
+> `::the_default_store_lives_beside_the_legacy_file_and_never_on_top_of_it`).
+>
+> **Clause 5 — no new crate, scoped EXACTLY as RESEARCH Pitfall 6 requires** (an unscoped claim
+> reopens the booking, because a reviewer WILL grep and find the line): **no new
+> `oauth2`/`openidconnect` dependency was added; the `pmcp` core crate remains oauth2-free;
+> `cargo-pmcp`'s PRE-EXISTING direct `oauth2 = "5.0"` at `cargo-pmcp/Cargo.toml:88` is confined to
+> `cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs` and is untouched, with ZERO `oauth2::`
+> references under `cargo-pmcp/src/commands/`** — which is where `116-13` worked. The six `oauth2::`
+> paths under `src/` all resolve to the INTERNAL module `crate::server::auth::oauth2`. Fence
+> commands, all run at HEAD:
+>
+> ```
+> $ git diff b2bf9157 -- Cargo.toml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)'
+> -version = "2.17.0"
+> +version = "2.18.0"                      # the only pair; no dependency line moved
+> $ grep -rnE '^oauth2\s*=|^openidconnect\s*=' Cargo.toml
+> (exit 1 — no hits)
+> $ grep -rn 'oauth2::' cargo-pmcp/src/commands/
+> (exit 1 — no hits)
+> $ set -o pipefail && grep -rn "openidconnect" --include="Cargo.toml" .
+> (exit 1 — no hits anywhere in the repository)
+> ```
+>
+> **At-rest safety and D-15.** `binary(oauth_credential_file)` **29** covers the at-rest properties
+> (`::save_sets_0600_on_the_file_and_0700_on_the_parent_it_creates`,
+> `::a_pre_existing_loose_file_is_tightened_by_the_next_save`,
+> `::a_corrupt_file_names_the_path_says_what_to_do_and_echoes_no_content`,
+> `::a_stale_lock_is_broken_so_a_crash_cannot_wedge_the_store`).
+> `binary(v2_bounded_reads_tripwire)` **13** closes D-15: the fence is permanently widened onto all
+> four auth files and reports ZERO whole-body violations with `WHOLE_BODY_ALLOWLIST` still `&[]` —
+> closed by bounding reads, not by writing exemptions.
+>
+> **SEP-2350 is NOT listed as a limitation of this requirement.** The amended text puts it explicitly
+> OUT OF SCOPE, so it is recorded as a DEFERRAL in the phase register instead; listing an
+> out-of-scope item as a limitation of the requirement it sits outside of is what made the previous
+> revision of this booking unbookable.
+>
+> **The three limitations that ARE in scope.**
+> 1. **AS-change detection does not use the specification's stated mechanism.** SEP-2352 describes
+>    the change as "detected via updated protected resource metadata"; `116-11` instead compares the
+>    issuer RESOLVED for a server URL against the one last recorded for it, which catches a server
+>    that starts pointing elsewhere but cannot catch a change announced only through protected
+>    resource metadata, because nothing reads that (`D-116-PRM` consequence 2; written into
+>    `announce_authorization_server_change`'s rustdoc in place; `T-116-43` disposition `accept`).
+> 2. **Schema-1 `cargo-pmcp` entries that record no issuer are DROPPED rather than guessed**, and the
+>    migration reports the count. SEP-2352 forbids inferring an issuer, and adopting one would bind a
+>    token to an authority that never minted it. This narrows D-17's "every existing login is
+>    preserved" — see the register.
+>    (`binary(auth_integration)::a_previous_format_entry_with_no_issuer_is_dropped_and_both_counts_are_reported`.)
+> 3. **An already-installed `cargo-pmcp` 0.18.0 hard-errors on `schema_version: 2`**
+>    (`cache.rs:74-80`) with an "upgrade cargo-pmcp" message, and nothing in this repository can
+>    change a binary a user already installed. Released-behaviour note; owner: cargo-pmcp release
+>    notes.
 
 ### Client & Agents on v2 (CLNT)
 
@@ -807,9 +1029,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCHM-01 | Phase 115 | Complete — gap closed in two rounds: 115-12 + 115-13 (recursive `$schema` pin; `root-draft07 + embedded` now `(Violates, Violates)`) then 115-14 + 115-15 (POSITION-AWARE traversal — `SUBSCHEMA_MAP_KEYWORDS`, so a keyword deny-list is never tested against a key in NAME position; `$defs.default` now `(Conforms, Violates)`, `rewritten=true`; rename-invariance fences in both generators, derived from the spec rather than restated from the crate's keyword lists) then 115-16 + 115-17 + 115-18 + 115-19 (COMPLETENESS — `SUBSCHEMA_MAP_KEYWORDS` omitted `dependencies`, so `dependencies.default` measured `rewritten=false` with no `tracing::warn!`; the list is now the SIX keywords DERIVED from the pinned meta-schemas rather than hand-kept, fenced STRUCTURALLY because no v2 verdict flip is reproducible there — both names are `(Violates, Violates)` — and all three literal copies of both keyword lists are held to that derivation by `tests/keyword_list_mirrors.rs`, the featureless source-text drift gate WR-01 asked for; residual `components.default` → `rewritten=false` booked unowned as `D-115-AK`) |
 | SCHM-02 | Phase 115 | Complete |
 | SCHM-03 | Phase 115 | Complete |
-| AUTH-01 | Phase 116 | Pending |
-| AUTH-02 | Phase 116 | Pending |
-| AUTH-03 | Phase 116 | Pending |
+| AUTH-01 | Phase 116 | **Complete** — booked by `116-15` against the text amended in `0aebf7f6`; `binary(oauth_iss_validation)` 27, `binary(oauth_iss_integration)` 13, `binary(oauth_state_csrf)` 12, `binary(oauth_discovery_validation)` 19, all parsed non-zero. The "or emits `iss`" clause makes v1 strictly SAFER than before. Anchor validation (RFC 8414 §3.3) and validate-before-respond ordering were delivered beyond the ask |
+| AUTH-02 | Phase 116 | **Complete** — booked by `116-15`; `binary(oauth_application_type)` 14, `binary(oauth_dcr_integration)` 24 (5 at the phase base). `application_type` asserted on the WIRE BODY, additive via the `#[serde(flatten)] extra` carrier (`semver-checks --baseline-rev b2bf9157` 196/196). SEP-837's retry MAY deliberately not adopted |
+| AUTH-03 | Phase 116 | **Complete** — booked by `116-15` against the text amended in `0aebf7f6`, with SEP-2350 explicitly out of scope. `binary(oauth_credential_store)` 54, `binary(oauth_store_wiring)` 18, `binary(oauth_credential_file)` 29, `binary(oauth_refresh)` 21, `binary(oauth_discovery_urls)` 38, `binary(auth_integration)` 20, `binary(v2_bounded_reads_tripwire)` 13. **Carries the named precondition `D-116-PRM`: the key shape is proven, but the two-servers-one-authorization-server SCENARIO is not constructible through the live flow until RFC 9728 lands, so its test seeds the second server.** Three in-scope limitations recorded in the booking |
 | CLNT-03 | Phase 117 | Pending |
 | CLNT-04 | Phase 117 | Pending |
 | SMPL-01 | Phase 117 | Pending |
@@ -844,11 +1066,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 - Phase 113 Stateless HTTP + MRTR — HTTP-01..05, CLNT-01, CLNT-02 (7)
 - Phase 114 Tasks Extension Migration — TASK-01..06 (6)
 - Phase 115 JSON Schema 2020-12 + Caching Hints — SCHM-01..03 (3)
-- Phase 116 Auth Hardening SEPs — AUTH-01..03 (3)
+- Phase 116 Auth Hardening SEPs — AUTH-01..03 (3) — **all 3 booked `[x]` by `116-15`, 2026-08-07**
 - Phase 117 Agents, Tester & v1 Severability — CLNT-03, CLNT-04, SMPL-01, SMPL-02 (4)
 - Phase 118 Conformance — CONF-01..03 (3)
 - Phase 119 Documentation — DOCS-04..06 (3)
 
 ---
 *Requirements defined: 2026-07-22*
-*Last updated: 2026-07-22 — traceability populated by v2.5 roadmap (Phases 112-119, 38/38 mapped)*
+*Last updated: 2026-08-07 — AUTH-01/02/03 booked `[x]` by Phase 116 plan `116-15` against the text
+amended in `0aebf7f6`, with cited artifacts, named `binary(...)` selectors and parsed counts. The
+Coverage block above is a MAPPING tally and is unchanged by a booking: 3 AUTH requirements were
+mapped to Phase 116 before and 3 are mapped now; what moved is their status, in the traceability
+table and in the phase map. (Previously: 2026-07-22 — traceability populated by v2.5 roadmap,
+Phases 112-119, 38/38 mapped.)*
