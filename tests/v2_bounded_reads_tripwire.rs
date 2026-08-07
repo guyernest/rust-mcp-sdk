@@ -1,15 +1,38 @@
-//! HTTP-09 tripwire — the mechanical half of "every peer-controlled read on the
-//! v2 transport path is memory-bounded".
+//! HTTP-09 / AUTH-03 tripwire — the mechanical half of "every peer-controlled
+//! read on the v2 transport path **and on the auth surface** is memory-bounded".
 //!
-//! # What the requirement says
+//! # What the requirements say
 //!
-//! > **HTTP-09**: Every peer-controlled read on the v2 transport path is
-//! > memory-bounded. Closure is **enumerable, not narrative**: a tripwire test
-//! > asserts that no unbounded whole-body read (`.collect()`, `read_to_end`) and
-//! > no unbounded accumulation over peer-supplied bytes exists in `src/shared/`,
-//! > `src/client/subscriptions.rs`, or `src/server/streamable_http_server.rs`
-//! > outside an explicit reviewed allowlist, and that no scan over peer-chosen
-//! > input is worse than O(n).
+//! This file has TWO owners. It was written for the first and widened for the
+//! second, and it enforces the union of their scopes.
+//!
+//! > **HTTP-09** (first owner, phase 113.1): Every peer-controlled read on the v2
+//! > transport path is memory-bounded. Closure is **enumerable, not narrative**: a
+//! > tripwire test asserts that no unbounded whole-body read (`.collect()`,
+//! > `read_to_end`) and no unbounded accumulation over peer-supplied bytes exists
+//! > in `src/shared/`, `src/client/subscriptions.rs`, or
+//! > `src/server/streamable_http_server.rs` outside an explicit reviewed
+//! > allowlist, and that no scan over peer-chosen input is worse than O(n).
+//!
+//! > **AUTH-03 / D-15** (second owner, phase 116): the same property on the OAuth
+//! > / OIDC surface — `src/client/auth.rs`, `src/client/oauth.rs`,
+//! > `src/server/auth/providers/generic_oidc.rs` and
+//! > `src/server/auth/providers/cognito.rs`. Those bodies come from an identity
+//! > provider the deployment configured rather than from an arbitrary remote peer,
+//! > which is a statement about WHO CHOOSES THE BYTES and not a claim that the
+//! > reads are harmless: a compromised, misconfigured or MITM'd IdP endpoint
+//! > reaches the same allocation.
+//!
+//! ## The four auth files entered scope in phase 116, closing D-113-V
+//!
+//! `D-113-V` (`.planning/phases/113-.../deferred-items.md`) recorded 31
+//! reviewed-unbounded whole-body reads across exactly those four files, and
+//! recorded that the SCANNER ALREADY FOUND THEM — only the scope fence kept them
+//! unreported. Phase 116 bounded every one of those reads (plans 116-06, 116-07,
+//! 116-12) and then widened the fence here, in that order: widening first would
+//! have left `make quality-gate` red for several waves. The fence is now the thing
+//! that keeps them bounded, so a NEW unbounded read added to an auth file fails
+//! this suite by name instead of passing unnoticed.
 //!
 //! This file is the *enumeration* half. The O(n) clause is a separate artifact.
 //!
@@ -63,22 +86,46 @@ use std::path::{Path, PathBuf};
 /// how this requirement reopened three times.
 const SHARED_DIR: &str = "src/shared";
 
-/// The two individually-named files HTTP-09 puts in scope beyond `src/shared/`.
+/// The individually-named files this file's two owners put in scope beyond
+/// `src/shared/`.
+///
+/// The first two are HTTP-09's. The last four are AUTH-03 / D-15's, added in
+/// phase 116 to close D-113-V — the scanner already found their unbounded reads,
+/// and only this fence kept them unreported.
 const EXTRA_SCOPE: &[&str] = &[
     "src/client/subscriptions.rs",
     "src/server/streamable_http_server.rs",
+    "src/client/auth.rs",
+    "src/client/oauth.rs",
+    "src/server/auth/providers/generic_oidc.rs",
+    "src/server/auth/providers/cognito.rs",
 ];
 
 /// Files whose absence from the discovered scope means discovery is broken.
 ///
 /// Without this, a `read_dir` that silently returned nothing would make every
 /// check in this file pass over an empty set.
+///
+/// **These are FULL RELATIVE PATHS, matched against `rel()`, not base names.**
+/// A base name is not a safe key here: nine tracked files in this repo share the
+/// base name of `src/client/auth.rs`, and two of them live under `src/` (the
+/// other being `src/types/auth.rs`), so a bare base-name entry could be satisfied
+/// by the WRONG file entering scope and would report a green guard over coverage
+/// that was never established. The pre-existing five entries were converted to
+/// full paths in the same edit so the constant has one consistent form.
+///
+/// A reviewer can check the form mechanically — this returns nothing:
+/// `grep -nE '"(auth|oauth|generic_oidc|cognito)\.rs"' tests/v2_bounded_reads_tripwire.rs`
 const REQUIRED_FILES: &[&str] = &[
-    "http.rs",
-    "sse_parser.rs",
-    "streamable_http.rs",
-    "streamable_http_server.rs",
-    "subscriptions.rs",
+    "src/shared/http.rs",
+    "src/shared/sse_parser.rs",
+    "src/shared/streamable_http.rs",
+    "src/server/streamable_http_server.rs",
+    "src/client/subscriptions.rs",
+    "src/client/auth.rs",
+    "src/client/oauth.rs",
+    "src/server/auth/providers/generic_oidc.rs",
+    "src/server/auth/providers/cognito.rs",
 ];
 
 fn repo_root() -> PathBuf {
@@ -125,10 +172,11 @@ fn scope_files() -> Vec<PathBuf> {
     );
     for required in REQUIRED_FILES {
         assert!(
-            files
-                .iter()
-                .any(|p| p.file_name().is_some_and(|n| n == *required)),
-            "scope discovery lost {required}; discovered: {:?}",
+            files.iter().any(|p| rel(p) == *required),
+            "scope discovery lost {required}; discovered: {:?}\n    \
+             REQUIRED_FILES holds FULL RELATIVE PATHS. If this fired after an EXTRA_SCOPE edit, a \
+             path was dropped or mistyped and its file is no longer scanned — the silent \
+             coverage loss this guard exists to catch.",
             files.iter().map(|p| rel(p)).collect::<Vec<_>>()
         );
     }
@@ -649,11 +697,25 @@ fn no_unbounded_whole_body_read_over_peer_supplied_bytes() {
     }
     assert!(
         violations.is_empty(),
-        "HTTP-09: unbounded whole-body read(s) over peer-supplied bytes:{violations}\n\
-         Required action: wrap the read in `http_body_util::Limited` with the transport's \
-         configured cap, exactly as `collect_body_within_cap` does in src/shared/http.rs and \
-         src/shared/streamable_http.rs. If this site genuinely cannot be bounded, add a \
-         WHOLE_BODY_ALLOWLIST entry with a written justification and get it reviewed. \
+        "HTTP-09 / AUTH-03: unbounded whole-body read(s) over peer-supplied bytes:{violations}\n\
+         Required action depends on which client the site uses, and the two shapes are NOT \
+         interchangeable:\n\
+         \u{20} * hyper / axum (src/shared/, src/client/subscriptions.rs, \
+         src/server/streamable_http_server.rs): wrap the read in `http_body_util::Limited` with \
+         the transport's configured cap, exactly as `collect_body_within_cap` does in \
+         src/shared/http.rs and src/shared/streamable_http.rs.\n\
+         \u{20} * reqwest (src/client/auth.rs, src/client/oauth.rs, \
+         src/server/auth/providers/generic_oidc.rs, src/server/auth/providers/cognito.rs): \
+         `Limited` does NOT apply — reqwest exposes no body-limit API and every one of its \
+         whole-body reads (`.text()`, `.bytes()`, `.json()`) is unbounded with no bounded form to \
+         recognise. Use the `Response::chunk()`-accumulate shape instead: \
+         `collect_reqwest_body_within_cap` in src/shared/http_body_cap.rs (116-06), which checks \
+         the running total BEFORE each append so an over-cap body is never held whole, then \
+         `serde_json::from_slice`. `collect_sse_text_within_cap` in src/shared/sse_optimized.rs \
+         is the same shape for text.\n\
+         If this site genuinely cannot be bounded, add a WHOLE_BODY_ALLOWLIST entry with a \
+         written justification and get it reviewed — that list is EMPTY and that is its floor, so \
+         an entry is a decision a human makes on the record, not a way to close a phase. \
          Deleting the needle is not a fix."
     );
 }
@@ -758,6 +820,31 @@ struct Accumulation {
 /// line number, because those churn on every unrelated edit.
 const ALLOWLIST: &[Accumulation] = &[
     Accumulation {
+        path: "src/client/auth.rs",
+        needle: "push_str(",
+        count: 2,
+        why: "rendered_source_chain walks a &dyn Error source chain, appending \" <- \" and one \
+              cause's Display per LINK. The loop runs once per link, not once per byte: the chain \
+              is the finite structure reqwest built (its own error, then hyper/io or this crate's \
+              redirect refusal), and a reqwest error's Display names the request URL, the error \
+              kind and the status — it never carries the response body, which is the only thing \
+              in this path whose length an identity provider chooses. Sole production call site \
+              is request_failure. The bound is the chain's DEPTH, not a drain downstream; nothing \
+              streams into this String.",
+    },
+    Accumulation {
+        path: "src/client/oauth.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "extract_base_url appends a decimal port AFTER Url::parse has already accepted the \
+              MCP server URL, so the appended text is a colon plus at most five digits — \
+              Url::port() is an Option<u16>, and the `if let Some(port)` guard runs at most once \
+              per call with no loop and no incremental reader behind it. This is the same \
+              TYPE-bounded shape as normalize_server_key's entry below, reached from a different \
+              direction: it formats a parsed authority into a discovery base URL rather than into \
+              a credential cache key.",
+    },
+    Accumulation {
         path: "src/client/subscriptions.rs",
         needle: "extend_from_slice(",
         count: 2,
@@ -786,6 +873,36 @@ const ALLOWLIST: &[Accumulation] = &[
               to exactly that boundary. It IS a bound rather than a consumer of one: it exists to \
               keep untrusted peer frame bytes out of a client's logs, and it is the only writer \
               of that String.",
+    },
+    Accumulation {
+        path: "src/server/auth/providers/cognito.rs",
+        needle: "push_str(",
+        count: 5,
+        why: "Two mechanisms, both bounded by STRUCTURE rather than by a drain. (a) Three appends \
+              in authorization_url build a query string out of AuthorizationParams — a struct the \
+              calling server supplies, not bytes read off a socket. The nonce and PKCE-challenge \
+              appends each sit under a single `if let` that fires at most once, and the `extra` \
+              loop appends exactly once per HashMap entry the caller put there; every value goes \
+              through urlencoding::encode, so a value cannot break out of the parameter it is in. \
+              If an operator ever forwards a remote client's query map into `extra` verbatim, the \
+              bound becomes that map's size, and that is a decision the operator makes. (b) Two \
+              appends in rendered_source_chain run once per source() link of a reqwest error \
+              whose Display carries the URL, kind and status and never a response body.",
+    },
+    Accumulation {
+        path: "src/server/auth/providers/generic_oidc.rs",
+        needle: "push_str(",
+        count: 5,
+        why: "The same two mechanisms as the Cognito provider, in this file's own code: three \
+              appends in authorization_url and two in rendered_source_chain. What differs here is \
+              where the URL's PREFIX comes from — this provider starts from the \
+              authorization_endpoint of a discovery document, which is IdP-chosen text, and that \
+              document is read through collect_reqwest_body_within_cap under \
+              DEFAULT_AUTH_RESPONSE_BYTES (116-06), so even the peer-chosen part arrived under a \
+              1 MiB ceiling before it was ever appended to. The two caller-supplied appends are \
+              single-shot `if let` guards, the `extra` loop is one append per map entry, all \
+              urlencoding::encode'd, and the error-chain appends run once per finite source() \
+              link. Neither mechanism retains state across calls.",
     },
     Accumulation {
         path: "src/shared/credential_store.rs",
