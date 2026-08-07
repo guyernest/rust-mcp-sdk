@@ -544,6 +544,174 @@ acceptance class behind it.
 
 ---
 
+## Contract-First Closure
+
+Written by `116-15` Task 2. This is Class-A gate **A11**'s Phase-116 half, and it closes the loop
+CLAUDE.md § "Contract-First Development" opens. `116-01` authored three equations and eight bindings
+in wave 1, **before one line of this phase's `src/` existed**; this section checks the code that
+actually shipped against them and records the result — including where the two disagreed.
+
+### Step 1 — every `function:` resolved against real source
+
+The technique mirrors the team-servers gate (`Makefile:818-834`), adapted to `src/`: extract each
+`function:` value from the Phase-116 section and assert a declaration needle. Run it verbatim:
+
+```bash
+awk '/^# === OAuth Client Hardening \(Phase 116\) ===/,0' contracts/binding.yaml \
+  | grep -E '^  function:' | sed 's/^  function: //' \
+  | while read -r f; do sym=${f##*::}; \
+      if grep -rqE "fn ${sym}\b" src/; then echo "  OK   $f"; else echo "  FAIL $f"; fi; done
+```
+
+| # | `function:` | `module_path:` | declaration found at | resolved |
+|---|---|---|---|---|
+| 1 | `validate_authorization_response` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:334` | **OK** |
+| 2 | `iss_presence_from` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:530` | **OK** |
+| 3 | `discovery_url_candidates` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:763` | **OK** |
+| 4 | `issuer_matches_metadata` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:835` | **OK** |
+| 5 | `classify_discovery_failure` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:978` | **OK** |
+| 6 | `derive_application_type` | `pmcp::shared::oauth_validation` | `src/shared/oauth_validation.rs:1104` | **OK** |
+| 7 | `parse_credential_snapshot` | `pmcp::shared::credential_store` | `src/shared/credential_store.rs:652` | **OK** |
+| 8 | `CredentialKey::new` | `pmcp::shared::credential_store` | `src/shared/credential_store.rs:152` | **OK (by hand)** |
+
+**Row 8 was verified by hand, as `116-01`'s own note demanded.** The resolver reduces
+`CredentialKey::new` to the symbol `new`, whose needle `fn new\b` matches hundreds of unrelated
+declarations, so an automated OK there proves nothing. Opened and read: `src/shared/credential_store.rs:152`,
+inside `impl CredentialKey`, three parameters named `issuer`, `account`, `server`.
+
+Both `module_path:` values are real and UNGATED — `pub mod shared` (`src/lib.rs:34`),
+`pub mod credential_store` (`src/shared/mod.rs:32`), `pub mod oauth_validation`
+(`src/shared/mod.rs:62`), none carrying a `#[cfg]`. That is what makes A6's wasm result and A2's
+`--features full` column possible at all.
+
+### Step 1b — the four signature DIVERGENCES, recorded rather than absorbed
+
+A contract that silently adopts whatever shipped constrains nothing, so each difference between the
+wave-1 designed interface and the shipped declaration is named, explained, and the `signature:`
+value updated.
+
+| `function:` | designed in wave 1 | shipped | why it moved |
+|---|---|---|---|
+| `iss_presence_from` | no attribute | `#[must_use] pub fn …` | a pure precedence resolver whose returned `IssPresence` being dropped is always a bug; clippy's `must_use_candidate` is in `make lint`'s `-A` list, so this was a deliberate authorial choice, not a lint forcing it |
+| `issuer_matches_metadata` | no attribute | `#[must_use] pub fn …` | same shape, and a dropped `bool` here is a discarded RFC 8414 §3.3 anchor check — the most dangerous possible drop in this phase |
+| `discovery_url_candidates` | `Result<Vec<url::Url>>` | `Result<Vec<Url>>` | path qualification only; the module carries `use url::Url`. NOT a type change — recorded so a reader diffing the two does not hunt for one |
+| `CredentialKey::new` | three `impl Into<String>` APIT parameters | `pub fn new<I: Into<String>, A: Into<String>, S: Into<String>>(…)` | identical bounds, but the named-generic form admits turbofish where APIT does not, so it is a strictly WIDER public API. The contract has to say which of the two it is, because the difference is semver-visible |
+
+The other four — `validate_authorization_response`, `classify_discovery_failure`,
+`derive_application_type`, `parse_credential_snapshot` — shipped **byte-identical** to the interface
+committed before their bodies existed. That is the contract-first mandate working as intended: four
+of eight interfaces were designed correctly on the first attempt from the RFC/SEP clause alone, and
+the four that moved, moved for reasons a reader can now audit.
+
+### Step 2 — the invariant-to-fence mapping
+
+Every invariant in all three equations, each with a named test **binary** and a named **test**. An
+invariant with no fence would be a real finding and would BLOCK its binding's flip; none is unfenced.
+
+**`oauth_authorization_response_validation` — 10 invariants** (`contracts/mcp-protocol-sdk-v1.yaml:492-583`)
+
+| # | Invariant (abbreviated) | Fence |
+|---|---|---|
+| 1 | present-but-different `iss` rejected under EVERY `IssPresence` | `binary(oauth_iss_validation)::optional_with_a_present_but_different_iss_is_still_rejected`; both eras end-to-end in `binary(oauth_iss_integration)::a_matching_state_with_a_different_iss_is_refused_and_never_redeems` (advertised → `Required`) and `::a_present_but_different_iss_is_refused_even_when_nothing_was_advertised` (no metadata → `Optional`) |
+| 2 | under `Required`, an ABSENT `iss` is rejected | `binary(oauth_iss_validation)::row2_required_and_absent_is_rejected_with_no_actual_issuer`; `binary(oauth_iss_integration)::an_absent_iss_against_an_advertising_server_is_refused` |
+| 3 | under `Optional`, an ABSENT `iss` is accepted — the only leniency | `binary(oauth_iss_validation)::row4_optional_and_absent_proceeds`; `binary(oauth_iss_integration)::an_absent_iss_against_a_silent_server_proceeds` |
+| 4 | `Ok` implies the decoded `state` equalled the record's | `binary(oauth_iss_validation)::a_matching_state_passes_on_to_iss_validation`, `::an_absent_state_is_a_mismatch_not_a_skip`, `::state_is_evaluated_before_iss` |
+| 5 | no AS `error`/`error_description` surfaced when `state` or `iss` failed | `binary(oauth_iss_validation)::an_error_description_behind_a_wrong_iss_is_not_disclosed` with its complement `::an_error_description_behind_a_valid_iss_is_surfaced`; `binary(oauth_iss_integration)::an_error_description_behind_a_wrong_iss_reaches_neither_the_error_nor_the_browser` |
+| 6 | a duplicate of any security parameter is rejected (no "first wins") | `binary(oauth_iss_validation)::a_duplicated_state_is_refused`, `::a_duplicated_iss_is_refused`, `::a_duplicated_code_is_refused`, `::a_duplicated_error_is_refused`, `::a_duplicated_error_description_is_refused`, with the control `::a_duplicated_unknown_parameter_is_not_an_error` proving the rule is not "reject anything repeated" |
+| 7 | byte-exact comparison; no RFC 3986 §6.2.2-3 normalization | four proptests in `binary(oauth_iss_validation)`: `::no_scheme_or_host_case_folding`, `::no_default_port_elision`, `::no_trailing_slash_normalization`, `::no_percent_encoding_normalization` — all generated against `IssPresence::Optional`, the harder (lenient) era |
+| 8 | the raw query is bounded BEFORE parsing | `binary(oauth_iss_validation)::an_oversize_query_is_refused_and_never_echoed`; over the wire in `binary(oauth_iss_integration)::a_query_over_the_validator_cap_is_refused_and_echoes_nothing` and `::a_request_line_over_the_transport_cap_is_refused_without_hanging` |
+| 9 | rejection messages carry no byte of input for state and size | `binary(oauth_iss_validation)::a_different_state_is_refused_without_disclosing_either_value`, `::an_oversize_query_is_refused_and_never_echoed` |
+| 10 | an unrecognized `PMCP_OAUTH_ISS_VALIDATION` is NOT equivalent to unset | `binary(oauth_iss_validation)::an_unrecognized_env_value_is_distinguishable_from_an_unset_one`, `::parse_iss_env_value_rejects_plausible_but_wrong_values`, `::parse_iss_env_value_accepts_strict_and_lenient_in_three_forms`; in the live flow, `binary(oauth_state_csrf)::an_unrecognised_environment_value_falls_through_instead_of_enabling_strictness` |
+
+**`oauth_discovery_anchor` — 7 invariants** (`contracts/mcp-protocol-sdk-v1.yaml:584-651`)
+
+| # | Invariant (abbreviated) | Fence |
+|---|---|---|
+| 1 | the OIDC APPENDED form is in EVERY candidate list | `binary(oauth_discovery_urls)::the_oidc_appended_form_is_present_for_every_issuer` (property), `::the_microsoft_entra_id_form_survives_as_the_last_candidate` |
+| 2 | every candidate preserves scheme, host and effective port | `binary(oauth_discovery_urls)::every_candidate_keeps_the_issuer_scheme_and_host` (property), `::an_explicit_port_survives_into_every_candidate` |
+| 3 | metadata never escapes the fetch unless `issuer` string-equals | `binary(oauth_discovery_urls)::the_anchor_comparison_matches_only_identical_strings`, `::an_identical_issuer_matches`, `::no_normalization_of_any_kind_is_applied`; over HTTP in `binary(oauth_discovery_validation)::a_document_that_lies_about_its_issuer_is_rejected_naming_both_values` and `::only_the_issuer_field_decides_between_the_accepted_and_rejected_documents`; on the provider path in `binary(oauth_provider_discovery)::a_generic_document_that_lies_about_its_issuer_is_rejected_naming_both_values` |
+| 4 | `IssuerMismatch` / `BodyOverCap` / `MalformedSecurityMetadata` are TERMINAL | `binary(oauth_discovery_urls)::row_issuer_mismatch_is_terminal`, `::row_body_over_cap_is_terminal`, `::row_malformed_security_metadata_is_terminal`, `::an_untrusted_document_never_falls_through_and_availability_is_never_terminal`; end-to-end in `binary(oauth_discovery_validation)::a_lying_document_aborts_the_probe_instead_of_downgrading_to_a_later_candidate`, `::an_oversized_body_aborts_the_probe_…`, `::a_non_boolean_iss_flag_aborts_the_probe_…`, and in `binary(oauth_provider_discovery)::a_lying_document_aborts_the_generic_probe_…`, `::an_oversized_body_aborts_the_generic_probe_…` |
+| 5 | `Retry` re-attempts the SAME candidate, then degrades to `Fallback` | `binary(oauth_discovery_urls)::row_5xx_is_retried`, `::row_transport_is_retried`; `binary(oauth_discovery_validation)::a_five_xx_is_retried_to_the_budget_then_falls_back_to_the_next_candidate`; `binary(oauth_provider_discovery)::a_five_xx_is_retried_to_the_budget_then_falls_back_to_the_next_candidate` |
+| 6 | `http` only for loopback; userinfo, query and fragment rejected | `binary(oauth_discovery_urls)::the_three_loopback_spellings_are_the_only_permitted_http`, `::http_on_a_non_loopback_host_is_rejected_naming_the_scheme_rule`, `::every_non_http_scheme_is_rejected_by_name`, `::userinfo_is_rejected_with_and_without_a_password`, `::the_userinfo_refusal_does_not_reproduce_the_credential`, `::a_query_is_rejected_per_rfc_8414_section_2`, `::a_fragment_is_rejected_per_rfc_8414_section_2`, `::the_spec_worked_attack_is_rejected` |
+| 7 | a cross-origin discovery redirect is not followed silently | `binary(oauth_provider_discovery)::a_cross_origin_discovery_redirect_is_not_followed_by_the_generic_provider`; the predicate itself in `binary(oauth_discovery_urls)::same_origin_ignores_the_path`, `::same_origin_uses_the_effective_port`, `::same_origin_distinguishes_scheme_host_and_explicit_port` |
+
+**`oauth_credential_binding` — 7 invariants** (`contracts/mcp-protocol-sdk-v1.yaml:652-708`)
+
+| # | Invariant (abbreviated) | Fence |
+|---|---|---|
+| 1 | a lookup differing in ANY of the three components is a MISS | `binary(oauth_credential_store)::load_with_a_different_issuer_is_a_miss`, `::load_with_a_different_server_is_a_miss`, `::load_with_a_different_account_is_a_miss`, `::get_on_a_key_differing_in_any_component_returns_none`, `::two_keys_differing_only_in_server_are_distinct`; through the live flow in `binary(oauth_store_wiring)::two_mcp_servers_sharing_one_authorization_server_and_account_stay_disjoint_d_116_r1` and `::credentials_from_a_different_authorization_server_are_a_cache_miss_sep_2352`; through the CLI in `binary(auth_integration)::logout_of_one_server_leaves_a_second_sharing_one_issuer_working_d_116_r1` |
+| 2 | never re-keyed to an unrecorded issuer; a v1 entry without one is DROPPED | `binary(oauth_credential_store)::a_schema_1_entry_without_an_issuer_is_dropped_and_reported`; `binary(oauth_credential_file)::a_schema_1_entry_with_no_issuer_is_dropped_and_reported`; `binary(auth_integration)::a_previous_format_entry_with_no_issuer_is_dropped_and_both_counts_are_reported` |
+| 3 | the DCR-issued `client_id` lives in the record it belongs to | `binary(oauth_store_wiring)::a_dcr_flow_stores_the_issued_client_id_and_the_registered_application_type`; `binary(oauth_refresh)::a_dcr_registered_client_refreshes_with_the_stored_issued_client_id`, `::the_stored_client_id_is_preferred_over_the_configured_one`, `::a_refresh_with_no_client_id_anywhere_names_both_places_it_looked` |
+| 4 | the migration reports BOTH a migrated count and a dropped list | `binary(oauth_credential_store)::a_schema_1_document_migrates_every_entry_that_records_an_issuer`, `::take_migration_report_yields_once_then_none`, `::take_migration_report_is_none_on_a_store_that_never_migrated`; `binary(oauth_credential_file)::a_current_version_file_reports_no_migration` |
+| 5 | the `server` component comes from the v1 map key — LOSSLESS, not a re-key | `binary(oauth_credential_store)::the_schema_1_map_key_becomes_the_server_component`, `::two_schema_1_servers_sharing_one_issuer_stay_independent`; `binary(auth_integration)::two_previous_format_servers_sharing_one_issuer_stay_independently_addressable` |
+| 6 | `to_bytes` is byte-stable, so a diff is evidence of a real change | `binary(oauth_credential_store)::to_bytes_is_byte_stable_across_calls`, `::to_bytes_emits_the_current_schema_version`; observably in `binary(oauth_credential_file)::a_mutation_that_changes_nothing_does_not_write` and `binary(auth_integration)::a_previous_format_file_is_left_byte_identical_by_a_read_only_command` |
+| 7 | `parse_credential_snapshot` is TOTAL: `Err` never a panic, echoing no input | `binary(oauth_credential_store)::parse_credential_snapshot_never_panics`, `::parse_credential_snapshot_never_panics_on_mutated_documents` (both proptests), `::corrupt_bytes_are_an_error_that_echoes_no_input`, `::empty_input_is_an_error_not_an_empty_snapshot`, `::an_unknown_future_schema_version_is_an_error_naming_both_versions`; plus gate A9's fuzz target `oauth_credential_and_dcr`, 200 000 runs over arbitrary bytes with an empty artifacts directory |
+
+**24 invariants, 24 fenced, 0 unfenced.** No binding was blocked.
+
+### Step 3 — the status flip
+
+All eight entries flipped `planned` → `implemented`. Measured after the edit:
+
+```
+$ grep -c '^  status: planned' contracts/binding.yaml
+0
+$ awk '/^# === OAuth Client Hardening \(Phase 116\) ===/,0' contracts/binding.yaml \
+    | grep -c '^  status: implemented'
+8
+$ python3 -c "import yaml; yaml.safe_load(open('contracts/binding.yaml')); print('yaml ok')"
+yaml ok
+$ git diff -- contracts/binding.yaml | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+    | grep -vE '^[+-](  (status|signature):|#)'
+(no output — every changed line is a status, a signature or a comment)
+```
+
+No pre-existing binding outside the Phase-116 section was touched. The section comment now carries
+the flip date (2026-08-07), this plan's id, the four divergences and their reasons.
+
+**`tests/phase115_contract_bindings.rs` is UNCHANGED, which is the "or leave them with a written
+reason" branch of `116-01`'s hand-off.** The reason, on the record: (a) `PHASE_115_EQUATIONS` is
+retained in that same file after `115-10` flipped every Phase 115 binding, so retention is the
+established precedent rather than an exception invented here; (b) the `phase_116_records >= 8`
+anti-vacuity floor is DEFINED over `PHASE_116_EQUATIONS`, so deleting the constant would delete an
+assertion that this section still exists — a strict weakening; and (c) that constant's own doc
+comment, written by `116-01`, already states the expected end state ("every entry here is expected
+to carry ZERO `planned` bindings"), which is now true and measured. The residual exposure is narrow
+and named: a future phase could add a `planned` binding on one of the three Phase-116 equations
+without the deliberate conversation the test exists to force. Carried in the register.
+
+Re-run after the flip, with the ghost-binding check now load-bearing over all eight:
+
+```
+$ cargo nextest run --features full,oauth -E 'binary(phase115_contract_bindings)'
+     Summary [   1.236s] 5 tests run: 5 passed, 0 skipped        exit 0
+```
+
+### Step 4 — `make comply`, re-run
+
+```bash
+/usr/bin/make comply                 # Makefile:841-849, the invocation 116-BASELINES.md named
+```
+
+**exit 0**, after the flip as before it. Log: `target/116-verify/116-15-comply-post.log`. A plan
+citing "comply passed" is citing exactly this — `pmat comply check --path .` for its report only
+(project-level exit informational per CLAUDE.md D-07) plus deterministic team-servers binding-drift
+enforcement — and nothing stronger.
+
+### One finding this task produced
+
+**A seventh `D-116-GREP` instance, in this plan's own verify block.** The Task-2 acceptance check
+`test "$(grep -c 'status: planned' contracts/binding.yaml)" = "0"` could never pass, at any HEAD,
+before or after the flip: the UNANCHORED grep also matches PROSE. Measured before the edit —
+**10 = 8 entries + 2 comment lines** (`contracts/binding.yaml:444`, the Phase 115 section comment,
+and `:835`, `116-01`'s own Phase 116 comment). After the flip it is **1**: `:835` was rewritten to
+past tense because it had become FALSE, and `:444` is Phase 115's prose, which this task must not
+touch. The substantive criterion — zero `planned` ENTRIES — is met, and it is the anchored form
+`grep -c '^  status: planned'` = **0** that expresses it, which is exactly the form
+`116-BASELINES.md` used when it recorded the wave-1 count as "exactly `8`".
+
+---
+
 ## D-116-EX — No plan in Phase 116 owns CLAUDE.md's ALWAYS-**EXAMPLE** requirement
 
 **Found during:** `116-02` (Task 2), while checking CLAUDE.md's "ALWAYS Requirements for New
