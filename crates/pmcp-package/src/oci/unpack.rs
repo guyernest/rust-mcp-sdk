@@ -195,6 +195,7 @@ pub(crate) mod tests_support {
                 enabled: false,
                 provider: "none".to_string(),
                 callback_urls: vec![],
+                cognito: None,
                 dcr: None,
                 groups: None,
                 scopes: None,

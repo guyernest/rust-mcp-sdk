@@ -1,6 +1,11 @@
 pub mod auth;
 mod deploy;
 pub mod graphql;
+// Dependency-light leaf shared with the `cargo-pmcp` lib target (mounted via
+// `#[path]` in `lib.rs`) so the offline contract test can reach the two
+// capture GraphQL query consts without pulling this tree's reqwest/auth/deploy
+// deps into the lib target. See `graphql_contract.rs` for details.
+mod graphql_contract;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
