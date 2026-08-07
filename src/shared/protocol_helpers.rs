@@ -43,6 +43,14 @@ pub(crate) enum IngressRequest {
     /// A public typed request (the existing exhaustive-enum dispatch path).
     Public(Request),
     /// An internally-routed method with no public enum variant (v2-only).
+    ///
+    /// The payload is read by the native server dispatch. That path is compiled
+    /// out on wasm32 and in a transport-less build, so the field has no reader
+    /// THERE and nowhere else.
+    #[cfg_attr(
+        any(target_arch = "wasm32", not(feature = "streamable-http")),
+        allow(dead_code)
+    )]
     Internal(crate::types::protocol::InternalClientRequest),
 }
 

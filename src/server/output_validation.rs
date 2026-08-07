@@ -87,6 +87,9 @@ const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 /// pin applies only to v2 requests. `None` — no resolved protocol context —
 /// conservatively means [`Era::V1`], matching
 /// [`crate::types::protocol::protocol_era`]'s unknown-to-`V1` rule.
+// Called from the native dispatch path only; on wasm32 that path is not
+// compiled, so this has no caller THERE and nowhere else.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn warn_on_schema_mismatch(tool: &str, schema: &Value, value: &Value, era: Option<Era>) {
     #[cfg(feature = "validation")]
     {

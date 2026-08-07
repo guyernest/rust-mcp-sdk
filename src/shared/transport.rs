@@ -381,6 +381,10 @@ pub trait Transport: Send + Sync + Debug {
     }
 }
 
+/// A bidirectional MCP message transport.
+///
+/// wasm32 mirror of the native trait; `?Send` because wasm futures are not
+/// `Send`.
 #[cfg(target_arch = "wasm32")]
 #[async_trait(?Send)]
 pub trait Transport: Debug {

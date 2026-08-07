@@ -11,7 +11,7 @@ use crate::types::{
     ListToolsRequest, ListToolsResult, PromptInfo, ReadResourceRequest, ReadResourceResult,
     Request, RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
 };
-use crate::{ErrorCode, SUPPORTED_PROTOCOL_VERSIONS};
+use crate::ErrorCode;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
@@ -455,6 +455,10 @@ impl<F> SimpleTool<F>
 where
     F: Fn(Value) -> Result<Value> + Send + Sync,
 {
+    /// Build a tool from a name, a description and a handler closure.
+    ///
+    /// The input schema defaults to a permissive open object; use
+    /// [`Self::with_schema`] to constrain it.
     pub fn new(name: impl Into<String>, description: impl Into<String>, handler: F) -> Self {
         Self {
             name: name.into(),
@@ -468,6 +472,7 @@ where
         }
     }
 
+    /// Replace the default permissive input schema.
     pub fn with_schema(mut self, schema: Value) -> Self {
         self.input_schema = schema;
         self
@@ -494,5 +499,38 @@ where
             _meta: None,
             execution: None,
         }
+    }
+}
+
+impl std::fmt::Debug for WasmMcpServer {
+    /// Hand-written because the registries hold `dyn WasmTool`/`WasmResource`/
+    /// `WasmPrompt`, which are not `Debug` and must not be forced to be.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmMcpServer")
+            .field("info", &self.info)
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for WasmMcpServerBuilder {
+    /// Hand-written for the same reason as [`WasmMcpServer`]: the pending
+    /// registries hold non-`Debug` trait objects.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmMcpServerBuilder")
+            .field("name", &self.name)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<F> std::fmt::Debug for SimpleTool<F> {
+    /// Hand-written: `F` is a handler closure and is deliberately not bounded by
+    /// `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimpleTool")
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .finish_non_exhaustive()
     }
 }

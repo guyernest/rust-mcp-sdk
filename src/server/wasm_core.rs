@@ -212,3 +212,15 @@ impl ProtocolHandler for WasmServerCore {
 #[cfg(test)]
 #[path = "wasm_core_tests.rs"]
 mod wasm_core_tests;
+
+impl std::fmt::Debug for WasmServerCore {
+    /// Hand-written: the tool registry holds boxed handlers, which are not
+    /// `Debug` and must not be forced to be.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmServerCore")
+            .field("name", &self.name)
+            .field("version", &self.version)
+            .field("tools", &self.tools.len())
+            .finish_non_exhaustive()
+    }
+}

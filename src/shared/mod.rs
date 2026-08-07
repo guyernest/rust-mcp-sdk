@@ -79,6 +79,16 @@ pub mod protocol_helpers;
 pub mod reconnect;
 pub mod session;
 pub mod simd_parsing;
+// Dead on wasm32 by CONFIGURATION, not by disuse: this module's consumers are the
+// native server/client tier (`src/server/core.rs`, `src/server/task_dispatch.rs`,
+// `src/client/mod.rs`), all of which are `#[cfg(not(target_arch = "wasm32"))]`. The
+// items are `pub(crate)` and very much alive natively, so they must NOT be deleted;
+// the wasm build simply has no callers for them. Scoped to wasm32 so genuine dead
+// code is still caught on every other target.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod sse_parser;
 
 #[cfg(feature = "sse")]

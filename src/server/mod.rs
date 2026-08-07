@@ -40,6 +40,14 @@ pub mod adapters;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod builder;
 #[cfg(not(target_arch = "wasm32"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod core;
 pub mod limits;
 
@@ -125,6 +133,14 @@ pub mod simple_tool;
 // rather than two.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(feature = "fuzzing"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub(crate) mod task_dispatch;
 /// Shared task-lifecycle dispatch unit used by both Server and ServerCore.
 #[cfg(not(target_arch = "wasm32"))]
@@ -205,7 +221,11 @@ pub mod path_validation;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_typed_tool;
 
-// For WASM, provide a simple stub for RequestHandlerExtra
+/// wasm32 stand-in for the native cancellation module.
+///
+/// wasm32 has no cancellation support, so this exposes only a zero-field
+/// [`cancellation::RequestHandlerExtra`] so handler signatures stay identical
+/// across targets.
 #[cfg(target_arch = "wasm32")]
 pub mod cancellation {
     /// Stub for WASM - no cancellation support
@@ -228,6 +248,14 @@ pub mod roots;
 #[cfg(all(not(target_arch = "wasm32"), feature = "streamable-http"))]
 pub mod streamable_http_server;
 #[cfg(not(target_arch = "wasm32"))]
+// Dead by CONFIGURATION, not disuse: the dispatch paths that call into this
+// module are gated behind the transport features, so a `default-features = false`
+// build (as `pmcp-tasks` does) and a wasm32 build both compile the module with no
+// callers. Scoped so genuine dead code is still caught in a normal build.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod subscriptions;
 /// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
 #[cfg(feature = "streamable-http")]
@@ -533,6 +561,11 @@ impl std::fmt::Debug for Server {
     }
 }
 
+// Every accessor in this block is read by the transport dispatch (the v2 envelope
+// and the `subscriptions/listen` + `tasks/update` paths). A transport-less build
+// compiles the block with no readers, which is a property of the feature set, not
+// of the code.
+#[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
 #[cfg(not(target_arch = "wasm32"))]
 impl Server {
     /// The server-owned `requestState` codec, or `None` when this server did not

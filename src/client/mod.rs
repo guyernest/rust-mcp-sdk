@@ -9,6 +9,9 @@ use crate::types::mrtr::{
     INPUT_RESPONSES_KEY, READ_RESOURCE_METHOD, RESULT_TYPE_KEY, TASKS_CANCEL_METHOD,
     TASKS_GET_METHOD, TASKS_UPDATE_METHOD, TASK_ID_KEY, TASK_RESULT_TYPE,
 };
+// `TaskStatus` is consumed only by the native task-polling path; on wasm32 that
+// path is not compiled, so the import is unused THERE and nowhere else.
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 use crate::types::tasks::{
     resolve_poll_interval, CancelTaskRequest, CancelTaskResult, CreateTaskResult, DetailedTaskV2,
     GetTaskPayloadRequest, GetTaskRequest, GetTaskResult, ListTasksRequest, ListTasksResult, Task,

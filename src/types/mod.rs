@@ -4,19 +4,59 @@
 //! including requests, responses, notifications, and capability definitions.
 
 pub mod auth;
+// Dead on wasm32 by CONFIGURATION, not by disuse: this module's consumers are the
+// native server/client tier (`src/server/core.rs`, `src/server/task_dispatch.rs`,
+// `src/client/mod.rs`), all of which are `#[cfg(not(target_arch = "wasm32"))]`. The
+// items are `pub(crate)` and very much alive natively, so they must NOT be deleted;
+// the wasm build simply has no callers for them. Scoped to wasm32 so genuine dead
+// code is still caught on every other target.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod caching;
 pub mod capabilities;
 pub mod completable;
 pub mod content;
 pub mod elicitation;
 pub mod jsonrpc;
+// Dead on wasm32 by CONFIGURATION, not by disuse: this module's consumers are the
+// native server/client tier (`src/server/core.rs`, `src/server/task_dispatch.rs`,
+// `src/client/mod.rs`), all of which are `#[cfg(not(target_arch = "wasm32"))]`. The
+// items are `pub(crate)` and very much alive natively, so they must NOT be deleted;
+// the wasm build simply has no callers for them. Scoped to wasm32 so genuine dead
+// code is still caught on every other target.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod mrtr;
 pub mod notifications;
 pub mod prompts;
+// Dead on wasm32 by CONFIGURATION, not by disuse: this module's consumers are the
+// native server/client tier (`src/server/core.rs`, `src/server/task_dispatch.rs`,
+// `src/client/mod.rs`), all of which are `#[cfg(not(target_arch = "wasm32"))]`. The
+// items are `pub(crate)` and very much alive natively, so they must NOT be deleted;
+// the wasm build simply has no callers for them. Scoped to wasm32 so genuine dead
+// code is still caught on every other target.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod protocol;
 pub mod resources;
 pub mod roots;
 pub mod sampling;
+// Dead on wasm32 by CONFIGURATION, not by disuse: this module's consumers are the
+// native server/client tier (`src/server/core.rs`, `src/server/task_dispatch.rs`,
+// `src/client/mod.rs`), all of which are `#[cfg(not(target_arch = "wasm32"))]`. The
+// items are `pub(crate)` and very much alive natively, so they must NOT be deleted;
+// the wasm build simply has no callers for them. Scoped to wasm32 so genuine dead
+// code is still caught on every other target.
+#[cfg_attr(
+    any(target_arch = "wasm32", not(feature = "streamable-http")),
+    allow(dead_code)
+)]
 pub mod subscriptions;
 pub mod tasks;
 pub mod tools;
