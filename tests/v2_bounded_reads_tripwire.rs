@@ -71,7 +71,7 @@
 //! justification reviewed. Raising a number to match reality is the failure mode
 //! this file exists to prevent.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::ops::Range;
@@ -170,14 +170,16 @@ fn scope_files() -> Vec<PathBuf> {
         !files.is_empty(),
         "scope discovery returned nothing — every check in this file would pass vacuously"
     );
+    // Project once, then look up: `rel()` allocates twice per call, and the nested
+    // form ran it once per (file x required) pair.
+    let discovered: BTreeSet<String> = files.iter().map(|p| rel(p)).collect();
     for required in REQUIRED_FILES {
         assert!(
-            files.iter().any(|p| rel(p) == *required),
-            "scope discovery lost {required}; discovered: {:?}\n    \
+            discovered.contains(*required),
+            "scope discovery lost {required}; discovered: {discovered:?}\n    \
              REQUIRED_FILES holds FULL RELATIVE PATHS. If this fired after an EXTRA_SCOPE edit, a \
              path was dropped or mistyped and its file is no longer scanned — the silent \
-             coverage loss this guard exists to catch.",
-            files.iter().map(|p| rel(p)).collect::<Vec<_>>()
+             coverage loss this guard exists to catch."
         );
     }
     files
@@ -1247,20 +1249,13 @@ mod scanner {
 
     #[test]
     fn scope_discovery_finds_the_named_files_at_runtime() {
+        // `scope_files()` already asserts every REQUIRED_FILES entry by FULL PATH and
+        // panics with a better message, so a base-name restatement here would be a
+        // strictly weaker fourth copy of the scope list — in the very form this file's
+        // doc calls unsafe (nine files in the tree are named `auth.rs`). What is left
+        // is the one thing that check cannot cover: that the walk itself found a
+        // plausible population rather than a handful of files.
         let files = scope_files();
-        let names: Vec<String> = files
-            .iter()
-            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .collect();
-        for required in [
-            "http.rs",
-            "sse_parser.rs",
-            "streamable_http.rs",
-            "streamable_http_server.rs",
-            "subscriptions.rs",
-        ] {
-            assert!(names.contains(&required.to_string()), "missing {required}");
-        }
         assert!(
             files.len() > 20,
             "src/shared/ carries about thirty files; discovering {} suggests the walk is broken",

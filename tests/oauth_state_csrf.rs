@@ -280,18 +280,27 @@ fn the_flow_uses_the_shared_state_generator_and_the_bound_record_value() {
 #[test]
 fn the_env_override_is_read_inside_the_flow_and_warns_on_an_unrecognised_value() {
     let source = oauth_source();
-    // The name is read through `ISS_VALIDATION_ENV_VAR` rather than a literal at
-    // the call site, so prove BOTH halves: that the constant is the documented
-    // name, and that the flow reads the environment through it. Asserting only the
-    // literal made this test fail on the `/simplify` hoist while the behaviour was
-    // unchanged — and asserting only the call site would let the constant drift.
+    // The name is read through `ISS_VALIDATION_ENV_VAR` rather than a literal at the
+    // call site, so prove BOTH halves: that the constant carries the documented name,
+    // and that the flow reads the environment through it. Asserting only the literal
+    // made this test fail on the `/simplify` hoist while behaviour was unchanged —
+    // and asserting only the call site would let the constant drift.
+    //
+    // The needle deliberately omits `const `, so `pub(crate) const` and `static` are
+    // behaviour-neutral edits that do not re-break this test.
     assert!(
-        source.contains(r#"const ISS_VALIDATION_ENV_VAR: &str = "PMCP_OAUTH_ISS_VALIDATION""#),
-        "the override's name must be defined once, as `PMCP_OAUTH_ISS_VALIDATION`"
+        source.contains(r#"ISS_VALIDATION_ENV_VAR: &str = "PMCP_OAUTH_ISS_VALIDATION""#),
+        "the override's name must be `PMCP_OAUTH_ISS_VALIDATION`"
     );
-    assert!(
-        source.contains("std::env::var(ISS_VALIDATION_ENV_VAR)"),
-        "the override must be read by name, through that constant"
+    // Exactly one read, the same single-seam shape as
+    // `webbrowser_is_reached_only_through_the_launcher_seam` below: a second call site
+    // is how the value sent and the value honoured diverge.
+    assert_eq!(
+        source
+            .matches("std::env::var(ISS_VALIDATION_ENV_VAR)")
+            .count(),
+        1,
+        "the override must be read by name, through that constant, in exactly one place"
     );
     assert!(
         source.contains("parse_iss_env_value"),
@@ -304,12 +313,11 @@ fn the_env_override_is_read_inside_the_flow_and_warns_on_an_unrecognised_value()
         .nth(1)
         .and_then(|tail| tail.split("\n    }").next())
         .expect("OAuthHelper::new must exist");
-    // Exclude the CONSTANT as well as the literal: after the hoist, a read added to
-    // the constructor would name `ISS_VALIDATION_ENV_VAR`, and a literal-only check
-    // would wave it through.
+    // One substring covers both spellings and any future one: a denylist of exact
+    // identifiers can never be complete, and after the hoist a constructor read would
+    // name the constant, which a literal-only check would wave through.
     assert!(
-        !constructor.contains("PMCP_OAUTH_ISS_VALIDATION")
-            && !constructor.contains("ISS_VALIDATION_ENV_VAR"),
+        !constructor.contains("ISS_VALIDATION"),
         "the environment must NOT be read in OAuthHelper::new — construction stays I/O-free"
     );
 }
