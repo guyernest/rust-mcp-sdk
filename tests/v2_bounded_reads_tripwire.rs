@@ -86,19 +86,30 @@ use std::path::{Path, PathBuf};
 /// how this requirement reopened three times.
 const SHARED_DIR: &str = "src/shared";
 
-/// The individually-named files this file's two owners put in scope beyond
-/// `src/shared/`.
+/// The server-side auth surface, walked for the SAME reason `src/shared/` is.
 ///
-/// The first two are HTTP-09's. The last four are AUTH-03 / D-15's, added in
-/// phase 116 to close D-113-V — the scanner already found their unbounded reads,
-/// and only this fence kept them unreported.
+/// Phase 116 first enumerated `providers/generic_oidc.rs` and `providers/cognito.rs`
+/// individually, which reproduced by hand exactly the omission this file's other
+/// owner had already learned not to risk — and it cost coverage immediately: every
+/// file under here holds a `reqwest::Client` and parses a body an identity provider
+/// controls, but `jwt.rs` and `jwt_validator.rs` were never scanned, so their
+/// unbounded JWKS reads went unreported through the whole of D-113-V.
+///
+/// Deriving the scope is also CHEAPER than enumerating it here: the accumulation
+/// needle count across every other file under this directory is zero, so widening
+/// from two named providers to the whole tree adds no `ALLOWLIST` entries at all.
+const SERVER_AUTH_DIR: &str = "src/server/auth";
+
+/// The individually-named files this file's two owners put in scope beyond the two
+/// walked directories.
+///
+/// The first two are HTTP-09's. The last two are AUTH-03 / D-15's: they are named
+/// rather than walked because `src/client/` as a whole is not the auth surface.
 const EXTRA_SCOPE: &[&str] = &[
     "src/client/subscriptions.rs",
     "src/server/streamable_http_server.rs",
     "src/client/auth.rs",
     "src/client/oauth.rs",
-    "src/server/auth/providers/generic_oidc.rs",
-    "src/server/auth/providers/cognito.rs",
 ];
 
 /// Files whose absence from the discovered scope means discovery is broken.
@@ -126,6 +137,8 @@ const REQUIRED_FILES: &[&str] = &[
     "src/client/oauth.rs",
     "src/server/auth/providers/generic_oidc.rs",
     "src/server/auth/providers/cognito.rs",
+    "src/server/auth/jwt.rs",
+    "src/server/auth/jwt_validator.rs",
 ];
 
 fn repo_root() -> PathBuf {
@@ -159,6 +172,7 @@ fn scope_files() -> Vec<PathBuf> {
     let root = repo_root();
     let mut files = Vec::new();
     collect_rs_files(&root.join(SHARED_DIR), &mut files);
+    collect_rs_files(&root.join(SERVER_AUTH_DIR), &mut files);
     for extra in EXTRA_SCOPE {
         let path = root.join(extra);
         assert!(path.is_file(), "scope file {extra} no longer exists");
