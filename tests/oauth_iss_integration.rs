@@ -165,8 +165,7 @@ impl DrivenFlow {
     fn error(&self) -> &pmcp::Error {
         self.outcome
             .as_ref()
-            .err()
-            .expect("this row must be a refusal")
+            .expect_err("this row must be a refusal")
     }
 
     /// Assert the two page-level halves of a rejection, then the zero-call mock.
