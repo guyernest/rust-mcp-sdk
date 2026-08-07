@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 116-11-PLAN.md
-last_updated: "2026-08-06T23:27:24.223Z"
+stopped_at: Completed 116-14-PLAN.md
+last_updated: "2026-08-07T02:51:35.240Z"
 last_activity: 2026-08-06
 progress:
   total_phases: 72
   completed_phases: 61
   total_plans: 374
-  completed_plans: 372
+  completed_plans: 373
   percent: 85
 ---
 
@@ -26,11 +26,53 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 116 (auth-hardening-seps) — EXECUTING
-Plans complete: 14 of 16 (01–13 and 16; the counter is wave-ordered, not sequential)
-Remaining: 116-14, 116-15
+Plans complete: 15 of 16 (01–14 and 16; the counter is wave-ordered, not sequential)
+Remaining: 116-15
 Status: Ready to execute
 
-**116-13 HAS LANDED — cargo-pmcp carries NO credential format, reader or writer of its own, and the
+**116-14 HAS LANDED — D-113-V IS CLOSED BY MEASUREMENT.** Commit `43b3dde8` (test, +142/−25 in
+`tests/v2_bounded_reads_tripwire.rs` alone; `git diff --exit-code` clean on all four source files).
+The four auth files — `src/client/auth.rs`, `src/client/oauth.rs`,
+`src/server/auth/providers/{generic_oidc,cognito}.rs` — are PERMANENTLY in `EXTRA_SCOPE`, and the
+fence that would have reported the 33 whole-body sites `116-BASELINES.md` observed now reports
+**zero**. `WHOLE_BODY_ALLOWLIST` is still `&[]` — closed by fixing reads, not by writing exemptions.
+`REQUIRED_FILES` converted from 5 base names to 9 FULL RELATIVE PATHS with the matcher moved from
+`file_name()` to `rel()` in the same edit (nine tracked files share `auth.rs`'s base name; two live
+under `src/`). Module doc now names AUTH-03/D-15 as SECOND OWNER and D-113-V as the item closed; the
+failure message splits into a hyper `Limited` branch and a reqwest `chunk()`-accumulate branch naming
+`src/shared/http_body_cap.rs`. 13/13 green under BOTH `--features full,oauth` and `--features full`;
+`make quality-gate` exits **0**.
+
+**⚠ THE REAL WORK WAS THE ACCUMULATION CHANGE DETECTOR, WHICH 116-14's PLAN NEVER MENTIONS.**
+Widening `EXTRA_SCOPE` alone left `no_unbounded_whole_body_read_over_peer_supplied_bytes` PASSING
+(the 33 reads were already bounded by 116-06/07/11/12) and failed only
+`every_peer_byte_accumulation_is_reviewed` with **13** new `push_str(` sites. `116-BASELINES.md`
+predicted **7** — it was measured 2026-08-02, before 116-06/07/12 added the `rendered_source_chain`
+helpers. Four `ALLOWLIST` entries were added, which is the DESIGNED closure for that list (a change
+detector over a justified population), NOT the forbidden move — that is `WHOLE_BODY_ALLOWLIST`, a
+prohibition whose empty state is its floor.
+
+**All three controls RUN, with the third labelled as a limit.** (1) Negative: reverting
+`read_token_body` to `.bytes().await` fired `no_unbounded_whole_body_read_over_peer_supplied_bytes`
+at `:695` naming `src/client/auth.rs:828` — and matched a rustfmt-split chain, on an auth file.
+(2) Anti-vacuity in the direction that CAN fail (cognito dropped from `EXTRA_SCOPE`, retained in
+`REQUIRED_FILES`): FOUR tests failed at `:170`, "scope discovery lost
+src/server/auth/providers/cognito.rs". (3) Counter-control (dropped from `REQUIRED_FILES`,
+`EXTRA_SCOPE` intact): PASSED, as expected, and is recorded as the measured LIMIT — that guard
+protects discovery, not the requirement list — never as evidence.
+
+**⚠ HARNESS/HOST NOTES FOR THE NEXT EXECUTOR.** `SSL_CERT_FILE=target/116-verify/cacert.pem` did NOT
+exist at session start and had to be regenerated (`security find-certificate -a -p
+/System/Library/Keychains/SystemRootCertificates.keychain`, 158 certs — matches 116-13). Expect to
+regenerate it. `make quality-gate` (~45 min at `CARGO_BUILD_JOBS=4`) is killed by a monitor-loop
+timeout unless launched as `nohup CMD > log 2>&1 < /dev/null & disown` at the TOP LEVEL of a Bash
+call — inside a subshell `disown` fails and the process dies. **Never point two runs at one log
+path:** a killed run's `Terminated: 15` and a later run's success banner landed in the same file and
+that log had to be discarded rather than interpreted. The one `rust-analyzer` seen was serena's
+(parent = uv python), 15 s CPU over 2h17m — NOT the Zed fault; do not read a bare non-zero `pgrep`
+count as that fault.
+
+Prior-plan context — **116-13 HAS LANDED — cargo-pmcp carries NO credential format, reader or writer of its own, and the
 2.18.0 / 0.19.0 pair is publishable.** Commits `554a305e` (Task 1, +1263/−704 across 9 files) +
 `be93951d` (Task 2, +63/−6 across 4). `TokenCacheV1`, `TokenCacheEntry`, `read`, `write_atomic`,
 `normalize_cache_key` and `refresh_and_persist` are GONE; `cache.rs` greps clean of `serde_json`,
@@ -891,6 +933,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 116-13: cargo-pmcp auth subcommands are thin wrappers over pmcp CredentialStore/CredentialStoreAdmin; the CLI key is (issuer, empty-account, normalize_server_key(url))
 - [Phase ?]: 116-13: Cargo.lock is NOT git-tracked here, so version-bump plans must not list it in files_modified; the RESEARCH dependency fence is refined to 'no dependency line added/removed/changed, only the version line'
 - [Phase ?]: 116-13: this phase's gate results are green only under SSL_CERT_FILE (exported keychain bundle) because fresh binaries are denied the rustls-native-certs keychain read on this host; 116-15 must carry the caveat
+- [Phase ?]: 116-14: the tripwire's accumulation ALLOWLIST is a change detector whose designed closure IS a written justification; WHOLE_BODY_ALLOWLIST is the prohibition with the empty floor
+- [Phase ?]: 116-14: REQUIRED_FILES converted to FULL RELATIVE PATHS with the matcher moved from file_name() to rel() in the same edit — nine tracked files share auth.rs's base name and two live under src/, so a base-name entry could report a green guard over the wrong file
+- [Phase ?]: 116-14: fence-closing order is fix-then-fence — widening scope ahead of 116-06/07/12's bounding would have left make quality-gate red for several waves
+- [Phase ?]: 116-14: an anti-vacuity control must be run in the direction that CAN fail (scope removed, requirement retained); the reverse direction passes vacuously and is recorded as a measured LIMIT, never as evidence
 
 ### Pending Todos
 
@@ -945,8 +991,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-06T23:26:43.653Z
-Stopped at: Completed 116-11-PLAN.md
+Last session: 2026-08-07T02:51:30.638Z
+Stopped at: Completed 116-14-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -1063,3 +1109,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P10 | 118min | 2 tasks | 3 files |
 | Phase 116 P12 | 300min | 3 tasks | 3 files |
 | Phase 116 P13 | 2 sessions | 2 tasks | 13 files |
+| Phase 116 P14 | 4h | 1 tasks | 1 files |

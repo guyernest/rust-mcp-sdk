@@ -2667,7 +2667,7 @@ Plans:
 **Wave 9** *(blocked on Wave 8 completion)*
 
 - [x] 116-13-PLAN.md — Wave 9. D-19's convergence: cargo-pmcp drops its parallel `TokenCacheV1`, keeps `oauth-cache.json` as the surviving path and migration source, and its five `auth` subcommands become thin wrappers over `CredentialStore` + `CredentialStoreAdmin` — with `logout`'s four semantics test-pinned first, and a logout-isolation test proving `auth logout <A>` no longer reaches a second server sharing the same authorization server. Scopes the no-oauth2 claim by keeping cargo-pmcp's pre-existing direct `oauth2 = "5.0"` confined to `deployment/`, and makes versions/pins coherent for publish — including the `Cargo.lock` the two version bumps rewrite
-- [ ] 116-14-PLAN.md — Wave 9. D-113-V closed by measurement: `EXTRA_SCOPE` and the `REQUIRED_FILES` anti-vacuity guard widened to the four auth files using FULL RELATIVE PATHS (a base-name entry for `auth.rs` could be satisfied by the wrong file), the tripwire reporting zero, `WHOLE_BODY_ALLOWLIST` still empty at its written floor, and the module doc naming AUTH-03/D-15 as second owner. Runs LAST among source-touching plans on purpose — widening earlier would leave the gate red for waves. THREE controls are RUN, not assumed, and the anti-vacuity one is run in the direction that can actually fail: scope removed while the requirement is retained. The reverse (requirement removed, scope intact) is run separately and recorded as the measured LIMIT, not as evidence
+- [x] 116-14-PLAN.md — Wave 9. D-113-V closed by measurement: `EXTRA_SCOPE` and the `REQUIRED_FILES` anti-vacuity guard widened to the four auth files using FULL RELATIVE PATHS (a base-name entry for `auth.rs` could be satisfied by the wrong file), the tripwire reporting zero, `WHOLE_BODY_ALLOWLIST` still empty at its written floor, and the module doc naming AUTH-03/D-15 as second owner. Runs LAST among source-touching plans on purpose — widening earlier would leave the gate red for waves. THREE controls are RUN, not assumed, and the anti-vacuity one is run in the direction that can actually fail: scope removed while the requirement is retained. The reverse (requirement removed, scope intact) is run separately and recorded as the measured LIMIT, not as evidence
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
@@ -2724,7 +2724,7 @@ Plans:
 | 113.1 Merge Unblock | 6/6 | Complete | 2026-07-27 |
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
-| 116. Auth Hardening SEPs | 14/16 | In Progress|  |
+| 116. Auth Hardening SEPs | 15/16 | In Progress|  |
 | 117. Agents, Tester & v1 Severability | 0/TBD | Not started | - |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
