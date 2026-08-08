@@ -211,57 +211,116 @@ impl EventStore for InMemoryEventStore {
     }
 }
 
-/// Type alias for session callback
+/// Type alias for session callback.
+///
+/// v1-ONLY, and gated for a mechanical reason worth stating: its ONLY two uses
+/// are `StreamableHttpServerConfig::on_session_initialized` and
+/// `::on_session_closed`, both gated just below, so on a `full-v2` build the
+/// alias is dead and `RUSTFLAGS="-D warnings"` says so. Plan 117-12 deferred it
+/// here for exactly that reason — it could not be gated before the fields it
+/// types were.
+#[cfg(feature = "v1-compat")]
 type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Configuration for the streamable HTTP server.
 ///
+/// # Four of these fields exist only on a `v1-compat` build
+///
+/// `session_id_generator`, `event_store`, `on_session_initialized` and
+/// `on_session_closed` describe the MCP 2025-11-25 session lifecycle and its SSE
+/// resumability. The 2026-07-28 transport is handshake-free and session-free and
+/// states outright that resumable streams via `Last-Event-ID` are not supported,
+/// so on a build without `v1-compat` those four fields are not merely unused —
+/// they are not compiled, and neither is the machinery behind them (SMPL-02).
+///
+/// `enable_json_response`, `http_middleware`, `allowed_origins` and
+/// `max_request_bytes` are era-neutral and present on every build.
+///
+/// ## Semver, stated plainly (plan 117-13, assumption A7)
+///
+/// Removing a public field is normally a MAJOR break. It is safe here for exactly
+/// one reason: the build that lacks them, `full-v2`, is a brand-new feature that
+/// no published consumer builds with. Every shipped configuration enables
+/// `v1-compat` — it is in `default` and in `full` — so no existing code loses a
+/// field.
+///
+/// **That argument expires the moment `full-v2` enters any published crate's
+/// default feature set.** At that point this gating becomes a semver break and
+/// must be scheduled as one (SMPL-F1, pmcp 3.0). Do not widen `full-v2`'s reach
+/// without re-reading this paragraph. The policy is `docs/v1-sunset-policy.md`.
+///
 /// # Examples
+///
+/// Era-neutral configuration — compiles on every build:
 ///
 /// ```rust
 /// use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
-/// use std::sync::Arc;
 ///
-/// // Stateless configuration (for serverless/Lambda)
+/// // Name only the shared fields and let the rest default. Functional-update
+/// // syntax is what keeps this example compiling on `full-v2`, where the four
+/// // session fields do not exist to be named.
 /// let config = StreamableHttpServerConfig {
-///     session_id_generator: None,  // No sessions
-///     enable_json_response: false,
-///     event_store: None,
-///     on_session_initialized: None,
-///     on_session_closed: None,
-///     http_middleware: None,
-///     allowed_origins: None,
+///     enable_json_response: true,
 ///     max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
+///     ..Default::default()
 /// };
+/// assert!(config.enable_json_response);
 ///
-/// // Stateful configuration with custom session IDs
-/// let config = StreamableHttpServerConfig {
-///     session_id_generator: Some(Box::new(|| {
-///         format!("session-{}", uuid::Uuid::new_v4())
-///     })),
-///     enable_json_response: false,
-///     event_store: None,
-///     on_session_initialized: Some(Box::new(|session_id| {
-///         println!("Session started: {}", session_id);
-///     })),
-///     on_session_closed: Some(Box::new(|session_id| {
-///         println!("Session ended: {}", session_id);
-///     })),
-///     http_middleware: None,
-///     allowed_origins: None,
-///     max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
-/// };
+/// // For serverless / Lambda, prefer the constructor over a literal: it also
+/// // picks the right CORS posture.
+/// let stateless = StreamableHttpServerConfig::stateless();
+/// assert!(stateless.enable_json_response);
 /// ```
+#[cfg_attr(
+    feature = "v1-compat",
+    doc = r#"
+Stateful MCP 2025-11-25 configuration — `v1-compat` builds only:
+
+```rust
+use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
+
+let config = StreamableHttpServerConfig {
+    session_id_generator: Some(Box::new(|| {
+        format!("session-{}", uuid::Uuid::new_v4())
+    })),
+    on_session_initialized: Some(Box::new(|session_id| {
+        println!("Session started: {}", session_id);
+    })),
+    on_session_closed: Some(Box::new(|session_id| {
+        println!("Session ended: {}", session_id);
+    })),
+    ..Default::default()
+};
+assert!(config.session_id_generator.is_some());
+assert!(config.on_session_closed.is_some());
+```
+"#
+)]
 pub struct StreamableHttpServerConfig {
-    /// Function to generate session IDs (None for stateless mode)
+    /// Function to generate session IDs (None for stateless mode).
+    ///
+    /// v1-ONLY: 2026-07-28 has no session to mint an id for.
+    #[cfg(feature = "v1-compat")]
     pub session_id_generator: Option<Box<dyn Fn() -> String + Send + Sync>>,
     /// Enable JSON responses instead of SSE
     pub enable_json_response: bool,
-    /// Event store for resumability (using concrete type for object safety)
+    /// Event store for resumability (using concrete type for object safety).
+    ///
+    /// v1-ONLY: 2026-07-28 does not support resumable streams via
+    /// `Last-Event-ID`, so there is nothing for a store to replay. Its presence
+    /// here is also what pinned [`InMemoryEventStore`] into both builds until
+    /// this field was gated.
+    #[cfg(feature = "v1-compat")]
     pub event_store: Option<Arc<InMemoryEventStore>>,
-    /// Callback when session is initialized
+    /// Callback when session is initialized.
+    ///
+    /// v1-ONLY: there is no `initialize` handshake on 2026-07-28.
+    #[cfg(feature = "v1-compat")]
     pub on_session_initialized: Option<SessionCallback>,
-    /// Callback when session is closed
+    /// Callback when session is closed.
+    ///
+    /// v1-ONLY: there is no session to close, and `DELETE /` answers `405`.
+    #[cfg(feature = "v1-compat")]
     pub on_session_closed: Option<SessionCallback>,
     /// HTTP middleware chain for request/response processing
     pub http_middleware: Option<Arc<ServerHttpMiddlewareChain>>,
@@ -283,30 +342,47 @@ pub struct StreamableHttpServerConfig {
 }
 
 impl std::fmt::Debug for StreamableHttpServerConfig {
+    /// Written as STATEMENTS rather than a `.field(..).field(..)` chain.
+    ///
+    /// An attribute cannot be attached to one link of a method chain, so gating
+    /// the four v1-only rows needs each of them to be its own statement. The
+    /// alternative — two whole `fmt` bodies behind opposing `#[cfg]`s — would
+    /// duplicate the four shared rows and let the two copies drift.
+    ///
+    /// The rendered field ORDER is unchanged on a `v1-compat` build, so this is
+    /// not an observable change for any existing consumer.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamableHttpServerConfig")
-            .field("session_id_generator", &self.session_id_generator.is_some())
-            .field("enable_json_response", &self.enable_json_response)
-            .field("event_store", &self.event_store.is_some())
-            .field(
-                "on_session_initialized",
-                &self.on_session_initialized.is_some(),
-            )
-            .field("on_session_closed", &self.on_session_closed.is_some())
-            .field("http_middleware", &self.http_middleware.is_some())
-            .field("allowed_origins", &self.allowed_origins)
-            .field("max_request_bytes", &self.max_request_bytes)
-            .finish()
+        let mut out = f.debug_struct("StreamableHttpServerConfig");
+        #[cfg(feature = "v1-compat")]
+        out.field("session_id_generator", &self.session_id_generator.is_some());
+        out.field("enable_json_response", &self.enable_json_response);
+        #[cfg(feature = "v1-compat")]
+        out.field("event_store", &self.event_store.is_some());
+        #[cfg(feature = "v1-compat")]
+        out.field(
+            "on_session_initialized",
+            &self.on_session_initialized.is_some(),
+        );
+        #[cfg(feature = "v1-compat")]
+        out.field("on_session_closed", &self.on_session_closed.is_some());
+        out.field("http_middleware", &self.http_middleware.is_some());
+        out.field("allowed_origins", &self.allowed_origins);
+        out.field("max_request_bytes", &self.max_request_bytes);
+        out.finish()
     }
 }
 
 impl Default for StreamableHttpServerConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "v1-compat")]
             session_id_generator: Some(Box::new(|| Uuid::new_v4().to_string())),
             enable_json_response: false,
+            #[cfg(feature = "v1-compat")]
             event_store: Some(Arc::new(InMemoryEventStore::default())),
+            #[cfg(feature = "v1-compat")]
             on_session_initialized: None,
+            #[cfg(feature = "v1-compat")]
             on_session_closed: None,
             http_middleware: None,
             allowed_origins: None,
@@ -330,10 +406,14 @@ impl StreamableHttpServerConfig {
     /// instead (which defaults to `AllowedOrigins::localhost()`).
     pub fn stateless() -> Self {
         Self {
+            #[cfg(feature = "v1-compat")]
             session_id_generator: None,
             enable_json_response: true,
+            #[cfg(feature = "v1-compat")]
             event_store: None,
+            #[cfg(feature = "v1-compat")]
             on_session_initialized: None,
+            #[cfg(feature = "v1-compat")]
             on_session_closed: None,
             http_middleware: None,
             allowed_origins: Some(AllowedOrigins::any()),
