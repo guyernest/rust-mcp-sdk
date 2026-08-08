@@ -50,6 +50,7 @@ pub mod app_validator;
 pub mod conformance;
 pub mod diagnostics;
 pub mod era_diff;
+pub mod era_observations;
 pub mod post_deploy_report;
 pub mod report;
 pub mod scenario;
@@ -62,8 +63,12 @@ pub mod validators;
 pub use app_validator::{AppValidationMode, AppValidator};
 pub use conformance::{ConformanceDomain, ConformanceRunner};
 pub use era_diff::{
-    default_baseline_path, load_baseline, load_default_baseline, parse_baseline, EraBaseline,
-    EraDelta,
+    build_dual_run_report, compare_eras, default_baseline_path, load_baseline,
+    load_default_baseline, parse_baseline, ClassifiedDifference, DifferenceClass, DualRunReport,
+    EraBaseline, EraDelta,
+};
+pub use era_observations::{
+    observe as observe_era, EraObservations, ObservationId, ObservedValue, PROBE_REGISTRY,
 };
 pub use pmcp::client::oauth;
 pub use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
@@ -78,7 +83,7 @@ pub use report::{
 pub use scenario::TestScenario;
 pub use scenario_executor::ScenarioExecutor;
 pub use scenario_generator::ScenarioGenerator;
-pub use tester::ServerTester;
+pub use tester::{detect_eras, no_era_spoken_report, unreachable_report, EraSupport, ServerTester};
 
 use anyhow::{Context, Result};
 use std::time::Duration;

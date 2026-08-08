@@ -5,6 +5,20 @@ use std::time::Duration;
 
 mod app_validator;
 mod diagnostics;
+// The dual-run pair (Phase 117): `conformance::ConformanceRunner::run_dual`
+// needs both, so the binary must declare them alongside the library barrel.
+//
+// Why the allow: a Rust binary and its sibling library are SEPARATE crates, so
+// this module is compiled twice and dead-code analysis runs independently on
+// each. The library exports the whole surface (`load_baseline`,
+// `default_baseline_path`, the `EraBaseline` accessors); the binary reaches
+// only the `--dual-run` path through it. Without the allow the binary reports
+// every library-only item as dead — which is not a defect, it is the other
+// crate's entry point. Scoped to these two modules, never crate-wide.
+#[allow(dead_code)]
+mod era_diff;
+#[allow(dead_code)]
+mod era_observations;
 mod report;
 mod scenario;
 mod scenario_executor;

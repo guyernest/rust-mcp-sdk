@@ -1,0 +1,848 @@
+//! Dedicated era PROBES: the wire facts a `TestReport` structurally cannot
+//! carry.
+//!
+//! # Why this module exists
+//!
+//! MEASURED at `crates/mcp-tester/src/report.rs:74-81` and `:153-158`:
+//! [`TestResult`](crate::TestResult) is
+//! `{name, category, status, duration, error, details}` and
+//! [`TestReport`](crate::TestReport) is `{tests, duration, timestamp, summary}`.
+//!
+//! Now read `crates/mcp-tester/baselines/era-deltas.yaml`. Most of its fourteen
+//! entries are WIRE FACTS — a response header's presence, a session id, the
+//! `Last-Event-ID` resumability surface, a result-envelope field, the LOCATION
+//! of a capability, a caching hint, an HTTP status mapping. Not one of those is
+//! representable in the two structs above. `details` is free-form prose.
+//!
+//! So a dual-run comparison that diffed two `TestReport`s by test NAME and
+//! STATUS could not observe most of the baseline at all. It would report
+//! permanent false MISSING findings for every wire fact no test name encodes,
+//! and — if it fell back to substring matching on display names to compensate —
+//! it would hand out false confidence instead. Dedicated probes emitting STABLE
+//! IDs are what make the evidence observable in the first place.
+//!
+//! # The shape
+//!
+//! One probe per baseline `observation_id`, each recording what it saw as an
+//! [`ObservedValue`] whose [`ObservedValue::token`] is drawn from the SAME short
+//! vocabulary the baseline's `v1:` / `v2:` columns use. That is what lets
+//! [`crate::era_diff`] join an observation against a delta and check not merely
+//! that the eras DIFFERED but that they differed in the RECORDED way.
+//!
+//! Derivation rules are documented on each probe. They are era-INDEPENDENT: a
+//! probe reads the wire and maps what it saw to a token, and never consults the
+//! era to decide what it "should" have seen. A probe that did would be
+//! asserting its own premise.
+
+use std::collections::BTreeMap;
+
+use pmcp::types::protocol::Era;
+use serde::{Deserialize, Serialize};
+
+use crate::tester::{ServerTester, V2HeaderMode};
+
+/// The STABLE, MACHINE-FACING name of one wire fact.
+///
+/// A newtype over a `&'static str` so an ID can never be built from a runtime
+/// display name: the whole point is that these are fixed identifiers, joined
+/// against `EraDelta::observation_id`, and never renamed for readability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ObservationId(pub &'static str);
+
+impl ObservationId {
+    /// The identifier as a string slice.
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+
+    /// Resolve a wire string back to a registry id.
+    ///
+    /// `None` for anything not in [`PROBE_REGISTRY`] — which is the whole point
+    /// of the `&'static str` newtype: an id is a fixed identifier this crate
+    /// knows, not an arbitrary string a caller invented.
+    pub fn from_registry(value: &str) -> Option<Self> {
+        PROBE_REGISTRY.iter().copied().find(|id| id.0 == value)
+    }
+}
+
+impl Serialize for ObservationId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ObservationId {
+    /// Deserializing VALIDATES against [`PROBE_REGISTRY`].
+    ///
+    /// The newtype holds a `&'static str`, so an arbitrary borrowed string
+    /// cannot be turned into one; and the validation this forces is a feature,
+    /// not a workaround. A stored report naming an id this build has no probe
+    /// for is a report this build cannot honestly interpret, and saying so is
+    /// better than silently accepting a leaked string.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_registry(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "`{raw}` is not a known observation id; this build's probe registry \
+                 has no probe for it"
+            ))
+        })
+    }
+}
+
+impl std::fmt::Display for ObservationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+/// What a probe SAW.
+///
+/// Small on purpose — these are the only value kinds the fourteen probes need.
+/// [`Self::Unavailable`] is the honest answer when a probe ran but could not
+/// establish its fact; it is deliberately NOT the same as [`Self::Absent`],
+/// which is a positive observation that something was not there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ObservedValue {
+    /// The wire fact was observed PRESENT.
+    Present,
+    /// The wire fact was observed ABSENT.
+    Absent,
+    /// A short observed token, in the baseline's own vocabulary.
+    Text(String),
+    /// An observed HTTP status code.
+    Status(u16),
+    /// A JSON pointer naming WHERE a value was found.
+    Pointer(String),
+    /// The probe ran but could not establish the fact; the string says why.
+    Unavailable(String),
+}
+
+impl ObservedValue {
+    /// The canonical token this observation compares as.
+    ///
+    /// This is what [`crate::era_diff`] matches against an `EraDelta`'s `v1:` /
+    /// `v2:` column, so the vocabulary here and the vocabulary in
+    /// `era-deltas.yaml` are ONE vocabulary.
+    pub fn token(&self) -> String {
+        match self {
+            Self::Present => "present".to_string(),
+            Self::Absent => "absent".to_string(),
+            Self::Text(s) => s.clone(),
+            Self::Status(code) => format!("status:{code}"),
+            Self::Pointer(p) => p.clone(),
+            Self::Unavailable(_) => "unavailable".to_string(),
+        }
+    }
+
+    /// Whether the probe actually established its fact.
+    pub fn is_established(&self) -> bool {
+        !matches!(self, Self::Unavailable(_))
+    }
+}
+
+/// Everything one era run observed, keyed by [`ObservationId`].
+///
+/// A `BTreeMap` rather than a `HashMap`: the report is RENDERED and compared as
+/// bytes, so iteration order has to be deterministic.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EraObservations(pub BTreeMap<ObservationId, ObservedValue>);
+
+impl EraObservations {
+    /// Look one observation up.
+    pub fn get(&self, id: ObservationId) -> Option<&ObservedValue> {
+        self.0.get(&id)
+    }
+
+    /// Number of observations recorded.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing at all was observed.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Every id recorded, in sorted order.
+    pub fn ids(&self) -> Vec<ObservationId> {
+        self.0.keys().copied().collect()
+    }
+}
+
+// ===========================================================================
+// The probe registry.
+// ===========================================================================
+
+/// `method:initialize` — ERA-01.
+pub const METHOD_INITIALIZE: ObservationId = ObservationId("method.initialize");
+/// `method:server/discover` — ERA-02.
+pub const METHOD_SERVER_DISCOVER: ObservationId = ObservationId("method.server_discover");
+/// `header:Mcp-Session-Id` — ERA-03.
+pub const HEADER_MCP_SESSION_ID: ObservationId = ObservationId("header.mcp_session_id");
+/// `header:Mcp-Method,Mcp-Name` — ERA-04.
+pub const HEADER_MCP_METHOD_AND_NAME: ObservationId = ObservationId("header.mcp_method_and_name");
+/// `header:Last-Event-ID` — ERA-05.
+pub const HEADER_LAST_EVENT_ID: ObservationId = ObservationId("header.last_event_id");
+/// `http-verb:GET,DELETE` — ERA-06.
+pub const HTTP_VERB_GET_DELETE: ObservationId = ObservationId("http.verb.get_delete");
+/// `result-field:resultType` — ERA-07.
+pub const RESULT_RESULT_TYPE: ObservationId = ObservationId("result.result_type");
+/// `result-field:serverInfo` — ERA-08.
+pub const RESULT_SERVER_INFO: ObservationId = ObservationId("result.server_info");
+/// `method:tasks/list` — ERA-09.
+pub const METHOD_TASKS_LIST: ObservationId = ObservationId("method.tasks_list");
+/// `capability:tasks` location — ERA-10.
+pub const CAPABILITY_TASKS_LOCATION: ObservationId = ObservationId("capability.tasks_location");
+/// `result-field:ttlMs,cacheScope` — ERA-11.
+pub const RESULT_CACHE_SCOPE: ObservationId = ObservationId("result.cache_scope");
+/// `method:resources/subscribe` — ERA-12.
+pub const METHOD_RESOURCES_SUBSCRIBE: ObservationId = ObservationId("method.resources_subscribe");
+/// `method:subscriptions/listen` — ERA-13.
+pub const METHOD_SUBSCRIPTIONS_LISTEN: ObservationId = ObservationId("method.subscriptions_listen");
+/// `http-status:JSON-RPC error code mapping` — ERA-14.
+pub const HTTP_STATUS_ERROR_CODE_MAPPING: ObservationId =
+    ObservationId("http.status.error_code_mapping");
+
+/// Every [`ObservationId`] this module has a probe for.
+///
+/// This is one half of the two-direction coverage contract with
+/// `crates/mcp-tester/baselines/era-deltas.yaml`; the tests below assert both
+/// directions. A baseline entry with no probe is an entry nothing can ever
+/// observe, which would produce a permanent false MISSING finding — exactly the
+/// defect the observation-id design removes. A probe with no baseline entry
+/// would report every run of it as an UNEXPECTED finding.
+pub const PROBE_REGISTRY: &[ObservationId] = &[
+    METHOD_INITIALIZE,
+    METHOD_SERVER_DISCOVER,
+    HEADER_MCP_SESSION_ID,
+    HEADER_MCP_METHOD_AND_NAME,
+    HEADER_LAST_EVENT_ID,
+    HTTP_VERB_GET_DELETE,
+    RESULT_RESULT_TYPE,
+    RESULT_SERVER_INFO,
+    METHOD_TASKS_LIST,
+    CAPABILITY_TASKS_LOCATION,
+    RESULT_CACHE_SCOPE,
+    METHOD_RESOURCES_SUBSCRIBE,
+    METHOD_SUBSCRIPTIONS_LISTEN,
+    HTTP_STATUS_ERROR_CODE_MAPPING,
+];
+
+/// The `_meta`/capability key the v2 wire uses for the tasks extension (ERA-10).
+const TASKS_EXTENSION_KEY: &str = "io.modelcontextprotocol/tasks";
+
+/// JSON-RPC "method not found".
+const METHOD_NOT_FOUND: i64 = -32601;
+
+// ===========================================================================
+// Probes.
+// ===========================================================================
+
+/// Run every probe against `tester` for `era` and collect what they saw.
+///
+/// `tester` must already have established its connection (the capability
+/// observations read the projection it holds). Probes are sequential on
+/// purpose: they share one endpoint and several of them are about SESSION and
+/// HEADER state, which concurrent requests would make unreadable.
+pub async fn observe(tester: &ServerTester, era: Era) -> EraObservations {
+    let mut out = BTreeMap::new();
+    out.insert(METHOD_INITIALIZE, probe_initialize(tester, era).await);
+    out.insert(
+        METHOD_SERVER_DISCOVER,
+        probe_server_discover(tester, era).await,
+    );
+    out.insert(
+        HEADER_MCP_SESSION_ID,
+        probe_session_header(tester, era).await,
+    );
+    out.insert(
+        HEADER_MCP_METHOD_AND_NAME,
+        probe_required_headers(tester, era).await,
+    );
+    out.insert(HEADER_LAST_EVENT_ID, probe_last_event_id(tester, era).await);
+    out.insert(HTTP_VERB_GET_DELETE, probe_get_delete(tester, era).await);
+
+    let list = tester
+        .raw_jsonrpc_probe(
+            "tools/list",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await;
+    out.insert(
+        RESULT_RESULT_TYPE,
+        classify_envelope_key(&list, "resultType"),
+    );
+    out.insert(RESULT_SERVER_INFO, classify_server_info(&list));
+    out.insert(RESULT_CACHE_SCOPE, classify_cache_hints(&list));
+
+    out.insert(METHOD_TASKS_LIST, probe_tasks_list(tester, era).await);
+    out.insert(
+        CAPABILITY_TASKS_LOCATION,
+        probe_tasks_capability_location(tester),
+    );
+    out.insert(
+        METHOD_RESOURCES_SUBSCRIBE,
+        probe_resources_subscribe(tester, era).await,
+    );
+    out.insert(
+        METHOD_SUBSCRIPTIONS_LISTEN,
+        probe_subscriptions_listen(tester, era).await,
+    );
+    out.insert(
+        HTTP_STATUS_ERROR_CODE_MAPPING,
+        probe_error_status_mapping(tester, era).await,
+    );
+
+    EraObservations(out)
+}
+
+/// Shorthand for the transport-failure answer.
+fn unavailable(e: &str) -> ObservedValue {
+    ObservedValue::Unavailable(e.to_string())
+}
+
+/// ERA-01. Rule: a JSON-RPC `result` means the method is `served`; anything
+/// else means it is `absent`.
+async fn probe_initialize(tester: &ServerTester, era: Era) -> ObservedValue {
+    let params = serde_json::json!({
+        "protocolVersion": pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28,
+        "clientInfo": { "name": "mcp-tester", "version": env!("CARGO_PKG_VERSION") },
+        "capabilities": {},
+    });
+    match tester
+        .raw_jsonrpc_probe("initialize", "", params, era, V2HeaderMode::Standard)
+        .await
+    {
+        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
+        Ok(_) => ObservedValue::Text("absent".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-02. Rule: a `result` means `served`; the specific `-32601` refusal is
+/// recorded as `error:-32601` because that exact code is what the baseline
+/// records for v1; any other refusal is recorded with its own code so a
+/// changed rejection shape shows up as a finding rather than as agreement.
+async fn probe_server_discover(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "server/discover",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
+        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-03. Rule: send a request carrying an INBOUND session id; if the server
+/// answers with an `Mcp-Session-Id` header it is minting/echoing, otherwise it
+/// is neither minting nor echoing.
+///
+/// The initialize/discover pair is used because a v1 server mints its session
+/// on the initialization request specifically.
+async fn probe_session_header(tester: &ServerTester, era: Era) -> ObservedValue {
+    let (method, params) = if era == Era::V2 {
+        ("server/discover", serde_json::json!({}))
+    } else {
+        (
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2025-11-25",
+                "clientInfo": { "name": "mcp-tester", "version": env!("CARGO_PKG_VERSION") },
+                "capabilities": {},
+            }),
+        )
+    };
+    match tester
+        .raw_jsonrpc_probe(method, "", params, era, V2HeaderMode::Standard)
+        .await
+    {
+        Ok(o) if o.session_header.is_some() => ObservedValue::Text("minted-and-echoed".into()),
+        Ok(_) => ObservedValue::Text("never-minted-inbound-ignored".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-04. Rule: send a request DELIBERATELY omitting `Mcp-Method` and
+/// `Mcp-Name`. If the server still answers normally the headers are not
+/// required (`not-sent`); if it refuses, they are required and cross-checked.
+///
+/// This is the one observation that cannot be made by watching a conformant
+/// request — a header that is not required looks exactly like one that is,
+/// until you leave it out.
+async fn probe_required_headers(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "tools/list",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::OmitMethodAndName,
+        )
+        .await
+    {
+        Ok(o) if o.is_result() => ObservedValue::Text("not-sent".into()),
+        Ok(_) => ObservedValue::Text("required-and-cross-checked".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-05. Rule: `GET` the endpoint with a `Last-Event-ID` header. A `200` with
+/// an SSE content type means resumability is `supported`; anything else means
+/// the header is `ignored`.
+async fn probe_last_event_id(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_verb_probe("GET", era, &[("Last-Event-ID", "0")])
+        .await
+    {
+        Ok((status, ct)) if status == 200 && ct.contains("text/event-stream") => {
+            ObservedValue::Text("supported".into())
+        },
+        Ok(_) => ObservedValue::Text("ignored".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-06. Rule: probe both `GET` and `DELETE`. When BOTH answer `405` the verb
+/// surface is rejected; otherwise at least one verb is still serving its v1
+/// role (an SSE stream or a session teardown).
+async fn probe_get_delete(tester: &ServerTester, era: Era) -> ObservedValue {
+    let get = tester.raw_verb_probe("GET", era, &[]).await;
+    let delete = tester.raw_verb_probe("DELETE", era, &[]).await;
+    match (get, delete) {
+        (Ok((405, _)), Ok((405, _))) => ObservedValue::Text("status:405".into()),
+        (Ok(_), Ok(_)) => ObservedValue::Text("sse-stream-or-session-teardown".into()),
+        (Err(e), _) | (_, Err(e)) => unavailable(&e),
+    }
+}
+
+/// ERA-07. Rule: is `key` a present, non-null member of the JSON-RPC `result`?
+fn classify_envelope_key(
+    probe: &std::result::Result<crate::tester::RawProbeOutcome, String>,
+    key: &str,
+) -> ObservedValue {
+    match probe {
+        Ok(o) => match o.result.as_ref().and_then(|r| r.get(key)) {
+            Some(v) if !v.is_null() => ObservedValue::Present,
+            _ => ObservedValue::Absent,
+        },
+        Err(e) => unavailable(e),
+    }
+}
+
+/// ERA-08. Rule: `serverInfo` may ride at the top of the result or under the
+/// result's `_meta` (v2 carries it as reserved response metadata), so BOTH
+/// locations count as present. A probe that only looked at the top level would
+/// report a permanent false `absent`.
+fn classify_server_info(
+    probe: &std::result::Result<crate::tester::RawProbeOutcome, String>,
+) -> ObservedValue {
+    match probe {
+        Ok(o) => {
+            let Some(result) = o.result.as_ref() else {
+                return ObservedValue::Absent;
+            };
+            let top = result.get("serverInfo").is_some_and(|v| !v.is_null());
+            let in_meta = result
+                .get("_meta")
+                .and_then(|m| m.get("io.modelcontextprotocol/serverInfo"))
+                .is_some_and(|v| !v.is_null());
+            if top || in_meta {
+                ObservedValue::Present
+            } else {
+                ObservedValue::Absent
+            }
+        },
+        Err(e) => unavailable(e),
+    }
+}
+
+/// ERA-11. Rule: both `ttlMs` AND `cacheScope` present means the pair is
+/// `required`; neither present means `absent`; exactly one is `partial`, which
+/// matches no baseline column and so surfaces as a finding — which is correct,
+/// because the schema declares both without `?`.
+fn classify_cache_hints(
+    probe: &std::result::Result<crate::tester::RawProbeOutcome, String>,
+) -> ObservedValue {
+    match probe {
+        Ok(o) => {
+            let Some(result) = o.result.as_ref() else {
+                return ObservedValue::Absent;
+            };
+            let ttl = result.get("ttlMs").is_some_and(|v| !v.is_null());
+            let scope = result.get("cacheScope").is_some_and(|v| !v.is_null());
+            match (ttl, scope) {
+                (true, true) => ObservedValue::Text("required".into()),
+                (false, false) => ObservedValue::Absent,
+                _ => ObservedValue::Text("partial".into()),
+            }
+        },
+        Err(e) => unavailable(e),
+    }
+}
+
+/// ERA-09. Rule: a `result` means `served`; a refusal is recorded with its code.
+async fn probe_tasks_list(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "tasks/list",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
+        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-10. Rule: read the connection's capability structure and report WHERE a
+/// tasks surface was found — the v1 spellings (`capabilities.tasks`,
+/// `experimental.tasks`) or the v2 extension key. Both spellings present at
+/// once, or neither, are reported distinctly so the relocation cannot be
+/// half-observed.
+///
+/// This is the one probe that reads the tester's established projection rather
+/// than sending its own request: the capability structure is a property of the
+/// connection, and re-fetching it would just repeat ERA-02.
+fn probe_tasks_capability_location(tester: &ServerTester) -> ObservedValue {
+    let Some(caps) = tester.server_capabilities() else {
+        return unavailable("no capability structure on this connection");
+    };
+    let v1_location = caps.tasks.is_some()
+        || caps
+            .experimental
+            .as_ref()
+            .is_some_and(|e| e.contains_key("tasks"));
+    let v2_location = caps
+        .extensions
+        .as_ref()
+        .is_some_and(|e| e.contains_key(TASKS_EXTENSION_KEY));
+    match (v1_location, v2_location) {
+        (true, false) => ObservedValue::Text("capabilities.tasks + experimental.tasks".into()),
+        (false, true) => ObservedValue::Text(format!("extensions[{TASKS_EXTENSION_KEY}] = {{}}")),
+        (true, true) => ObservedValue::Text("both-locations".into()),
+        (false, false) => ObservedValue::Absent,
+    }
+}
+
+/// ERA-12. Rule: a `result` means `served`; any refusal means `retired`.
+async fn probe_resources_subscribe(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "resources/subscribe",
+            "",
+            serde_json::json!({ "uri": "mcp-tester://era-probe" }),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
+        Ok(_) => ObservedValue::Text("retired".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-13. Rule: `-32601` is recorded as such; anything the server actually
+/// serves is the capability-gated stream. A server that is method-aware but
+/// capability-gated answers something other than `-32601`, which the baseline
+/// note explicitly calls SKIPPED-conformant.
+async fn probe_subscriptions_listen(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "subscriptions/listen",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(o) if o.error_code == Some(METHOD_NOT_FOUND) => {
+            ObservedValue::Text(format!("error:{METHOD_NOT_FOUND}"))
+        },
+        Ok(_) => ObservedValue::Text("sse-stream-capability-gated".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// ERA-14. Rule: send a method that cannot exist and read the HTTP STATUS the
+/// JSON-RPC error came back under. The legacy table returns `200` for every
+/// JSON-RPC-level error; the era-gated table maps the code onto a real HTTP
+/// status. So `200` means the legacy table is in force and anything else means
+/// the era-gated one is.
+///
+/// Note this reads the status, NOT the era: it is the mapping that is being
+/// observed, and consulting the era to decide would make the observation
+/// circular.
+async fn probe_error_status_mapping(tester: &ServerTester, era: Era) -> ObservedValue {
+    match tester
+        .raw_jsonrpc_probe(
+            "mcp-tester/definitely-not-a-method",
+            "",
+            serde_json::json!({}),
+            era,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(o) if o.http_status == 200 => ObservedValue::Text("unchanged-legacy-table".into()),
+        Ok(_) => ObservedValue::Text("era-gated-table".into()),
+        Err(e) => unavailable(&e),
+    }
+}
+
+/// Render a refusal as a stable token: the JSON-RPC code when there is one,
+/// otherwise the HTTP status. Never prose — a message-derived token would be
+/// exactly the unstable string matching § Q4.3 forbids.
+fn error_token(error_code: Option<i64>, http_status: u16) -> String {
+    error_code.map_or_else(|| format!("status:{http_status}"), |c| format!("error:{c}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::era_diff::load_default_baseline;
+    use std::collections::BTreeSet;
+
+    /// DIRECTION 1: every baseline entry has a probe.
+    ///
+    /// A baseline entry nothing observes can only ever be reported MISSING, in
+    /// every run, forever — the permanent-false-finding defect the
+    /// observation-id design exists to remove.
+    #[test]
+    fn every_baseline_entry_has_a_probe() {
+        let baseline = load_default_baseline().expect("the shipped baseline must load");
+        let probes: BTreeSet<&str> = PROBE_REGISTRY.iter().map(|id| id.as_str()).collect();
+        let unprobed: Vec<&str> = baseline
+            .observation_ids()
+            .into_iter()
+            .filter(|id| !probes.contains(id))
+            .collect();
+        assert!(
+            unprobed.is_empty(),
+            "these baseline observation_ids have NO probe and would report a \
+             permanent false MISSING finding: {unprobed:?}"
+        );
+    }
+
+    /// DIRECTION 2: every probe has a baseline entry.
+    ///
+    /// A probe with no entry would report every difference it sees as an
+    /// UNEXPECTED finding, which is the same defect pointing the other way.
+    #[test]
+    fn every_probe_has_a_baseline_entry() {
+        let baseline = load_default_baseline().expect("the shipped baseline must load");
+        let entries: BTreeSet<&str> = baseline.observation_ids().into_iter().collect();
+        let unbaselined: Vec<&str> = PROBE_REGISTRY
+            .iter()
+            .map(|id| id.as_str())
+            .filter(|id| !entries.contains(id))
+            .collect();
+        assert!(
+            unbaselined.is_empty(),
+            "these probes have NO baseline entry and would report every run as an \
+             UNEXPECTED finding: {unbaselined:?}"
+        );
+    }
+
+    #[test]
+    fn the_registry_has_no_duplicates() {
+        let unique: BTreeSet<&str> = PROBE_REGISTRY.iter().map(|id| id.as_str()).collect();
+        assert_eq!(
+            unique.len(),
+            PROBE_REGISTRY.len(),
+            "a duplicated ObservationId would silently merge two wire facts"
+        );
+    }
+
+    /// The token vocabulary is the JOIN vocabulary; if it drifts, every
+    /// EXPECTED classification silently becomes UNEXPECTED.
+    #[test]
+    fn observed_value_tokens_are_stable() {
+        assert_eq!(ObservedValue::Present.token(), "present");
+        assert_eq!(ObservedValue::Absent.token(), "absent");
+        assert_eq!(ObservedValue::Text("served".into()).token(), "served");
+        assert_eq!(ObservedValue::Status(405).token(), "status:405");
+        assert_eq!(ObservedValue::Pointer("/a/b".into()).token(), "/a/b");
+        assert_eq!(
+            ObservedValue::Unavailable("x".into()).token(),
+            "unavailable"
+        );
+        assert!(!ObservedValue::Unavailable("x".into()).is_established());
+        assert!(ObservedValue::Absent.is_established());
+    }
+
+    /// `Unavailable` (the probe could not tell) must never be confusable with
+    /// `Absent` (the probe established that nothing was there).
+    #[test]
+    fn unavailable_is_not_absent() {
+        assert_ne!(
+            ObservedValue::Unavailable("boom".into()),
+            ObservedValue::Absent
+        );
+        assert_ne!(
+            ObservedValue::Unavailable("boom".into()).token(),
+            ObservedValue::Absent.token()
+        );
+    }
+
+    #[test]
+    fn error_token_prefers_the_jsonrpc_code() {
+        assert_eq!(error_token(Some(-32601), 200), "error:-32601");
+        assert_eq!(error_token(None, 404), "status:404");
+    }
+
+    #[test]
+    fn observations_iterate_deterministically() {
+        let mut map = BTreeMap::new();
+        map.insert(RESULT_CACHE_SCOPE, ObservedValue::Absent);
+        map.insert(METHOD_INITIALIZE, ObservedValue::Text("served".into()));
+        let observations = EraObservations(map);
+        assert_eq!(
+            observations.ids(),
+            vec![METHOD_INITIALIZE, RESULT_CACHE_SCOPE],
+            "BTreeMap order is the rendering order and must be sorted"
+        );
+        assert_eq!(observations.len(), 2);
+        assert!(!observations.is_empty());
+        assert_eq!(
+            observations.get(METHOD_INITIALIZE),
+            Some(&ObservedValue::Text("served".into()))
+        );
+    }
+
+    /// The envelope-key classifier is the shared rule behind ERA-07; it must
+    /// treat an explicit `null` as absent, not as present.
+    #[test]
+    fn envelope_key_classifier_treats_null_as_absent() {
+        let present = Ok(crate::tester::RawProbeOutcome {
+            http_status: 200,
+            content_type: "application/json".into(),
+            session_header: None,
+            result: Some(serde_json::json!({ "resultType": "complete" })),
+            error_code: None,
+        });
+        assert_eq!(
+            classify_envelope_key(&present, "resultType"),
+            ObservedValue::Present
+        );
+
+        let null = Ok(crate::tester::RawProbeOutcome {
+            http_status: 200,
+            content_type: "application/json".into(),
+            session_header: None,
+            result: Some(serde_json::json!({ "resultType": null })),
+            error_code: None,
+        });
+        assert_eq!(
+            classify_envelope_key(&null, "resultType"),
+            ObservedValue::Absent
+        );
+
+        let failed: std::result::Result<crate::tester::RawProbeOutcome, String> =
+            Err("boom".into());
+        assert!(!classify_envelope_key(&failed, "resultType").is_established());
+    }
+
+    #[test]
+    fn cache_hint_classifier_distinguishes_partial_from_required() {
+        let outcome = |result: serde_json::Value| {
+            Ok(crate::tester::RawProbeOutcome {
+                http_status: 200,
+                content_type: "application/json".into(),
+                session_header: None,
+                result: Some(result),
+                error_code: None,
+            })
+        };
+        assert_eq!(
+            classify_cache_hints(&outcome(
+                serde_json::json!({ "ttlMs": 0, "cacheScope": "private" })
+            )),
+            ObservedValue::Text("required".into())
+        );
+        assert_eq!(
+            classify_cache_hints(&outcome(serde_json::json!({}))),
+            ObservedValue::Absent
+        );
+        assert_eq!(
+            classify_cache_hints(&outcome(serde_json::json!({ "ttlMs": 0 }))),
+            ObservedValue::Text("partial".into()),
+            "one hint without the other must not read as conformant"
+        );
+    }
+
+    #[test]
+    fn server_info_classifier_accepts_both_locations() {
+        let outcome = |result: serde_json::Value| {
+            Ok(crate::tester::RawProbeOutcome {
+                http_status: 200,
+                content_type: "application/json".into(),
+                session_header: None,
+                result: Some(result),
+                error_code: None,
+            })
+        };
+        assert_eq!(
+            classify_server_info(&outcome(
+                serde_json::json!({ "serverInfo": { "name": "x" } })
+            )),
+            ObservedValue::Present
+        );
+        assert_eq!(
+            classify_server_info(&outcome(serde_json::json!({
+                "_meta": { "io.modelcontextprotocol/serverInfo": { "name": "x" } }
+            }))),
+            ObservedValue::Present
+        );
+        assert_eq!(
+            classify_server_info(&outcome(serde_json::json!({}))),
+            ObservedValue::Absent
+        );
+    }
+
+    // CLAUDE.md ALWAYS / PROPERTY testing.
+    proptest::proptest! {
+        /// `token()` is TOTAL and never empty — an empty token would join
+        /// against nothing and quietly classify every delta as MISSING.
+        #[test]
+        fn every_observed_value_has_a_non_empty_token(text in "[^\\s]{1,32}", code in 0u16..600) {
+            for value in [
+                ObservedValue::Present,
+                ObservedValue::Absent,
+                ObservedValue::Text(text.clone()),
+                ObservedValue::Status(code),
+                ObservedValue::Pointer(text.clone()),
+                ObservedValue::Unavailable(text.clone()),
+            ] {
+                proptest::prop_assert!(!value.token().is_empty());
+            }
+        }
+
+        /// `error_token` is TOTAL and always yields one of the two stable
+        /// prefixes — never server prose.
+        #[test]
+        fn error_token_is_always_a_stable_prefix(code in -40000i64..40000, status in 0u16..600) {
+            let with_code = error_token(Some(code), status);
+            proptest::prop_assert!(with_code.starts_with("error:"));
+            let without = error_token(None, status);
+            proptest::prop_assert!(without.starts_with("status:"));
+        }
+    }
+}

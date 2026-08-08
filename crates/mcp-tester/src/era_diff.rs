@@ -38,16 +38,21 @@
 //!
 //! # Scope
 //!
-//! Data model plus reader ONLY. The dual-run comparison itself (and the report
-//! type that carries its verdict) is deliberately NOT here — it is owned by a
-//! later plan, which joins its observed differences against
-//! [`EraDelta::observation_id`].
+//! The baseline data model and its reader, PLUS (added by plan 117-11) the
+//! dual-run comparison and the [`DualRunReport`] that carries its verdict. The
+//! comparison joins observed [`crate::era_observations::ObservationId`]s against
+//! [`EraDelta::observation_id`] — never against a `TestResult` display name,
+//! which could not observe most of the baseline at all.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use crate::era_observations::{EraObservations, ObservedValue};
+use crate::report::TestReport;
 
 /// One expected v1-vs-v2 difference: a difference that is CORRECT BY DESIGN.
 ///
@@ -251,6 +256,748 @@ const DEFAULT_BASELINE_TEXT: &str = include_str!(concat!(
 pub fn load_default_baseline() -> Result<EraBaseline> {
     parse_baseline(DEFAULT_BASELINE_TEXT)
         .context("Failed to parse the compiled-in era-delta baseline")
+}
+
+// ===========================================================================
+// The dual-run comparison (Phase 117, D-06).
+// ===========================================================================
+
+/// How one observation-id's v1-vs-v2 behaviour relates to the baseline.
+///
+/// [`Self::Unexpected`] and [`Self::Missing`] are BOTH findings, reported as
+/// DISTINCT categories because they mean opposite things and call for opposite
+/// remedies: an unexpected difference means the implementation moved, a missing
+/// one means either the spec moved or a documented behaviour regressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DifferenceClass {
+    /// The eras differed, and they differed exactly as the baseline records.
+    /// CORRECT BY DESIGN.
+    Expected,
+    /// The eras differed with no baseline delta recording that difference (or
+    /// recording it with different values). A FINDING.
+    Unexpected,
+    /// A baseline delta whose observation did NOT differ across the eras, or
+    /// was never observed at all. Also a FINDING.
+    Missing,
+}
+
+impl DifferenceClass {
+    /// Whether this class is a finding a reader must act on.
+    pub fn is_finding(self) -> bool {
+        !matches!(self, Self::Expected)
+    }
+
+    /// Stable label for the rendered report.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Expected => "EXPECTED",
+            Self::Unexpected => "UNEXPECTED",
+            Self::Missing => "MISSING",
+        }
+    }
+}
+
+/// One classified observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassifiedDifference {
+    /// The stable wire-fact id this row is about.
+    pub observation_id: String,
+    /// How it relates to the baseline.
+    pub class: DifferenceClass,
+    /// What the v1 run observed, if it observed anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v1: Option<ObservedValue>,
+    /// What the v2 run observed, if it observed anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2: Option<ObservedValue>,
+    /// The matching baseline entry's `ERA-NN` label, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_id: Option<String>,
+    /// Whether the matching baseline entry is PROVISIONAL.
+    ///
+    /// A provisional delta that goes MISSING is a legible consequence of
+    /// Phase-114/115 churn in an unsigned-off area; a non-provisional one going
+    /// MISSING is a regression. Rendering them identically would make the first
+    /// look alarming and the second look routine.
+    #[serde(default)]
+    pub provisional: bool,
+    /// Human-readable explanation of this row's classification.
+    pub detail: String,
+}
+
+/// The dual-run verdict: two suite reports plus the baseline-keyed comparison.
+///
+/// # Why a NEW TOP-LEVEL STRUCT (the A-D11 rule)
+///
+/// The same rule this module's header states, applied to the comparison rather
+/// than to the baseline. `cargo-pmcp` links `mcp-tester` as a LIBRARY: it builds
+/// [`crate::TestResult`] as an exhaustive positional struct literal and matches
+/// [`crate::TestCategory`] with no `_` arm, so hanging the comparison off either
+/// type is a hard workspace compile break. `post_deploy_report` is the in-repo
+/// precedent for exactly this escape hatch, and its header argues the case
+/// verbatim ("Why a new struct (vs. extending `TestReport`)").
+///
+/// So this struct carries the two `TestReport`s WHOLE — the human-facing suite
+/// results, unmodified — alongside the two [`EraObservations`] the comparison
+/// actually reads. Nothing is added to `TestResult`.
+///
+/// `schema_version` is the wire-format guard, and every optional field carries
+/// `#[serde(default, skip_serializing_if = "Option::is_none")]` so a future
+/// additive field does not invalidate a stored report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DualRunReport {
+    /// Wire-format version of this struct. Currently `1`.
+    pub schema_version: u32,
+    /// Which eras the target was detected to serve (`dual`, `v1-only`, …).
+    pub era_support: String,
+    /// The v1 suite result, verbatim.
+    pub v1_report: TestReport,
+    /// The v2 suite result, verbatim.
+    pub v2_report: TestReport,
+    /// What the v1 probes saw.
+    pub v1_observations: EraObservations,
+    /// What the v2 probes saw.
+    pub v2_observations: EraObservations,
+    /// Every classified observation, in stable id order.
+    pub differences: Vec<ClassifiedDifference>,
+    /// Set when the comparison itself looks untrustworthy — see
+    /// [`compare_eras`]'s anti-vacuity guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspicion: Option<String>,
+    /// Free-form note, e.g. why a dual run degraded to a single run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl DualRunReport {
+    /// Rows that are findings (UNEXPECTED or MISSING).
+    pub fn findings(&self) -> Vec<&ClassifiedDifference> {
+        self.differences
+            .iter()
+            .filter(|d| d.class.is_finding())
+            .collect()
+    }
+
+    /// Count of rows in one class.
+    pub fn count(&self, class: DifferenceClass) -> usize {
+        self.differences.iter().filter(|d| d.class == class).count()
+    }
+
+    /// Render the comparison into any writer.
+    ///
+    /// Follows `report.rs:238-255`'s `print_to_writer` shape so a test can
+    /// capture into a `Vec<u8>` and assert on BYTES. Printed only when
+    /// `--dual-run` was requested; nothing here is on the single-run path.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the writer's I/O errors.
+    pub fn print_to_writer<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
+        writeln!(w)?;
+        writeln!(w, "DUAL-RUN ERA COMPARISON")?;
+        writeln!(w, "{}", "=".repeat(60))?;
+        writeln!(w, "Era support : {}", self.era_support)?;
+        writeln!(
+            w,
+            "v1 suite    : {} tests, {} failed",
+            self.v1_report.summary.total, self.v1_report.summary.failed
+        )?;
+        writeln!(
+            w,
+            "v2 suite    : {} tests, {} failed",
+            self.v2_report.summary.total, self.v2_report.summary.failed
+        )?;
+        writeln!(
+            w,
+            "Differences : {} expected, {} unexpected, {} missing",
+            self.count(DifferenceClass::Expected),
+            self.count(DifferenceClass::Unexpected),
+            self.count(DifferenceClass::Missing),
+        )?;
+        if let Some(note) = &self.note {
+            writeln!(w, "Note        : {note}")?;
+        }
+        writeln!(w)?;
+
+        for class in [
+            DifferenceClass::Unexpected,
+            DifferenceClass::Missing,
+            DifferenceClass::Expected,
+        ] {
+            let rows: Vec<&ClassifiedDifference> = self
+                .differences
+                .iter()
+                .filter(|d| d.class == class)
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            writeln!(w, "{} ({})", class.label(), rows.len())?;
+            for row in rows {
+                let provisional = if row.provisional && class == DifferenceClass::Missing {
+                    " [PROVISIONAL]"
+                } else if row.provisional {
+                    " [provisional]"
+                } else {
+                    ""
+                };
+                writeln!(
+                    w,
+                    "  {}{}{}",
+                    row.observation_id,
+                    row.delta_id
+                        .as_ref()
+                        .map(|d| format!(" ({d})"))
+                        .unwrap_or_default(),
+                    provisional
+                )?;
+                writeln!(w, "      {}", row.detail)?;
+            }
+            writeln!(w)?;
+        }
+
+        if let Some(suspicion) = &self.suspicion {
+            writeln!(w, "SUSPICIOUS: {suspicion}")?;
+            writeln!(w)?;
+        }
+        Ok(())
+    }
+}
+
+/// Classify every observation against `baseline`, joining on
+/// [`crate::era_observations::ObservationId`] — never on a display name.
+///
+/// # The join rule
+///
+/// For each id in the union of (v1 observations ∪ v2 observations ∪ baseline
+/// ids):
+///
+/// * the eras DIFFERED when both runs established a value and the two tokens
+///   are unequal (an unestablished value on either side is "we could not tell",
+///   which is not a difference);
+/// * DIFFERED + a delta whose recorded `v1:`/`v2:` columns EQUAL the observed
+///   tokens ⇒ [`DifferenceClass::Expected`];
+/// * DIFFERED + no such delta ⇒ [`DifferenceClass::Unexpected`] (including the
+///   case where a delta exists but records different values — the difference is
+///   real and is not the documented one);
+/// * NOT DIFFERED + a delta exists ⇒ [`DifferenceClass::Missing`];
+/// * NOT DIFFERED + no delta ⇒ not reported at all.
+///
+/// # The anti-vacuity guard
+///
+/// Two independent era runs against a DUAL-era server MUST differ: the baseline
+/// lists fourteen differences that are correct by design. So an empty
+/// difference list, with two non-empty suite reports, does not mean "all
+/// clear" — it means the comparison probably did not run, or every probe came
+/// back `Unavailable`. That is surfaced in
+/// [`DualRunReport::suspicion`] rather than rendered as a clean bill of health,
+/// because a silently-never-matching comparison would classify everything as
+/// agreement and be indistinguishable from success.
+pub fn compare_eras(
+    v1: &EraObservations,
+    v2: &EraObservations,
+    baseline: &EraBaseline,
+) -> (Vec<ClassifiedDifference>, Option<String>) {
+    let mut ids: BTreeSet<&str> = BTreeSet::new();
+    for id in v1.ids() {
+        ids.insert(id.as_str());
+    }
+    for id in v2.ids() {
+        ids.insert(id.as_str());
+    }
+    for id in baseline.observation_ids() {
+        ids.insert(id);
+    }
+
+    let mut differences = Vec::new();
+    for id in ids {
+        let observed_v1 = v1.0.iter().find(|(k, _)| k.as_str() == id).map(|(_, v)| v);
+        let observed_v2 = v2.0.iter().find(|(k, _)| k.as_str() == id).map(|(_, v)| v);
+        let delta = baseline.find_by_observation_id(id);
+
+        let differed = match (observed_v1, observed_v2) {
+            (Some(a), Some(b)) => {
+                a.is_established() && b.is_established() && a.token() != b.token()
+            },
+            _ => false,
+        };
+        let agrees_with_delta = match (delta, observed_v1, observed_v2) {
+            (Some(d), Some(a), Some(b)) => a.token() == d.v1 && b.token() == d.v2,
+            _ => false,
+        };
+
+        let (class, detail) = match (differed, delta, agrees_with_delta) {
+            (true, Some(d), true) => (
+                DifferenceClass::Expected,
+                format!(
+                    "{}: v1 `{}` vs v2 `{}` — correct by design ({})",
+                    d.subject, d.v1, d.v2, d.source
+                ),
+            ),
+            (true, Some(d), false) => (
+                DifferenceClass::Unexpected,
+                format!(
+                    "the eras differ, but NOT as {} records: observed v1 `{}` / v2 `{}`, \
+                     baseline records v1 `{}` / v2 `{}`",
+                    d.id,
+                    token_of(observed_v1),
+                    token_of(observed_v2),
+                    d.v1,
+                    d.v2
+                ),
+            ),
+            (true, None, _) => (
+                DifferenceClass::Unexpected,
+                format!(
+                    "the eras differ with NO baseline entry: observed v1 `{}` / v2 `{}`",
+                    token_of(observed_v1),
+                    token_of(observed_v2)
+                ),
+            ),
+            (false, Some(d), _) => (
+                DifferenceClass::Missing,
+                format!(
+                    "{} no longer reproduces: baseline records v1 `{}` / v2 `{}`, \
+                     observed v1 `{}` / v2 `{}`",
+                    d.id,
+                    d.v1,
+                    d.v2,
+                    token_of(observed_v1),
+                    token_of(observed_v2)
+                ),
+            ),
+            (false, None, _) => continue,
+        };
+
+        differences.push(ClassifiedDifference {
+            observation_id: id.to_string(),
+            class,
+            v1: observed_v1.cloned(),
+            v2: observed_v2.cloned(),
+            delta_id: delta.map(|d| d.id.clone()),
+            provisional: delta.is_some_and(|d| d.provisional),
+            detail,
+        });
+    }
+
+    let suspicion = if differences.is_empty() {
+        Some(format!(
+            "the classified difference list is EMPTY, yet the baseline records {} \
+             differences that are correct by design. Two independent era runs \
+             against a dual-era server MUST differ, so this is far more likely to \
+             mean the comparison did not run (or every probe returned \
+             `unavailable`) than that the eras agree.",
+            baseline.deltas.len()
+        ))
+    } else {
+        None
+    };
+
+    (differences, suspicion)
+}
+
+/// Render an optional observation as its token, or `not observed`.
+fn token_of(value: Option<&ObservedValue>) -> String {
+    value.map_or_else(|| "not observed".to_string(), ObservedValue::token)
+}
+
+/// Build a [`DualRunReport`] from two suite reports and two observation sets.
+///
+/// The anti-vacuity guard is applied here too: an empty difference list is only
+/// SUSPICIOUS when both suites actually ran tests. A comparison over two empty
+/// reports is merely empty.
+pub fn build_dual_run_report(
+    era_support: &str,
+    v1_report: TestReport,
+    v2_report: TestReport,
+    v1_observations: EraObservations,
+    v2_observations: EraObservations,
+    baseline: &EraBaseline,
+) -> DualRunReport {
+    let (differences, mut suspicion) = compare_eras(&v1_observations, &v2_observations, baseline);
+    if v1_report.summary.total == 0 || v2_report.summary.total == 0 {
+        suspicion = None;
+    }
+    DualRunReport {
+        schema_version: 1,
+        era_support: era_support.to_string(),
+        v1_report,
+        v2_report,
+        v1_observations,
+        v2_observations,
+        differences,
+        suspicion,
+        note: None,
+    }
+}
+
+#[cfg(test)]
+mod comparison {
+    use super::*;
+    use crate::era_observations::{
+        EraObservations, ObservationId, ObservedValue, METHOD_INITIALIZE, RESULT_CACHE_SCOPE,
+    };
+    use std::collections::BTreeMap;
+
+    fn baseline_with(entries: &[(&str, &str, &str, bool)]) -> EraBaseline {
+        EraBaseline {
+            schema_version: 1,
+            v1_protocol: "2025-11-25".to_string(),
+            v2_protocol: "2026-07-28".to_string(),
+            deltas: entries
+                .iter()
+                .enumerate()
+                .map(|(i, (observation_id, v1, v2, provisional))| EraDelta {
+                    id: format!("ERA-{:02}", i + 1),
+                    observation_id: (*observation_id).to_string(),
+                    subject: format!("subject for {observation_id}"),
+                    v1: (*v1).to_string(),
+                    v2: (*v2).to_string(),
+                    kind: "test".to_string(),
+                    source: "unit test".to_string(),
+                    note: None,
+                    provisional: *provisional,
+                })
+                .collect(),
+        }
+    }
+
+    fn observations(entries: &[(ObservationId, ObservedValue)]) -> EraObservations {
+        let mut map = BTreeMap::new();
+        for (id, value) in entries {
+            map.insert(*id, value.clone());
+        }
+        EraObservations(map)
+    }
+
+    /// THE JOIN RULE, exercised directly with a matching AND a non-matching
+    /// case. A rule that silently never matched would classify every delta
+    /// EXPECTED (or every one UNEXPECTED) and could not fail either half of
+    /// this test.
+    #[test]
+    fn join_rule_matches_a_recorded_delta_and_rejects_a_mismatched_one() {
+        let baseline = baseline_with(&[
+            ("method.initialize", "served", "absent", false),
+            ("result.cache_scope", "absent", "required", false),
+        ]);
+
+        // MATCHING: observed values equal the recorded columns.
+        let (matched, _) = compare_eras(
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("served".into()))]),
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("absent".into()))]),
+            &baseline,
+        );
+        let initialize = matched
+            .iter()
+            .find(|d| d.observation_id == "method.initialize")
+            .expect("the observed id must be classified");
+        assert_eq!(
+            initialize.class,
+            DifferenceClass::Expected,
+            "a difference recorded in the baseline is correct by design"
+        );
+        assert_eq!(initialize.delta_id.as_deref(), Some("ERA-01"));
+
+        // NON-MATCHING: the eras differ, but not in the recorded way.
+        let (mismatched, _) = compare_eras(
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("served".into()))]),
+            &observations(&[(
+                METHOD_INITIALIZE,
+                ObservedValue::Text("served-but-deprecated".into()),
+            )]),
+            &baseline,
+        );
+        let initialize = mismatched
+            .iter()
+            .find(|d| d.observation_id == "method.initialize")
+            .expect("the observed id must be classified");
+        assert_eq!(
+            initialize.class,
+            DifferenceClass::Unexpected,
+            "a difference that is not the DOCUMENTED difference is a finding"
+        );
+        assert!(initialize.detail.contains("baseline records"));
+    }
+
+    #[test]
+    fn an_unrecorded_difference_is_unexpected() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        let (differences, _) = compare_eras(
+            &observations(&[(RESULT_CACHE_SCOPE, ObservedValue::Absent)]),
+            &observations(&[(RESULT_CACHE_SCOPE, ObservedValue::Text("required".into()))]),
+            &baseline,
+        );
+        let row = differences
+            .iter()
+            .find(|d| d.observation_id == "result.cache_scope")
+            .expect("an unbaselined difference must still be reported");
+        assert_eq!(row.class, DifferenceClass::Unexpected);
+        assert!(row.delta_id.is_none());
+        assert!(row.detail.contains("NO baseline entry"));
+    }
+
+    #[test]
+    fn a_delta_that_no_longer_reproduces_is_missing() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        let (differences, _) = compare_eras(
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("served".into()))]),
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("served".into()))]),
+            &baseline,
+        );
+        let row = &differences[0];
+        assert_eq!(row.class, DifferenceClass::Missing);
+        assert!(row.detail.contains("no longer reproduces"));
+    }
+
+    #[test]
+    fn a_delta_never_observed_is_missing_not_silently_dropped() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        let (differences, _) = compare_eras(
+            &EraObservations::default(),
+            &EraObservations::default(),
+            &baseline,
+        );
+        assert_eq!(differences.len(), 1);
+        assert_eq!(differences[0].class, DifferenceClass::Missing);
+        assert!(differences[0].detail.contains("not observed"));
+    }
+
+    /// An `Unavailable` observation is "we could not tell", NOT a difference —
+    /// otherwise a flaky probe would manufacture findings.
+    #[test]
+    fn an_unavailable_observation_is_not_a_difference() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        let (differences, _) = compare_eras(
+            &observations(&[(METHOD_INITIALIZE, ObservedValue::Text("served".into()))]),
+            &observations(&[(
+                METHOD_INITIALIZE,
+                ObservedValue::Unavailable("transport failed".into()),
+            )]),
+            &baseline,
+        );
+        assert_eq!(differences[0].class, DifferenceClass::Missing);
+    }
+
+    /// A provisional delta going MISSING must be legible as Phase-114/115 churn
+    /// rather than as an alarming regression.
+    #[test]
+    fn provisional_missing_is_reported_distinctly_from_non_provisional() {
+        let baseline = baseline_with(&[
+            ("method.initialize", "served", "absent", false),
+            ("result.cache_scope", "absent", "required", true),
+        ]);
+        let same = |id| observations(&[(id, ObservedValue::Text("same".into()))]);
+        let mut v1 = same(METHOD_INITIALIZE).0;
+        v1.extend(same(RESULT_CACHE_SCOPE).0);
+        let observations_both = EraObservations(v1);
+        let (differences, _) = compare_eras(&observations_both, &observations_both, &baseline);
+
+        let non_provisional = differences
+            .iter()
+            .find(|d| d.observation_id == "method.initialize")
+            .expect("classified");
+        let provisional = differences
+            .iter()
+            .find(|d| d.observation_id == "result.cache_scope")
+            .expect("classified");
+        assert_eq!(non_provisional.class, DifferenceClass::Missing);
+        assert_eq!(provisional.class, DifferenceClass::Missing);
+        assert!(!non_provisional.provisional);
+        assert!(provisional.provisional);
+
+        let report = DualRunReport {
+            schema_version: 1,
+            era_support: "dual".into(),
+            v1_report: TestReport::new(),
+            v2_report: TestReport::new(),
+            v1_observations: EraObservations::default(),
+            v2_observations: EraObservations::default(),
+            differences,
+            suspicion: None,
+            note: None,
+        };
+        let mut sink = Vec::<u8>::new();
+        report.print_to_writer(&mut sink).expect("render");
+        let text = String::from_utf8(sink).expect("utf8");
+        assert!(
+            text.contains("result.cache_scope (ERA-02) [PROVISIONAL]"),
+            "a provisional MISSING must be marked in the render:\n{text}"
+        );
+        assert!(
+            text.contains("method.initialize (ERA-01)\n"),
+            "a non-provisional MISSING must NOT be marked:\n{text}"
+        );
+    }
+
+    /// MISSING and UNEXPECTED must appear as separate, labelled sections.
+    #[test]
+    fn render_reports_missing_and_unexpected_as_distinct_categories() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        let (differences, _) = compare_eras(
+            &observations(&[
+                (METHOD_INITIALIZE, ObservedValue::Text("served".into())),
+                (RESULT_CACHE_SCOPE, ObservedValue::Absent),
+            ]),
+            &observations(&[
+                (METHOD_INITIALIZE, ObservedValue::Text("served".into())),
+                (RESULT_CACHE_SCOPE, ObservedValue::Text("required".into())),
+            ]),
+            &baseline,
+        );
+        let report = DualRunReport {
+            schema_version: 1,
+            era_support: "dual".into(),
+            v1_report: TestReport::new(),
+            v2_report: TestReport::new(),
+            v1_observations: EraObservations::default(),
+            v2_observations: EraObservations::default(),
+            differences,
+            suspicion: None,
+            note: None,
+        };
+        let mut sink = Vec::<u8>::new();
+        report.print_to_writer(&mut sink).expect("render");
+        let text = String::from_utf8(sink).expect("utf8");
+        assert!(text.contains("UNEXPECTED (1)"), "{text}");
+        assert!(text.contains("MISSING (1)"), "{text}");
+        assert_eq!(report.findings().len(), 2);
+    }
+
+    /// THE ANTI-VACUITY GUARD.
+    #[test]
+    fn an_empty_difference_list_is_surfaced_as_suspicious() {
+        let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+        // Nothing to classify at all: no observation ids, no baseline overlap.
+        let empty_baseline = baseline_with(&[]);
+        let (differences, suspicion) = compare_eras(
+            &EraObservations::default(),
+            &EraObservations::default(),
+            &empty_baseline,
+        );
+        assert!(differences.is_empty());
+        let suspicion = suspicion.expect("an empty difference list must be suspicious");
+        assert!(suspicion.contains("MUST differ"), "{suspicion}");
+
+        // …but with a real baseline the list is NOT empty, so no suspicion.
+        let (differences, suspicion) = compare_eras(
+            &EraObservations::default(),
+            &EraObservations::default(),
+            &baseline,
+        );
+        assert!(!differences.is_empty());
+        assert!(suspicion.is_none());
+    }
+
+    /// The guard is only meaningful when both suites actually ran.
+    #[test]
+    fn suspicion_is_suppressed_when_a_suite_ran_no_tests() {
+        let report = build_dual_run_report(
+            "dual",
+            TestReport::new(),
+            TestReport::new(),
+            EraObservations::default(),
+            EraObservations::default(),
+            &baseline_with(&[]),
+        );
+        assert!(
+            report.suspicion.is_none(),
+            "a comparison over two empty reports is empty, not suspicious"
+        );
+        assert_eq!(report.schema_version, 1);
+    }
+
+    /// Optional fields must be omitted, not serialized as `null` — the
+    /// forward-compatibility shape `post_deploy_report` established.
+    #[test]
+    fn optional_fields_are_omitted_when_absent() {
+        let report = build_dual_run_report(
+            "dual",
+            TestReport::new(),
+            TestReport::new(),
+            EraObservations::default(),
+            EraObservations::default(),
+            &baseline_with(&[]),
+        );
+        let json = serde_json::to_string(&report).expect("serializes");
+        assert!(!json.contains("\"note\""), "{json}");
+        assert!(json.contains("\"schema_version\":1"), "{json}");
+    }
+
+    /// Classification order is deterministic, because the report is rendered
+    /// and compared as bytes.
+    #[test]
+    fn classification_order_is_deterministic() {
+        let baseline = baseline_with(&[
+            ("method.initialize", "served", "absent", false),
+            ("result.cache_scope", "absent", "required", false),
+        ]);
+        let first = compare_eras(
+            &EraObservations::default(),
+            &EraObservations::default(),
+            &baseline,
+        )
+        .0;
+        let second = compare_eras(
+            &EraObservations::default(),
+            &EraObservations::default(),
+            &baseline,
+        )
+        .0;
+        assert_eq!(first, second);
+        let ids: Vec<&str> = first.iter().map(|d| d.observation_id.as_str()).collect();
+        assert_eq!(ids, vec!["method.initialize", "result.cache_scope"]);
+    }
+
+    // CLAUDE.md ALWAYS / PROPERTY testing.
+    proptest::proptest! {
+        /// The comparison is TOTAL: any pair of observation sets classifies
+        /// without panicking, and every baseline id is always accounted for.
+        #[test]
+        fn compare_eras_accounts_for_every_baseline_id(
+            v1_token in "[a-z]{1,8}",
+            v2_token in "[a-z]{1,8}",
+        ) {
+            let baseline = baseline_with(&[("method.initialize", "served", "absent", false)]);
+            let (differences, _) = compare_eras(
+                &observations(&[(METHOD_INITIALIZE, ObservedValue::Text(v1_token.clone()))]),
+                &observations(&[(METHOD_INITIALIZE, ObservedValue::Text(v2_token.clone()))]),
+                &baseline,
+            );
+            proptest::prop_assert_eq!(differences.len(), 1);
+            let expected = v1_token == "served" && v2_token == "absent";
+            proptest::prop_assert_eq!(
+                differences[0].class == DifferenceClass::Expected,
+                expected
+            );
+        }
+
+        /// The renderer never panics, whatever it is handed.
+        #[test]
+        fn render_never_panics(era_support in ".*", detail in ".*") {
+            let report = DualRunReport {
+                schema_version: 1,
+                era_support,
+                v1_report: TestReport::new(),
+                v2_report: TestReport::new(),
+                v1_observations: EraObservations::default(),
+                v2_observations: EraObservations::default(),
+                differences: vec![ClassifiedDifference {
+                    observation_id: "x.y".to_string(),
+                    class: DifferenceClass::Unexpected,
+                    v1: None,
+                    v2: None,
+                    delta_id: None,
+                    provisional: false,
+                    detail,
+                }],
+                suspicion: None,
+                note: None,
+            };
+            let mut sink = Vec::<u8>::new();
+            proptest::prop_assert!(report.print_to_writer(&mut sink).is_ok());
+        }
+    }
 }
 
 #[cfg(test)]
