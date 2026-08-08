@@ -415,6 +415,64 @@ fn copy_string_literal(chars: &[char], mut i: usize, out: &mut String) -> usize 
     i
 }
 
+/// The `#` count of a raw-string opener starting at `i`, if `i` starts one.
+///
+/// Returns `None` unless `chars[i] == 'r'`, the character BEFORE it cannot be
+/// part of an identifier (so `for`, `char` and `iter` are not mistaken for a
+/// raw-string prefix), and the `r` is followed by zero or more `#` and then a
+/// `"`.
+fn raw_string_hashes(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != 'r' {
+        return None;
+    }
+    if i > 0 {
+        let prev = chars[i - 1];
+        if prev.is_alphanumeric() || prev == '_' {
+            return None;
+        }
+    }
+    let mut j = i + 1;
+    let mut hashes = 0usize;
+    while chars.get(j) == Some(&'#') {
+        hashes += 1;
+        j += 1;
+    }
+    if chars.get(j) == Some(&'"') {
+        Some(hashes)
+    } else {
+        None
+    }
+}
+
+/// Copy an `r#"…"#` raw string verbatim, honouring its `#` count.
+///
+/// Raw strings have no escape processing, so the ONLY terminator is `"` followed
+/// by exactly the opening number of `#`. Handling them is not cosmetic: the
+/// `#[cfg_attr(feature = "v1-compat", doc = r#"…"#)]` doc payloads in
+/// [`CLIENT_TRANSPORT`] contain `http://localhost:8080`, and a stripper that
+/// fell out of string mode there would treat the `//` as a line comment and eat
+/// the rest of the line — silently shrinking the very region the client scan
+/// has to reason about.
+fn copy_raw_string(chars: &[char], mut i: usize, hashes: usize, out: &mut String) -> usize {
+    // Copy the `r`, the `#`s and the opening quote.
+    let opener_len = 1 + hashes + 1;
+    for k in 0..opener_len {
+        out.push(chars[i + k]);
+    }
+    i += opener_len;
+    while i < chars.len() {
+        if chars[i] == '"' && (1..=hashes).all(|k| chars.get(i + k) == Some(&'#')) {
+            for k in 0..=hashes {
+                out.push(chars[i + k]);
+            }
+            return i + hashes + 1;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    i
+}
+
 /// Rust source with `//`, `///`, `//!` and `/* … */` comments removed.
 ///
 /// The scan below MUST run on stripped source. A doc comment that mentions a
@@ -436,6 +494,8 @@ fn strip_comments(rust: &str) -> String {
             i = skip_line_comment(&chars, i);
         } else if c == '/' && chars.get(i + 1) == Some(&'*') {
             i = skip_block_comment(&chars, i, &mut out);
+        } else if let Some(hashes) = raw_string_hashes(&chars, i) {
+            i = copy_raw_string(&chars, i, hashes, &mut out);
         } else if c == '"' {
             i = copy_string_literal(&chars, i, &mut out);
         } else {
@@ -675,4 +735,664 @@ fn both_paired_module_files_exist() {
              is single-line."
         );
     }
+}
+
+// ===========================================================================
+// SMPL-01/SMPL-02, CLIENT half: the transport's session lifecycle and SSE
+// resumability (plan 117-14).
+//
+// Everything above this line is about the SERVER: the feature lists, and the
+// paired module that severs the server's session map and event store. The
+// CLIENT transport carries the mirror image of all of it — a stored session id,
+// a `Mcp-Session-Id` capture, a DELETE teardown, and a `Last-Event-ID` writer —
+// and a `full-v2` build that severed only the server proves half of a
+// requirement whose wording ("initialize/session lifecycle, SSE resumability")
+// carries no server-only qualifier.
+//
+// Why the scope is DERIVED here too: the checks below SCAN the client transport
+// for three tokens and answer "is this occurrence inside a `v1-compat` region"
+// STRUCTURALLY, from brace depth and the innermost enclosing attribute. They do
+// not consult a line list. 116-14's lesson is that an enumerated scope hides
+// exactly the items it forgot to list, and pre-cut line numbers in a plan go
+// stale the moment the first edit lands.
+// ===========================================================================
+
+/// The client transport whose v1 surface this section scans.
+const CLIENT_TRANSPORT: &str = "src/shared/streamable_http.rs";
+
+/// The deliberately UNGATED constants module, gated PER-CONST.
+const HTTP_CONSTANTS: &str = "src/shared/http_constants.rs";
+
+/// The tokens whose ungated presence in [`CLIENT_TRANSPORT`] would falsify
+/// SMPL-02 on the client side.
+///
+/// `session_id` is the stored identity, its accessors and its capture;
+/// `resumption_token` is the SSE replay cursor and its callback; and
+/// `LAST_EVENT_ID` is the wire header the cursor is written into.
+///
+/// WHAT TO DO when one of these fires: GATE the item. Never shorten this list
+/// and never narrow the scan — that is the 116-14 failure mode this section
+/// exists to avoid.
+const CLIENT_V1_TOKENS: &[&str] = &["session_id", "resumption_token", "LAST_EVENT_ID"];
+
+/// Floor on the number of tracked-token occurrences the scan must FIND.
+///
+/// Every client check below is an ABSENCE check over the ungated remainder, and
+/// absence checks pass trivially when the scan matched nothing. The transport
+/// holds comfortably more than this today.
+///
+/// WHAT TO DO when this fires: fix the scanner or the path constant. Never
+/// lower the floor.
+const MIN_CLIENT_V1_OCCURRENCES: usize = 20;
+
+/// Floor on [`CLIENT_TRANSPORT`]'s stripped byte count, for the same reason.
+const MIN_CLIENT_STRIPPED_BYTES: usize = 20_000;
+
+/// Whether one line lies inside a `v1-compat` region and/or a `#[cfg(test)]`
+/// region.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct LineGate {
+    /// Inside a region governed by `#[cfg(feature = "v1-compat")]` (or by a
+    /// `#[cfg_attr(feature = "v1-compat", …)]` attribute's own extent).
+    v1: bool,
+    /// Inside a `#[cfg(test)]` region.
+    test: bool,
+}
+
+/// A block opened by a line that carried a gate.
+struct GateFrame {
+    /// Brace depth BEFORE the opening line; the frame pops when depth returns.
+    close_depth: i64,
+    v1: bool,
+    test: bool,
+}
+
+/// What one complete attribute says about the code around it.
+struct AttrClass {
+    v1: bool,
+    test: bool,
+    /// `#[cfg(…)]` governs the item that FOLLOWS it. `#[cfg_attr(…, doc = …)]`
+    /// does NOT: it only makes its own payload conditional, so a `cfg_attr`
+    /// carrying a v1-only doctest must not mark the struct beneath it as v1.
+    governs_next_item: bool,
+}
+
+/// Classify one complete attribute's text.
+fn classify_attribute(text: &str) -> AttrClass {
+    // A `not(feature = "v1-compat")` mention is the NULL-TWIN half. Remove those
+    // first so only a POSITIVE mention counts as a gate — otherwise the twin,
+    // whose whole point is that it carries no v1 surface, would be treated as a
+    // place v1 surface is allowed to live.
+    let positive = text.replace("not(feature = \"v1-compat\")", "");
+    let trimmed = text.trim_start();
+    AttrClass {
+        v1: positive.contains("feature = \"v1-compat\""),
+        test: text.contains("cfg(test)") || text.contains("cfg(all(test"),
+        governs_next_item: trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg("),
+    }
+}
+
+/// Net `{` minus `}` on a line whose string and char literals are blanked.
+fn brace_delta(skeleton_line: &str) -> i64 {
+    counted(skeleton_line, '{') - counted(skeleton_line, '}')
+}
+
+/// How many times `needle` appears on a line, as a signed count.
+///
+/// `i64::try_from` rather than `as i64`: a lossy cast on a line long enough to
+/// overflow would silently invert a depth calculation, and every frame after it
+/// would close in the wrong place.
+fn counted(line: &str, needle: char) -> i64 {
+    i64::try_from(line.matches(needle).count()).unwrap_or(i64::MAX)
+}
+
+/// Net `[` minus `]`, for walking a multi-line attribute to its end.
+fn bracket_delta(skeleton_line: &str) -> i64 {
+    counted(skeleton_line, '[') - counted(skeleton_line, ']')
+}
+
+/// Net `(` minus `)`, for keeping a gate attached across a WRAPPED signature.
+///
+/// `rustfmt` splits a long `fn` signature across several lines, so the `{` that
+/// opens the body is not on the line the `#[cfg]` governs. Without this the gate
+/// would be consumed by the signature's first line and the whole body would read
+/// as ungated — which is exactly the false positive this scanner reported the
+/// first time it ran against the real transport.
+fn paren_delta(skeleton_line: &str) -> i64 {
+    counted(skeleton_line, '(') - counted(skeleton_line, ')')
+}
+
+/// The same source with the INTERIOR of every string and char literal replaced
+/// by spaces, so structural counting cannot be fooled by punctuation in a
+/// literal.
+///
+/// Line count and column count are preserved exactly, so this maps 1:1 onto the
+/// stripped source it is derived from. The braces in a `doc = r#"…"#` payload —
+/// which the transport's `cfg_attr` doctests are full of — must not move the
+/// brace depth, or every subsequent frame would close in the wrong place.
+fn structural_skeleton(stripped: &str) -> String {
+    let chars: Vec<char> = stripped.chars().collect();
+    let mut out = String::with_capacity(stripped.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        if let Some(hashes) = raw_string_hashes(&chars, i) {
+            let mut buf = String::new();
+            let end = copy_raw_string(&chars, i, hashes, &mut buf);
+            blank_literal(&buf, &mut out);
+            i = end;
+            continue;
+        }
+        if chars[i] == '"' {
+            let mut buf = String::new();
+            let end = copy_string_literal(&chars, i, &mut buf);
+            blank_literal(&buf, &mut out);
+            i = end;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Push `literal` with every non-newline character replaced by a space.
+fn blank_literal(literal: &str, out: &mut String) {
+    for c in literal.chars() {
+        out.push(if c == '\n' { '\n' } else { ' ' });
+    }
+}
+
+/// Per-line answer to "is this line inside a `v1-compat` region, and/or inside
+/// a `#[cfg(test)]` region".
+///
+/// A line-oriented state machine over the STRIPPED source, using a skeleton with
+/// blanked literals for all structural counting:
+///
+/// * an attribute (possibly spanning lines) is walked to its closing bracket;
+/// * a `#[cfg(…)]` sets a PENDING gate that applies to the next construct, while
+///   a `#[cfg_attr(…)]` marks only its own lines;
+/// * a construct line that opens more braces than it closes pushes a frame
+///   carrying its gate, and the frame pops when brace depth returns;
+/// * a construct whose parenthesis depth is still open CARRIES its gate to the
+///   next line, so a `rustfmt`-wrapped `fn` signature keeps the gate until the
+///   `{` that actually opens the body;
+/// * an attribute with code AFTER its closing `]` (`#[cfg(…)] param: T,`)
+///   governs THAT line and nothing further.
+///
+/// Answering structurally rather than by proximity is the whole point:
+/// `the_gate_region_scanner_distinguishes_gated_from_ungated` asserts BOTH
+/// directions on a fixture, because an always-true scanner would make every
+/// assertion in this section vacuous — which is exactly what 116-14 shipped.
+fn gate_map(stripped: &str) -> Vec<LineGate> {
+    let skeleton = structural_skeleton(stripped);
+    let lines: Vec<&str> = stripped.lines().collect();
+    let skel: Vec<&str> = skeleton.lines().collect();
+    let mut out = vec![LineGate::default(); lines.len()];
+    let mut stack: Vec<GateFrame> = Vec::new();
+    let mut depth: i64 = 0;
+    let mut paren: i64 = 0;
+    let mut carry: Option<LineGate> = None;
+    let mut pending = LineGate::default();
+    let mut attr_depth: i64 = 0;
+    let mut attr_text = String::new();
+    let mut attr_first = 0usize;
+
+    for i in 0..lines.len() {
+        let sk = skel.get(i).copied().unwrap_or("");
+        let t = sk.trim();
+        let inherited = LineGate {
+            v1: stack.iter().any(|f| f.v1),
+            test: stack.iter().any(|f| f.test),
+        };
+
+        // Still walking a multi-line attribute.
+        if attr_depth > 0 {
+            attr_text.push(' ');
+            attr_text.push_str(lines[i]);
+            attr_depth += bracket_delta(sk);
+            out[i] = inherited;
+            if attr_depth <= 0 {
+                let class = classify_attribute(&attr_text);
+                for line in out.iter_mut().take(i + 1).skip(attr_first) {
+                    line.v1 |= class.v1;
+                    line.test |= class.test;
+                }
+                if class.governs_next_item {
+                    pending.v1 |= class.v1;
+                    pending.test |= class.test;
+                }
+                attr_text.clear();
+                attr_depth = 0;
+            }
+            continue;
+        }
+
+        // An attribute starts here.
+        if t.starts_with("#[") || t.starts_with("#![") {
+            let delta = bracket_delta(sk);
+            if delta > 0 {
+                attr_first = i;
+                attr_text = lines[i].to_string();
+                attr_depth = delta;
+                out[i] = inherited;
+                continue;
+            }
+            let class = classify_attribute(lines[i]);
+            out[i] = LineGate {
+                v1: inherited.v1 || pending.v1 || class.v1,
+                test: inherited.test || pending.test || class.test,
+            };
+            let close = sk.rfind(']').map_or(sk.len(), |p| p + 1);
+            if sk[close..].trim().is_empty() {
+                if class.governs_next_item {
+                    pending.v1 |= class.v1;
+                    pending.test |= class.test;
+                }
+                continue;
+            }
+            // `#[cfg(…)] param: T,` — the attribute governs THIS line only.
+            let before = depth;
+            depth += brace_delta(sk);
+            paren += paren_delta(sk);
+            if depth > before {
+                stack.push(GateFrame {
+                    close_depth: before,
+                    v1: out[i].v1,
+                    test: out[i].test,
+                });
+                carry = None;
+                paren = 0;
+            } else if paren <= 0 {
+                carry = None;
+                paren = 0;
+            }
+            pending = LineGate::default();
+            pop_closed_frames(&mut stack, depth);
+            continue;
+        }
+
+        // A blank line keeps a pending gate alive (a stripped doc comment leaves
+        // one behind between the attribute and the item it governs).
+        if t.is_empty() {
+            out[i] = inherited;
+            continue;
+        }
+
+        let base = carry.unwrap_or(pending);
+        let here = LineGate {
+            v1: inherited.v1 || base.v1,
+            test: inherited.test || base.test,
+        };
+        out[i] = here;
+        let before = depth;
+        depth += brace_delta(sk);
+        paren += paren_delta(sk);
+        if depth > before {
+            stack.push(GateFrame {
+                close_depth: before,
+                v1: here.v1,
+                test: here.test,
+            });
+            carry = None;
+            paren = 0;
+        } else if paren > 0 {
+            // A wrapped signature or call: the gate stays attached until the
+            // parentheses close and the body's `{` arrives.
+            carry = Some(base);
+        } else {
+            carry = None;
+            paren = 0;
+        }
+        pending = LineGate::default();
+        pop_closed_frames(&mut stack, depth);
+    }
+    out
+}
+
+/// Pop every frame whose block has closed at `depth`.
+fn pop_closed_frames(stack: &mut Vec<GateFrame>, depth: i64) {
+    while let Some(frame) = stack.last() {
+        if depth <= frame.close_depth {
+            stack.pop();
+        } else {
+            break;
+        }
+    }
+}
+
+/// One tracked-token occurrence the scan found.
+struct Occurrence {
+    line_number: usize,
+    token: &'static str,
+    text: String,
+}
+
+/// Every tracked-token occurrence in `relative`, split into gated and ungated.
+///
+/// `#[cfg(test)]` regions are excluded entirely: the transport's own unit tests
+/// legitimately construct v1 configurations to prove the v1 path still works,
+/// and they never ship in a `full-v2` LIBRARY build.
+fn client_v1_occurrences(relative: &str) -> (Vec<Occurrence>, Vec<Occurrence>) {
+    let stripped = strip_comments(&source(relative));
+    let gates = gate_map(&stripped);
+    let mut inside_gate = Vec::new();
+    let mut outside_gate = Vec::new();
+    for (index, line) in stripped.lines().enumerate() {
+        let gate = gates.get(index).copied().unwrap_or_default();
+        if gate.test {
+            continue;
+        }
+        for token in CLIENT_V1_TOKENS {
+            for _ in line.matches(token) {
+                let occurrence = Occurrence {
+                    line_number: index + 1,
+                    token,
+                    text: line.trim().to_string(),
+                };
+                if gate.v1 {
+                    inside_gate.push(occurrence);
+                } else {
+                    outside_gate.push(occurrence);
+                }
+            }
+        }
+    }
+    (inside_gate, outside_gate)
+}
+
+/// The client transport holds NO ungated session or resumability surface.
+#[test]
+fn the_client_transport_carries_no_ungated_session_state() {
+    let (_gated, ungated) = client_v1_occurrences(CLIENT_TRANSPORT);
+
+    for occurrence in &ungated {
+        eprintln!(
+            "ungated `{}` at {CLIENT_TRANSPORT}:{} — {}",
+            occurrence.token, occurrence.line_number, occurrence.text
+        );
+    }
+    assert!(
+        ungated.is_empty(),
+        "FAILURE MODE: {CLIENT_TRANSPORT} names v1 session/resumability surface OUTSIDE any \
+         `#[cfg(feature = \"v1-compat\")]` region — {} occurrence(s), first at line {} (`{}`): {}\n\
+         CONSEQUENCE: a `full-v2` build still compiles the client half of the MCP 2025-11-25 \
+         session lifecycle, so SMPL-01/SMPL-02 are proven for the server only while the \
+         requirement's wording covers both.\n\
+         WHAT TO DO: GATE the item, or route the read through a paired accessor whose `full-v2` \
+         twin answers a constant. NEVER narrow the scan or shorten CLIENT_V1_TOKENS — an \
+         enumerated scope hides exactly what it forgot to list (116-14).",
+        ungated.len(),
+        ungated[0].line_number,
+        ungated[0].token,
+        ungated[0].text
+    );
+}
+
+/// The client scan cannot pass over an empty, truncated or unmatched file.
+#[test]
+fn the_client_inventory_check_is_not_vacuous() {
+    let stripped = strip_comments(&source(CLIENT_TRANSPORT));
+    assert!(
+        stripped.len() >= MIN_CLIENT_STRIPPED_BYTES,
+        "FAILURE MODE: {CLIENT_TRANSPORT} strips to {} byte(s), below the \
+         {MIN_CLIENT_STRIPPED_BYTES} floor.\n\
+         CONSEQUENCE: the client checks are ABSENCE checks and absence checks pass trivially over \
+         an empty string, so a truncated or unreadable file would report green while proving \
+         nothing.\n\
+         WHAT TO DO: restore the file or fix the path constant. Never lower the floor.",
+        stripped.len()
+    );
+
+    let (gated, ungated) = client_v1_occurrences(CLIENT_TRANSPORT);
+    let found = gated.len() + ungated.len();
+    assert!(
+        found >= MIN_CLIENT_V1_OCCURRENCES,
+        "FAILURE MODE: the client scan matched {found} tracked-token occurrence(s), below the \
+         {MIN_CLIENT_V1_OCCURRENCES} floor.\n\
+         CONSEQUENCE: `the_client_transport_carries_no_ungated_session_state` would then be \
+         vacuous — it passes by matching nothing rather than by finding everything gated.\n\
+         WHAT TO DO: fix `gate_map` / `strip_comments` / CLIENT_V1_TOKENS. Never lower the floor."
+    );
+    assert!(
+        !gated.is_empty(),
+        "FAILURE MODE: the client scan found tracked tokens but classified NONE of them as gated.\n\
+         CONSEQUENCE: `gate_map` is returning `false` unconditionally, which would make the \
+         ungated-set assertion fire on everything — or, with the opposite bug, pass on nothing.\n\
+         WHAT TO DO: fix `gate_map`, not the assertion."
+    );
+}
+
+/// The line index of the first stripped line whose trimmed form starts with
+/// `needle`, together with the file's gate map.
+fn declaration_gate(relative: &str, needle: &str) -> LineGate {
+    let stripped = strip_comments(&source(relative));
+    let gates = gate_map(&stripped);
+    for (index, line) in stripped.lines().enumerate() {
+        if line.trim_start().starts_with(needle) {
+            return gates.get(index).copied().unwrap_or_default();
+        }
+    }
+    panic!(
+        "FAILURE MODE: no line in {relative} starts with `{needle}`.\n\
+         CONSEQUENCE: the check that depends on it would have nothing to assert about.\n\
+         WHAT TO DO: fix the needle or restore the declaration — do not delete the check."
+    );
+}
+
+/// `LAST_EVENT_ID` and its ONE client reader carry the SAME gate.
+///
+/// Gating the const without its reader — or the reader without the const — is a
+/// compile break on exactly one feature set, which is the configuration a
+/// single-config CI job does not run.
+#[test]
+fn the_last_event_id_const_and_its_reader_are_co_gated() {
+    let declaration = declaration_gate(HTTP_CONSTANTS, "pub const LAST_EVENT_ID");
+    assert!(
+        declaration.v1,
+        "FAILURE MODE: `LAST_EVENT_ID` in {HTTP_CONSTANTS} is NOT governed by \
+         `#[cfg(feature = \"v1-compat\")]`.\n\
+         CONSEQUENCE: the SSE replay cursor's header name survives into a build whose whole claim \
+         is that it never writes an attacker-influenced cursor onto the wire (T-117-53).\n\
+         WHAT TO DO: gate the const AND its reader in {CLIENT_TRANSPORT} in ONE edit — gating \
+         either alone does not compile."
+    );
+
+    let ungated_readers: Vec<Occurrence> = client_v1_occurrences(CLIENT_TRANSPORT)
+        .1
+        .into_iter()
+        .filter(|occurrence| occurrence.token == "LAST_EVENT_ID")
+        .collect();
+    assert!(
+        ungated_readers.is_empty(),
+        "FAILURE MODE: {CLIENT_TRANSPORT} reads `LAST_EVENT_ID` outside any `v1-compat` region \
+         (first at line {}).\n\
+         CONSEQUENCE: the const is gated but its reader is not, so `--no-default-features \
+         --features full-v2` fails to compile — and `--features streamable-http` without \
+         `v1-compat` fails too (T-117-54).\n\
+         WHAT TO DO: gate the reader. Do not ungate the const to make this pass.",
+        ungated_readers
+            .first()
+            .map_or(0, |occurrence| occurrence.line_number)
+    );
+}
+
+/// The v2-REQUIRED constants are still ungated — the live counter-example.
+///
+/// Without this, a `gate_map` that returned `true` for every line would make
+/// every assertion above pass while proving nothing. These three constants MUST
+/// come back `false`, from the same scanner, on the same file.
+///
+/// `MCP_SESSION_ID` is in this list DELIBERATELY and by MEASUREMENT (plan 117-14,
+/// assumption A4): its server-side readers sit on the shared v2 POST path, and
+/// the v2 test surface names it precisely to assert its ABSENCE. What is severed
+/// is the STORING and SENDING of a session id, not the header's name.
+#[test]
+fn the_v2_required_constants_are_still_ungated() {
+    for needle in [
+        "pub const MCP_METHOD",
+        "pub const MCP_NAME",
+        "pub const MCP_SESSION_ID",
+    ] {
+        let gate = declaration_gate(HTTP_CONSTANTS, needle);
+        assert!(
+            !gate.v1,
+            "FAILURE MODE: `{needle}` in {HTTP_CONSTANTS} is governed by \
+             `#[cfg(feature = \"v1-compat\")]`.\n\
+             CONSEQUENCE: either a v2-REQUIRED constant (VERS-05) was severed and the v2 build is \
+             now broken, or — if this fires while the code is correct — the gate scanner returns \
+             `true` unconditionally and every check in this section is vacuous.\n\
+             WHAT TO DO: ungate the constant. Severance here is PER-CONST; gating the module is \
+             forbidden by that module's own doc."
+        );
+    }
+}
+
+/// The gate scanner distinguishes gated from ungated, in BOTH directions.
+///
+/// An always-true scanner passes every absence check; an always-false one fails
+/// on correct code and pressures the next author to weaken the assertion. The
+/// fixture therefore carries one gated occurrence, one ungated occurrence, one
+/// null-twin (`not(...)`) occurrence and one `#[cfg(test)]` occurrence.
+#[test]
+fn the_gate_region_scanner_distinguishes_gated_from_ungated() {
+    let fixture = r#"
+pub struct Thing {
+    pub url: String,
+    #[cfg(feature = "v1-compat")]
+    pub session_id: Option<String>,
+    pub ungated_session_id: Option<String>,
+}
+
+#[cfg(feature = "v1-compat")]
+fn gated_block(&self) -> Option<String> {
+    self.config.read().session_id.clone()
+}
+
+#[cfg(feature = "v1-compat")]
+fn gated_wrapped_signature(
+    request: &mut Request,
+    resumption_token: Option<&str>,
+) -> Result<()> {
+    request.insert(LAST_EVENT_ID, resumption_token);
+}
+
+#[cfg(not(feature = "v1-compat"))]
+const fn twin(&self) -> Option<String> {
+    None
+}
+
+fn ungated_block(&self) -> Option<String> {
+    self.config.read().session_id.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    fn helper(session_id: Option<&str>) {}
+}
+"#;
+    let stripped = strip_comments(fixture);
+    let gates = gate_map(&stripped);
+    let lines: Vec<&str> = stripped.lines().collect();
+
+    let gate_of = |needle: &str| -> LineGate {
+        let index = lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("fixture line containing `{needle}` not found"));
+        gates[index]
+    };
+
+    // Direction 1: gated occurrences are ACCEPTED.
+    assert!(
+        gate_of("pub session_id: Option<String>").v1,
+        "FAILURE MODE: a field carrying `#[cfg(feature = \"v1-compat\")]` was NOT recognised as \
+         gated.\n\
+         CONSEQUENCE: correct code fails the client scan, and the pressure is to weaken the \
+         assertion rather than fix the scanner.\n\
+         WHAT TO DO: fix `gate_map`."
+    );
+    assert!(
+        gate_of("fn gated_block").v1,
+        "FAILURE MODE: a `#[cfg(feature = \"v1-compat\")]` fn was not recognised as gated.\n\
+         WHAT TO DO: fix `gate_map`'s frame handling."
+    );
+    assert!(
+        gate_of("resumption_token: Option<&str>,").v1,
+        "FAILURE MODE: a `rustfmt`-WRAPPED signature under `#[cfg(feature = \"v1-compat\")]` lost \
+         its gate — the parameter lines read as ungated because the `{{` that opens the body is \
+         on a later line.\n\
+         CONSEQUENCE: correctly gated helpers such as `apply_resumption_header` report as ungated \
+         v1 surface, and the pressure is to un-wrap real code to appease the scanner.\n\
+         WHAT TO DO: fix `gate_map`'s paren carry, not the assertion or the source."
+    );
+    assert!(
+        gate_of("request.insert(LAST_EVENT_ID").v1,
+        "FAILURE MODE: the BODY of a wrapped-signature gated fn was not recognised as gated.\n\
+         WHAT TO DO: fix `gate_map`'s paren carry."
+    );
+
+    // Direction 2: ungated occurrences are REJECTED.
+    assert!(
+        !gate_of("pub ungated_session_id").v1,
+        "FAILURE MODE: an UNGATED field was reported as gated, so `gate_map` returns `true` too \
+         readily.\n\
+         CONSEQUENCE: every absence check in this section becomes vacuous — the 116-14 failure \
+         mode exactly.\n\
+         WHAT TO DO: fix `gate_map`."
+    );
+    assert!(
+        !gate_of("fn ungated_block").v1,
+        "FAILURE MODE: an ungated fn was reported as gated — the gate leaked past the end of the \
+         preceding `#[cfg]` block.\n\
+         WHAT TO DO: fix `gate_map`'s frame popping."
+    );
+
+    // The null twin is NOT a place v1 surface may live.
+    assert!(
+        !gate_of("const fn twin").v1,
+        "FAILURE MODE: `#[cfg(not(feature = \"v1-compat\"))]` was treated as a v1-compat gate.\n\
+         CONSEQUENCE: the null twin — the half that exists ONLY on `full-v2` — would become a \
+         legal home for session state, inverting the whole point of the pair.\n\
+         WHAT TO DO: fix `classify_attribute`."
+    );
+
+    // `#[cfg(test)]` is recognised, so test fixtures are excluded rather than
+    // silently counted as production surface.
+    assert!(
+        gate_of("fn helper(session_id").test,
+        "FAILURE MODE: a `#[cfg(test)]` region was not recognised.\n\
+         CONSEQUENCE: the transport's own v1 unit tests would be reported as ungated production \
+         surface, and the honest remedy — deleting them — makes the suite worse.\n\
+         WHAT TO DO: fix `gate_map`."
+    );
+}
+
+/// The stripper handles raw strings, so a `//` inside one is not a comment.
+///
+/// [`CLIENT_TRANSPORT`] carries `#[cfg_attr(feature = "v1-compat", doc = r#"…"#)]`
+/// payloads containing `http://localhost:8080`. A stripper that fell out of
+/// string mode there would eat the rest of that line — and, worse, desynchronise
+/// so the attribute's closing `)]` disappeared, leaving `gate_map` inside an
+/// unterminated attribute and marking everything after it as gated.
+#[test]
+fn the_stripper_handles_raw_strings() {
+    let fixture = "let a = r#\"see http://localhost:8080 for more\"#;\nlet kept = 2; // gone\n";
+    let stripped = strip_comments(fixture);
+
+    assert!(
+        stripped.contains("http://localhost:8080"),
+        "FAILURE MODE: the stripper treated `//` INSIDE a raw string as a line comment. \
+         Observed: {stripped:?}\n\
+         WHAT TO DO: fix `raw_string_hashes` / `copy_raw_string`, not the assertion."
+    );
+    assert!(
+        stripped.contains("let kept = 2;"),
+        "FAILURE MODE: the stripper desynchronised after a raw string. Observed: {stripped:?}\n\
+         WHAT TO DO: fix `copy_raw_string`."
+    );
+    assert!(
+        !stripped.contains("gone"),
+        "FAILURE MODE: a real line comment survived. Observed: {stripped:?}\n\
+         WHAT TO DO: fix `strip_comments`."
+    );
 }
