@@ -24,17 +24,10 @@
 
 use crate::report::{TestCategory, TestResult, TestStatus};
 use crate::tester::{ServerTester, V2HeaderMode};
+use pmcp::types::capabilities::TASKS_EXTENSION_KEY;
 use pmcp::types::protocol::Era;
 use serde_json::json;
 use std::time::Instant;
-
-/// The `_meta`/capability key the v2 wire uses for the tasks extension.
-///
-/// Spelled here rather than imported because the crate-side constant is not
-/// public API of `pmcp` at the version this crate depends on. C-04 only reads
-/// it, and `crates/mcp-tester/tests/dual_run.rs` carries the drift tripwire
-/// against a live server.
-const TASKS_EXTENSION_KEY: &str = "io.modelcontextprotocol/tasks";
 
 /// Run all core conformance scenarios.
 /// Core domain handles initialization -- must run before other domains.

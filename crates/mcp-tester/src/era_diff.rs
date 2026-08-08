@@ -126,6 +126,21 @@ pub struct EraBaseline {
 }
 
 impl EraBaseline {
+    /// An empty baseline — classifies NOTHING.
+    ///
+    /// Exists so the "baseline could not be parsed" path in
+    /// `ConformanceRunner::run_dual` does not have to spell out an exhaustive
+    /// struct literal, which every new field would otherwise break.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            schema_version: 0,
+            v1_protocol: String::new(),
+            v2_protocol: String::new(),
+            deltas: Vec::new(),
+        }
+    }
+
     /// Look an entry up by its stable [`EraDelta::observation_id`].
     pub fn find_by_observation_id(&self, observation_id: &str) -> Option<&EraDelta> {
         self.deltas
@@ -512,8 +527,14 @@ pub fn compare_eras(
 
     let mut differences = Vec::new();
     for id in ids {
-        let observed_v1 = v1.0.iter().find(|(k, _)| k.as_str() == id).map(|(_, v)| v);
-        let observed_v2 = v2.0.iter().find(|(k, _)| k.as_str() == id).map(|(_, v)| v);
+        // `EraObservations::get` is the newtype's own lookup; reaching past it
+        // into the inner map hand-rolled a linear scan AND left `get` dead in
+        // production code, so a reader could not tell the scan was incidental.
+        // An observation can only ever be keyed by a registry id, so a
+        // non-registry `id` correctly yields `None` from both sides.
+        let key = crate::era_observations::ObservationId::from_registry(id);
+        let observed_v1 = key.and_then(|k| v1.get(k));
+        let observed_v2 = key.and_then(|k| v2.get(k));
         let delta = baseline.find_by_observation_id(id);
 
         let differed = match (observed_v1, observed_v2) {

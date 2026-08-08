@@ -1860,10 +1860,15 @@ fn validate_protocol_version_matches_session(
     let Some(sid) = session_id else {
         return Ok(());
     };
-    let Some(negotiated_version) = v1::session_protocol_version(&state.v1, sid.as_str()) else {
+    // Ordered so the CHEAP check runs first: `MCP-Protocol-Version` is an
+    // optional header, and with nothing to compare against there is no point
+    // taking the session read-lock and cloning the recorded version out of it
+    // (`session_protocol_version` returns an owned `String` so the ZST twin can
+    // implement it). Every request that omits the header now skips both.
+    let Some(provided_version) = protocol_version else {
         return Ok(());
     };
-    let Some(provided_version) = protocol_version else {
+    let Some(negotiated_version) = v1::session_protocol_version(&state.v1, sid.as_str()) else {
         return Ok(());
     };
     if *provided_version == negotiated_version {

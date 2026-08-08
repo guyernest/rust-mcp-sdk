@@ -617,6 +617,52 @@ async fn single_run_output_is_unchanged_by_the_dual_run_work() {
 // ===========================================================================
 
 /// `era_observations` builds raw v2 requests using literal reserved `_meta`
+/// A JSON HTTP/1.1 response with the `Content-Length` computed and the
+/// connection closed — the byte format both stubs below need.
+fn http_json(body: &str, extra_headers: &str) -> String {
+    // Built by concatenation rather than one long literal with a `\` line
+    // continuation: rustfmt rewrapped the continued form and baked the
+    // indentation INTO the string, so `Content-Length` arrived as an indented
+    // (folded) header and the client could not find the body.
+    let mut response = String::from("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n");
+    response.push_str(extra_headers);
+    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    response.push_str("Connection: close\r\n\r\n");
+    response.push_str(body);
+    response
+}
+
+/// The JSON-RPC `-32601` refusal both stubs answer unknown methods with.
+const STUB_REFUSAL: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no"}}"#;
+
+/// Spawn a raw TCP stub that answers each request with `respond(request)`.
+///
+/// The accept/read/write/shutdown scaffolding was written out twice below, with
+/// the two copies already subtly identical (same 8 KiB single-read, same
+/// shutdown ordering). Sharing it means a fix to the socket handling cannot land
+/// in one copy and miss the other; the tests keep their own RESPONDER, which is
+/// the only part that was ever genuinely different.
+fn spawn_stub<F>(listener: TcpListener, respond: F) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(&str) -> String + Send + Sync + 'static,
+{
+    let respond = Arc::new(respond);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let respond = respond.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let Ok(n) = socket.read(&mut buf).await else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let _ = socket.write_all(respond(&request).as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    })
+}
+
 /// keys, because pmcp's own constants are `pub(crate)` and their only public
 /// re-export is behind the `testing` feature this crate does not enable.
 ///
@@ -626,37 +672,27 @@ async fn single_run_output_is_unchanged_by_the_dual_run_work() {
 /// constant against the SDK's behaviour, not against itself.
 #[tokio::test]
 async fn the_sdk_emits_the_reserved_meta_key_this_crate_spells() {
-    let captured: Arc<tokio::sync::Mutex<Vec<String>>> = Arc::new(tokio::sync::Mutex::new(vec![]));
+    let captured: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![]));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     let sink = captured.clone();
-    let handle = tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            let sink = sink.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 8192];
-                let Ok(n) = socket.read(&mut buf).await else {
-                    return;
-                };
-                sink.lock()
-                    .await
-                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
-                let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no"}}"#;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.shutdown().await;
-            });
+    // Captures synchronously into a std Mutex so the responder stays a plain
+    // `Fn(&str) -> String`; the assertions below read it after teardown.
+    let handle = spawn_stub(listener, move |request| {
+        if let Ok(mut seen) = sink.lock() {
+            seen.push(request.to_owned());
         }
+        http_json(STUB_REFUSAL, "")
     });
 
     let mut v2 = v2_tester(&mcp_url(addr));
     let _ = tokio::time::timeout(STEP_TIMEOUT, v2.test_initialize()).await;
     teardown(handle).await;
 
-    let requests = captured.lock().await.clone();
+    let requests = captured
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     assert!(
         !requests.is_empty(),
         "the SDK-built v2 client must have sent at least one request"
@@ -690,46 +726,26 @@ async fn era_detection_does_not_leak_a_session_per_invocation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     let (m, d) = (minted.clone(), deleted.clone());
-    let handle = tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            let (m, d) = (m.clone(), d.clone());
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; 8192];
-                let Ok(n) = socket.read(&mut buf).await else {
-                    return;
-                };
-                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
-                let response = if request.starts_with("DELETE") {
-                    d.fetch_add(1, Ordering::SeqCst);
-                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
-                } else if request.contains("\"initialize\"") {
-                    m.fetch_add(1, Ordering::SeqCst);
-                    let body = json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": {
-                            "protocolVersion": V1,
-                            "capabilities": {},
-                            "serverInfo": { "name": "stub", "version": "0.0.0" },
-                        }
-                    })
-                    .to_string();
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                         mcp-session-id: stub-session\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                } else {
-                    let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no"}}"#;
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                };
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.shutdown().await;
-            });
+    let handle = spawn_stub(listener, move |request| {
+        if request.starts_with("DELETE") {
+            d.fetch_add(1, Ordering::SeqCst);
+            return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
         }
+        if request.contains("\"initialize\"") {
+            m.fetch_add(1, Ordering::SeqCst);
+            let body = json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "protocolVersion": V1,
+                    "capabilities": {},
+                    "serverInfo": { "name": "stub", "version": "0.0.0" },
+                }
+            })
+            .to_string();
+            return http_json(&body, "mcp-session-id: stub-session\r\n");
+        }
+        http_json(STUB_REFUSAL, "")
     });
 
     let url = mcp_url(addr);

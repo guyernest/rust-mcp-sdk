@@ -165,36 +165,26 @@ impl ConformanceRunner {
         // A baseline that cannot be parsed is a build-time impossibility (it is
         // compiled in and gated by `tests/era_baseline.rs`), but it is reported
         // rather than unwrapped: a testing tool must not panic on its own data.
-        match crate::era_diff::load_default_baseline() {
-            Ok(baseline) => crate::era_diff::build_dual_run_report(
-                "dual",
-                v1_report,
-                v2_report,
-                v1_observations,
-                v2_observations,
-                &baseline,
-            ),
-            Err(e) => {
-                let mut report = crate::era_diff::build_dual_run_report(
-                    "dual",
-                    v1_report,
-                    v2_report,
-                    v1_observations,
-                    v2_observations,
-                    &EraBaseline {
-                        schema_version: 0,
-                        v1_protocol: String::new(),
-                        v2_protocol: String::new(),
-                        deltas: Vec::new(),
-                    },
-                );
-                report.note = Some(format!(
+        let (baseline, note) = match crate::era_diff::load_default_baseline() {
+            Ok(baseline) => (baseline, None),
+            Err(e) => (
+                EraBaseline::empty(),
+                Some(format!(
                     "the compiled-in era baseline could not be parsed, so NOTHING \
                      was classified: {e}"
-                ));
-                report
-            },
-        }
+                )),
+            ),
+        };
+        let mut report = crate::era_diff::build_dual_run_report(
+            "dual",
+            v1_report,
+            v2_report,
+            v1_observations,
+            v2_observations,
+            &baseline,
+        );
+        report.note = note;
+        report
     }
 
     fn should_run(&self, domain: ConformanceDomain) -> bool {

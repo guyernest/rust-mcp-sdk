@@ -822,14 +822,14 @@ async fn run_dual_conformance_test(
                 "{} {url} serves only MCP 2025-11-25; --dual-run degraded to a single v1 run.",
                 "note:".yellow()
             );
-            runner_run(&runner, build(false)?).await
+            Ok(runner.run(&mut build(false)?).await)
         },
         EraSupport::V2Only => {
             eprintln!(
                 "{} {url} serves only MCP 2026-07-28; --dual-run degraded to a single v2 run.",
                 "note:".yellow()
             );
-            runner_run(&runner, build(true)?).await
+            Ok(runner.run(&mut build(true)?).await)
         },
         // Reachable but speaking no era we know is a CONFORMANCE finding about
         // whatever answered, so it is a Core-domain failure.
@@ -840,14 +840,6 @@ async fn run_dual_conformance_test(
         // non-zero.
         EraSupport::Unreachable => Ok(tester::unreachable_report(url)),
     }
-}
-
-/// Run the suite once against an owned tester.
-async fn runner_run(
-    runner: &conformance::ConformanceRunner,
-    mut tester: ServerTester,
-) -> Result<TestReport> {
-    Ok(runner.run(&mut tester).await)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -57,6 +57,13 @@ pub struct ServerTester {
     pub transport_type: TransportType,
     http_config: Option<StreamableHttpTransportConfig>,
     json_rpc_client: Option<Client>,
+    /// Lazily-built, reused client for the RAW wire probes.
+    ///
+    /// A `reqwest::Client` owns its connection pool, TLS config and root-cert
+    /// store, so building one per probe meant ~23 constructions (and ~23
+    /// handshakes) per `--dual-run`. Built once on first probe; `Client` is
+    /// internally `Arc`'d so cloning it out is cheap.
+    raw_probe_client: std::sync::OnceLock<Client>,
     timeout: Duration,
     insecure: bool,
     api_key: Option<String>,
@@ -219,6 +226,7 @@ impl ServerTester {
         );
 
         Ok(Self {
+            raw_probe_client: std::sync::OnceLock::new(),
             url: url.to_string(),
             transport_type,
             http_config,
@@ -3696,16 +3704,22 @@ impl ServerTester {
         Ok((response.status().as_u16(), content_type))
     }
 
-    /// Build the probe `reqwest::Client`, honouring the tester's TLS posture and
-    /// bounding every probe by the operator-configured timeout.
+    /// The probe `reqwest::Client`, built once and reused.
+    ///
+    /// Delegates to [`crate::conformance::transport::build_probe_client`] rather
+    /// than rebuilding the same body: that helper is the crate's single
+    /// definition of probe TLS/timeout posture, and it clamps the operator
+    /// timeout with `min(timeout, PROBE_RECEIVE_TIMEOUT)`. An open-coded copy
+    /// here had drifted from it — `--timeout 300` gave the era probes a
+    /// five-MINUTE ceiling while every other probe in the crate got five
+    /// seconds.
     fn build_raw_probe_client(&self) -> std::result::Result<Client, String> {
-        let mut builder = reqwest::ClientBuilder::new().timeout(self.timeout);
-        if self.insecure {
-            builder = builder.danger_accept_invalid_certs(true);
+        if let Some(client) = self.raw_probe_client.get() {
+            return Ok(client.clone());
         }
-        builder
-            .build()
-            .map_err(|e| format!("probe client build error: {e}"))
+        let client = crate::conformance::transport::build_probe_client(self)?;
+        let _ = self.raw_probe_client.set(client.clone());
+        Ok(client)
     }
 }
 
@@ -3718,26 +3732,27 @@ impl ServerTester {
 ///
 /// PURE and unit-tested below.
 pub fn build_probe_body(method: &str, params: Value, era: Era) -> String {
+    // Keep the MAP, not a rebuilt `Value`: the previous form destructured
+    // `Value::Object(map)` only to wrap it straight back up, then guarded the
+    // insert behind an `as_object_mut()` branch that could never be `None`.
     let mut params = match params {
-        Value::Object(map) => Value::Object(map),
-        _ => json!({}),
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
     };
     if era == Era::V2 {
-        if let Some(object) = params.as_object_mut() {
-            object.insert(
-                "_meta".to_string(),
-                json!({
-                    RESERVED_PROTOCOL_VERSION_KEY: PROTOCOL_VERSION_2026_07_28,
-                    RESERVED_CLIENT_INFO_KEY: {
-                        "name": "mcp-tester",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    RESERVED_CLIENT_CAPABILITIES_KEY: {
-                        "elicitation": {}, "sampling": {}, "roots": {},
-                    },
-                }),
-            );
-        }
+        params.insert(
+            "_meta".to_string(),
+            json!({
+                RESERVED_PROTOCOL_VERSION_KEY: PROTOCOL_VERSION_2026_07_28,
+                RESERVED_CLIENT_INFO_KEY: {
+                    "name": "mcp-tester",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                RESERVED_CLIENT_CAPABILITIES_KEY: {
+                    "elicitation": {}, "sampling": {}, "roots": {},
+                },
+            }),
+        );
     }
     json!({
         "jsonrpc": "2.0",
@@ -3890,10 +3905,6 @@ pub async fn detect_eras(url: &str, timeout: Duration) -> EraSupport {
         // rather than as a conformance finding: no server was ever contacted.
         return EraSupport::Unreachable;
     };
-    // The reachability fact, established BEFORE either attempt — that is,
-    // before any error exists that could be stringified.
-    let answered = endpoint_is_reachable(&parsed).await;
-
     let v2_ok = probe_v2(url, timeout).await;
     let v1_ok = probe_v1(url, timeout).await;
 
@@ -3901,8 +3912,19 @@ pub async fn detect_eras(url: &str, timeout: Duration) -> EraSupport {
         (true, true) => EraSupport::Dual,
         (true, false) => EraSupport::V1Only,
         (false, true) => EraSupport::V2Only,
-        (false, false) if answered => EraSupport::NoEraSpoken,
-        (false, false) => EraSupport::Unreachable,
+        // ONLY the "neither era answered" case needs the reachability fact, so
+        // the probe is paid only here rather than on every detection. The
+        // contract cited on `endpoint_is_reachable` is about not deriving
+        // reachability from an ERROR STRING; a TCP connect run at this point
+        // still stringifies nothing, so running it lazily preserves it.
+        // (An `if` rather than a match guard because guards cannot `.await`.)
+        (false, false) => {
+            if endpoint_is_reachable(&parsed).await {
+                EraSupport::NoEraSpoken
+            } else {
+                EraSupport::Unreachable
+            }
+        },
     }
 }
 

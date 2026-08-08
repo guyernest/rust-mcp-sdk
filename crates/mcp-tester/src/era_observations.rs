@@ -36,10 +36,11 @@
 
 use std::collections::BTreeMap;
 
+use pmcp::types::capabilities::TASKS_EXTENSION_KEY;
 use pmcp::types::protocol::Era;
 use serde::{Deserialize, Serialize};
 
-use crate::tester::{ServerTester, V2HeaderMode};
+use crate::tester::{RawProbeOutcome, ServerTester, V2HeaderMode};
 
 /// The STABLE, MACHINE-FACING name of one wire fact.
 ///
@@ -110,11 +111,15 @@ pub enum ObservedValue {
     /// The wire fact was observed ABSENT.
     Absent,
     /// A short observed token, in the baseline's own vocabulary.
+    ///
+    /// This is the only carrier for a status (`status:405`, produced by
+    /// [`error_token`]) or a location. Typed `Status(u16)` / `Pointer(String)`
+    /// variants existed here and were never constructed by any probe — and
+    /// because [`Self::token`] rendered `Status(405)` and `Text("status:405")`
+    /// identically, they were two values that compared EQUAL through the join
+    /// while being distinct on the wire. Reintroduce a typed variant only
+    /// alongside a probe that emits it.
     Text(String),
-    /// An observed HTTP status code.
-    Status(u16),
-    /// A JSON pointer naming WHERE a value was found.
-    Pointer(String),
     /// The probe ran but could not establish the fact; the string says why.
     Unavailable(String),
 }
@@ -130,8 +135,6 @@ impl ObservedValue {
             Self::Present => "present".to_string(),
             Self::Absent => "absent".to_string(),
             Self::Text(s) => s.clone(),
-            Self::Status(code) => format!("status:{code}"),
-            Self::Pointer(p) => p.clone(),
             Self::Unavailable(_) => "unavailable".to_string(),
         }
     }
@@ -230,9 +233,6 @@ pub const PROBE_REGISTRY: &[ObservationId] = &[
     HTTP_STATUS_ERROR_CODE_MAPPING,
 ];
 
-/// The `_meta`/capability key the v2 wire uses for the tasks extension (ERA-10).
-const TASKS_EXTENSION_KEY: &str = "io.modelcontextprotocol/tasks";
-
 // ===========================================================================
 // Probes.
 // ===========================================================================
@@ -320,6 +320,39 @@ fn unavailable(e: &str) -> ObservedValue {
     ObservedValue::Unavailable(e.to_string())
 }
 
+/// The standard-header JSON-RPC probe call.
+///
+/// Six probes below issue byte-identical calls modulo the method and params, so
+/// the call SHAPE lives here once. A change to it — a new header mode, a body
+/// cap, an extra argument — is then one edit rather than six that must stay in
+/// lockstep, where a missed one silently changes what that observation measures.
+async fn send_standard(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+    method: &str,
+    params: serde_json::Value,
+) -> std::result::Result<RawProbeOutcome, String> {
+    tester
+        .raw_jsonrpc_probe_with_session(method, "", params, era, V2HeaderMode::Standard, session)
+        .await
+}
+
+/// The shared classification: a `result` means served, any refusal is recorded
+/// with its own code so a CHANGED rejection shape shows up as a finding rather
+/// than as agreement, and a transport failure stays `Unavailable` (never
+/// `Absent` — see `unavailable_is_not_absent`).
+fn served_or_error(
+    probe: std::result::Result<RawProbeOutcome, String>,
+    served: &str,
+) -> ObservedValue {
+    match probe {
+        Ok(o) if o.is_result() => ObservedValue::Text(served.into()),
+        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
+        Err(e) => unavailable(&e),
+    }
+}
+
 /// Send a WELL-FORMED `initialize` for `era`.
 ///
 /// The params MUST be well-formed. MEASURED: a request whose params omit
@@ -383,21 +416,17 @@ async fn probe_server_discover(
     era: Era,
     session: Option<&str>,
 ) -> ObservedValue {
-    match tester
-        .raw_jsonrpc_probe_with_session(
-            "server/discover",
-            "",
-            serde_json::json!({}),
+    served_or_error(
+        send_standard(
+            tester,
             era,
-            V2HeaderMode::Standard,
             session,
+            "server/discover",
+            serde_json::json!({}),
         )
-        .await
-    {
-        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
-        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
-        Err(e) => unavailable(&e),
-    }
+        .await,
+        "served",
+    )
 }
 
 /// ERA-04. Rule: send a request DELIBERATELY omitting `Mcp-Method` and
@@ -525,21 +554,10 @@ fn classify_cache_hints(
 
 /// ERA-09. Rule: a `result` means `served`; a refusal is recorded with its code.
 async fn probe_tasks_list(tester: &ServerTester, era: Era, session: Option<&str>) -> ObservedValue {
-    match tester
-        .raw_jsonrpc_probe_with_session(
-            "tasks/list",
-            "",
-            serde_json::json!({}),
-            era,
-            V2HeaderMode::Standard,
-            session,
-        )
-        .await
-    {
-        Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
-        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
-        Err(e) => unavailable(&e),
-    }
+    served_or_error(
+        send_standard(tester, era, session, "tasks/list", serde_json::json!({})).await,
+        "served",
+    )
 }
 
 /// ERA-10. Rule: read the connection's capability structure and report WHERE a
@@ -604,25 +622,21 @@ async fn probe_subscriptions_listen(
     era: Era,
     session: Option<&str>,
 ) -> ObservedValue {
-    match tester
-        .raw_jsonrpc_probe_with_session(
-            "subscriptions/listen",
-            "",
-            serde_json::json!({}),
+    // Only a RESULT counts as served (which is what `served_or_error` encodes).
+    // Recording any non-`-32601` refusal as "the stream is capability-gated"
+    // would read a `-32600` parse failure as a served method — the same
+    // mis-inference the malformed `initialize` probe would have made.
+    served_or_error(
+        send_standard(
+            tester,
             era,
-            V2HeaderMode::Standard,
             session,
+            "subscriptions/listen",
+            serde_json::json!({}),
         )
-        .await
-    {
-        // Only a RESULT counts as served. Recording any non-`-32601` refusal as
-        // "the stream is capability-gated" would read a `-32600` parse failure
-        // as a served method, which is the same mis-inference the malformed
-        // `initialize` probe would have made.
-        Ok(o) if o.is_result() => ObservedValue::Text("sse-stream-capability-gated".into()),
-        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
-        Err(e) => unavailable(&e),
-    }
+        .await,
+        "sse-stream-capability-gated",
+    )
 }
 
 /// ERA-14. Rule: send a method that cannot exist and read the HTTP STATUS the
@@ -727,8 +741,10 @@ mod tests {
         assert_eq!(ObservedValue::Present.token(), "present");
         assert_eq!(ObservedValue::Absent.token(), "absent");
         assert_eq!(ObservedValue::Text("served".into()).token(), "served");
-        assert_eq!(ObservedValue::Status(405).token(), "status:405");
-        assert_eq!(ObservedValue::Pointer("/a/b".into()).token(), "/a/b");
+        assert_eq!(
+            ObservedValue::Text("status:405".into()).token(),
+            "status:405"
+        );
         assert_eq!(
             ObservedValue::Unavailable("x".into()).token(),
             "unavailable"
@@ -872,8 +888,7 @@ mod tests {
                 ObservedValue::Present,
                 ObservedValue::Absent,
                 ObservedValue::Text(text.clone()),
-                ObservedValue::Status(code),
-                ObservedValue::Pointer(text.clone()),
+                ObservedValue::Text(format!("status:{code}")),
                 ObservedValue::Unavailable(text.clone()),
             ] {
                 proptest::prop_assert!(!value.token().is_empty());
