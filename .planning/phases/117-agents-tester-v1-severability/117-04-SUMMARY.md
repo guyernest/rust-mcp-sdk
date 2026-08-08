@@ -42,7 +42,12 @@ patterns-established:
   - "RED-test failure messages name their IMPLEMENTER plan (const IMPLEMENTER), so a red run says WHO must act"
   - "Fallback classification is asserted structurally (which requests the server received), never by inspecting error text — the file contains zero `contains(` occurrences"
 
-requirements-completed: [CLNT-03]
+# CLNT-03 is deliberately NOT booked here. This plan writes its contract RED; the
+# tests FAIL by design until 117-07 implements client_for. Booking it now would be
+# exactly the false-completion the phase exists to prevent. 117-07 (implementation)
+# and 117-10 both carry CLNT-03 and one of them discharges it.
+requirements-completed: []
+requirements-contracted: [CLNT-03]
 
 duration: 47min
 completed: 2026-08-08

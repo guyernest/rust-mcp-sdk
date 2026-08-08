@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 117-03-PLAN.md
-last_updated: "2026-08-08T04:57:22.832Z"
+last_updated: "2026-08-08T05:25:34.744Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 377
+  completed_plans: 378
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 4 of 14
+Plan: 5 of 14
 Plans complete: 16 of 16
 Remaining: none
 Status: Ready to execute
@@ -1002,6 +1002,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 117-02: v1 SSE fixtures use a bounded LOCAL frame-counting reader (N=2 success bound, 5s timeout failure bound) because common::v2::get reads to EOF and cannot read a long-lived text/event-stream
 - [Phase ?]: serde Duration needs no width-preserving dynamic at from_secs(0) — proven by an executed test, not prose
 - [Phase ?]: 117-11 must run BOTH cargo build -p cargo-pmcp AND cargo check -p cargo-pmcp --tests: the second TestResult literal (check.rs:522) is #[cfg(test)] and invisible to cargo build
+- [Phase ?]: 117-04: spawn_v2 accepts BOTH eras (dual server) — the discriminating fixture; only a server-side wire assertion catches a silent v1 preference
+- [Phase ?]: 117-04: era claims are read from a SERVER-side request log, not a new ConnectorClient accessor — the Q4.3 reachability rule needs no new API
+- [Phase ?]: 117-04 MEASURED BLOCKER for 117-07: an era rejection (HTTP 400) and an unreachable host (connect failure) are the SAME Error::Transport(TransportError::Request(String)) variant — classification must be behavioural (try v2, then v1, then propagate), never textual
 
 ### Pending Todos
 
@@ -1056,7 +1059,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T04:57:22.819Z
+Last session: 2026-08-08T05:25:17.894Z
 Stopped at: Completed 117-03-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1179,3 +1182,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P01 | 35min | 3 tasks | 6 files |
 | Phase 117 P02 | 45min | 2 tasks | 1 files |
 | Phase 117 P03 | 48min | 2 tasks | 1 files |
+| Phase 117 P04 | 47min | 2 tasks | 2 files |
