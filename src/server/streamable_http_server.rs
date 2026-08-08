@@ -7,8 +7,7 @@ use crate::server::http_middleware::{
 use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
 use crate::server::Server;
 use crate::shared::http_constants::{
-    APPLICATION_JSON, LAST_EVENT_ID, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID,
-    TEXT_EVENT_STREAM,
+    APPLICATION_JSON, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
 };
 use crate::shared::TransportMessage;
 use crate::types::{ClientRequest, Request};
@@ -68,7 +67,28 @@ use uuid::Uuid;
 #[cfg_attr(not(feature = "v1-compat"), path = "streamable_http_server/v1_session_off.rs")]
 pub(crate) mod v1;
 
-/// Event store trait for resumability support
+/// Event store trait for resumability support.
+///
+/// # This is NOT `crate::shared::event_store::EventStore`
+///
+/// There are TWO public traits called `EventStore` in this crate, and confusing
+/// them is the obvious mistake. This one is transport-local, has THREE methods
+/// (`store_event`, `replay_events_after`, `get_stream_for_event`), and is the
+/// trait the crate-internal `EventStoreHandle` alias erases for the v1
+/// SSE-resumability path. The other
+/// lives in [`crate::shared::event_store`], has six methods, and is a separate
+/// facility that plan 117-06 already gated behind `v1-compat` wholesale.
+///
+/// # v1-only, and not yet gated
+///
+/// Resumability exists only for MCP 2025-11-25 — the 2026-07-28 transport spec
+/// states that resumable SSE streams via `Last-Event-ID` are not supported — so
+/// this trait is v1-only surface. It is nonetheless compiled on BOTH feature
+/// sets today, because the PUBLIC field
+/// `StreamableHttpServerConfig::event_store` pins the concrete
+/// [`InMemoryEventStore`] and gating that field is plan 117-13's subject. The
+/// two must be gated together, in one edit; see the SEVERABILITY note above the
+/// `EventStoreHandle` alias in this module's source.
 #[async_trait]
 pub trait EventStore: Send + Sync {
     /// Store an event for later retrieval
@@ -95,7 +115,33 @@ type EventList = Vec<(String, TransportMessage)>;
 /// Type alias for events map
 type EventsMap = HashMap<String, EventList>;
 
-/// In-memory event store implementation
+/// In-memory event store implementation.
+///
+/// Implements this module's three-method [`EventStore`] trait — NOT the
+/// six-method [`crate::shared::event_store::EventStore`], and NOT the
+/// same-named [`crate::shared::event_store::InMemoryEventStore`].
+///
+/// # Public path
+///
+/// This type is reachable at `pmcp::server::streamable_http_server::InMemoryEventStore`
+/// and the example below exists to PIN that path: it is the concrete type the
+/// public `StreamableHttpServerConfig::event_store` field takes, so moving or
+/// re-exporting it elsewhere would be a MAJOR semver break. Phase 117 gates v1
+/// surface without changing where any of it is reachable from on the default
+/// (`v1-compat`) build, and this doctest fails to compile if that stops being
+/// true.
+///
+/// ```rust
+/// use pmcp::server::streamable_http_server::{InMemoryEventStore, StreamableHttpServerConfig};
+/// use std::sync::Arc;
+///
+/// let store = Arc::new(InMemoryEventStore::default());
+/// let config = StreamableHttpServerConfig {
+///     event_store: Some(Arc::clone(&store)),
+///     ..Default::default()
+/// };
+/// assert!(config.event_store.is_some());
+/// ```
 #[derive(Debug, Default)]
 pub struct InMemoryEventStore {
     /// Events by stream ID
@@ -417,10 +463,12 @@ use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 //
 // The era gates that decide whether sessions and resumability are live for a
 // request moved into the `v1` paired module in plan 117-09: they are now
-// `v1::sessions_active`, `v1::active_session_generator`,
-// `v1::apply_session_header`, `v1::resumability_active`, `v1::resumability_store`
-// and the two pure `_for` rules. Call them through `v1::`, unconditionally —
-// there is no `#[cfg]` at any call site in this file.
+// `v1::sessions_active`, `v1::apply_session_header`, `v1::resumability_active`,
+// `v1::resumability_store` and the two pure `_for` rules. Call them through
+// `v1::`, unconditionally — there is no `#[cfg]` at any call site in this file.
+// (`active_session_generator` was a seventh; plan 117-12 moved both of its
+// callers into the pair, so it is now private to `v1_session.rs` and this file
+// never names it.)
 //
 // This alias stays HERE rather than moving with them, and deliberately so. The
 // `EventStore` trait it erases is PUBLIC API on both feature sets, and the null
@@ -431,15 +479,30 @@ use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 // and neither declares it, which is exactly the arrangement that test documents.
 //
 // SEVERABILITY — handed forward by plan 113-08, PICKED UP by Phase 117 / SMPL-01.
-// What that comment asked for is now DONE for the era decisions and for all v1
-// session, SSE and resumability STATE: they live in `v1_session.rs`, and a
-// `full-v2` build compiles the null twin instead, so it allocates no session map,
-// registers no SSE stream and can never hand out an event store. The gating is
-// structural — the twin is zero-sized — not a runtime branch.
+// What that comment asked for is now DONE for the era decisions, for all v1
+// session, SSE and resumability STATE, for the v1 session LIFECYCLE, and for the
+// SSE REPLAY PATH: they live in `v1_session.rs`, and a `full-v2` build compiles
+// the null twin instead, so it allocates no session map, registers no SSE stream,
+// can never hand out an event store, and — since plan 117-12 — contains no reader
+// of `Last-Event-ID` at all. The gating is structural — the twin is zero-sized,
+// and the replay twin has no header access to order — not a runtime branch.
 //
-// Still compiled on BOTH feature sets, and moved behind the same seam by plans
-// 117-12 and 117-13: the [`EventStore`] trait, [`InMemoryEventStore`], the
-// `LAST_EVENT_ID` constant and the SSE replay path.
+// Still compiled on BOTH feature sets, and gated behind the same seam by plan
+// 117-13: the [`EventStore`] trait, [`InMemoryEventStore`] and the
+// `LAST_EVENT_ID` constant in `crate::shared::http_constants`.
+//
+// Those three could NOT move in 117-12, and the reason is worth recording so the
+// next attempt does not rediscover it. The trait and the store are PUBLIC API
+// (`pmcp::server::streamable_http_server::{EventStore, InMemoryEventStore}`), and
+// the public `StreamableHttpServerConfig::event_store` field pins the concrete
+// `InMemoryEventStore`. Moving them into the `pub(crate)` pair would either
+// change that public path or require a `#[cfg]` on the config field — which is
+// precisely plan 117-13's subject. The store is ALSO in the tripwire's
+// `FORBIDDEN_STATE_TYPES`, so the null twin can never declare it, which rules out
+// re-exporting the pair's copy. Trait, store and config field are ONE edit, and
+// that edit belongs to 117-13. `LAST_EVENT_ID` is the same shape: its two readers
+// (this transport's replay path, now in the pair, and the client at
+// `src/shared/streamable_http.rs`) must be gated together.
 //
 // Nothing is DELETED anywhere in Phase 117. Gating is reversible and semver-safe;
 // removing the pair is a MAJOR version change, tracked as SMPL-F1 for pmcp 3.0
@@ -473,7 +536,7 @@ pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
 // are deliberately separated here so they are never conflated again:
 //
 //   * DIRECT response  -> assembled through `envelope_for_live_request`
-//   * HISTORICAL event -> re-emitted verbatim by `replay_sse_events_from_header`
+//   * HISTORICAL event -> re-emitted verbatim by `v1::replay_sse_events_from_header`
 //
 // MRTR independently reinforces the direct half: a retry MUST use a different
 // JSON-RPC id, so any id replay becomes immediately visible to the client.
@@ -491,9 +554,9 @@ pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
 // | `build_json_response` / `build_sse_response_from_single_message` | framing | serialize/frame one already-constructed envelope; construct none of their own |
 // | `build_success_response_with_middleware` | framing | serializes one already-constructed envelope |
 // | `v1::route_to_session_stream` inside `build_response` | routing | gated on `sessions_on`, so a v2 reply can never be handed to another caller's stream (the T-113-07 fix) |
-// | `store_response_event` | caching | gated on `resumability_active`; on v1 it retains a whole envelope, which is CORRECT — that is the historical-event record replay re-emits |
-// | `sse_event_for_message` | caching | same gate, same verdict |
-// | `replay_sse_events_from_header` | historical | re-emits stored events verbatim, ORIGINAL ids intact — intentional, and asserted by `v1_replayed_event_retains_original_id` |
+// | `v1::store_response_event` | caching | gated on `resumability_active`; on v1 it retains a whole envelope, which is CORRECT — that is the historical-event record replay re-emits |
+// | `v1::sse_event_for_message` | caching | same gate, same verdict |
+// | `v1::replay_sse_events_from_header` | historical | re-emits stored events verbatim, ORIGINAL ids intact — intentional, and asserted by `v1_replayed_event_retains_original_id` |
 // | `create_error_response_with_id` + `v2_gate_reject_response` + `map_unparsed_body_for_v2` | direct (error) | cannot use the constructor: `RequestId` has no `Null` variant and a JSON-RPC error for an unparseable body legitimately carries `id: null`. Their id comes from `raw_request_id(<the LIVE body>)`, never from a cache, so the invariant holds by construction |
 // | `create_error_response` | direct (error) | pre-dispatch transport failure with no live id at all; emits `id: null`, unchanged since before v2 |
 //
@@ -2158,30 +2221,6 @@ async fn build_success_response_with_middleware(
     into_axum(server_response)
 }
 
-/// Persist the response event if resumability is live for THIS request.
-///
-/// Shared by both POST handlers — same condition (init OR non-init request
-/// with a response session ID), same store-event call, same fire-and-forget
-/// error handling.
-///
-/// The store is reached through [`v1::resumability_store`], so a v2 request writes
-/// NOTHING (HTTP-05 / T-113-30) independently of whether it happens to have a
-/// response session id. Retaining v2 response envelopes that can never be
-/// replayed is dead retention of exactly the material an id-replay bug feeds on.
-async fn store_response_event(
-    state: &ServerState,
-    era: Option<crate::types::protocol::Era>,
-    response_session_id: Option<&String>,
-    response_msg: &TransportMessage,
-) {
-    if let Some(event_store) = v1::resumability_store(state, era) {
-        if let Some(sid) = response_session_id {
-            let event_id = Uuid::new_v4().to_string();
-            let _ = event_store.store_event(sid, &event_id, response_msg).await;
-        }
-    }
-}
-
 /// Fast path handler without HTTP middleware
 /// Read the axum request body with enforced byte limit.
 ///
@@ -2295,7 +2334,7 @@ async fn handle_fast_path_request(
         None
     };
 
-    store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
+    v1::store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
 
     let mut response = build_response(state, response_msg, session_id, sessions_on);
 
@@ -2389,7 +2428,7 @@ async fn assemble_discover_response_fast(
     let response_msg =
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
-    store_response_event(state, era, response_session_id, &response_msg).await;
+    v1::store_response_event(state, era, response_session_id, &response_msg).await;
 
     let mut response = build_response(state, response_msg, session_id, sessions_on);
 
@@ -2504,7 +2543,7 @@ async fn assemble_tasks_update_fast(
     let response_msg =
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
-    store_response_event(state, era, response_session_id, &response_msg).await;
+    v1::store_response_event(state, era, response_session_id, &response_msg).await;
 
     let mut response = build_response(state, response_msg, session_id, sessions_on);
 
@@ -2557,7 +2596,7 @@ async fn assemble_tasks_update_with_middleware(
     let response_msg =
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
-    store_response_event(state, era, response_session_id, &response_msg).await;
+    v1::store_response_event(state, era, response_session_id, &response_msg).await;
 
     let version_to_send =
         compute_outbound_protocol_version(state, response_session_id, false, None);
@@ -2836,7 +2875,7 @@ fn listen_sse_event(frame: crate::server::subscriptions::ListenFrame) -> Event {
 /// `X-Accel-Buffering: no`, and no-transform caching.
 ///
 /// The `Mcp-Session-Id` header is NEVER attached: there are no sessions on v2
-/// (HTTP-01), so [`attach_sse_response_headers`] — which requires one — is
+/// (HTTP-01), so [`v1::attach_sse_response_headers`] — which requires one — is
 /// deliberately not reused here.
 fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&(String, String)>) {
     let headers = response.headers_mut();
@@ -3483,7 +3522,7 @@ async fn assemble_discover_response_with_middleware(
     let response_msg =
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
-    store_response_event(state, era, response_session_id, &response_msg).await;
+    v1::store_response_event(state, era, response_session_id, &response_msg).await;
 
     // Discover is never an init request → compute the outbound version normally.
     let version_to_send =
@@ -3726,7 +3765,7 @@ async fn dispatch_message_with_middleware(
                 None
             };
 
-            store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
+            v1::store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
 
             let version_to_send = compute_outbound_protocol_version(
                 state,
@@ -4019,126 +4058,11 @@ async fn handle_post_with_middleware_inner(
     .await)
 }
 
-/// Handle GET requests for SSE streams
-/// Resolve the SSE session ID: validate an incoming one or mint a new one.
-///
-/// Returns `Ok(session_id)` on success, or an error response (404 unknown
-/// session, 405 stateless-mode).
-/// A GET carries no body and therefore no `_meta`, so the ONLY era signal is the
-/// `MCP-Protocol-Version` header — and a v2 GET is already answered `405` by
-/// [`handle_get_sse`] before this runs. Sessions are therefore evaluated at
-/// `era = None`, which [`v1::sessions_active`] resolves to exactly the pre-113
-/// config-only behavior for the v1 / non-opted-in traffic that can reach here.
-fn resolve_sse_session(
-    state: &ServerState,
-    incoming_session_id: Option<String>,
-) -> std::result::Result<String, Response> {
-    let sessions_on = v1::sessions_active(state, None);
-    if let Some(sid) = incoming_session_id {
-        if sessions_on && !v1::session_exists(&state.v1, &sid) {
-            return Err(create_error_response(
-                StatusCode::NOT_FOUND,
-                crate::types::protocol::error_codes::INVALID_REQUEST,
-                "Unknown session ID",
-            ));
-        }
-        return Ok(sid);
-    }
-    let Some(generator) = v1::active_session_generator(state, None) else {
-        return Err(create_error_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-            "SSE not supported in stateless mode",
-        ));
-    };
-    let new_id = generator();
-    // `true`: a GET SSE implicitly initializes the session it mints.
-    v1::insert_session(&state.v1, new_id.clone(), true, None);
-    if let Some(callback) = &state.config.on_session_initialized {
-        callback(&new_id);
-    }
-    Ok(new_id)
-}
-
-/// Replay events from the event store after a `Last-Event-ID` header value
-/// into an SSE sender channel. Fire-and-forget on any intermediate failure.
-///
-/// `event_store` comes from [`v1::resumability_store`], so on a v2 request it is
-/// `None` and this function returns before it ever LOOKS at `Last-Event-ID` —
-/// the spec's "ignore it" taken literally, at the only site in the transport that
-/// reads that header (T-113-29).
-async fn replay_sse_events_from_header(
-    headers: &HeaderMap,
-    tx: &mpsc::UnboundedSender<TransportMessage>,
-    event_store: Option<&EventStoreHandle>,
-) {
-    // Deliberately FIRST: an era that suppresses resumability must not even parse
-    // an attacker-supplied replay cursor.
-    let Some(store) = event_store else {
-        return;
-    };
-    let Some(last_event_id) = headers.get(LAST_EVENT_ID) else {
-        return;
-    };
-    let Ok(last_id) = last_event_id.to_str() else {
-        return;
-    };
-    if let Ok(events) = store.replay_events_after(last_id).await {
-        for (_event_id, msg) in events {
-            // A REPLAYED HISTORICAL EVENT is not a direct response: it keeps its
-            // ORIGINAL id, which is correct and is asserted as such by
-            // `v1_replayed_event_retains_original_id`. See the direct-response
-            // audit block above `envelope_for_live_request`.
-            let _ = tx.send(msg);
-        }
-    }
-}
-
-/// Map a `TransportMessage` to an SSE `Event`, spawning a best-effort event
-/// store write in parallel.
-///
-/// `event_store` comes from [`v1::resumability_store`], so a v2 stream writes nothing.
-fn sse_event_for_message(
-    msg: &TransportMessage,
-    session_id: &str,
-    event_store: Option<&EventStoreHandle>,
-) -> Event {
-    let event_id = Uuid::new_v4().to_string();
-    if let Some(store) = event_store {
-        let sid = session_id.to_string();
-        let msg_clone = msg.clone();
-        let store = store.clone();
-        let event_id_clone = event_id.clone();
-        tokio::spawn(async move {
-            let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
-        });
-    }
-    Event::default()
-        .id(event_id)
-        .event("message")
-        .data(serde_json::to_string(msg).unwrap())
-}
-
-/// Attach SSE-specific hardening headers (session, cache-control, connection)
-/// to the given axum response.
-fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
-    response
-        .headers_mut()
-        .insert(MCP_SESSION_ID, session_id.parse().unwrap());
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache, no-transform"),
-    );
-    response
-        .headers_mut()
-        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
-}
-
 /// Handle GET requests for SSE streams.
 ///
-/// Refactored in 75-01 Task 1a-A: extracted [`resolve_sse_session`],
-/// [`replay_sse_events_from_header`], [`sse_event_for_message`], and
-/// [`attach_sse_response_headers`] so this orchestrator is a short pipeline.
+/// Refactored in 75-01 Task 1a-A: extracted [`v1::resolve_sse_session`],
+/// [`v1::replay_sse_events_from_header`], [`v1::sse_event_for_message`], and
+/// [`v1::attach_sse_response_headers`] so this orchestrator is a short pipeline.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(rejection) = v2_verb_rejection(&state, &headers, "GET").await {
         return rejection;
@@ -4152,7 +4076,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
-    let session_id = match resolve_sse_session(&state, incoming_session_id) {
+    let session_id = match v1::resolve_sse_session(&state, incoming_session_id) {
         Ok(sid) => sid,
         Err(response) => return response,
     };
@@ -4172,10 +4096,10 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     // GET is already answered `405` at the top of this function, so only v1 /
     // non-opted-in traffic reaches here. `v1::resumability_store(state, None)` is
     // therefore exactly the pre-113 config-only read, the same reasoning
-    // [`resolve_sse_session`] records for its `v1::sessions_active(state, None)`.
+    // [`v1::resolve_sse_session`] records for its `v1::sessions_active(state, None)`.
     let resumability = v1::resumability_store(&state, None).cloned();
 
-    replay_sse_events_from_header(&headers, &tx, resumability.as_ref()).await;
+    v1::replay_sse_events_from_header(&headers, &tx, resumability.as_ref()).await;
 
     let stream = UnboundedReceiverStream::new(rx);
     let session_id_for_header = session_id.clone();
@@ -4183,7 +4107,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     let event_store = resumability;
 
     let sse = Sse::new(stream.map(move |msg| {
-        Ok::<_, Infallible>(sse_event_for_message(
+        Ok::<_, Infallible>(v1::sse_event_for_message(
             &msg,
             &session_id_for_stream,
             event_store.as_ref(),
@@ -4191,7 +4115,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     }));
 
     let mut response = sse.into_response();
-    attach_sse_response_headers(&mut response, &session_id_for_header);
+    v1::attach_sse_response_headers(&mut response, &session_id_for_header);
     response
 }
 
@@ -4257,6 +4181,12 @@ mod tests {
     use super::v1::{
         apply_session_header, resumability_active_for, resumability_store, sessions_active_for,
     };
+    // `LAST_EVENT_ID` is imported HERE rather than at file scope since plan
+    // 117-12: `v1::replay_sse_events_from_header` — the transport's only
+    // production reader of that header — moved into the paired module, and a
+    // file-scope import used solely by `#[cfg(test)]` code is an unused import
+    // on the lib-only severance build, which `RUSTFLAGS="-D warnings"` rejects.
+    use crate::shared::http_constants::LAST_EVENT_ID;
     use crate::types::protocol::Era;
 
     // -----------------------------------------------------------------------

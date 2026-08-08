@@ -55,11 +55,11 @@
 // `src/shared/http_body_cap.rs`. The real half carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{EventStoreHandle, ServerState, StreamableHttpServerConfig};
+use super::{create_error_response, EventStoreHandle, ServerState, StreamableHttpServerConfig};
 use crate::shared::TransportMessage;
-use crate::types::protocol::Era;
-use axum::http::HeaderMap;
-use axum::response::Response;
+use crate::types::protocol::{error_codes, Era};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{sse::Event, Response};
 use tokio::sync::mpsc;
 
 /// The zero-sized stand-in for the v1 session and resumability state.
@@ -90,15 +90,6 @@ impl V1State {
 /// No session is ever tracked, so no session id is ever known.
 pub(crate) const fn session_exists(_state: &V1State, _session_id: &str) -> bool {
     false
-}
-
-/// Recording a session is a no-op: there is nowhere to record it.
-pub(crate) fn insert_session(
-    _state: &V1State,
-    _session_id: String,
-    _initialized: bool,
-    _protocol_version: Option<String>,
-) {
 }
 
 /// No session, so no version was ever negotiated against one.
@@ -182,14 +173,6 @@ pub(crate) const fn sessions_active_for(_cfg_has_generator: bool, _era: Option<E
 /// BOTH halves, and `era` is visibly CONSUMED here instead of discarded.
 pub(crate) const fn sessions_active(_state: &ServerState, era: Option<Era>) -> bool {
     sessions_active_for(false, era)
-}
-
-/// There is never a session-id generator to hand out, so nothing can mint one.
-pub(crate) const fn active_session_generator(
-    _state: &ServerState,
-    _era: Option<Era>,
-) -> Option<&(dyn Fn() -> String + Send + Sync)> {
-    None
 }
 
 /// No `Mcp-Session-Id` response header is ever emitted, on any request.
@@ -358,3 +341,96 @@ pub(crate) fn resolve_session_for_request(
         validate_non_init_session(state, era, session_id)
     }
 }
+
+// ---------------------------------------------------------------------------
+// v1 SSE RESUMABILITY — the v2 constant answers (plan 117-12, SMPL-02).
+//
+// The 2026-07-28 transport spec is verbatim: "Resumable SSE streams via
+// `Last-Event-ID` are not supported", and a `Last-Event-ID` header on a request
+// should be ignored. On this build that is not a runtime refusal and not an
+// early return — there is no store to reach, no replay loop compiled behind
+// these functions, and NOTHING IN THIS FILE NAMES THAT HEADER.
+//
+// That last property is the one to check when editing this block: a twin that
+// took a header map and looked inside it, even to decide to do nothing, would
+// re-open a threat this build closes by construction.
+// ---------------------------------------------------------------------------
+
+/// Nothing is ever persisted, because there is no store to persist into.
+///
+/// Retaining response envelopes that can never be replayed would be dead
+/// retention of exactly the material an id-replay bug feeds on (T-113-30); here
+/// the retention is not merely gated off, it is not compiled.
+///
+/// Stays `async` because the signature is the real half's and both POST
+/// handlers `.await` it.
+pub(crate) async fn store_response_event(
+    _state: &ServerState,
+    _era: Option<Era>,
+    _response_session_id: Option<&String>,
+    _response_msg: &TransportMessage,
+) {
+}
+
+/// A session-addressed SSE stream is never resolved, on any GET.
+///
+/// The real function's own answer when no session generator is available, which
+/// on this build is always: `405 Method Not Allowed`, "SSE not supported in
+/// stateless mode". Returning it unconditionally also means an attacker-supplied
+/// `Mcp-Session-Id` is never echoed back as a stream identity — the real
+/// function's `Ok(sid)` passthrough exists only for the v1 stateful mode this
+/// build does not have.
+pub(crate) fn resolve_sse_session(
+    _state: &ServerState,
+    _incoming_session_id: Option<String>,
+) -> std::result::Result<String, Response> {
+    Err(create_error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        error_codes::METHOD_NOT_FOUND,
+        "SSE not supported in stateless mode",
+    ))
+}
+
+/// Nothing is ever replayed — and, critically, NO HEADER IS EVER READ.
+///
+/// This is the most load-bearing twin in the pair. The real function returns
+/// before it looks at the replay cursor when resumability is off, and that
+/// ORDERING is the mitigation for T-113-29 / T-113-30: an era that suppresses
+/// resumability must not even PARSE an attacker-supplied replay cursor. Here the
+/// ordering is not something to preserve on the next edit — there is no header
+/// access to order. `headers` is taken so the signature matches its real
+/// counterpart, and it is never touched.
+///
+/// Do not "improve" this by inspecting `headers` to log or count ignored
+/// cursors: that would put an attacker-controlled parse back into the build that
+/// exists to prove it absent, and `tests/v1_severability_tripwire.rs` fails on
+/// the `LAST_EVENT_ID` token for exactly that reason.
+///
+/// Stays `async` because the signature is the real half's and the GET handler
+/// `.await`s it.
+pub(crate) async fn replay_sse_events_from_header(
+    _headers: &HeaderMap,
+    _tx: &mpsc::UnboundedSender<TransportMessage>,
+    _event_store: Option<&EventStoreHandle>,
+) {
+}
+
+/// An empty SSE event, retaining nothing and spawning nothing.
+///
+/// Unreachable in practice — [`resolve_sse_session`] answers `405` before any
+/// stream is framed — so the value only has to exist. It deliberately does NOT
+/// serialize the message: the real half's `serde_json::to_string(msg).unwrap()`
+/// is a panic site this build has no reason to carry.
+pub(crate) fn sse_event_for_message(
+    _msg: &TransportMessage,
+    _session_id: &str,
+    _event_store: Option<&EventStoreHandle>,
+) -> Event {
+    Event::default()
+}
+
+/// No SSE hardening headers are attached, because no SSE stream is ever opened.
+///
+/// In particular no `Mcp-Session-Id` is written onto a response here; the
+/// `response` argument is taken and left exactly as it arrived.
+pub(crate) const fn attach_sse_response_headers(_response: &mut Response, _session_id: &str) {}

@@ -72,16 +72,17 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use super::{create_error_response, EventStoreHandle, ServerState, StreamableHttpServerConfig};
-use crate::shared::http_constants::MCP_SESSION_ID;
+use crate::shared::http_constants::{LAST_EVENT_ID, MCP_SESSION_ID};
 use crate::shared::TransportMessage;
 use crate::types::protocol::{error_codes, Era};
 use crate::types::{ClientRequest, Request};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::Response;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{sse::Event, Response};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 /// Type alias for the live v1 SSE stream map.
 ///
@@ -182,9 +183,12 @@ pub(crate) fn session_exists(state: &V1State, session_id: &str) -> bool {
 
 /// Start tracking a v1 session.
 ///
-/// Takes the two [`SessionInfo`] fields as arguments rather than the struct, so
-/// the transport never has to name a type the twin does not have.
-pub(crate) fn insert_session(
+/// PRIVATE to this module since plan 117-12: both of its callers
+/// ([`process_init_session`] and [`resolve_sse_session`]) now live on this side
+/// of the pair, so it is no longer a seam the transport crosses and the twin
+/// does not declare it. Kept as a helper rather than inlined twice because it
+/// has two call sites and it is the only place [`SessionInfo`] is constructed.
+fn insert_session(
     state: &V1State,
     session_id: String,
     initialized: bool,
@@ -320,7 +324,16 @@ pub(crate) fn sessions_active(state: &ServerState, era: Option<Era>) -> bool {
 /// The second (and last) permitted reader of `config.session_id_generator`: it
 /// gates the borrow behind [`sessions_active`] so no caller can reach the
 /// generator on a request whose era suppresses sessions.
-pub(crate) fn active_session_generator(
+///
+/// PRIVATE to this module since plan 117-12, for the same reason as
+/// [`insert_session`]: both of its callers ([`process_init_session`] and
+/// [`resolve_sse_session`]) moved onto this side of the pair, so it is no longer
+/// a seam the transport crosses. The twin does not declare it — a mirrored
+/// declaration nothing can call would be dead code on the `full-v2` build, and
+/// the only ways to keep it alive there are contrivances (a `debug_assert!`
+/// whose real job is to defeat the lint, or a branch with two identical arms).
+/// Narrowing the visibility is the honest form of the same fact.
+fn active_session_generator(
     state: &ServerState,
     era: Option<Era>,
 ) -> Option<&(dyn Fn() -> String + Send + Sync)> {
@@ -655,4 +668,159 @@ pub(crate) fn resolve_session_for_request(
     } else {
         validate_non_init_session(state, era, session_id)
     }
+}
+
+// ---------------------------------------------------------------------------
+// v1 SSE RESUMABILITY and the GET-stream helpers (MOVED here by plan 117-12,
+// SMPL-02).
+//
+// The 2026-07-28 transport spec is verbatim that "Resumable SSE streams via
+// `Last-Event-ID` are not supported" and that a `Last-Event-ID` header on a
+// request should be ignored. Before this move that was a runtime early return;
+// now it is structural — the functions below are not compiled into a `full-v2`
+// build at all, and with them goes the ONLY reader of `LAST_EVENT_ID` in the
+// server. See the twin's `replay_sse_events_from_header` for why "not even
+// parsed" is the property that matters (threats T-113-29 / T-113-30).
+// ---------------------------------------------------------------------------
+
+/// Persist the response event if resumability is live for THIS request.
+///
+/// Shared by both POST handlers — same condition (init OR non-init request
+/// with a response session ID), same store-event call, same fire-and-forget
+/// error handling.
+///
+/// The store is reached through [`resumability_store`], so a v2 request writes
+/// NOTHING (HTTP-05 / T-113-30) independently of whether it happens to have a
+/// response session id. Retaining v2 response envelopes that can never be
+/// replayed is dead retention of exactly the material an id-replay bug feeds on.
+pub(crate) async fn store_response_event(
+    state: &ServerState,
+    era: Option<Era>,
+    response_session_id: Option<&String>,
+    response_msg: &TransportMessage,
+) {
+    if let Some(event_store) = resumability_store(state, era) {
+        if let Some(sid) = response_session_id {
+            let event_id = Uuid::new_v4().to_string();
+            let _ = event_store.store_event(sid, &event_id, response_msg).await;
+        }
+    }
+}
+
+/// Resolve the SSE session ID: validate an incoming one or mint a new one.
+///
+/// Returns `Ok(session_id)` on success, or an error response (404 unknown
+/// session, 405 stateless-mode).
+/// A GET carries no body and therefore no `_meta`, so the ONLY era signal is the
+/// `MCP-Protocol-Version` header — and a v2 GET is already answered `405` by
+/// [`handle_get_sse`](super::handle_get_sse) before this runs. Sessions are
+/// therefore evaluated at `era = None`, which [`sessions_active`] resolves to
+/// exactly the pre-113 config-only behavior for the v1 / non-opted-in traffic
+/// that can reach here.
+pub(crate) fn resolve_sse_session(
+    state: &ServerState,
+    incoming_session_id: Option<String>,
+) -> std::result::Result<String, Response> {
+    let sessions_on = sessions_active(state, None);
+    if let Some(sid) = incoming_session_id {
+        if sessions_on && !session_exists(&state.v1, &sid) {
+            return Err(create_error_response(
+                StatusCode::NOT_FOUND,
+                error_codes::INVALID_REQUEST,
+                "Unknown session ID",
+            ));
+        }
+        return Ok(sid);
+    }
+    let Some(generator) = active_session_generator(state, None) else {
+        return Err(create_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            error_codes::METHOD_NOT_FOUND,
+            "SSE not supported in stateless mode",
+        ));
+    };
+    let new_id = generator();
+    // `true`: a GET SSE implicitly initializes the session it mints.
+    insert_session(&state.v1, new_id.clone(), true, None);
+    if let Some(callback) = &state.config.on_session_initialized {
+        callback(&new_id);
+    }
+    Ok(new_id)
+}
+
+/// Replay events from the event store after a `Last-Event-ID` header value
+/// into an SSE sender channel. Fire-and-forget on any intermediate failure.
+///
+/// `event_store` comes from [`resumability_store`], so on a v2 request it is
+/// `None` and this function returns before it ever LOOKS at `Last-Event-ID` —
+/// the spec's "ignore it" taken literally, at the only site in the transport that
+/// reads that header (T-113-29). On a `full-v2` build the guarantee is stronger
+/// still: this function does not exist, and the twin that replaces it names no
+/// header at all.
+pub(crate) async fn replay_sse_events_from_header(
+    headers: &HeaderMap,
+    tx: &mpsc::UnboundedSender<TransportMessage>,
+    event_store: Option<&EventStoreHandle>,
+) {
+    // Deliberately FIRST: an era that suppresses resumability must not even parse
+    // an attacker-supplied replay cursor.
+    let Some(store) = event_store else {
+        return;
+    };
+    let Some(last_event_id) = headers.get(LAST_EVENT_ID) else {
+        return;
+    };
+    let Ok(last_id) = last_event_id.to_str() else {
+        return;
+    };
+    if let Ok(events) = store.replay_events_after(last_id).await {
+        for (_event_id, msg) in events {
+            // A REPLAYED HISTORICAL EVENT is not a direct response: it keeps its
+            // ORIGINAL id, which is correct and is asserted as such by
+            // `v1_replayed_event_retains_original_id`. See the direct-response
+            // audit block in `streamable_http_server.rs`, above
+            // `envelope_for_live_request`.
+            let _ = tx.send(msg);
+        }
+    }
+}
+
+/// Map a `TransportMessage` to an SSE `Event`, spawning a best-effort event
+/// store write in parallel.
+///
+/// `event_store` comes from [`resumability_store`], so a v2 stream writes nothing.
+pub(crate) fn sse_event_for_message(
+    msg: &TransportMessage,
+    session_id: &str,
+    event_store: Option<&EventStoreHandle>,
+) -> Event {
+    let event_id = Uuid::new_v4().to_string();
+    if let Some(store) = event_store {
+        let sid = session_id.to_string();
+        let msg_clone = msg.clone();
+        let store = store.clone();
+        let event_id_clone = event_id.clone();
+        tokio::spawn(async move {
+            let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
+        });
+    }
+    Event::default()
+        .id(event_id)
+        .event("message")
+        .data(serde_json::to_string(msg).unwrap())
+}
+
+/// Attach SSE-specific hardening headers (session, cache-control, connection)
+/// to the given axum response.
+pub(crate) fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
+    response
+        .headers_mut()
+        .insert(MCP_SESSION_ID, session_id.parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
 }
