@@ -201,8 +201,34 @@ pmcp-code-mode = { version = "0.5.3", path = "crates/pmcp-code-mode" }  # For co
 pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
 
 [features]
-default = ["logging"]
-full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros", "testing"]
+default = ["logging", "v1-compat"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros", "testing", "v1-compat"]
+# The SMPL-01 severance PROOF set: exactly what `full` has, EXCEPT `v1-compat`.
+#
+# `--no-default-features` alone proves nothing here, because `default = ["logging"]`
+# — it would strip `http`/`streamable-http` too and "prove" v1 is severable by
+# never compiling the transport at all. Hence a parallel positive list.
+#
+# `full` and `full-v2` are two enumerated lists that can DRIFT: a feature added to
+# `full` and forgotten here silently SHRINKS the severance proof. That drift is a
+# test failure — tests/v1_severability_tripwire.rs DERIVES both lists from THIS
+# file at test time rather than re-enumerating them.
+#
+# An inverted `v2-only` feature was REJECTED (D-02): cargo features are additive
+# and cannot be subtracted, so any crate anywhere in the dependency graph enabling
+# a negative feature would silently strip v1 for every other consumer.
+full-v2 = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros", "testing"]
+# MCP 2025-11-25 compatibility layer: the initialize/session lifecycle and SSE
+# resumability (`Last-Event-ID` + event store). SSE framing/parsing itself is
+# SHARED with v2 and is deliberately NOT gated.
+#
+# Default-on, so no existing consumer changes behavior. Building WITHOUT it —
+# `cargo build -p pmcp --no-default-features --features full-v2` — is the SMPL-01
+# severance proof. Actually REMOVING it is SMPL-F1 / pmcp 3.0, gated on public
+# client adoption of v2; see docs/v1-sunset-policy.md for the (date-free) policy.
+#
+# Dependency-free marker feature: do NOT add it to any other feature's list.
+v1-compat = []
 composition = ["streamable-http"]
 # MCP Apps Extension - Interactive UI support for ChatGPT Apps, MCP-UI, and standard MCP hosts
 mcp-apps = []
