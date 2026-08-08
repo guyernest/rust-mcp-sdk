@@ -697,6 +697,26 @@ name = "s52_v2_caching_hints"
 path = "examples/s52_v2_caching_hints.rs"
 required-features = ["streamable-http", "http-client", "testing"]
 
+# Phase 117-10 (CLNT-03): the `pmcp-agent` connector against BOTH eras — the v2
+# happy path against the paired `s47_v2_stateless_mrtr` server, the v1 fallback
+# against a v1-only server it starts in-process, and unreachable-host error
+# propagation. Needs the `pmcp-agent` dev-dependency declared above for
+# `UrlConnectorClientFactory`.
+#
+# NUMBERING, derived from what is on disk rather than from the sequence: `s47`
+# and `s48` are each occupied twice, `s49` is occupied twice
+# (`s49_sampling_host` + `s49_v2_subscriptions_client`), and `s50`/`s51`/`s52`
+# all exist — so `s53` is the next free slot. See the bijection note above the
+# `s47_v2_stateless_mrtr` block.
+#
+# `testing` is deliberately ABSENT (unlike `s52`): this example reads no
+# reserved `_meta` key spelling of its own — the connector factory owns every
+# wire detail — so the two transport features are the whole requirement.
+[[example]]
+name = "s53_v2_agent_client"
+path = "examples/s53_v2_agent_client.rs"
+required-features = ["streamable-http", "http-client"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
