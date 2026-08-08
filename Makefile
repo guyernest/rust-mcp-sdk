@@ -426,7 +426,7 @@ doc-open: doc
 doc-check:
 	@echo "$(BLUE)Checking rustdoc warnings (zero-tolerance)...$(NC)"
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps \
-		--features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket
+		--features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket,v1-compat
 	@echo "$(GREEN)✓ Zero rustdoc warnings$(NC)"
 
 # Book documentation
