@@ -33,6 +33,41 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
+// ---------------------------------------------------------------------------
+// The v1 severance seam (SMPL-01 / SMPL-02).
+//
+// ONE module declaration, TWO source files, exactly one of which is compiled.
+// `v1_session.rs` holds the real MCP 2025-11-25 session + SSE-resumability
+// state; `v1_session_off.rs` is the null twin a `full-v2` build gets instead.
+//
+// Declaring the pair here — rather than sprinkling `#[cfg(feature =
+// "v1-compat")]` through this 6,000-line file — means call sites below name
+// `v1::…` unconditionally and never grow a feature gate of their own. A
+// signature that drifts between the halves fails the build on one feature set,
+// and `tests/v1_severability_tripwire.rs` covers the direction a build cannot
+// see (the twin must declare nothing the real module does not).
+//
+// `#[path]` on a module declared in a non-`mod.rs` file resolves relative to
+// THIS file's directory (`src/server/`), which is why both literals carry the
+// `streamable_http_server/` prefix.
+//
+// `#[rustfmt::skip]` is load-bearing, not cosmetic: rustfmt explodes the
+// `not(...)` form across four lines (it nests a list inside a list, unlike the
+// positive form), and the severability tripwire matches the attribute as a
+// single-line literal so a half-deleted pair is visible in a grep as well as in
+// a build. Removing the skip silently defeats that match.
+//
+// `pub(crate)` on the module, not private: the items inside are `pub(crate)`
+// (117-09 reaches them from `ServerState`), and `clippy::redundant_pub_crate`
+// rejects `pub(crate)` items inside a PRIVATE module. Narrowing the module
+// instead of the items would force `pub(super)` on both halves and lose the
+// crate-level reachability the collapse needs.
+// ---------------------------------------------------------------------------
+#[rustfmt::skip]
+#[cfg_attr(feature = "v1-compat", path = "streamable_http_server/v1_session.rs")]
+#[cfg_attr(not(feature = "v1-compat"), path = "streamable_http_server/v1_session_off.rs")]
+pub(crate) mod v1;
+
 /// Event store trait for resumability support
 #[async_trait]
 pub trait EventStore: Send + Sync {
@@ -262,8 +297,12 @@ impl StreamableHttpServerConfig {
 }
 
 /// Session information
+///
+/// `pub(crate)` rather than private because the `v1-compat` half of the `v1`
+/// paired module names it in a field type; a private type in a `pub(crate)`
+/// field is a `private_interfaces` error.
 #[derive(Debug, Clone)]
-struct SessionInfo {
+pub(crate) struct SessionInfo {
     initialized: bool,
     protocol_version: Option<String>,
 }
