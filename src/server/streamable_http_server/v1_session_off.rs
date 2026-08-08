@@ -367,6 +367,20 @@ pub(crate) async fn store_response_event(
 /// constructor the v2 rejection head uses. A locally hand-rolled `405` would be
 /// a second answer to one question, free to drift on the next edit.
 ///
+/// # `405` PREEMPTS `406` — a deliberate status difference
+///
+/// The real half calls `validate_headers(headers, "GET")` first, so a GET with a
+/// wrong `Accept` is answered `406 Not Acceptable` there. This twin answers `405`
+/// for EVERY GET, whatever the headers say, and that is intended rather than an
+/// oversight: content negotiation is a question about how to serve a request, and
+/// this endpoint does not serve GET at all on `2026-07-28`. Answering `406` would
+/// tell the caller to fix its `Accept` header and try again, which is advice that
+/// cannot work.
+///
+/// It also keeps the answer INPUT-INDEPENDENT, which is the same property the
+/// DELETE twin's doc names: one status for all inputs discloses nothing about
+/// what this build does or does not hold.
+///
 /// `headers` is taken so the signature matches the real half's and is never
 /// read: no `Mcp-Session-Id`, no `Accept`, no replay cursor. Stays `async`
 /// because the real half awaits its SSE replay and the shared head `.await`s the

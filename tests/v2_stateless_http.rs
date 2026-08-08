@@ -43,11 +43,11 @@ use common::v2::{
 // Both are reached only from the `v1-compat`-gated v1 controls below.
 #[cfg(feature = "v1-compat")]
 use common::v2::v1_body;
-#[cfg(feature = "v1-compat")]
-use std::net::SocketAddr;
 use pmcp::types::protocol::error_codes::{
     HEADER_MISMATCH, METHOD_NOT_FOUND, UNSUPPORTED_PROTOCOL_VERSION,
 };
+#[cfg(feature = "v1-compat")]
+use std::net::SocketAddr;
 // `PARSE_ERROR` is asserted only by the `v1-compat`-gated v1 control below.
 #[cfg(feature = "v1-compat")]
 use pmcp::types::protocol::error_codes::PARSE_ERROR;
@@ -237,6 +237,18 @@ async fn v1_session_unchanged() {
 // HTTP-01: GET / DELETE are 405 on v2, unchanged on v1.
 // ===========================================================================
 
+/// The `Allow` value RFC 9110 §15.5.6 makes a MUST on every `405`.
+///
+/// Asserted on BOTH verbs and BOTH feature sets: here for the CONDITIONAL v2
+/// rejection (this file runs under `v1-compat`), and in
+/// `tests/v2_verbs_405_on_severed_build.rs` for the twin's unconditional answer.
+/// One constructor — `method_not_allowed_for_verb` — produces both, so a
+/// regression in either is a regression in it.
+///
+/// `GET` and `DELETE` are deliberately absent from the list: both stay ROUTED,
+/// but `Allow` enumerates SUPPORT, and neither is supported on `2026-07-28`.
+const ALLOW: &str = "POST, OPTIONS";
+
 /// Spec: "HTTP GET or DELETE to the MCP endpoint: respond with 405 Method Not
 /// Allowed." The bogus session id proves the guard runs BEFORE session
 /// validation — a v1 GET with the same id answers 404 (see
@@ -260,6 +272,12 @@ async fn v2_get_405() {
         "a v2 GET must be 405 Method Not Allowed; body: {}",
         response.raw
     );
+    assert_eq!(
+        response.allow.as_deref(),
+        Some(ALLOW),
+        "a v2 GET refusal must carry `Allow: {ALLOW}` (RFC 9110 §15.5.6 MUST); got {:?}",
+        response.allow
+    );
 }
 
 #[tokio::test]
@@ -279,6 +297,12 @@ async fn v2_delete_405() {
         response.status, 405,
         "a v2 DELETE must be 405 Method Not Allowed; body: {}",
         response.raw
+    );
+    assert_eq!(
+        response.allow.as_deref(),
+        Some(ALLOW),
+        "a v2 DELETE refusal must carry `Allow: {ALLOW}` (RFC 9110 §15.5.6 MUST); got {:?}",
+        response.allow
     );
 }
 

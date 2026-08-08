@@ -727,6 +727,9 @@ pub struct Resp {
     pub mcp_session_id: Option<String>,
     /// The response `Content-Type` — `text/event-stream` for an SSE reply.
     pub content_type: Option<String>,
+    /// The `Allow` header. RFC 9110 §15.5.6 makes it a MUST on every `405`, so a
+    /// `None` here on a refused verb is a spec violation, not a detail.
+    pub allow: Option<String>,
     /// The parsed JSON body. An SSE reply is unwrapped from its first `data:`
     /// frame, so callers assert the same way in both framings.
     pub body: Value,
@@ -780,6 +783,7 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
     let mcp_version = hget(MCP_PROTOCOL_VERSION);
     let mcp_session_id = hget(MCP_SESSION_ID);
     let content_type = hget("content-type");
+    let allow = hget("allow");
     let raw = response.text().await.unwrap_or_default();
     let body = parse_body(&raw, content_type.as_deref());
     Resp {
@@ -789,6 +793,7 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
         mcp_version,
         mcp_session_id,
         content_type,
+        allow,
         body,
         raw,
     }

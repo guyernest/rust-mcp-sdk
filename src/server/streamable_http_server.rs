@@ -249,6 +249,7 @@ impl EventStore for InMemoryEventStore {
 /// here for exactly that reason — it could not be gated before the fields it
 /// types were.
 #[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Configuration for the streamable HTTP server.
@@ -330,6 +331,7 @@ pub struct StreamableHttpServerConfig {
     ///
     /// v1-ONLY: 2026-07-28 has no session to mint an id for.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub session_id_generator: Option<Box<dyn Fn() -> String + Send + Sync>>,
     /// Enable JSON responses instead of SSE
     pub enable_json_response: bool,
@@ -340,11 +342,13 @@ pub struct StreamableHttpServerConfig {
     /// here is also what pinned [`InMemoryEventStore`] into both builds until
     /// this field was gated.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub event_store: Option<Arc<InMemoryEventStore>>,
     /// Callback when session is initialized.
     ///
     /// v1-ONLY: there is no `initialize` handshake on 2026-07-28.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub on_session_initialized: Option<SessionCallback>,
     /// Callback when session is closed.
     ///
@@ -1673,12 +1677,36 @@ impl StreamableHttpServer {
 /// different meaning ("no such endpoint" rather than "this endpoint does not
 /// take this verb") — see `tests/v2_verbs_405_on_severed_build.rs`, which
 /// asserts the distinction on the severed build.
+/// # The `Allow` header
+///
+/// RFC 9110 section 15.5.6 is a MUST: "The origin server MUST generate an
+/// `Allow` header field in a 405 response containing a list of the target
+/// resource's currently supported methods." Intermediaries and generic HTTP
+/// clients rely on it, and a `405` without it tells a caller only that it was
+/// wrong, never what to do instead. Consolidating both `405` sites into this one
+/// function is what made fixing it a single edit.
+///
+/// `POST, OPTIONS` is the honest list: `POST` is the MCP endpoint, and `OPTIONS`
+/// is answered by the CORS layer. `GET` and `DELETE` are deliberately absent —
+/// they are ROUTED (an unrouted verb would answer `404`, a different claim) but
+/// they are not SUPPORTED on `2026-07-28`, and `Allow` enumerates support, not
+/// routing.
+///
+/// This changes v1-compat wire bytes for the v2-REJECTION path only, which is a
+/// path no v1 client reaches: it fires only when the request opted into
+/// `2026-07-28`. `tests/v1_byte_identity_after_cut.rs` pins the v1
+/// session-lifecycle responses and does not pin this one — verified by running
+/// it after this change.
 pub(crate) fn method_not_allowed_for_verb(verb: &str) -> Response {
-    create_error_response(
+    let mut response = create_error_response(
         StatusCode::METHOD_NOT_ALLOWED,
         crate::types::protocol::error_codes::METHOD_NOT_FOUND,
         &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
-    )
+    );
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST, OPTIONS"));
+    response
 }
 
 /// Reject a v2 `GET` / `DELETE` with `405 Method Not Allowed`, or `None` to let

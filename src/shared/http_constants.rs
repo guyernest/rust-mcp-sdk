@@ -92,6 +92,7 @@ pub const MCP_NAME: &str = "mcp-name";
 ///
 /// Per-CONST gating only. Do NOT gate this module — see the module doc.
 #[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 pub const LAST_EVENT_ID: &str = "Last-Event-ID";
 
 /// HTTP Accept header name

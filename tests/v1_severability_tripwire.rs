@@ -326,11 +326,83 @@ const FORBIDDEN_OPERATIONS: &[&str] = &[
 ///
 /// Every check below is an ABSENCE check, and absence checks pass trivially over
 /// an empty string. A file that failed to read, was truncated, or was emptied by
-/// a bad merge would therefore report green while proving nothing. The twin is
-/// comfortably above this floor today.
+/// a bad merge would therefore report green while proving nothing.
 ///
-/// WHAT TO DO when this fires: restore the file. Never lower the floor.
-const MIN_STRIPPED_BYTES: usize = 200;
+/// # Why the floor is not a token value
+///
+/// It was 200 bytes, an order of magnitude below the twin's actual stripped
+/// size — so a twin gutted to a TENTH of itself still cleared it, and the floor
+/// only caught a file that was empty rather than one that had been hollowed out.
+/// It now sits at roughly 70% of the twin's current stripped length, which is
+/// the level at which "several functions silently disappeared" fails rather than
+/// merely "the file is gone" (WR-09).
+///
+/// WHAT TO DO when this fires: restore the file. If the twin legitimately shrank
+/// because the REAL half shrank too, lower this in the SAME commit as that
+/// deletion and say so in the message — never on its own.
+const MIN_STRIPPED_BYTES: usize = 2400;
+
+/// [`declaration_name`] recognises every item kind, including the ones a twin
+/// could once have grown invisibly.
+///
+/// Self-test with COUNTER-EXAMPLES, in the spirit of the rest of this file: a
+/// reader is only trustworthy if it is shown to answer `None` where it should.
+/// Without the negative rows a `declaration_name` that returned `Some` for every
+/// line would pass the positive rows and make
+/// `the_v1_null_twin_declares_nothing_the_real_module_does_not` compare noise.
+#[test]
+fn the_declaration_reader_recognises_every_item_kind() {
+    let positive = [
+        ("pub(crate) const fn is_x(a: u8) -> bool {", "is_x"),
+        ("pub(crate) async fn handle(a: u8) {", "handle"),
+        ("    unsafe fn raw() {", "raw"),
+        ("pub(in crate::server) fn scoped() {", "scoped"),
+        ("pub struct V1State {", "V1State"),
+        ("enum SessionState {", "SessionState"),
+        ("pub(crate) union Bits {", "Bits"),
+        ("trait EventStore {", "EventStore"),
+        (
+            "pub(crate) type EventStoreHandle = Arc<dyn EventStore>;",
+            "EventStoreHandle",
+        ),
+        ("const MAX: usize = 4;", "MAX"),
+        (
+            "static SESSIONS: OnceLock<Map> = OnceLock::new();",
+            "SESSIONS",
+        ),
+        ("pub(crate) mod inner {", "inner"),
+        ("impl V1State {", "V1State"),
+        ("macro_rules! session {", "session"),
+    ];
+    for (line, expected) in positive {
+        assert_eq!(
+            declaration_name(line).as_deref(),
+            Some(expected),
+            "FAILURE MODE: `declaration_name` did not read `{expected}` out of `{line}`.\n\
+             CONSEQUENCE: an item kind the reader cannot see is an item kind the twin can grow \
+             INVISIBLY — `the_v1_null_twin_declares_nothing_the_real_module_does_not` would go \
+             green over a twin holding `static SESSIONS: OnceLock<…>`.\n\
+             WHAT TO DO: add the keyword to ITEM_KEYWORDS, or fix the modifier stripping."
+        );
+    }
+
+    for line in [
+        "    if is_initialize_request(msg) {",
+        "        Ok(None)",
+        "let x = fn_like_name();",
+        "",
+        "// fn commented_out() {",
+    ] {
+        assert_eq!(
+            declaration_name(line).as_deref(),
+            None,
+            "FAILURE MODE: `declaration_name` invented a declaration in `{line}`.\n\
+             CONSEQUENCE: a reader that answers `Some` for ordinary code compares NOISE, so the \
+             inclusion check it feeds proves nothing.\n\
+             WHAT TO DO: tighten the keyword match; never loosen the counter-examples."
+        );
+    }
+}
 
 /// The crate root, so no check in this file names an absolute path.
 fn repo_root() -> std::path::PathBuf {
@@ -506,29 +578,78 @@ fn strip_comments(rust: &str) -> String {
     out
 }
 
-/// The `fn` / `struct` / `type` / `const` NAME a stripped line declares.
+/// Every item keyword `declaration_name` recognises.
+///
+/// # Why this list is longer than it looks like it needs to be
+///
+/// It used to hold five entries — `const fn`, `fn`, `struct`, `type`, `const` —
+/// which meant a twin that added `static SESSIONS: OnceLock<…>`, `enum
+/// SessionState`, a `trait`, a `mod`, a `union`, an `impl` block or a
+/// `macro_rules!` was INVISIBLE to
+/// `the_v1_null_twin_declares_nothing_the_real_module_does_not`. That test bills
+/// itself as "the derived replacement for an enumerated blacklist … it catches
+/// invented machinery without needing a list that goes stale", and it was
+/// resting on exactly such a list — in the file whose own prose condemns the
+/// pattern. Phase 117's code review caught it (WR-09).
+///
+/// It is still an enumerated list, because Rust's item grammar is finite and a
+/// parser is the wrong tool here. What changed is that it is now the WHOLE
+/// grammar rather than the subset the pair happened to use: every item kind that
+/// can introduce state or machinery is named, so a twin cannot grow one silently.
+///
+/// ORDER MATTERS. Longest-prefix first within a family, so `const fn ` resolves
+/// as a function rather than as a constant named `fn`.
+const ITEM_KEYWORDS: &[&str] = &[
+    "const fn ",
+    "async fn ",
+    "unsafe fn ",
+    "fn ",
+    "struct ",
+    "enum ",
+    "union ",
+    "trait ",
+    "type ",
+    "const ",
+    "static ",
+    "mod ",
+    "impl ",
+    "macro_rules!",
+];
+
+/// The item NAME a stripped line declares, for every kind in [`ITEM_KEYWORDS`].
 ///
 /// Line-oriented on purpose: both halves of the pair are small, hand-written
 /// files whose declarations start their own line. Visibility and the modifiers
 /// that may precede the keyword are stripped first, and `const fn` is resolved
 /// as a function rather than as a constant.
+///
+/// `pub(in path)` is handled as well as bare `pub(crate)`/`pub(super)`/`pub`:
+/// before Phase 117's fix pass a `pub(in crate::server) fn` yielded `None` and
+/// slipped past every name-based check.
 fn declaration_name(line: &str) -> Option<String> {
     let mut rest = line.trim();
-    for vis in ["pub(crate) ", "pub(super) ", "pub(self) ", "pub "] {
-        if let Some(stripped) = rest.strip_prefix(vis) {
-            rest = stripped.trim_start();
-            break;
+    // `pub(in some::path)` is variable-length, so it is matched structurally
+    // rather than by a fixed prefix list.
+    if let Some(after) = rest.strip_prefix("pub(") {
+        if let Some(close) = after.find(')') {
+            rest = after[close + 1..].trim_start();
         }
+    } else if let Some(stripped) = rest.strip_prefix("pub ") {
+        rest = stripped.trim_start();
     }
-    while let Some(stripped) = ["async ", "unsafe ", "extern "]
+    while let Some(stripped) = ["async ", "unsafe ", "extern ", "default "]
         .iter()
         .find_map(|m| rest.strip_prefix(m))
     {
         rest = stripped.trim_start();
     }
-    let tail = ["const fn ", "fn ", "struct ", "type ", "const "]
+    // `trim_start`: `macro_rules!` carries no trailing space in the keyword table
+    // (the name may follow it immediately or after whitespace), and a leading
+    // space would make the `take_while` below yield an empty name.
+    let tail = ITEM_KEYWORDS
         .iter()
-        .find_map(|kw| rest.strip_prefix(kw))?;
+        .find_map(|kw| rest.strip_prefix(kw))?
+        .trim_start();
     let name: String = tail
         .chars()
         .take_while(|c| c.is_alphanumeric() || *c == '_')
@@ -817,19 +938,74 @@ struct AttrClass {
     governs_next_item: bool,
 }
 
+/// Collapse every run of whitespace to a single space.
+///
+/// The predicate matches below are `contains` over fixed strings with exactly
+/// one space around each `=`, so a `rustfmt`-wrapped or hand-written
+/// `#[cfg(not(feature =\n    "v1-compat"))]` classified as UNGATED (IN-02). The
+/// failure direction was safe — a false POSITIVE finding rather than a missed
+/// one — but it is a sharp edge on a file whose whole job is to be believed, and
+/// one normalising pass removes it.
+fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Classify one complete attribute's text.
 fn classify_attribute(text: &str) -> AttrClass {
+    // Whitespace-normalised FIRST, so a line-wrapped predicate reads the same as
+    // a single-line one.
+    let flat = normalize_whitespace(text);
     // A `not(feature = "v1-compat")` mention is the NULL-TWIN half. Remove those
     // first so only a POSITIVE mention counts as a gate — otherwise the twin,
     // whose whole point is that it carries no v1 surface, would be treated as a
     // place v1 surface is allowed to live.
-    let positive = text.replace("not(feature = \"v1-compat\")", "");
+    let positive = flat.replace("not(feature = \"v1-compat\")", "");
     let trimmed = text.trim_start();
     AttrClass {
         v1: positive.contains("feature = \"v1-compat\""),
-        test: text.contains("cfg(test)") || text.contains("cfg(all(test"),
+        test: flat.contains("cfg(test)") || flat.contains("cfg(all(test"),
         governs_next_item: trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg("),
     }
+}
+
+/// A LINE-WRAPPED feature predicate classifies the same as a single-line one.
+///
+/// The counter-example is the point: before Phase 117's fix pass the two spellings
+/// below disagreed, so a `rustfmt` pass over a long `#[cfg]` could silently flip a
+/// gated region to ungated in the reader's eyes and produce a bogus finding.
+#[test]
+fn the_attribute_reader_is_insensitive_to_line_wrapping() {
+    let single = classify_attribute("#[cfg(feature = \"v1-compat\")]");
+    let wrapped = classify_attribute("#[cfg(feature =\n    \"v1-compat\")]");
+    assert!(
+        single.v1 && wrapped.v1,
+        "FAILURE MODE: a line-wrapped `#[cfg(feature = \"v1-compat\")]` did not classify as \
+         gated (single={}, wrapped={}).\n\
+         CONSEQUENCE: `rustfmt` wrapping a long predicate would make the reader report a gated \
+         region as ungated — a finding with no defect behind it, in the file a reader trusts to \
+         tell them the difference.\n\
+         WHAT TO DO: fix `normalize_whitespace`; never special-case the spelling.",
+        single.v1,
+        wrapped.v1
+    );
+
+    let negated = classify_attribute("#[cfg(not(feature =\n    \"v1-compat\"))]");
+    assert!(
+        !negated.v1,
+        "FAILURE MODE: a line-wrapped `not(feature = \"v1-compat\")` classified as GATED.\n\
+         CONSEQUENCE: the null-twin half would be treated as a place v1 surface may live, which \
+         is the exact inversion this classifier exists to prevent.\n\
+         WHAT TO DO: the negative strip must run over the NORMALISED text, not the raw text."
+    );
+
+    let wrapped_test = classify_attribute("#[cfg(all(test,\n    feature = \"v1-compat\"))]");
+    assert!(
+        wrapped_test.test && wrapped_test.v1,
+        "FAILURE MODE: a wrapped `#[cfg(all(test, feature = \"v1-compat\"))]` lost its `test` or \
+         `v1` classification.\n\
+         WHAT TO DO: fix `normalize_whitespace`; the `cfg(all(test` match must read the \
+         normalised text."
+    );
 }
 
 /// Net `{` minus `}` on a line whose string and char literals are blanked.

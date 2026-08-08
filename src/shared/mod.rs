@@ -56,6 +56,7 @@ pub mod credential_store;
 // deliberately ungated — per-constant gating is plan 117-13's job — and
 // `src/shared/session.rs` is unmeasured and deliberately left alone.
 #[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 /// v1-only SSE resumability: the `Last-Event-ID` replay store and its tokens.
 pub mod event_store;
 /// Hardened HTTP plumbing for this crate's OAuth/OIDC surfaces: the streaming
@@ -156,6 +157,7 @@ pub use context::{ClientInfo, ContextPropagator, RequestContext};
 // as the `pub mod event_store;` declaration above — gating one without the other
 // is a compile break, not a warning.
 #[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 pub use event_store::{
     EventStore, EventStoreConfig, InMemoryEventStore, MessageDirection, ResumptionManager,
     ResumptionState, ResumptionToken, StoredEvent,

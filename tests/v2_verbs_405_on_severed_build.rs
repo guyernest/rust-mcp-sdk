@@ -80,6 +80,14 @@ const VERB_TIMEOUT: Duration = Duration::from_secs(10);
 /// The `405` every assertion in this file expects.
 const METHOD_NOT_ALLOWED: u16 = 405;
 
+/// The `Allow` value RFC 9110 §15.5.6 requires on every `405` this file provokes.
+///
+/// `GET` and `DELETE` are deliberately absent: they are ROUTED on both feature
+/// sets (an unrouted verb answers `404`, a different claim — see
+/// [`assert_refused_not_unrouted`]) but they are not SUPPORTED on `2026-07-28`,
+/// and `Allow` enumerates support rather than routing.
+const ALLOW: &str = "POST, OPTIONS";
+
 /// The `404` every assertion in this file explicitly REJECTS.
 ///
 /// A `404` here would not be a smaller version of the same answer; it would mean
@@ -139,6 +147,19 @@ fn assert_refused_not_unrouted(response: &Resp, verb: &str) {
          WHAT TO DO: restore the `.route(\"/\", {})` line in `build_mcp_router`; the verb must \
          stay routed on BOTH feature sets and be refused by its handler.",
         verb.to_lowercase()
+    );
+    assert_eq!(
+        response.allow.as_deref(),
+        Some(ALLOW),
+        "FAILURE MODE: the {verb} / refusal carried `Allow: {:?}`, not `{ALLOW}`.\n\
+         CONSEQUENCE: RFC 9110 §15.5.6 is a MUST — \"the origin server MUST generate an `Allow` \
+         header field in a 405 response containing a list of the target resource's currently \
+         supported methods\". Without it the refusal tells an intermediary or a generic HTTP \
+         client only that it was wrong, never what to do instead.\n\
+         WHAT TO DO: `method_not_allowed_for_verb` in `src/server/streamable_http_server.rs` is \
+         THE single 405 constructor for both the v2 rejection head and the severed-build twin \
+         bodies. Fix it there, once.",
+        response.allow
     );
     assert_eq!(
         response.status, METHOD_NOT_ALLOWED,

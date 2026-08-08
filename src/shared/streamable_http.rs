@@ -9,6 +9,7 @@ use crate::shared::http_constants::{
 // module in plan 117-12 — so on a `full-v2` build nothing in `pmcp` names
 // `Last-Event-ID` at all.
 #[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 use crate::shared::http_constants::LAST_EVENT_ID;
 use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
@@ -86,6 +87,7 @@ impl SendOptions {
     /// The `v1-compat` half: whatever the caller put in
     /// [`Self::resumption_token`].
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     fn resumption_cursor(&self) -> Option<String> {
         self.resumption_token.clone()
     }
@@ -167,6 +169,7 @@ pub struct StreamableHttpTransportConfig {
     /// what makes "the severed client holds no session identifier to echo"
     /// (T-117-52) a property of the TYPE rather than of a runtime branch.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub session_id: Option<String>,
     /// Enable JSON responses instead of SSE (for simple request/response)
     pub enable_json_response: bool,
@@ -298,6 +301,7 @@ impl StreamableHttpTransportConfigBuilder {
             session_id: None,
             enable_json_response: false,
             #[cfg(feature = "v1-compat")]
+            #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
             on_resumption_token: None,
             http_middleware_chain: None,
         }
@@ -320,6 +324,7 @@ impl StreamableHttpTransportConfigBuilder {
     /// v1-ONLY (`v1-compat`): MCP `2026-07-28` has no session to set, so this
     /// method does not exist on a `full-v2` build.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
@@ -730,6 +735,7 @@ impl StreamableHttpTransport {
     /// cursor. On a `full-v2` build nothing in `pmcp` names `Last-Event-ID` at
     /// all — which is what makes T-117-53 a property of the compiled crate.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     fn apply_resumption_header(
         request: &mut Request<Full<Bytes>>,
         resumption_token: Option<&str>,
@@ -753,6 +759,7 @@ impl StreamableHttpTransport {
     /// v1-ONLY (`v1-compat`): a `full-v2` build stores no session id, so there
     /// is nothing to get and this accessor does not exist.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub fn session_id(&self) -> Option<String> {
         self.config.read().session_id.clone()
     }
@@ -768,9 +775,22 @@ impl StreamableHttpTransport {
     /// The `Mcp-Session-Id` value an outgoing request should carry, if any.
     ///
     /// The `v1-compat` half: the stored session id.
+    ///
+    /// # Why this takes `&StreamableHttpTransportConfig`, not `&self`
+    ///
+    /// So the caller can read it INSIDE the lock scope it already holds. The
+    /// first version of this pair took `&self` and acquired its own
+    /// `self.config.read()` after the caller's guard had dropped, which silently
+    /// turned one atomic snapshot of `extra_headers` / `auth_provider` /
+    /// `http_middleware_chain` / `session_id` into two — a concurrent
+    /// [`Self::set_session_id`] landing between the acquisitions would have built
+    /// a request from a MIX of two config states. Benign while only `session_id`
+    /// moved, and a real tear on a struct this crate explicitly documents as
+    /// runtime-mutable. Taking the guard's `&Config` makes a second acquisition
+    /// unrepresentable.
     #[cfg(feature = "v1-compat")]
-    fn outbound_session(&self) -> Option<String> {
-        self.config.read().session_id.clone()
+    fn outbound_session_from(config: &StreamableHttpTransportConfig) -> Option<String> {
+        config.session_id.clone()
     }
 
     /// The null twin: a `full-v2` build never stores a session id, so the
@@ -780,8 +800,7 @@ impl StreamableHttpTransport {
     /// on this build. Answering here is what keeps the request-building
     /// pipeline free of a `#[cfg]` at its call site.
     #[cfg(not(feature = "v1-compat"))]
-    #[allow(clippy::unused_self)]
-    const fn outbound_session(&self) -> Option<String> {
+    const fn outbound_session_from(_config: &StreamableHttpTransportConfig) -> Option<String> {
         None
     }
 
@@ -1061,19 +1080,23 @@ impl StreamableHttpTransport {
     ) -> Result<Request<Full<Bytes>>> {
         use crate::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
 
-        // Extract config data
-        let (extra_headers, auth_provider, middleware_chain) = {
+        // Extract config data — ONE snapshot, under ONE lock acquisition.
+        //
+        // `outbound_session` is read through the paired accessor rather than off
+        // the config directly (on a `full-v2` build there is no field to read and
+        // the twin answers the constant `None`), but INSIDE this scope: a second
+        // acquisition after the guard dropped would let a concurrent
+        // `set_session_id` produce a request built from two different config
+        // states. See `outbound_session_from`.
+        let (extra_headers, auth_provider, middleware_chain, outbound_session) = {
             let config = self.config.read();
             (
                 config.extra_headers.clone(),
                 config.auth_provider.clone(),
                 config.http_middleware_chain.clone(),
+                Self::outbound_session_from(&config),
             )
         };
-        // Read the outgoing session through the paired accessor rather than off
-        // the config: on a `full-v2` build there is no field to read and the
-        // twin answers the constant `None`.
-        let outbound_session = self.outbound_session();
 
         // Start building request with hyper
         let mut request_builder = Request::builder().method(method.clone()).uri(url);
