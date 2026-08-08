@@ -100,3 +100,46 @@ the two links, or record the exclusion deliberately.
   protocol versions are cross-checked against the pmcp constants by
   `the_protocol_versions_match_the_sdk_constants` — but any future YAML schema in this repo that
   relies on type strictness for validation should not.
+
+## D-117-05-A — the `v1-severance` gate's RUNTIME blocking semantics are unobserved
+
+**Found during:** 117-05 Task 3 (the plan's own CORRECTION-116-DOC adversarial check)
+**Status:** Open — DEFERRED by owner decision (Option B of the task's two options).
+**Owner:** Guy Ernest (guy@mlguy.us)
+
+**The exact unproved claim, stated as one sentence:** *GitHub Actions evaluates a failed `needs` job
+as a failed `gate` conclusion (rather than skipped/pending).*
+
+**What IS proved, and by what.** `tests/ci_severance_gate_wiring.rs` is the standing evidence in its
+place. It parses `.github/workflows/ci.yml` structurally with `serde_yaml` and asserts the three
+required wirings and their mutual consistency: `v1-severance` in `gate.needs`; an `env:` variable
+bound to `needs.v1-severance.result`; and that same variable name evaluated inside the step's `run:`
+script. It carries a LIVE negative control — the non-blocking `feature-flags` job, which is present
+in `ci.yml` and absent from `gate.needs` — so the tripwire is demonstrably able to tell a blocking
+job from a non-blocking one rather than always returning true. Both removal controls were EXECUTED
+and reverted, each producing its targeted failure message.
+
+**What is NOT proved.** Everything above is a statement about the workflow FILE. Whether GitHub's
+runtime turns a red `needs` job into a red `gate` conclusion — as opposed to leaving `gate` skipped
+or pending — was not observed. Per CORRECTION-116-DOC, that gap is stated rather than smoothed over:
+no artifact of 117-05 claims the gate "blocks merge" as proven fact.
+
+**Why Option A was unavailable at execution time.** Option A is the plan's preferred branch *if a PR
+is already open for this phase*. At execution there was **no open PR for
+`fix/mcp-publisher-oidc-audience`** — the only open PRs on `paiml/rust-mcp-sdk` were seven dependabot
+PRs (#295, #304, #305, #306, #308, #309, #310). Executing A would therefore have required opening a
+PR and running a break-push / observe / revert-push cycle, both outside 117-05's scope (the plan
+forbids creating a branch, and the execution context forbids pushing or opening a PR).
+
+**What WOULD discharge this.** On the first real PR that carries this branch:
+1. Introduce a deliberate severance break — reference a `v1-compat`-gated symbol from ungated code.
+   Now that 117-06 has landed, `src/shared/event_store.rs` is the natural subject.
+2. Push. Confirm the `v1 Severance Gate` check turns red.
+3. Confirm the aggregate `gate` check ALSO reports failure — **not** "skipped" and not "pending".
+   This step is the whole point; the other two are setup.
+4. Revert the break, push, confirm both return green.
+5. Record verbatim: the `gate` conclusion string as GitHub reported it, the break commit SHA, and
+   the revert commit SHA.
+
+Until step 5 exists, the correct phrasing everywhere is "wired to block" / "wired into `gate` in all
+three required places", never "blocks merge".
