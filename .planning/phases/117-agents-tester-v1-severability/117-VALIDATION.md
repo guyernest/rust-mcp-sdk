@@ -66,12 +66,16 @@ created: 2026-08-07
 | 117-01 T2 | 117-01 | 1 | SMPL-01 | `v1-compat` is present in BOTH `default` and `full` | unit | `cargo test --test v1_severability_tripwire` | ❌ W0 | ⬜ pending |
 | 117-01 T1 / 117-05 T1 | 117-01, 117-05 | 1 | SMPL-01 / SMPL-02 | Crate compiles with the **real transport** and NO v1 layer | build | `RUSTFLAGS="-D warnings" cargo build -p pmcp --no-default-features --features full-v2` | ❌ W0 (new `ci.yml` job) | ⬜ pending |
 | 117-05 T2+T3 | 117-05 | 1 | SMPL-01 | The severance job is reachable from `gate.needs` and actually blocks | **manual-only** | Scratch PR that breaks `full-v2`; assert `gate` reports failure | ❌ manual by necessity | ⬜ pending |
-| 117-06 T3 | 117-06 | 2 | SMPL-02 | The `full-v2` build contains no session/SSE-resumability code | unit (source tripwire) | `cargo test --test v1_severability_tripwire` — assert the v1 module file carries no `sessions`/`event_store`/`Last-Event-ID` token, **with a non-vacuity guard on file length** | ❌ W0 | ⬜ pending |
+| 117-06 T3 | 117-06 | 2 | SMPL-02 | The `full-v2` build contains no session/SSE-resumability code | unit (source tripwire) | `cargo test --test v1_severability_tripwire` — assert **SEMANTICALLY**: `V1State` is a unit struct, no state-bearing type (`HashMap`/`RwLock`/`EventStoreHandle`) is held, no state/header **operation** is performed, and the twin declares nothing `v1_session.rs` does not (derived, not enumerated). **A substring blacklist is forbidden** — four of the eight original tokens (`sessions`, `event_store`, `EventStore`, `sse_streams`) are provably unsatisfiable against identifiers 117-09 requires. Guarded by a non-vacuity floor plus one POSITIVE control (`sessions_active_for` must be ACCEPTED) | ❌ W0 | ⬜ pending |
 | 117-02 T1+T2 (capture) / 117-09,12,13 (assert) | 117-02, 117-09, 117-12, 117-13 | 2 | SMPL-02 | The v1 wire is **byte-identical** across the cut | integration (golden) | `cargo test --test v1_byte_identity_after_cut --features "full"` | ❌ W0 — **capture goldens BEFORE the cut** | ⬜ pending |
 | 117-09 T2 | 117-09 | 2 | SMPL-02 | `sessions_active` / `resumability_active` truth tables survive the move | unit + property | `cargo test --lib --features "full" sessions_active` / `resumability_active` | ✅ `streamable_http_server.rs:4568,4585,5879,5894` | ⬜ pending |
 | 117-12 T2 | 117-12 | 2 | SMPL-02 | v2 exchanges write zero event-store traffic and replay nothing | integration (spy) | `cargo test --lib --features "full" spy_records` | ✅ `streamable_http_server.rs:5946,5972,5997,6015` | ⬜ pending |
 | 117-09 T1 / 117-12 T2 | 117-09, 117-12 | 2 | SMPL-02 | A v2 response is never routed into a session SSE stream | integration | `cargo test --lib --features "full" v2_response_is_never_routed` | ✅ `streamable_http_server.rs:6060` | ⬜ pending |
-| 117-01 T3 / 117-13 T3 | 117-01, 117-13 | 1 | SMPL-01 | The sunset-policy rustdoc compiles warning-free | doc | `make doc-check` (after adding `v1-compat` to `Makefile:429`) | ✅ target exists; ❌ feature-list edit | ⬜ pending |
+| 117-01 T3 / 117-13 T3 | 117-01, 117-13 | 1 / 6 | SMPL-01 | The sunset-policy rustdoc compiles warning-free | doc | `make doc-check` (after adding `v1-compat` to `Makefile:429`) | ✅ target exists; ❌ feature-list edit | ⬜ pending |
+| 117-13 T2 | 117-13 | 6 | SMPL-02 | GET and DELETE return **405** on the severed build — a RUNTIME claim proven by a RUN, not by a build | integration (severed build) | `cargo test --test v2_verbs_405_on_severed_build --no-default-features --features full-v2` — a `0 tests` result is a FAILURE; 404-vs-405 negative control discriminates routed-and-405 from unrouted | ❌ W0 | ⬜ pending |
+| 117-14 T1 | 117-14 | 5 | SMPL-01 / SMPL-02 | The client's SSE-resumability surface (`resumption_token`, `on_resumption_token`, `Last-Event-ID` writer) is gated; A4 measured | build + source | `RUSTFLAGS="-D warnings" cargo build -p pmcp --no-default-features --features full-v2` && `cargo build -p pmcp --no-default-features --features "streamable-http"` | ❌ W0 — 55 ungated v1 sites measured in `src/shared/streamable_http.rs` | ⬜ pending |
+| 117-14 T2 | 117-14 | 5 | SMPL-01 / SMPL-02 | The client session lifecycle (`session_id` capture, DELETE teardown) is gated; `Client::initialize` severability MEASURED not assumed | build + source | `RUSTFLAGS="-D warnings" cargo build -p pmcp --no-default-features --features full-v2` && `cargo test --lib --features "full"` | ❌ W0 — `streamable_http.rs:946` capture, `:1412-1428` teardown | ⬜ pending |
+| 117-14 T3 | 117-14 | 5 | SMPL-01 | The client inventory is **derived** (not enumerated) and proven on the severed build at RUNTIME | unit (tripwire) + integration (severed build) | `cargo test --test v1_severability_tripwire` && `cargo test --test v2_client_carries_no_session_on_severed_build --no-default-features --features full-v2` | ❌ W0 | ⬜ pending |
 | 117-04 T2 / 117-07 T1 | 117-04, 117-07 | 3 | CLNT-03 | Agent connects to a v2 server end-to-end (tools/list → tools/call → task poll → terminal) | integration (live socket) | `cargo test --test agent_v2_e2e --features "full"` | ❌ W0 | ⬜ pending |
 | 117-04 T2 / 117-07 T1 | 117-04, 117-07 | 3 | CLNT-03 | Agent **falls back to v1** when the server answers-and-rejects v2 | integration (live socket) | `cargo test --test agent_v2_e2e --features "full" fallback` | ❌ W0 — **the D-07 negative case; must not be skipped** | ⬜ pending |
 | 117-04 T2 / 117-07 T1 | 117-04, 117-07 | 3 | CLNT-03 | An unreachable host **propagates** rather than reporting era V1 | integration | `cargo test --test agent_v2_e2e --features "full" unreachable` | ❌ W0 | ⬜ pending |
@@ -131,13 +135,15 @@ created: 2026-08-07
 
 ## Validation Sign-Off
 
-- [x] All tasks have `<automated>` verify or a Wave 0 dependency — 33 tasks, 33 `<automated>` blocks
+- [x] All tasks have `<automated>` verify or a Wave 0 dependency — 36 tasks, 37 `<automated>` blocks (every task carries one; 117-05 adds a 4th at plan level for the manual branch-protection check)
 - [x] Sampling continuity: no 3 consecutive tasks without automated verify — every task has one
 - [x] Wave 0 covers all ❌ MISSING references above — all new files are created in Wave 1/2 plans before the plan that asserts against them
 - [x] No watch-mode flags — grepped, zero
 - [x] Any nextest command uses `binary(...)`, never `test(/.../)` — zero nextest commands appear in any plan; all verify blocks use plain `cargo test`, which is what `make quality-gate` runs
-- [x] Severance build reported **separately** from `make quality-gate` every wave — stated in the `<verification>` block of 117-01, 117-06, 117-09, 117-10, 117-12 and 117-13
+- [x] Severance build reported **separately** from `make quality-gate` every wave — stated in the `<verification>` block of 117-01, 117-06, 117-09, 117-10, 117-12, 117-13 and 117-14
 - [x] Feedback latency < 30s per task — except the three live-socket suites (117-02, 117-04, 117-11), each of which carries an explicit runtime bound as an acceptance criterion
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** plans written 2026-08-07 — 13 plans, 5 waves; every row above maps to a real task
+**Approval:** plans written 2026-08-07 — **14 plans, 6 waves** (revised 2026-08-07 from cross-AI
+review, commit `d08aad05`: plan 117-14 added for client-side severance at wave 5; 117-13 moved to
+wave 6); every row above maps to a real task
