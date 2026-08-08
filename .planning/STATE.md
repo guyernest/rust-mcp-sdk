@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 117-05-PLAN.md
-last_updated: "2026-08-08T13:42:03.368Z"
+stopped_at: Completed 117-09-PLAN.md
+last_updated: "2026-08-08T15:18:57.929Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 382
+  completed_plans: 383
   percent: 86
 ---
 
@@ -26,10 +26,57 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 9 of 14
-Plans complete: 8 of 14 (117-01..117-08)
-Remaining: 117-09..117-14
+Plan: 10 of 14
+Plans complete: 9 of 14 (117-01..117-09)
+Remaining: 117-10..117-14
 Status: Ready to execute
+
+**117-09 HAS LANDED — SMPL-02 IS NOW STRUCTURAL AND IS BOOKED `[x]`.** Commits `9044eb70` +
+`64856c15` (+673/−310 across 3 files) + `2c05d2bd` / `d57d4672` (summary). `ServerState` went
+**6 fields → 4**: `sse_streams`, `sessions` and `event_store` collapsed behind one
+`v1: v1::V1State`, which is a **unit struct on `full-v2`** — so the v2 transport provably
+allocates no session map, registers no SSE stream and can never hand out an event store, as a
+property of the TYPE rather than of a runtime branch. All seven era chokepoints moved into the
+pair with **parameter types, arity and return types identical 7/7**, `era` included.
+`grep -c '#[cfg(feature = "v1-compat")]'` in the 6,400-line transport is **0** — the paired
+module did exactly what D-03 rejected in-place `#[cfg]` blocks for.
+
+**⚠ TWO OF THE PLAN'S OWN INSTRUCTIONS WERE UNSATISFIABLE AS WRITTEN, AND THE BUILD SAID SO
+RATHER THAN A REVIEWER.** (1) The plan's `state: &ServerState` first parameter for the state
+operations makes every null twin ignore its argument, so nothing reads `ServerState::v1` on
+`full-v2` and the severance build fails `-D warnings` with `` field `v1` is never read ``. That
+was MEASURED — it was the first severance build after the collapse. The operations now take
+`&V1State` (call sites pass `&state.v1`); the seven chokepoints keep `&ServerState`. The
+alternative was a dead-code allow on the seam field, i.e. blunting the exact lint 117-05's CI job
+is built around. (2) The plan says to move `EventStoreHandle` into the pair; doing so forces the
+NULL TWIN to declare `Arc<dyn EventStore>`, a literal in the tripwire's `FORBIDDEN_STATE_TYPES`.
+**The tripwire is right and was NOT modified** — the alias stays in the transport and both halves
+carry it in SIGNATURES via `use super::EventStoreHandle`, which is what that test's own comments
+prescribe.
+
+**⚠ THE PLAN'S THREE-BUCKET PREDICTION FOR THE `sessions` READS WAS WRONG FOR THIS COMMIT.** It
+said the nine remaining reads "need NO accessor at all — they follow their function" into
+117-12/13. Their functions are still in the transport at this commit and `full-v2` must compile,
+so **all ten** got behavioural `v1::` operations now; they fold into the moved bodies later.
+Re-derived access counts vs the research's measured 5/10/1: **4** `sse_streams` CODE sites (the
+5th was prose), **10** `sessions` sites (matches), and **2** production `event_store` readers
+(`resumability_active` reads it too, one line above `resumability_store`) plus **1** test writer
+the research did not list.
+
+**The 113-08 SEVERABILITY comment says what is TRUE, not what the plan drafted.** The plan's text
+would have claimed the trait, store, `LAST_EVENT_ID` and replay path are already gated; measured
+at HEAD, the only `#[cfg(feature = "v1-compat")]` gates in `src/` remain 117-06's two in
+`src/shared/mod.rs`. Those four items are 117-12's and 117-13's subject.
+
+**Gate results, all run directly rather than inferred:** severance build exit **0** with
+`grep -c 'warning:'` = **0**; `cargo test --lib --features full` **1880 = 1880** EXACTLY before
+and after (a drop would mean a silently removed test); `v1_byte_identity_after_cut --features
+full` **9/9** (without the feature flag it reports `0 passed` and proves nothing);
+`v1_severability_tripwire` **9/9**; `make lint`, `make doc-check`, `make quality-gate` all exit
+**0**; PMAT `--max-cognitive 25` **0 violations** repo-wide, unchanged. Two more instances of the
+carry-forward hazards: `cargo fmt` reflowed a field-path chain that a single-line rewrite missed
+(the build caught it), and the `allow(dead_code)` acceptance grep briefly matched my own doc
+comment explaining why the seam field does not carry one.
 
 **116-15 HAS LANDED — PHASE 116 IS COMPLETE AND AUTH-01/02/03 ARE BOOKED `[x]`.** Commits
 `a334d104` (fix) + `37638653` + `1afd7f80` + `ac9de6d2` + `b0b92cfd` + `0e820dfb`
@@ -1017,6 +1064,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 117]: 117-05: Option A (dedicated v1-severance CI job) over folding the severance build into quality-gate — isolated cache key and a failure message that names the exact cause
 - [Phase 117]: 117-05: serde_yaml (declared root dev-dependency) over an interpreter-based YAML parser — a BLOCKING gate must not rest on undeclared PyYAML that merely happens to exist on a runner (T-117-SC2)
 - [Phase 117]: 117-05: adversarial gate-blocking check DEFERRED as D-117-05-A (owner Guy Ernest) — no PR was open, so runtime blocking semantics stay unobserved; phrasing is 'wired to block', never 'blocks merge'
+- [Phase 117]: 117-09: v1 state operations take `&V1State`, NOT `&ServerState` — with `&ServerState` every null twin ignores its argument, nothing reads `ServerState::v1` on `full-v2`, and the severance build fails `-D warnings` with `field \`v1\` is never read`. The only alternative was a dead-code allow on the seam field, which would blunt the exact lint 117-05's CI severance job is built around. The seven era chokepoints keep `&ServerState` unchanged (D-11 / Pitfall 2).
+- [Phase 117]: 117-09: `EventStoreHandle` stays in the transport rather than moving into the v1 pair — the null twin declaring it would put the literal `Arc<dyn EventStore` into `v1_session_off.rs`, which the tripwire's FORBIDDEN_STATE_TYPES rejects BY DESIGN. Both halves carry it in SIGNATURES via `use super::EventStoreHandle`; neither declares it. The tripwire is right and was not modified.
+- [Phase 117]: 117-09: the 113-08 SEVERABILITY comment records what is TRUE at this commit — era decisions and ALL v1 session/SSE/resumability STATE are gated structurally via a zero-sized twin, while the EventStore trait, InMemoryEventStore, LAST_EVENT_ID and the replay path are still compiled on both feature sets and are 117-12/117-13's subject. The plan's proposed text would have claimed gating this plan does not perform.
+- [Phase 117]: 117-09: every remaining `sessions`/`sse_streams` read got a behavioural `v1::` operation NOW rather than following its function in 117-12/13 — those functions are still in the transport at this commit and the `full-v2` build must compile. Re-derived counts: 4 sse_streams code sites (research said 5, one was prose), 10 sessions sites (matches), 2 event_store production readers + 1 test writer (research said 1).
 
 ### Pending Todos
 
@@ -1071,9 +1122,9 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T13:41:58.827Z
-Stopped at: Completed 117-05-PLAN.md
-Resume file: .planning/phases/117-agents-tester-v1-severability/117-09-PLAN.md
+Last session: 2026-08-08T15:18:35.855Z
+Stopped at: Completed 117-09-PLAN.md
+Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
 
@@ -1199,3 +1250,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P07 | 95min | 3 tasks | 7 files |
 | Phase 117 P08 | 82 | 3 tasks | 6 files |
 | Phase 117 P05 | 95min | 3 tasks | 4 files |
+| Phase 117 P09 | 74 | 2 tasks | 3 files |
