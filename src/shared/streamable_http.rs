@@ -108,9 +108,9 @@ impl SendOptions {
 /// # Examples
 ///
 /// Built through [`StreamableHttpTransportConfigBuilder`] rather than through a
-/// struct literal, because `on_resumption_token` exists only behind
-/// `v1-compat`: a literal naming it does not compile on a `full-v2` build,
-/// while the builder compiles on both.
+/// struct literal, because two of this struct's fields (`session_id`,
+/// `on_resumption_token`) exist only behind `v1-compat`: a literal naming them
+/// does not compile on a `full-v2` build, while the builder compiles on both.
 ///
 /// ```rust
 /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
@@ -133,6 +133,25 @@ impl SendOptions {
 /// assert!(config.enable_json_response);
 /// assert_eq!(config.extra_headers.len(), 1);
 /// ```
+#[cfg_attr(
+    feature = "v1-compat",
+    doc = r#"
+A session-bearing configuration is v1-only (MCP `2025-11-25`), so this example
+compiles only when `v1-compat` is on:
+
+```rust
+use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+use url::Url;
+
+let config = StreamableHttpTransportConfigBuilder::new(
+    Url::parse("http://localhost:8080").unwrap(),
+)
+.with_session_id("session-123")
+.build();
+assert_eq!(config.session_id.as_deref(), Some("session-123"));
+```
+"#
+)]
 #[derive(Clone)]
 pub struct StreamableHttpTransportConfig {
     /// The HTTP endpoint URL
@@ -141,7 +160,13 @@ pub struct StreamableHttpTransportConfig {
     pub extra_headers: Vec<(String, String)>,
     /// Optional authentication provider
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
-    /// Optional session ID (for stateful operation)
+    /// Optional session ID (for stateful operation).
+    ///
+    /// v1-ONLY (`v1-compat`). MCP `2026-07-28` has no session at all, so a
+    /// `full-v2` build stores none and this field does not exist — which is
+    /// what makes "the severed client holds no session identifier to echo"
+    /// (T-117-52) a property of the TYPE rather than of a runtime branch.
+    #[cfg(feature = "v1-compat")]
     pub session_id: Option<String>,
     /// Enable JSON responses instead of SSE (for simple request/response)
     pub enable_json_response: bool,
@@ -164,7 +189,8 @@ impl StreamableHttpTransportConfig {
     /// `#[cfg]` wedged into the middle of a method-call chain.
     #[cfg(feature = "v1-compat")]
     fn debug_v1_fields(&self, out: &mut std::fmt::DebugStruct<'_, '_>) {
-        out.field("on_resumption_token", &self.on_resumption_token.is_some());
+        out.field("session_id", &self.session_id)
+            .field("on_resumption_token", &self.on_resumption_token.is_some());
     }
 
     /// The null twin: a `full-v2` config carries no v1 fields to render.
@@ -218,6 +244,8 @@ pub struct StreamableHttpTransportConfigBuilder {
     url: Url,
     extra_headers: Vec<(String, String)>,
     auth_provider: Option<Arc<dyn AuthProvider>>,
+    /// v1-ONLY (`v1-compat`) — mirrors `StreamableHttpTransportConfig::session_id`.
+    #[cfg(feature = "v1-compat")]
     session_id: Option<String>,
     enable_json_response: bool,
     /// v1-ONLY (`v1-compat`) — mirrors
@@ -233,7 +261,8 @@ impl StreamableHttpTransportConfigBuilder {
     /// `StreamableHttpTransportConfig::debug_v1_fields`.
     #[cfg(feature = "v1-compat")]
     fn debug_v1_fields(&self, out: &mut std::fmt::DebugStruct<'_, '_>) {
-        out.field("on_resumption_token", &self.on_resumption_token.is_some());
+        out.field("session_id", &self.session_id)
+            .field("on_resumption_token", &self.on_resumption_token.is_some());
     }
 
     /// The null twin: a `full-v2` builder carries no v1 fields to render.
@@ -265,6 +294,7 @@ impl StreamableHttpTransportConfigBuilder {
             url,
             extra_headers: Vec::new(),
             auth_provider: None,
+            #[cfg(feature = "v1-compat")]
             session_id: None,
             enable_json_response: false,
             #[cfg(feature = "v1-compat")]
@@ -286,6 +316,10 @@ impl StreamableHttpTransportConfigBuilder {
     }
 
     /// Set the session ID for stateful operation.
+    ///
+    /// v1-ONLY (`v1-compat`): MCP `2026-07-28` has no session to set, so this
+    /// method does not exist on a `full-v2` build.
+    #[cfg(feature = "v1-compat")]
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
@@ -351,6 +385,7 @@ impl StreamableHttpTransportConfigBuilder {
             url: self.url,
             extra_headers: self.extra_headers,
             auth_provider: self.auth_provider,
+            #[cfg(feature = "v1-compat")]
             session_id: self.session_id,
             enable_json_response: self.enable_json_response,
             #[cfg(feature = "v1-compat")]
@@ -684,12 +719,16 @@ impl StreamableHttpTransport {
 
     /// Write the SSE resumption cursor onto an outgoing GET request.
     ///
-    /// The `v1-compat` half: emits `Last-Event-ID` when the caller supplied a
-    /// cursor. This is the LAST remaining reader of
-    /// [`crate::shared::http_constants::LAST_EVENT_ID`] in the crate — the
-    /// server's moved into the paired module in plan 117-12 — so the constant
-    /// and this function carry the same `#[cfg]`, applied in one edit. Gating
-    /// either alone is a compile break.
+    /// v1-ONLY, with NO null twin — deliberately. This is the LAST remaining
+    /// reader of [`crate::shared::http_constants::LAST_EVENT_ID`] in the crate
+    /// (the server's moved into the paired module in plan 117-12), so the
+    /// constant and this function carry the same `#[cfg]`, applied in one edit;
+    /// gating either alone is a compile break.
+    ///
+    /// A twin returning `Ok(())` would be indistinguishable from absence and
+    /// would only tempt a later author to "improve" it by logging the ignored
+    /// cursor. On a `full-v2` build nothing in `pmcp` names `Last-Event-ID` at
+    /// all — which is what makes T-117-53 a property of the compiled crate.
     #[cfg(feature = "v1-compat")]
     fn apply_resumption_header(
         request: &mut Request<Full<Bytes>>,
@@ -709,30 +748,113 @@ impl StreamableHttpTransport {
         Ok(())
     }
 
-    /// The null twin: a `full-v2` build writes no replay cursor at all.
+    /// Get the current session ID.
     ///
-    /// It NAMES no header — the client-side mirror of the server's
-    /// `v1_session_off::replay_sse_events_from_header`, which takes a
-    /// `&HeaderMap` and never touches it (plan 117-12). Do NOT "improve" this
-    /// by logging the ignored cursor: naming `Last-Event-ID` here would put the
-    /// token back into a build whose whole claim is that nothing in it writes
-    /// an attacker-influenced replay cursor onto the wire (T-117-53).
-    #[cfg(not(feature = "v1-compat"))]
-    const fn apply_resumption_header(
-        _request: &mut Request<Full<Bytes>>,
-        _resumption_token: Option<&str>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Get the current session ID
+    /// v1-ONLY (`v1-compat`): a `full-v2` build stores no session id, so there
+    /// is nothing to get and this accessor does not exist.
+    #[cfg(feature = "v1-compat")]
     pub fn session_id(&self) -> Option<String> {
         self.config.read().session_id.clone()
     }
 
-    /// Set the session ID (useful for resuming sessions)
+    /// Set the session ID (useful for resuming sessions).
+    ///
+    /// v1-ONLY (`v1-compat`), for the same reason as [`Self::session_id`].
+    #[cfg(feature = "v1-compat")]
     pub fn set_session_id(&self, session_id: Option<String>) {
         self.config.write().session_id = session_id;
+    }
+
+    /// The `Mcp-Session-Id` value an outgoing request should carry, if any.
+    ///
+    /// The `v1-compat` half: the stored session id.
+    #[cfg(feature = "v1-compat")]
+    fn outbound_session(&self) -> Option<String> {
+        self.config.read().session_id.clone()
+    }
+
+    /// The null twin: a `full-v2` build never stores a session id, so the
+    /// answer is the constant `None`.
+    ///
+    /// Do NOT "improve" this by reading the config — the field does not exist
+    /// on this build. Answering here is what keeps the request-building
+    /// pipeline free of a `#[cfg]` at its call site.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn outbound_session(&self) -> Option<String> {
+        None
+    }
+
+    /// Store the `Mcp-Session-Id` a response carried, if this build has
+    /// sessions at all.
+    ///
+    /// The `v1-compat` half. NEVER on v2 (T-113-06): there is no session in
+    /// `2026-07-28`, so a response that carries `Mcp-Session-Id` anyway (a
+    /// misconfigured intermediary, a dual-stack server echoing v1 state) must
+    /// not be able to plant one that the outbound path would then have to
+    /// suppress. Refusing to STORE it is the belt to the outbound braces.
+    #[cfg(feature = "v1-compat")]
+    fn capture_session_header(&self, headers: &hyper::HeaderMap) {
+        if self.is_v2() {
+            return;
+        }
+        if let Some(value) = headers.get(MCP_SESSION_ID) {
+            if let Ok(text) = value.to_str() {
+                self.config.write().session_id = Some(text.to_string());
+            }
+        }
+    }
+
+    /// The null twin: a `full-v2` build has nowhere to store a session id, so
+    /// it does not look for one.
+    ///
+    /// The v1 half's `is_v2()` guard is a RUNTIME belt over a v1-shaped store;
+    /// here the store itself is gone, so the suppression is structural. Do NOT
+    /// "improve" this by inspecting `headers` to log an ignored session id.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn capture_session_header(&self, _headers: &hyper::HeaderMap) {}
+
+    /// Terminate the HTTP session this transport established, if any.
+    ///
+    /// The `v1-compat` half: when a session id is stored, DELETE the endpoint
+    /// and clear it.
+    #[cfg(feature = "v1-compat")]
+    async fn terminate_session(&self) -> Result<()> {
+        if self.session_id().is_none() {
+            return Ok(());
+        }
+        let url = self.config.read().url.clone();
+        let request = self
+            .build_request_with_middleware(Method::DELETE, url.as_str(), vec![])
+            .await?;
+
+        // Send DELETE request (ignore 405 as per spec)
+        let response = self.client.request(request).await;
+        if let Ok(resp) = response {
+            if !resp.status().is_success() && resp.status() != StatusCode::METHOD_NOT_ALLOWED {
+                // Log error but don't fail close operation
+                tracing::warn!("Failed to terminate session: {}", resp.status());
+            }
+        }
+
+        // Clear session ID
+        self.config.write().session_id = None;
+        Ok(())
+    }
+
+    /// The null twin: a `full-v2` build never established a session, so there
+    /// is nothing to terminate.
+    ///
+    /// This is the load-bearing half of T-117-55. The severed build has NO
+    /// DELETE construction site at all — not a runtime `if` that is always
+    /// false: nothing here names [`Method::DELETE`], builds a request, or
+    /// touches `self.client`. A teardown for a session that never existed is
+    /// not something this build can emit.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self, clippy::unused_async)]
+    async fn terminate_session(&self) -> Result<()> {
+        Ok(())
     }
 
     /// Get the protocol version
@@ -750,8 +872,21 @@ impl StreamableHttpTransport {
         self.last_event_id.read().clone()
     }
 
-    /// Start a GET SSE stream with middleware support
-    pub async fn start_sse(&self, resumption_token: Option<String>) -> Result<()> {
+    /// Start a GET SSE stream with middleware support.
+    ///
+    /// # The cursor argument is v1-only
+    ///
+    /// The parameter keeps the same POSITION and TYPE on both feature sets so
+    /// every caller compiles unchanged, but only the `v1-compat` build names it
+    /// `resumption_token` and reads it. On a `full-v2` build it is
+    /// `_ignored_cursor`: MCP `2026-07-28` removed SSE resumability, so there
+    /// is nothing to resume from and the GET this builds carries no
+    /// `Last-Event-ID` — the constant does not even exist on that build.
+    pub async fn start_sse(
+        &self,
+        #[cfg(feature = "v1-compat")] resumption_token: Option<String>,
+        #[cfg(not(feature = "v1-compat"))] _ignored_cursor: Option<String>,
+    ) -> Result<()> {
         // Abort any existing SSE stream
         let handle = self.abort_handle.write().take();
         if let Some(handle) = handle {
@@ -782,9 +917,13 @@ impl StreamableHttpTransport {
 
         // Add the SSE resumption cursor, on the builds that have one.
         //
-        // Routed through the paired helper rather than written inline: on a
-        // `full-v2` build the twin names no header, so nothing in the compiled
-        // crate writes a replay cursor.
+        // Why: this is the ONLY `#[cfg]` at a CALL SITE in this file. It is
+        // unavoidable because the argument it reads is itself gated (see this
+        // method's doc): on `full-v2` the parameter is `_ignored_cursor` and
+        // `apply_resumption_header` does not exist. Every other v1 read on this
+        // transport goes through a paired accessor with a constant `full-v2`
+        // answer instead — do NOT let a second one accumulate here.
+        #[cfg(feature = "v1-compat")]
         Self::apply_resumption_header(&mut request, resumption_token.as_deref())?;
 
         // Send request
@@ -923,15 +1062,18 @@ impl StreamableHttpTransport {
         use crate::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
 
         // Extract config data
-        let (extra_headers, auth_provider, session_id, middleware_chain) = {
+        let (extra_headers, auth_provider, middleware_chain) = {
             let config = self.config.read();
             (
                 config.extra_headers.clone(),
                 config.auth_provider.clone(),
-                config.session_id.clone(),
                 config.http_middleware_chain.clone(),
             )
         };
+        // Read the outgoing session through the paired accessor rather than off
+        // the config: on a `full-v2` build there is no field to read and the
+        // twin answers the constant `None`.
+        let outbound_session = self.outbound_session();
 
         // Start building request with hyper
         let mut request_builder = Request::builder().method(method.clone()).uri(url);
@@ -959,9 +1101,9 @@ impl StreamableHttpTransport {
         // class HTTP-01/HTTP-05 exist to close (T-113-06). The suppression is
         // unconditional — a value left over from a v1 exchange on the same
         // transport must not leak either.
-        if let Some(session_id) = &session_id {
+        if let Some(session) = &outbound_session {
             if !is_v2 {
-                request_builder = request_builder.header(MCP_SESSION_ID, session_id.as_str());
+                request_builder = request_builder.header(MCP_SESSION_ID, session.as_str());
             }
         }
 
@@ -1074,20 +1216,11 @@ impl StreamableHttpTransport {
 
     /// Process response headers and extract session/protocol information
     fn process_response_headers(&self, response: &HyperResponse<impl hyper::body::Body>) {
-        // Update session ID from response header.
-        //
-        // NEVER on v2 (T-113-06): there is no session in `2026-07-28`, so a
-        // response that carries `Mcp-Session-Id` anyway (a misconfigured
-        // intermediary, a dual-stack server echoing v1 state) must not be able
-        // to plant one that the outbound path would then have to suppress.
-        // Refusing to STORE it is the belt to the outbound braces.
-        if !self.is_v2() {
-            if let Some(session_id) = response.headers().get(MCP_SESSION_ID) {
-                if let Ok(session_id_str) = session_id.to_str() {
-                    self.config.write().session_id = Some(session_id_str.to_string());
-                }
-            }
-        }
+        // Update session ID from response header, on the builds that have a
+        // session to update. See `Self::capture_session_header` for why the v1
+        // half still carries a runtime `is_v2()` guard and the `full-v2` twin
+        // needs none.
+        self.capture_session_header(response.headers());
 
         // Update protocol version from response header
         if let Some(protocol_version) = response.headers().get(MCP_PROTOCOL_VERSION) {
@@ -1554,27 +1687,12 @@ impl Transport for StreamableHttpTransport {
             handle.abort();
         }
 
-        // Optionally send a DELETE request to terminate the session
-        if let Some(_session_id) = self.session_id() {
-            let url = self.config.read().url.clone();
-            let request = self
-                .build_request_with_middleware(Method::DELETE, url.as_str(), vec![])
-                .await?;
-
-            // Send DELETE request (ignore 405 as per spec)
-            let response = self.client.request(request).await;
-            if let Ok(resp) = response {
-                if !resp.status().is_success() && resp.status() != StatusCode::METHOD_NOT_ALLOWED {
-                    // Log error but don't fail close operation
-                    tracing::warn!("Failed to terminate session: {}", resp.status());
-                }
-            }
-
-            // Clear session ID
-            self.config.write().session_id = None;
-        }
-
-        Ok(())
+        // Optionally send a DELETE request to terminate the session.
+        //
+        // Routed through the paired helper, so the `full-v2` build has no DELETE
+        // construction site at all rather than a runtime branch that is always
+        // false (T-117-55).
+        self.terminate_session().await
     }
 
     fn is_connected(&self) -> bool {

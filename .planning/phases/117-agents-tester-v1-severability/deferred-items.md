@@ -158,3 +158,22 @@ warning: unused imports: `DEFAULT_AUTH_RESPONSE_BYTES` and `collect_reqwest_body
 `git diff --name-only src/` is EMPTY for this plan, so these are not caused by it. They do not
 appear under `make lint`'s `--features full` scope, which is why the gate is green. Left
 untouched per the executor scope boundary (only auto-fix what the current task's changes caused).
+
+## DEFERRED-117-14-A: two pre-existing `unused_imports` warnings in `pmcp` under mcp-tester's feature set
+
+**Found during:** plan 117-14 Task 2 verification (`cargo test -p mcp-tester --test report_compat`).
+
+```
+warning: unused imports: `DEFAULT_AUTH_RESPONSE_BYTES` and `collect_reqwest_body_within_cap`
+  --> src/server/auth/jwt.rs:18:36
+warning: unused imports: `DEFAULT_AUTH_RESPONSE_BYTES` and `collect_reqwest_body_within_cap`
+  --> src/server/auth/jwt_validator.rs:53:36
+```
+
+**Why deferred:** PRE-EXISTING and out of this plan's scope. Neither file was touched by
+117-14, and neither import has anything to do with the client session/resumability cut.
+They surface only under the feature combination `mcp-tester` selects (`jwt-auth` without
+whatever gates the two items' readers), which is why `make lint --features full` and the
+`full` / `full-v2` / `streamable-http` builds are all clean. Fixing them means gating the
+`use` to match its readers' `cfg` — a one-line change that belongs to whoever owns the
+auth body-cap seam, not to a severability plan.
