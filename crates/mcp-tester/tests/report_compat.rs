@@ -47,6 +47,7 @@
 //!   consumer contract.
 
 use mcp_tester::{OutputFormat, TestCategory, TestReport, TestResult};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 // ===========================================================================
@@ -471,4 +472,300 @@ fn json_duration_is_deterministic_without_a_dynamic() {
          so something OTHER than `timestamp` is per-run and JSON_DYNAMICS is \
          incomplete"
     );
+}
+
+// ===========================================================================
+// 2. `--format pretty` — why this is not one byte golden
+//
+// A byte-identical golden for MULTI-CATEGORY pretty output is IMPOSSIBLE. Three
+// measured sources of non-determinism, all in `crates/mcp-tester/src/report.rs`:
+//
+//   1. HASHMAP GROUPING. `print_pretty` groups tests into a
+//      `std::collections::HashMap<String, Vec<&TestResult>>` and iterates it
+//      directly (cited in plan 117-03 as `report.rs:262-282`; MEASURED at HEAD as
+//      the map declaration at `:264-265`, the fill at `:267-270` and the
+//      `for (category, tests) in by_category` iteration at `:273-281`). Rust's
+//      default hasher is randomly seeded per process, so the ORDER OF THE
+//      CATEGORY BLOCKS differs between runs.
+//
+//   2. CONDITIONAL ANSI. The `colored` conditional decides at render time whether
+//      to emit escape sequences (cited as `report.rs:257-259` / `:294-298`;
+//      MEASURED at HEAD as the `.cyan().bold()` header writes at `:259-260` and
+//      the status-symbol match at `:298-303`). `ShouldColorize::from_env`
+//      consults `io::stdout().is_terminal()`, so the same code emits different
+//      bytes in a terminal than under a captured `Vec<u8>`.
+//
+//   3. CONDITIONAL DURATION COLUMN. `print_test_result_pretty` prints a duration
+//      column ONLY when `duration.as_millis() > 100`, and pads with nine spaces
+//      otherwise (cited as `report.rs:305-309`; MEASURED at HEAD as `:313-318` —
+//      `:305-309` is the adjacent name-truncation branch). This conditional
+//      changes the line WIDTH, not merely its content.
+//
+// So the criterion here was CHOSEN, not conceded:
+//
+//   * Sources 2 and 3 are ELIMINATED by construction — ANSI is pinned off
+//     explicitly and every fixture duration is zero.
+//   * Source 1 is eliminated for the SINGLE-CATEGORY fixture, because a one-entry
+//     `HashMap` has exactly one iteration order. That fixture therefore gets a
+//     real BYTE golden, so the pretty format is not left unpinned.
+//   * Source 1 is genuinely irreducible for the MULTI-CATEGORY fixture, so that
+//     one is asserted STRUCTURALLY — on a MULTISET of lines, plus a separate
+//     check that each category block is internally ordered. The ONLY thing not
+//     asserted is the order OF the category blocks.
+// ===========================================================================
+
+/// Pin ANSI off for the whole process.
+///
+/// `colored::control::set_override` writes two process-global `AtomicBool`s, so
+/// every test in this binary calls this before rendering and every call stores the
+/// same value — there is no interleaving that can yield anything but `false`.
+///
+/// This is explicit rather than inherited because the library's default consults
+/// tty detection (`ShouldColorize::from_env` calls `io::stdout().is_terminal()`),
+/// and tty detection differs between a developer's terminal, a CI runner and the
+/// captured `Vec<u8>` this file renders into. Relying on the default would make
+/// the golden environment-dependent.
+fn ansi_off() {
+    colored::control::set_override(false);
+}
+
+/// Three `Core` tests: one category, so the `HashMap` has exactly one entry and
+/// its iteration order is deterministic by construction.
+///
+/// One test fails, so the golden also pins the `RECOMMENDATIONS` block and the
+/// `Overall Status: FAILED` line rather than only the happy path.
+fn single_category_fixture() -> TestReport {
+    let mut report = TestReport::new();
+    report.duration = Duration::from_secs(0);
+    report.add_test(TestResult::passed(
+        "initialize",
+        TestCategory::Core,
+        Duration::from_secs(0),
+        "protocol 2025-11-25",
+    ));
+    report.add_test(TestResult::passed(
+        "ping",
+        TestCategory::Core,
+        Duration::from_secs(0),
+        "round trip ok",
+    ));
+    report.add_test(TestResult::failed(
+        "shutdown",
+        TestCategory::Core,
+        Duration::from_secs(0),
+        "connection reset by peer",
+    ));
+    report
+}
+
+/// The golden for [`single_category_fixture`] under `--format pretty`, ANSI off.
+const PRETTY_SINGLE_CATEGORY_GOLDEN: &str = r#"
+TEST RESULTS
+════════════════════════════════════════════════════════════
+
+Core:
+
+  ✓ initialize                                        protocol 2025-11-25
+  ✓ ping                                              round trip ok
+  ✗ shutdown                                          connection reset by peer
+
+════════════════════════════════════════════════════════════
+SUMMARY
+════════════════════════════════════════════════════════════
+
++-------------+-------+
+| Total Tests | 3     |
++-------------+-------+
+| Passed      | 2     |
++-------------+-------+
+| Failed      | 1     |
++-------------+-------+
+| Duration    | 0.00s |
++-------------+-------+
+
+Overall Status: FAILED
+
+RECOMMENDATIONS
+════════════════════════════════════════════════════════════
+
+  • Fix core connectivity issues first
+    - Verify server is running and accessible
+    - Check network configuration and firewall rules
+
+Run with --verbose for detailed error information
+"#;
+
+#[test]
+fn pretty_single_category_output_is_byte_pinned() {
+    ansi_off();
+    let raw = capture(&single_category_fixture(), OutputFormat::Pretty);
+    assert_eq!(
+        raw, PRETTY_SINGLE_CATEGORY_GOLDEN,
+        "ADDITIVITY BREAK: the single-run `--format pretty` output changed on the \
+         pinned single-category fixture. Do NOT re-record this golden — make the \
+         change `--dual-run`-only, or put it in a new top-level struct the way \
+         `crates/mcp-tester/src/post_deploy_report.rs` does."
+    );
+}
+
+/// Count each trimmed, non-empty output line.
+///
+/// A MULTISET, not a set: a set collapses duplicates, so a line printed twice
+/// where it should print once (or once where it should print twice) would compare
+/// EQUAL and the regression would escape. The counts are what make the
+/// order-insensitive comparison still sensitive to multiplicity.
+fn line_multiset(text: &str) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        *counts.entry(trimmed.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// The pinned multiset for [`multi_category_fixture`] under `--format pretty`.
+const PRETTY_MULTI_CATEGORY_LINES: &[(&str, usize)] = &[
+    ("════════════════════════════════════════════════════════════", 4),
+    ("• Debug tool implementations", 1),
+    ("✓ initialize                                        protocol 2025-11-25", 1),
+    ("✓ ping                                              round trip ok", 1),
+    ("○ tasks/get                                         server does not advertise the tasks capability", 1),
+    ("✓ tasks/result                                      terminal task returned a result", 1),
+    ("✗ tools/call echo                                   handler returned isError", 1),
+    ("⚠ tools/list                                        server returned an empty tool list", 1),
+    ("- Check input validation and error handling", 1),
+    ("- Review tool response formats", 1),
+    ("- Verify tool registration and handlers", 1),
+    ("+-------------+-------+", 7),
+    ("| Duration    | 0.00s |", 1),
+    ("| Failed      | 1     |", 1),
+    ("| Passed      | 3     |", 1),
+    ("| Skipped     | 1     |", 1),
+    ("| Total Tests | 6     |", 1),
+    ("| Warnings    | 1     |", 1),
+    ("Core:", 1),
+    ("Overall Status: FAILED", 1),
+    ("RECOMMENDATIONS", 1),
+    ("Run with --verbose for detailed error information", 1),
+    ("SUMMARY", 1),
+    ("Tasks:", 1),
+    ("TEST RESULTS", 1),
+    ("Tools:", 1),
+];
+
+#[test]
+fn pretty_multi_category_line_multiset_is_pinned() {
+    ansi_off();
+    let raw = capture(&multi_category_fixture(), OutputFormat::Pretty);
+    let actual = line_multiset(&raw);
+    let expected: BTreeMap<String, usize> = PRETTY_MULTI_CATEGORY_LINES
+        .iter()
+        .map(|(line, count)| ((*line).to_string(), *count))
+        .collect();
+
+    let mut differences = Vec::new();
+    for (line, want) in &expected {
+        let got = actual.get(line).copied().unwrap_or(0);
+        if got != *want {
+            differences.push(format!("  line {line:?}: expected {want}, got {got}"));
+        }
+    }
+    for (line, got) in &actual {
+        if !expected.contains_key(line) {
+            differences.push(format!("  line {line:?}: expected 0, got {got}"));
+        }
+    }
+
+    assert!(
+        differences.is_empty(),
+        "ADDITIVITY BREAK: the `--format pretty` line multiset changed.\n{}\n\
+         Do NOT re-record this golden — make the change `--dual-run`-only, or put \
+         it in a new top-level struct the way \
+         `crates/mcp-tester/src/post_deploy_report.rs` does. Raw output was:\n{raw}",
+        differences.join("\n")
+    );
+}
+
+/// The insertion order of the tests within each category of
+/// [`multi_category_fixture`], which interleaves them so this is not a tautology
+/// on one-element blocks.
+const PRETTY_CATEGORY_BLOCKS: &[(&str, &[&str])] = &[
+    ("Core", &["initialize", "ping"]),
+    ("Tools", &["tools/call echo", "tools/list"]),
+    ("Tasks", &["tasks/get", "tasks/result"]),
+];
+
+/// Within a category block the tests must appear in insertion order.
+///
+/// This is what keeps [`pretty_multi_category_line_multiset_is_pinned`]
+/// order-insensitive about ONLY the genuinely non-deterministic thing — the order
+/// OF the category blocks — and nothing else.
+#[test]
+fn pretty_multi_category_blocks_are_internally_ordered() {
+    ansi_off();
+    let raw = capture(&multi_category_fixture(), OutputFormat::Pretty);
+    let lines: Vec<&str> = raw.lines().map(str::trim).collect();
+
+    for (category, expected_order) in PRETTY_CATEGORY_BLOCKS {
+        let header = format!("{category}:");
+        let start = lines
+            .iter()
+            .position(|line| *line == header)
+            .unwrap_or_else(|| panic!("category header `{header}` missing from:\n{raw}"));
+
+        // `print_pretty` writes one blank line between the header and the block.
+        let block: Vec<&str> = lines[start + 1..]
+            .iter()
+            .skip_while(|line| line.is_empty())
+            .take_while(|line| !line.is_empty())
+            .copied()
+            .collect();
+
+        let observed: Vec<&str> = expected_order
+            .iter()
+            .filter_map(|name| {
+                block
+                    .iter()
+                    .position(|line| line.contains(name))
+                    .map(|index| (index, *name))
+            })
+            .collect::<std::collections::BTreeMap<usize, &str>>()
+            .into_values()
+            .collect();
+
+        assert_eq!(
+            observed, *expected_order,
+            "category `{category}` did not print its tests in insertion order; \
+             observed block was {block:?}"
+        );
+    }
+}
+
+// ===========================================================================
+// 3. `--format minimal` / `--format verbose` — smoke only
+//
+// Neither is a consumer contract: `cargo-pmcp`'s machine-readable path parses
+// `PostDeployReport`, and `print_verbose` re-enters `print_pretty`
+// (`report.rs:483-484`) so it inherits the HashMap ordering problem wholesale.
+// These exist so a format that starts emitting NOTHING is still caught.
+// ===========================================================================
+
+#[test]
+fn minimal_and_verbose_produce_non_empty_output() {
+    ansi_off();
+    let report = multi_category_fixture();
+
+    for format in [OutputFormat::Minimal, OutputFormat::Verbose] {
+        let raw = capture(&report, format);
+        assert!(
+            !raw.trim().is_empty(),
+            "FAILURE MODE: `{format:?}` rendered an empty capture, so the format \
+             prints nothing at all.\n\
+             WHAT TO DO: restore the renderer; these two formats are unpinned but \
+             they must still produce output."
+        );
+    }
 }
