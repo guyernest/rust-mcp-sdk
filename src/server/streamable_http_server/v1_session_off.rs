@@ -55,12 +55,20 @@
 // `src/shared/http_body_cap.rs`. The real half carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{create_error_response, EventStoreHandle, ServerState, StreamableHttpServerConfig};
+// The import list is itself a severance measurement, so read it before the code.
+//
+// Plan 117-13 removed SIX names from it — `create_error_response`,
+// `EventStoreHandle`, `error_codes`, `StatusCode`, `sse::Event` and `mpsc` —
+// when the GET body moved into the real half and took the last twins that used
+// them. What is left is the vocabulary of an answer, not of a transport: this
+// file now frames no error of its own (the one `405` it returns comes from the
+// shared constructor in the parent), names no event-store handle, and cannot
+// even mention an SSE event or a channel sender.
+use super::{ServerState, StreamableHttpServerConfig};
 use crate::shared::TransportMessage;
-use crate::types::protocol::{error_codes, Era};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{sse::Event, Response};
-use tokio::sync::mpsc;
+use crate::types::protocol::Era;
+use axum::http::HeaderMap;
+use axum::response::Response;
 
 /// The zero-sized stand-in for the v1 session and resumability state.
 ///
@@ -87,11 +95,6 @@ impl V1State {
 // v1 session-map operations — every answer is a constant.
 // ---------------------------------------------------------------------------
 
-/// No session is ever tracked, so no session id is ever known.
-pub(crate) const fn session_exists(_state: &V1State, _session_id: &str) -> bool {
-    false
-}
-
 /// No session, so no version was ever negotiated against one.
 ///
 /// The 2026-07-28 transport carries its version per request, so a session-scoped
@@ -103,28 +106,9 @@ pub(crate) const fn session_protocol_version(
     None
 }
 
-/// Forgetting a session is a no-op: there is nothing to forget.
-pub(crate) const fn remove_session(_state: &V1State, _session_id: &str) {}
-
 // ---------------------------------------------------------------------------
 // v1 SSE stream operations — every answer is a constant.
 // ---------------------------------------------------------------------------
-
-/// No stream is ever open, because none is ever registered.
-pub(crate) const fn sse_stream_exists(_state: &V1State, _session_id: &str) -> bool {
-    false
-}
-
-/// Registering a stream is a no-op; the sender is dropped on the spot.
-pub(crate) fn register_sse_stream(
-    _state: &V1State,
-    _session_id: String,
-    _sender: mpsc::UnboundedSender<TransportMessage>,
-) {
-}
-
-/// Closing a stream is a no-op: none was ever opened.
-pub(crate) const fn remove_sse_stream(_state: &V1State, _session_id: &str) {}
 
 /// The message is always handed straight back, never routed anywhere.
 ///
@@ -211,14 +195,20 @@ pub(crate) const fn resumability_active(_state: &ServerState, era: Option<Era>) 
     resumability_active_for(false, era)
 }
 
-/// There is no store to hand out, on any request, ever.
+/// No inbound session id is ever read, because no header is ever looked at.
 ///
-/// The gated borrow degenerates to a constant `None`, so no caller can replay
-/// from a store or write to one — because there is none to reach.
-pub(crate) const fn resumability_store(
-    _state: &ServerState,
-    _era: Option<Era>,
-) -> Option<&EventStoreHandle> {
+/// The v1 half of `super::extract_session_and_protocol_headers` — a MIXED
+/// function that also reads `MCP-Protocol-Version`, which this build REQUIRES
+/// (VERS-05). That is why the function stays in the transport and only this read
+/// is paired.
+///
+/// `headers` is taken so the signature matches its real counterpart and is never
+/// touched. Do not "improve" this by reading the header to log or reject an
+/// unexpected session id: `tests/v1_severability_tripwire.rs` fails on the
+/// `MCP_SESSION_ID` and `headers.get` tokens for exactly that reason, and a
+/// build that reads the header in order to complain about it is still a build
+/// that reads the header.
+pub(crate) const fn incoming_session_header(_headers: &HeaderMap) -> Option<String> {
     None
 }
 
@@ -372,65 +362,46 @@ pub(crate) async fn store_response_event(
 ) {
 }
 
-/// A session-addressed SSE stream is never resolved, on any GET.
+// ---------------------------------------------------------------------------
+// The v1 HTTP verb bodies — the constant `405` a `full-v2` build answers.
+// ---------------------------------------------------------------------------
+
+/// `GET /` is never served: this build has no SSE stream to open.
 ///
-/// The real function's own answer when no session generator is available, which
-/// on this build is always: `405 Method Not Allowed`, "SSE not supported in
-/// stateless mode". Returning it unconditionally also means an attacker-supplied
-/// `Mcp-Session-Id` is never echoed back as a stream identity — the real
-/// function's `Ok(sid)` passthrough exists only for the v1 stateful mode this
-/// build does not have.
-pub(crate) fn resolve_sse_session(
-    _state: &ServerState,
-    _incoming_session_id: Option<String>,
-) -> std::result::Result<String, Response> {
-    Err(create_error_response(
-        StatusCode::METHOD_NOT_ALLOWED,
-        error_codes::METHOD_NOT_FOUND,
-        "SSE not supported in stateless mode",
-    ))
+/// SSE is a MCP 2025-11-25 transport feature; 2026-07-28 replaced it with
+/// per-request responses. Its real counterpart validates headers, resolves a
+/// session, registers a stream and replays an event log — none of which exists
+/// here, so there is nothing to answer but `405`.
+///
+/// # Refused, not missing
+///
+/// The verb stays ROUTED (`build_mcp_router` is identical on both feature sets).
+/// Dropping the route would answer `404`, which says "no such endpoint" rather
+/// than "this endpoint does not take this verb" — a different wire answer that
+/// `tests/v2_verbs_405_on_severed_build.rs` explicitly rejects.
+///
+/// # One 405, not two
+///
+/// The response comes from [`super::method_not_allowed_for_verb`], the SAME
+/// constructor the v2 rejection head uses. A locally hand-rolled `405` would be
+/// a second answer to one question, free to drift on the next edit.
+///
+/// `headers` is taken so the signature matches the real half's and is never
+/// read: no `Mcp-Session-Id`, no `Accept`, no replay cursor. Stays `async`
+/// because the real half awaits its SSE replay and the shared head `.await`s the
+/// call.
+pub(crate) async fn handle_get_sse_body(_state: &ServerState, _headers: &HeaderMap) -> Response {
+    super::method_not_allowed_for_verb("GET")
 }
 
-/// Nothing is ever replayed — and, critically, NO HEADER IS EVER READ.
+/// `DELETE /` is never served: there is no session to terminate.
 ///
-/// This is the most load-bearing twin in the pair. The real function returns
-/// before it looks at the replay cursor when resumability is off, and that
-/// ORDERING is the mitigation for T-113-29 / T-113-30: an era that suppresses
-/// resumability must not even PARSE an attacker-supplied replay cursor. Here the
-/// ordering is not something to preserve on the next edit — there is no header
-/// access to order. `headers` is taken so the signature matches its real
-/// counterpart, and it is never touched.
-///
-/// Do not "improve" this by inspecting `headers` to log or count ignored
-/// cursors: that would put an attacker-controlled parse back into the build that
-/// exists to prove it absent, and `tests/v1_severability_tripwire.rs` fails on
-/// the `LAST_EVENT_ID` token for exactly that reason.
-///
-/// Stays `async` because the signature is the real half's and the GET handler
-/// `.await`s it.
-pub(crate) async fn replay_sse_events_from_header(
-    _headers: &HeaderMap,
-    _tx: &mpsc::UnboundedSender<TransportMessage>,
-    _event_store: Option<&EventStoreHandle>,
-) {
+/// The real half looks a session up, removes its SSE stream, forgets it and
+/// fires `on_session_closed`. On this build no session is ever created, so the
+/// only honest answer is that the endpoint does not take this verb — and,
+/// deliberately, the same `405` as the GET twin rather than the real half's
+/// `404 Unknown session ID`, which would leak a session-existence oracle out of
+/// a build that tracks no sessions.
+pub(crate) fn handle_delete_body(_state: &ServerState, _headers: &HeaderMap) -> Response {
+    super::method_not_allowed_for_verb("DELETE")
 }
-
-/// An empty SSE event, retaining nothing and spawning nothing.
-///
-/// Unreachable in practice — [`resolve_sse_session`] answers `405` before any
-/// stream is framed — so the value only has to exist. It deliberately does NOT
-/// serialize the message: the real half's `serde_json::to_string(msg).unwrap()`
-/// is a panic site this build has no reason to carry.
-pub(crate) fn sse_event_for_message(
-    _msg: &TransportMessage,
-    _session_id: &str,
-    _event_store: Option<&EventStoreHandle>,
-) -> Event {
-    Event::default()
-}
-
-/// No SSE hardening headers are attached, because no SSE stream is ever opened.
-///
-/// In particular no `Mcp-Session-Id` is written onto a response here; the
-/// `response` argument is taken and left exactly as it arrived.
-pub(crate) const fn attach_sse_response_headers(_response: &mut Response, _session_id: &str) {}

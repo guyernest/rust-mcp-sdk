@@ -71,18 +71,49 @@
 // `src/shared/http_body_cap.rs`. The twin carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{create_error_response, EventStoreHandle, ServerState, StreamableHttpServerConfig};
+use super::{create_error_response, EventStore, ServerState, StreamableHttpServerConfig};
 use crate::shared::http_constants::{LAST_EVENT_ID, MCP_SESSION_ID};
 use crate::shared::TransportMessage;
 use crate::types::protocol::{error_codes, Era};
 use crate::types::{ClientRequest, Request};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{sse::Event, Response};
+use axum::response::{sse::Event, IntoResponse, Response, Sse};
+use axum::Json;
+use futures_util::StreamExt;
 use parking_lot::RwLock;
+use serde_json::json;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
+
+/// The event-store handle the transport actually uses for resumability.
+///
+/// Type-erased so every resumability helper is written against the
+/// [`EventStore`](super::EventStore) TRAIT rather than the concrete
+/// [`InMemoryEventStore`](super::InMemoryEventStore) that the public
+/// `StreamableHttpServerConfig::event_store` field pins. That public field's type
+/// is deliberately UNCHANGED — widening it would be a public-field type change,
+/// i.e. a MAJOR semver break, which the milestone rules out (D-113-D discipline).
+/// The indirection is what lets the crate's own tests substitute a spy and prove
+/// zero v2 traffic directly instead of inferring it from a normal-looking 200.
+///
+/// # Why it lives in the REAL half and not in the transport
+///
+/// It was declared in `streamable_http_server.rs` until plan 117-13. Once the
+/// GET body moved in here, the null twin's three uses of it went away and so did
+/// the transport's own, leaving the alias dead on a `full-v2` build under
+/// `RUSTFLAGS="-D warnings"`. It is a v1-only concept — resumability is a MCP
+/// 2025-11-25 feature the 2026-07-28 transport does not have — so the honest
+/// home is the half that only v1 compiles, rather than a `#[cfg]` on the alias
+/// or an `allow(dead_code)` over it.
+///
+/// The twin declares no counterpart, and must not: `Arc<dyn EventStore` is in
+/// `tests/v1_severability_tripwire.rs`'s `FORBIDDEN_STATE_TYPES`. The twin
+/// declaring FEWER items than this half is the direction that test permits.
+pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
 
 /// Type alias for the live v1 SSE stream map.
 ///
@@ -810,6 +841,24 @@ pub(crate) fn sse_event_for_message(
         .data(serde_json::to_string(msg).unwrap())
 }
 
+/// Read the inbound `Mcp-Session-Id` request header.
+///
+/// The v1 half of `super::extract_session_and_protocol_headers`, which is MIXED:
+/// it also reads `MCP-Protocol-Version`, which 2026-07-28 REQUIRES (VERS-05), so
+/// the function itself cannot move here. Only this read can, and it does — the
+/// twin answers `None` without naming a header, so a `full-v2` build never parses
+/// an inbound session id on the POST path at all.
+///
+/// Returns the raw header value with no validation beyond UTF-8; every session
+/// DECISION is made by `process_init_session` / `validate_non_init_session`
+/// below, which is where it belongs.
+pub(crate) fn incoming_session_header(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(std::string::ToString::to_string)
+}
+
 /// Attach SSE-specific hardening headers (session, cache-control, connection)
 /// to the given axum response.
 pub(crate) fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
@@ -823,4 +872,135 @@ pub(crate) fn attach_sse_response_headers(response: &mut Response, session_id: &
     response
         .headers_mut()
         .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+}
+
+// ---------------------------------------------------------------------------
+// The v1 HTTP verb bodies.
+//
+// `handle_get_sse` and `handle_delete_session` are SPLIT across the pair, not
+// moved into it: their `v2_verb_rejection` heads stay in the transport, always
+// compiled, and only these bodies are gated. Plan 117-13.
+// ---------------------------------------------------------------------------
+
+/// Everything a `GET /` does once the v2 405 rejection has declined to fire.
+///
+/// Verbatim the post-rejection half of the shipped `handle_get_sse`, including
+/// the `validate_headers` call: on a `v1-compat` build the wire answer for every
+/// GET is byte-identical to what it was before the split, which
+/// `tests/v1_byte_identity_after_cut.rs` pins.
+///
+/// It takes `&ServerState` and `&HeaderMap` rather than axum extractors because
+/// the extractors belong to the always-compiled head; the pair only ever sees
+/// already-extracted values, so the twin never has to model an axum handler
+/// signature.
+pub(crate) async fn handle_get_sse_body(state: &ServerState, headers: &HeaderMap) -> Response {
+    if let Err(error_response) = super::validate_headers(headers, "GET") {
+        return error_response;
+    }
+
+    let incoming_session_id = headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    let session_id = match resolve_sse_session(state, incoming_session_id) {
+        Ok(sid) => sid,
+        Err(response) => return response,
+    };
+
+    if sse_stream_exists(&state.v1, &session_id) {
+        return create_error_response(
+            StatusCode::CONFLICT,
+            error_codes::INVALID_REQUEST,
+            "SSE stream already exists for this session",
+        );
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    register_sse_stream(&state.v1, session_id.clone(), tx.clone());
+
+    // A GET carries no body and therefore no `_meta`, so `era = None` — and a v2
+    // GET is already answered `405` by the head in the transport, so only v1 /
+    // non-opted-in traffic reaches here. `resumability_store(state, None)` is
+    // therefore exactly the pre-113 config-only read, the same reasoning
+    // [`resolve_sse_session`] records for its `sessions_active(state, None)`.
+    let resumability = resumability_store(state, None).cloned();
+
+    replay_sse_events_from_header(headers, &tx, resumability.as_ref()).await;
+
+    let stream = UnboundedReceiverStream::new(rx);
+    let session_id_for_header = session_id.clone();
+    let session_id_for_stream = session_id.clone();
+    let event_store = resumability;
+
+    let sse = Sse::new(stream.map(move |msg| {
+        Ok::<_, Infallible>(sse_event_for_message(
+            &msg,
+            &session_id_for_stream,
+            event_store.as_ref(),
+        ))
+    }));
+
+    let mut response = sse.into_response();
+    attach_sse_response_headers(&mut response, &session_id_for_header);
+    response
+}
+
+/// Everything a `DELETE /` does once the v2 405 rejection has declined to fire.
+///
+/// Verbatim the post-rejection half of the shipped `handle_delete_session`.
+///
+/// Not `async`: the shipped body never awaited, and making it `async` purely to
+/// match the GET twin would add a future to a synchronous teardown for symmetry
+/// alone. The pair only requires that the two HALVES of *this* function agree,
+/// which they do.
+///
+/// This is also the only remaining reader of
+/// [`StreamableHttpServerConfig::on_session_closed`](super::StreamableHttpServerConfig)
+/// outside the config's own construction sites. Because it lives here, plan
+/// 117-13's gating of that field needed no `#[cfg]` at a call site.
+pub(crate) fn handle_delete_body(state: &ServerState, headers: &HeaderMap) -> Response {
+    // Extract session ID
+    let session_id = headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if let Some(sid) = session_id {
+        // Check if session exists
+        let exists = session_exists(&state.v1, &sid);
+
+        // A DELETE carries no body, so `era = None` — and a v2 DELETE is already
+        // answered `405` by the head in the transport, so only v1 / non-opted-in
+        // traffic reaches here. `sessions_active(state, None)` is exactly the
+        // pre-113 config-only read.
+        if !exists && sessions_active(state, None) {
+            // Unknown session in stateful mode
+            return create_error_response(
+                StatusCode::NOT_FOUND,
+                error_codes::INVALID_REQUEST,
+                "Unknown session ID",
+            );
+        }
+
+        // Remove SSE stream if exists
+        remove_sse_stream(&state.v1, &sid);
+
+        // Remove session from tracking
+        remove_session(&state.v1, &sid);
+
+        // Notify callback
+        if let Some(callback) = &state.config.on_session_closed {
+            callback(&sid);
+        }
+
+        (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
+    } else {
+        // No session to delete
+        create_error_response(
+            StatusCode::NOT_FOUND,
+            error_codes::INVALID_REQUEST,
+            "No session ID provided",
+        )
+    }
 }

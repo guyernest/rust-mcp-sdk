@@ -74,7 +74,7 @@ pub(crate) mod v1;
 /// There are TWO public traits called `EventStore` in this crate, and confusing
 /// them is the obvious mistake. This one is transport-local, has THREE methods
 /// (`store_event`, `replay_events_after`, `get_stream_for_event`), and is the
-/// trait the crate-internal `EventStoreHandle` alias erases for the v1
+/// trait the crate-internal `v1::EventStoreHandle` alias erases for the v1
 /// SSE-resumability path. The other
 /// lives in [`crate::shared::event_store`], has six methods, and is a separate
 /// facility that plan 117-06 already gated behind `v1-compat` wholesale.
@@ -87,8 +87,8 @@ pub(crate) mod v1;
 /// sets today, because the PUBLIC field
 /// `StreamableHttpServerConfig::event_store` pins the concrete
 /// [`InMemoryEventStore`] and gating that field is plan 117-13's subject. The
-/// two must be gated together, in one edit; see the SEVERABILITY note above the
-/// `EventStoreHandle` alias in this module's source.
+/// two must be gated together, in one edit; see the SEVERABILITY note in this
+/// module's source where the `EventStoreHandle` alias used to be declared.
 #[async_trait]
 pub trait EventStore: Send + Sync {
     /// Store an event for later retrieval
@@ -470,13 +470,25 @@ use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 // callers into the pair, so it is now private to `v1_session.rs` and this file
 // never names it.)
 //
-// This alias stays HERE rather than moving with them, and deliberately so. The
-// `EventStore` trait it erases is PUBLIC API on both feature sets, and the null
-// twin is forbidden from declaring `Arc<dyn EventStore>` at all —
-// `tests/v1_severability_tripwire.rs` reads that as the twin holding v1 state,
-// which is the one thing a `full-v2` build must never do. Both halves of the
-// pair therefore carry the alias in SIGNATURES via `use super::EventStoreHandle`
-// and neither declares it, which is exactly the arrangement that test documents.
+// The `EventStoreHandle` alias that used to be declared HERE moved into
+// `v1_session.rs` in plan 117-13 — a seam collapse, not a preference. Plan
+// 117-12's note said it had to stay because BOTH halves carried it in their
+// signatures; 117-13 split the GET body into the pair, which deleted the twin's
+// last three uses of it (`resumability_store`, `replay_sse_events_from_header`,
+// `sse_event_for_message`), and the transport's own last use went with them. On
+// a `full-v2` build the alias was then dead, and `RUSTFLAGS="-D warnings"` says
+// so. The two ways to keep it here were a `v1-compat` `#[cfg]` attribute on the
+// alias — which would be the first feature attribute in this 6,000-line file,
+// the very thing the paired-module design exists to avoid, and would break the
+// `grep -c` this file's severance is measured by — or a blanket `allow(dead_code)`
+// that
+// blunts the exact lint plan 117-05 wired the CI gate around. Declaring it in
+// the real half, where its only remaining users live, is neither.
+//
+// The null twin still declares nothing of the sort: it is forbidden from naming
+// `Arc<dyn EventStore>` at all (`tests/v1_severability_tripwire.rs` reads that as
+// the twin holding v1 state), and after 117-13 it does not name the alias in a
+// signature either.
 //
 // SEVERABILITY — handed forward by plan 113-08, PICKED UP by Phase 117 / SMPL-01.
 // What that comment asked for is now DONE for the era decisions, for all v1
@@ -508,17 +520,6 @@ use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 // removing the pair is a MAJOR version change, tracked as SMPL-F1 for pmcp 3.0
 // and governed by the (deliberately date-free) `docs/v1-sunset-policy.md`.
 // ---------------------------------------------------------------------------
-
-/// The event-store handle the transport actually uses for resumability.
-///
-/// Type-erased so every resumability helper is written against the [`EventStore`]
-/// TRAIT rather than the concrete [`InMemoryEventStore`] that the public
-/// `StreamableHttpServerConfig::event_store` field pins. That public field's type
-/// is deliberately UNCHANGED — widening it would be a public-field type change,
-/// i.e. a MAJOR semver break, which the milestone rules out (D-113-D discipline).
-/// The indirection is what lets the crate's own tests substitute a spy and prove
-/// zero v2 traffic directly instead of inferring it from a normal-looking 200.
-pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
 
 // ---------------------------------------------------------------------------
 // Direct-response id ownership (Plan 113-08, HTTP-05).
@@ -1541,6 +1542,36 @@ impl StreamableHttpServer {
     }
 }
 
+/// The ONE `405 Method Not Allowed` body for a verb the MCP endpoint does not
+/// serve.
+///
+/// Two callers, one answer:
+///
+/// * [`v2_method_not_allowed`] — the CONDITIONAL rejection. On a `v1-compat`
+///   build it fires only when the request opted into `2026-07-28` and the
+///   server accepts it; every other request falls through to the v1 body.
+/// * `v1::handle_get_sse_body` / `v1::handle_delete_body` in
+///   `v1_session_off.rs` — the UNCONDITIONAL answer. On a `full-v2` build there
+///   is no v1 body to fall through to, so the verb is always refused.
+///
+/// It is `pub(crate)` for exactly the second caller. A twin that hand-rolled its
+/// own `405` would be a second answer to the same question, free to drift from
+/// this one on the next edit; the wire shape of a refused verb must not depend
+/// on which half of the pair produced it.
+///
+/// The verb stays ROUTED in [`build_mcp_router`] on both feature sets. An
+/// unrouted verb answers `404`, which is a different wire answer with a
+/// different meaning ("no such endpoint" rather than "this endpoint does not
+/// take this verb") — see `tests/v2_verbs_405_on_severed_build.rs`, which
+/// asserts the distinction on the severed build.
+pub(crate) fn method_not_allowed_for_verb(verb: &str) -> Response {
+    create_error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+        &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
+    )
+}
+
 /// Reject a v2 `GET` / `DELETE` with `405 Method Not Allowed`, or `None` to let
 /// the existing v1 handler run.
 ///
@@ -1568,11 +1599,7 @@ fn v2_method_not_allowed(headers: &HeaderMap, verb: &str, v2_opted_in: bool) -> 
     if !v2_opted_in || !matches!(decode_version_header(headers), HeaderProtocolVersion::V2) {
         return None;
     }
-    Some(create_error_response(
-        StatusCode::METHOD_NOT_ALLOWED,
-        crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-        &format!("HTTP {verb} is not supported on the MCP endpoint for protocol 2026-07-28"),
-    ))
+    Some(method_not_allowed_for_verb(verb))
 }
 
 /// [`v2_method_not_allowed`] against a live server.
@@ -1970,11 +1997,23 @@ fn extract_auth_from_proxy_headers(
 ///
 /// Shared by both the fast path and middleware-path POST handlers so the two
 /// entry points read the same two headers in the same way.
+///
+/// # Why this function is MIXED, and stays here (plan 117-12 handoff, closed by 117-13)
+///
+/// It reads two headers of opposite eras. `MCP-Protocol-Version` is v2-REQUIRED
+/// (VERS-05), so this function cannot move into the pair; `Mcp-Session-Id` is
+/// v1-only, so its read cannot stay inline. The split is therefore INSIDE the
+/// function: the v1 read goes through [`v1::incoming_session_header`], whose twin
+/// answers `None` without naming a header, and the v2 read stays exactly where it
+/// was.
+///
+/// The consequence on a `full-v2` build is that `session_id` is `None` at the
+/// SOURCE rather than being resolved away ten functions later. That is the same
+/// value the pipeline already ended up with — every downstream consumer routes
+/// through a `v1::` seam whose twin discards it — but produced by a build that
+/// never read the header, which is what SMPL-02 asks for.
 fn extract_session_and_protocol_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {
-    let session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+    let session_id = v1::incoming_session_header(headers);
     let protocol_version = headers
         .get(MCP_PROTOCOL_VERSION)
         .and_then(|v| v.to_str().ok())
@@ -4060,66 +4099,42 @@ async fn handle_post_with_middleware_inner(
 
 /// Handle GET requests for SSE streams.
 ///
-/// Refactored in 75-01 Task 1a-A: extracted [`v1::resolve_sse_session`],
-/// [`v1::replay_sse_events_from_header`], [`v1::sse_event_for_message`], and
-/// [`v1::attach_sse_response_headers`] so this orchestrator is a short pipeline.
+/// # Split, not moved (plan 117-13)
+///
+/// This head is ALWAYS compiled. Everything after [`v2_verb_rejection`] is v1 —
+/// SSE is a MCP 2025-11-25 transport feature and 2026-07-28 answers `405` — so
+/// the body lives in the `v1` pair while the rejection stays here, reachable on
+/// both feature sets.
+///
+/// That shape is what keeps the two 405s distinguishable:
+///
+/// * on a `v1-compat` build the rejection fires only for a request that opted
+///   into 2026-07-28 at a server that accepts it, and every other GET runs the
+///   real `v1::handle_get_sse_body`;
+/// * on a `full-v2` build the rejection still fires for that same request, and
+///   the twin body answers `405` for everything else — so GET is refused
+///   unconditionally, but by way of a ROUTED handler rather than a missing route
+///   (see [`method_not_allowed_for_verb`]).
+///
+/// The v1 pipeline it delegates to was extracted in 75-01 Task 1a-A
+/// (`resolve_sse_session`, `replay_sse_events_from_header`,
+/// `sse_event_for_message`, `attach_sse_response_headers`); those helpers are now
+/// module-internal to the real half, because this is their only caller.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(rejection) = v2_verb_rejection(&state, &headers, "GET").await {
         return rejection;
     }
-    if let Err(error_response) = validate_headers(&headers, "GET") {
-        return error_response;
-    }
-
-    let incoming_session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-
-    let session_id = match v1::resolve_sse_session(&state, incoming_session_id) {
-        Ok(sid) => sid,
-        Err(response) => return response,
-    };
-
-    if v1::sse_stream_exists(&state.v1, &session_id) {
-        return create_error_response(
-            StatusCode::CONFLICT,
-            crate::types::protocol::error_codes::INVALID_REQUEST,
-            "SSE stream already exists for this session",
-        );
-    }
-
-    let (tx, rx) = mpsc::unbounded_channel();
-    v1::register_sse_stream(&state.v1, session_id.clone(), tx.clone());
-
-    // A GET carries no body and therefore no `_meta`, so `era = None` — and a v2
-    // GET is already answered `405` at the top of this function, so only v1 /
-    // non-opted-in traffic reaches here. `v1::resumability_store(state, None)` is
-    // therefore exactly the pre-113 config-only read, the same reasoning
-    // [`v1::resolve_sse_session`] records for its `v1::sessions_active(state, None)`.
-    let resumability = v1::resumability_store(&state, None).cloned();
-
-    v1::replay_sse_events_from_header(&headers, &tx, resumability.as_ref()).await;
-
-    let stream = UnboundedReceiverStream::new(rx);
-    let session_id_for_header = session_id.clone();
-    let session_id_for_stream = session_id.clone();
-    let event_store = resumability;
-
-    let sse = Sse::new(stream.map(move |msg| {
-        Ok::<_, Infallible>(v1::sse_event_for_message(
-            &msg,
-            &session_id_for_stream,
-            event_store.as_ref(),
-        ))
-    }));
-
-    let mut response = sse.into_response();
-    v1::attach_sse_response_headers(&mut response, &session_id_for_header);
-    response
+    v1::handle_get_sse_body(&state, &headers).await
 }
 
-/// Handle DELETE requests to terminate sessions
+/// Handle DELETE requests to terminate sessions.
+///
+/// # Split, not moved (plan 117-13)
+///
+/// Same shape as [`handle_get_sse`]: the [`v2_verb_rejection`] head is always
+/// compiled, and the session-teardown body — which only means anything where
+/// sessions exist — lives in the `v1` pair. On a `full-v2` build the twin
+/// answers `405` unconditionally; the route itself is never removed.
 async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
@@ -4127,48 +4142,7 @@ async fn handle_delete_session(
     if let Some(rejection) = v2_verb_rejection(&state, &headers, "DELETE").await {
         return rejection;
     }
-    // Extract session ID
-    let session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    if let Some(sid) = session_id {
-        // Check if session exists
-        let session_exists = v1::session_exists(&state.v1, &sid);
-
-        // A DELETE carries no body, so `era = None` — and a v2 DELETE is already
-        // answered `405` above, so only v1 / non-opted-in traffic reaches here.
-        // `v1::sessions_active(state, None)` is exactly the pre-113 config-only read.
-        if !session_exists && v1::sessions_active(&state, None) {
-            // Unknown session in stateful mode
-            return create_error_response(
-                StatusCode::NOT_FOUND,
-                crate::types::protocol::error_codes::INVALID_REQUEST,
-                "Unknown session ID",
-            );
-        }
-
-        // Remove SSE stream if exists
-        v1::remove_sse_stream(&state.v1, &sid);
-
-        // Remove session from tracking
-        v1::remove_session(&state.v1, &sid);
-
-        // Notify callback
-        if let Some(callback) = &state.config.on_session_closed {
-            callback(&sid);
-        }
-
-        (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
-    } else {
-        // No session to delete
-        create_error_response(
-            StatusCode::NOT_FOUND,
-            crate::types::protocol::error_codes::INVALID_REQUEST,
-            "No session ID provided",
-        )
-    }
+    v1::handle_delete_body(&state, &headers)
 }
 
 #[cfg(test)]
@@ -5496,11 +5470,11 @@ mod tests {
     /// The spy is injected on `ServerState`, not on the public config, because
     /// `StreamableHttpServerConfig::event_store` is pinned to the concrete
     /// `InMemoryEventStore` and widening that public field would be a MAJOR semver
-    /// break (see [`EventStoreHandle`]).
+    /// break (see [`v1::EventStoreHandle`]).
     fn spy_state() -> (ServerState, Arc<SpyEventStore>) {
         let spy = Arc::new(SpyEventStore::default());
         let mut state = dual_era_state();
-        state.v1.event_store = Some(spy.clone() as EventStoreHandle);
+        state.v1.event_store = Some(spy.clone() as v1::EventStoreHandle);
         (state, spy)
     }
 
