@@ -342,6 +342,79 @@ jobs:
     - name: Run purity gate (per-crate, per-feature, fail-closed; Layers 1+2)
       run: make purity-check
 
+  # Phase 117 (SMPL-01 / D-02) MCP-v1 severability gate.
+  #
+  # Proves that the v1 compatibility layer is CLEANLY SEVERABLE: the crate still
+  # builds, warning-free, with `v1-compat` off and everything else on. This job is
+  # wired into the `gate` aggregate below in all THREE required places (`needs:`,
+  # the `env:` binding, and the `if` chain), so a broken severance build is a red
+  # required check rather than a green-looking advisory one. It must never be made
+  # advisory-only, and it must not be folded into the `feature-flags` job: that job
+  # is absent from `gate.needs`, and `make test-feature-flags` (Makefile:310-341)
+  # checks `pmcp-tasks` combinations only — it touches zero root `pmcp` features,
+  # so its name is misleading.
+  #
+  # The build command carries FOUR fences. Each closes a specific false-green, and
+  # none of them is redundant — read this before "simplifying" the line:
+  #
+  #  1. `-p pmcp` — `pmcp` is both the root package AND the workspace root, and 20+
+  #     members depend on it, several with `full` (which includes `v1-compat`). A
+  #     workspace-wide build would unify `v1-compat` back on and prove nothing.
+  #     `-p` restricts the build to that package plus its own dependency closure.
+  #
+  #  2. `--no-default-features` — `v1-compat` is a member of `default`, so without
+  #     this it simply arrives via `default` and the build is vacuous.
+  #
+  #  3. `--features full-v2` (NOT a bare `--no-default-features`) — `default` also
+  #     carries `logging`, and a bare `--no-default-features` strips `http` and
+  #     `streamable-http` as well. That would "prove" severance by never compiling
+  #     the transport at all. `full-v2` is `full` minus exactly `v1-compat`, and
+  #     tests/v1_severability_tripwire.rs derives both lists from Cargo.toml so the
+  #     two enumerated lists cannot silently drift apart.
+  #
+  #  4. `RUSTFLAGS="-D warnings"` — load-bearing. `make lint` passes `-D clippy::all`
+  #     but NOT a bare `-D warnings`, so a helper left stranded after the v1 cut
+  #     would emit a `dead_code` rustc lint and the build would still pass green.
+  #
+  # Two flags that must NEVER be added here:
+  #
+  #  * `--all-features` can NEVER prove severance. Cargo features are additive, so
+  #    it enables `full-v2` AND `v1-compat` simultaneously. This is why the `msrv`
+  #    job (`cargo check --all-features`), the coverage step and `make build` are
+  #    all incapable of substituting for this job, however similar they look.
+  #
+  #  * `--all-targets` (likewise `--tests`, `--examples`) must not be added. The
+  #    severance build is deliberately lib-only — `pmcp` declares no `[[bin]]`, so
+  #    `cargo build` covers exactly the shipped library. Adding targets would drag
+  #    in ~29 struct-literal sites in tests/examples for ZERO additional proof
+  #    about the library that consumers actually link.
+  #
+  # The cache key is deliberately its own (`-cargo-severance-`): every other job
+  # builds a different feature set, and sharing a `target/` with an
+  # `--all-features` build makes timings confusing while cargo rebuilds anyway.
+  v1-severance:
+    name: v1 Severance Gate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-severance-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-severance-
+
+    - name: Build pmcp with v1 severed (SMPL-01 severance proof)
+      run: RUSTFLAGS="-D warnings" cargo build -p pmcp --no-default-features --features full-v2
+
   # Phase 108 (D-13) pmcp-agent target matrix. Two independent guarantees:
   #  1. The LOOP + SEAMS + config path compiles for wasm32 under DEFAULT features
   #     (no url-connector/reqwest/StreamableHttpTransport). The agent-as-server
@@ -440,7 +513,7 @@ jobs:
   # Reports as "gate" to match the org ruleset's required status check.
   gate:
     runs-on: ubuntu-latest
-    needs: [test, quality-gate, purity-check, pmcp-agent-targets, wasm32-purity]
+    needs: [test, quality-gate, purity-check, pmcp-agent-targets, wasm32-purity, v1-severance]
     if: always()
     steps:
       - name: Evaluate required checks
@@ -450,13 +523,15 @@ jobs:
           PURITY_RESULT: ${{ needs.purity-check.result }}
           AGENT_TARGETS_RESULT: ${{ needs.pmcp-agent-targets.result }}
           WASM32_RESULT: ${{ needs.wasm32-purity.result }}
+          SEVERANCE_RESULT: ${{ needs.v1-severance.result }}
         run: |
           if [[ "$TEST_RESULT" != "success" ]] || \
              [[ "$QG_RESULT" != "success" ]] || \
              [[ "$PURITY_RESULT" != "success" ]] || \
              [[ "$AGENT_TARGETS_RESULT" != "success" ]] || \
-             [[ "$WASM32_RESULT" != "success" ]]; then
-            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT, wasm32-purity=$WASM32_RESULT"
+             [[ "$WASM32_RESULT" != "success" ]] || \
+             [[ "$SEVERANCE_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT, purity-check=$PURITY_RESULT, pmcp-agent-targets=$AGENT_TARGETS_RESULT, wasm32-purity=$WASM32_RESULT, v1-severance=$SEVERANCE_RESULT"
             exit 1
           fi
           echo "All required checks passed."
