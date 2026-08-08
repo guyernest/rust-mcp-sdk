@@ -1515,7 +1515,7 @@ impl HttpIngress {
     /// `HttpIngress` variant has exactly one place to answer the question.
     fn is_initialize(&self) -> bool {
         match self {
-            Self::Public(msg) => v1::is_initialize_request(msg),
+            Self::Public(msg) => is_initialize_request(msg),
             Self::Discover { .. } | Self::SubscriptionsListen { .. } | Self::TasksUpdate { .. } => {
                 false
             },
@@ -2164,6 +2164,64 @@ async fn resolve_v2_gate(
     }
 }
 
+/// Classify a `TransportMessage` as an `initialize` request or not.
+///
+/// Extracted so both POST handlers can short-circuit protocol-version
+/// validation and session creation without re-implementing the `matches!`.
+///
+/// # Why this is NOT in the `v1` pair
+///
+/// It reads like v1-only machinery — `initialize` is the 2025-11-25 handshake and
+/// the 2026-07-28 transport has none — and plan 117-12 did put it in the pair,
+/// with a `const fn … -> false` twin. That was wrong, and the code review of this
+/// phase caught it: this function holds **no v1 state at all**. It is a pure
+/// `matches!` over a message that both feature sets can receive, because a
+/// `full-v2` server still *serves* `initialize` — `v2_verb_rejection` is wired
+/// only to GET and DELETE, so an `initialize` POST reaches `Server` core and is
+/// dispatched normally.
+///
+/// With the twin in place, that POST took the non-init branch of
+/// [`compute_outbound_protocol_version`] and echoed
+/// `MCP-Protocol-Version: 2025-03-26` (the crate default) while its own
+/// `InitializeResult` body carried the negotiated `2025-11-25` — a silent
+/// protocol downgrade caused purely by the feature set the server was compiled
+/// with, since `StreamableHttpTransport` stores the header value and replays it
+/// on every subsequent request. A twin is only honest when the caller can
+/// correctly handle the constant it returns; here it could not.
+///
+/// [`update_session_after_init`](v1::update_session_after_init) — the function
+/// that actually touches the session map — stays in the pair and keeps its `()`
+/// twin. Severance is about STATE, not about which era invented the concept.
+///
+/// `tests/v2_initialize_negotiated_version_header.rs` fails if either classifier
+/// is pushed back into the pair.
+fn is_initialize_request(message: &TransportMessage) -> bool {
+    matches!(
+        message,
+        TransportMessage::Request { request: Request::Client(boxed), .. }
+            if matches!(**boxed, ClientRequest::Initialize(_))
+    )
+}
+
+/// Extract the negotiated protocol version from an `initialize` response.
+///
+/// Ungated for the same reason as [`is_initialize_request`], which see: this is a
+/// `serde_json::from_value` over a response payload and holds no v1 state, while
+/// a `full-v2` build still produces `InitializeResult` bodies whose
+/// `protocolVersion` the outbound header must agree with.
+fn extract_negotiated_version(response: &TransportMessage) -> Option<String> {
+    if let TransportMessage::Response(ref json_resp) = response {
+        if let crate::types::jsonrpc::ResponsePayload::Result(ref value) = json_resp.payload {
+            if let Ok(init_result) =
+                serde_json::from_value::<crate::types::InitializeResult>(value.clone())
+            {
+                return Some(init_result.protocol_version.0);
+            }
+        }
+    }
+    None
+}
+
 /// Compute the outbound `MCP-Protocol-Version` header value.
 ///
 /// Used by both POST handlers to echo either the negotiated version from an
@@ -2446,7 +2504,7 @@ async fn handle_fast_path_request(
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     let negotiated_version = if is_init_request {
-        let version = v1::extract_negotiated_version(&response_msg);
+        let version = extract_negotiated_version(&response_msg);
         v1::update_session_after_init(state, response_session_id.as_ref(), version.clone());
         version
     } else {
@@ -3382,7 +3440,7 @@ async fn read_and_classify_fast(
 /// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
 /// [`parse_transport_message_fast`], and [`handle_fast_path_request`] so
 /// this orchestrator is a thin early-return pipeline, sharing
-/// [`extract_session_and_protocol_headers`], [`v1::is_initialize_request`],
+/// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
 /// [`v1::resolve_session_for_request`], and [`compute_outbound_protocol_version`]
 /// with the middleware path.
 ///
@@ -3877,7 +3935,7 @@ async fn dispatch_message_with_middleware(
             ));
 
             let negotiated_version = if is_init_request {
-                let version = v1::extract_negotiated_version(&response_msg);
+                let version = extract_negotiated_version(&response_msg);
                 v1::update_session_after_init(state, response_session_id.as_ref(), version.clone());
                 version
             } else {

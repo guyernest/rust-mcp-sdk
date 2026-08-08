@@ -561,10 +561,16 @@ impl<T: Transport> Client<T> {
     ///    having handshaken — a semantic change to a subsystem this plan has no
     ///    mandate over.
     ///
-    /// SMPL-01's "initialize" clause is therefore met on the SERVER side only
-    /// (plan 117-12 moved `process_init_session`, `is_initialize_request` and
-    /// the rest of the seven session-lifecycle functions into `v1_session.rs`).
-    /// `docs/v1-sunset-policy.md` MUST name this as a known limitation.
+    /// SMPL-01's "initialize" clause is therefore met on the SERVER side only,
+    /// and even there it is the session BOOKKEEPING that is severed, not the
+    /// handshake: plan 117-12 moved `process_init_session`,
+    /// `update_session_after_init` and the rest of the session-lifecycle
+    /// functions into `v1_session.rs`, while a `full-v2` server still answers an
+    /// `initialize` POST statelessly (only GET and DELETE are refused `405`).
+    /// The pure classifiers `is_initialize_request` /
+    /// `extract_negotiated_version` therefore stay ungated in
+    /// `streamable_http_server.rs`. `docs/v1-sunset-policy.md` MUST name this as
+    /// a known limitation.
     ///
     /// # Errors
     ///

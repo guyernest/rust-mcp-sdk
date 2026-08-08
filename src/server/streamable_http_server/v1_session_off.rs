@@ -264,15 +264,6 @@ pub(crate) fn validate_non_init_session(
     Ok(None)
 }
 
-/// No version is ever negotiated out of an `initialize` result, because this
-/// build has no `initialize` exchange to read one from.
-///
-/// The 2026-07-28 transport carries its version per request, in a header, so a
-/// handshake-negotiated version would be the wrong authority even if one existed.
-pub(crate) const fn extract_negotiated_version(_response: &TransportMessage) -> Option<String> {
-    None
-}
-
 /// Recording the outcome of an initialization is a no-op: nothing was recorded
 /// to update.
 pub(crate) fn update_session_after_init(
@@ -297,16 +288,6 @@ pub(crate) const fn validate_protocol_version_matches_session(
     _protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
     Ok(())
-}
-
-/// Nothing is ever an `initialize` request, because the 2026-07-28 transport
-/// has no handshake.
-///
-/// The caller uses this flag to decide session minting, so a constant `false`
-/// means the mint path is unreachable on this build by construction rather than
-/// by a runtime guard.
-pub(crate) const fn is_initialize_request(_message: &TransportMessage) -> bool {
-    false
 }
 
 /// There is never a response session id, on any request, ever.

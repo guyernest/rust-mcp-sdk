@@ -75,7 +75,6 @@ use super::{create_error_response, EventStore, ServerState, StreamableHttpServer
 use crate::shared::http_constants::{LAST_EVENT_ID, MCP_SESSION_ID};
 use crate::shared::TransportMessage;
 use crate::types::protocol::{error_codes, Era};
-use crate::types::{ClientRequest, Request};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{sse::Event, IntoResponse, Response, Sse};
 use axum::Json;
@@ -587,20 +586,6 @@ pub(crate) fn validate_non_init_session(
     }
 }
 
-/// Extract negotiated protocol version from initialize response
-pub(crate) fn extract_negotiated_version(response: &TransportMessage) -> Option<String> {
-    if let TransportMessage::Response(ref json_resp) = response {
-        if let crate::types::jsonrpc::ResponsePayload::Result(ref value) = json_resp.payload {
-            if let Ok(init_result) =
-                serde_json::from_value::<crate::types::InitializeResult>(value.clone())
-            {
-                return Some(init_result.protocol_version.0);
-            }
-        }
-    }
-    None
-}
-
 /// Update session info after initialization
 pub(crate) fn update_session_after_init(
     state: &ServerState,
@@ -664,21 +649,6 @@ pub(crate) fn validate_protocol_version_matches_session(
             negotiated_version, provided_version
         ),
     ))
-}
-
-/// Classify a `TransportMessage` as an `initialize` request or not.
-///
-/// Extracted so both POST handlers can short-circuit protocol-version
-/// validation and session creation without re-implementing the `matches!`.
-///
-/// v1-only because `initialize` is: the 2026-07-28 transport has no handshake,
-/// so the twin answers `false` for every message and no session is ever minted.
-pub(crate) fn is_initialize_request(message: &TransportMessage) -> bool {
-    matches!(
-        message,
-        TransportMessage::Request { request: Request::Client(boxed), .. }
-            if matches!(**boxed, ClientRequest::Initialize(_))
-    )
 }
 
 /// Resolve the response session ID given the request type and incoming headers.
