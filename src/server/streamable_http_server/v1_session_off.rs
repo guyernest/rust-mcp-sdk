@@ -55,8 +55,10 @@
 // `src/shared/http_body_cap.rs`. The real half carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{EventStoreHandle, StreamableHttpServerConfig};
+use super::{EventStoreHandle, ServerState, StreamableHttpServerConfig};
 use crate::shared::TransportMessage;
+use crate::types::protocol::Era;
+use axum::http::HeaderMap;
 use tokio::sync::mpsc;
 
 /// The zero-sized stand-in for the v1 session and resumability state.
@@ -159,14 +161,92 @@ pub(crate) const fn route_to_session_stream(
 }
 
 // ---------------------------------------------------------------------------
-// v1 resumability state — there is none.
+// Session era gate — the v2 constant answers.
+//
+// Every signature below is its real counterpart's, arity and parameter types
+// intact, `era` included. The twins ignore `era`; they do NOT drop it. A caller
+// that no longer had to supply an era would be one edit away from resolving one
+// for itself, and Phase 112 D-11 / Phase 113 Pitfall 2 forbid a second era
+// resolver in the transport: the era is resolved ONCE at ingress and CONSUMED
+// everywhere else. Keeping the parameter is how that stays true on this build
+// too. (Unused names carry a leading underscore, which is Rust's marker for
+// "deliberately ignored" — the types and the arity are what callers see.)
+//
+// The pure `_for` rule and the state-reading `fn` stay SEPARATE items here as
+// well. Flattening them would leave the real half with a rule the twin has no
+// counterpart for, and the rule is exactly what the truth-table and property
+// tests exercise without constructing a live `ServerState`.
 // ---------------------------------------------------------------------------
+
+/// The session-era rule, collapsed to a constant.
+///
+/// There is no MCP 2025-11-25 session concept in this build, so a configured
+/// generator is not evidence of anything and the era does not need consulting:
+/// the answer is `false` for every input.
+pub(crate) const fn sessions_active_for(_cfg_has_generator: bool, _era: Option<Era>) -> bool {
+    false
+}
+
+/// Sessions are never live on this build.
+///
+/// Routed through [`sessions_active_for`] rather than returning `false` inline,
+/// for two reasons: the rule stays the single place the answer comes from on
+/// BOTH halves, and `era` is visibly CONSUMED here instead of discarded.
+pub(crate) const fn sessions_active(_state: &ServerState, era: Option<Era>) -> bool {
+    sessions_active_for(false, era)
+}
+
+/// There is never a session-id generator to hand out, so nothing can mint one.
+pub(crate) const fn active_session_generator(
+    _state: &ServerState,
+    _era: Option<Era>,
+) -> Option<&(dyn Fn() -> String + Send + Sync)> {
+    None
+}
+
+/// No `Mcp-Session-Id` response header is ever emitted, on any request.
+///
+/// The real half is "the ONE place" that header is written; here there is no
+/// such place at all, which is the stronger form of the same invariant. The
+/// `headers` argument is taken and left untouched.
+pub(crate) const fn apply_session_header(
+    _headers: &mut HeaderMap,
+    _response_session_id: Option<&String>,
+    _sessions_on: bool,
+) {
+}
+
+// ---------------------------------------------------------------------------
+// Resumability era gate — the v2 constant answers.
+//
+// The 2026-07-28 transport spec is verbatim that resumable SSE streams via
+// `Last-Event-ID` are not supported. On this build that is not a runtime
+// refusal: there is no store to reach, no replay path compiled behind these
+// functions, and nothing that reads the header.
+// ---------------------------------------------------------------------------
+
+/// The resumability rule, collapsed to a constant.
+///
+/// `false` for every input: this build offers no resumability to gate.
+pub(crate) const fn resumability_active_for(_cfg_has_event_store: bool, _era: Option<Era>) -> bool {
+    false
+}
+
+/// Resumability is never live on this build.
+///
+/// Routed through [`resumability_active_for`] for the same two reasons
+/// [`sessions_active`] is routed through its rule.
+pub(crate) const fn resumability_active(_state: &ServerState, era: Option<Era>) -> bool {
+    resumability_active_for(false, era)
+}
 
 /// There is no store to hand out, on any request, ever.
 ///
-/// The 2026-07-28 transport spec is verbatim that resumable SSE streams via
-/// `Last-Event-ID` are not supported, so `None` is the whole answer rather than
-/// a degraded one.
-pub(crate) const fn event_store(_state: &V1State) -> Option<&EventStoreHandle> {
+/// The gated borrow degenerates to a constant `None`, so no caller can replay
+/// from a store or write to one — because there is none to reach.
+pub(crate) const fn resumability_store(
+    _state: &ServerState,
+    _era: Option<Era>,
+) -> Option<&EventStoreHandle> {
     None
 }

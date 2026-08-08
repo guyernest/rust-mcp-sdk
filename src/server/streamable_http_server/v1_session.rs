@@ -71,8 +71,11 @@
 // `src/shared/http_body_cap.rs`. The twin carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{EventStoreHandle, StreamableHttpServerConfig};
+use super::{EventStoreHandle, ServerState, StreamableHttpServerConfig};
+use crate::shared::http_constants::MCP_SESSION_ID;
 use crate::shared::TransportMessage;
+use crate::types::protocol::Era;
+use axum::http::{HeaderMap, HeaderValue};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -275,15 +278,158 @@ pub(crate) fn route_to_session_stream(
 }
 
 // ---------------------------------------------------------------------------
-// v1 resumability state.
+// Session era gate (Plan 113-04, HTTP-01; MOVED here by plan 117-09).
+//
+// `stateless()` is a BUILD-TIME config: it clears `session_id_generator` once,
+// when the server is constructed. A dual-version server is built with
+// `Default::default()`, which keeps a live generator — so every session decision
+// that keys off the CONFIG would mint, demand and echo session ids for v2
+// requests too (RESEARCH Pitfall 1). HTTP-01 requires the opposite: on v2 there
+// is no handshake and no session at all.
+//
+// The fix is one predicate, not a transport fork. Every session decision routes
+// through `sessions_active`, which makes the ERA the decider and leaves the v1
+// path byte-for-byte unchanged.
 // ---------------------------------------------------------------------------
 
-/// The configured v1 resumability store, if any.
+/// The pure session-era rule: are sessions live for THIS request?
 ///
-/// An `Option`-returning accessor passes the twin test: `full-v2` answers `None`
-/// honestly, because that build has no store at all. Callers must still route
-/// through `resumability_store`, which additionally gates on the request's
-/// era.
-pub(crate) fn event_store(state: &V1State) -> Option<&EventStoreHandle> {
-    state.event_store.as_ref()
+/// | `cfg_has_generator` | `era`            | result | why |
+/// |---------------------|------------------|--------|-----|
+/// | `true`              | `Some(Era::V2)`  | `false`| v2 is handshake-free and session-free (HTTP-01) |
+/// | `true`              | `Some(Era::V1)`  | `true` | v1 session behavior is untouched |
+/// | `true`              | `None`           | `true` | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `false`             | anything         | `false`| an explicitly `stateless()` server stays stateless |
+///
+/// Split out from [`sessions_active`] so the RULE is unit- and property-testable
+/// without constructing a live [`ServerState`].
+pub(crate) const fn sessions_active_for(cfg_has_generator: bool, era: Option<Era>) -> bool {
+    !matches!(era, Some(Era::V2)) && cfg_has_generator
+}
+
+/// Are sessions live for this request? THE single reader of
+/// `config.session_id_generator`'s presence.
+///
+/// `era` is the ALREADY-RESOLVED [`ProtocolContext::era`](crate::types::protocol::ProtocolContext)
+/// being CONSUMED here — this layer never runs a second era resolver (Pitfall 2 /
+/// D-11). The POST entrypoints resolve it once via the v2 header gate and thread
+/// that same value into every session decision below.
+///
+/// `None` means the server is NOT opted into v2, so no era detection ran at all
+/// and the v1 path executes with zero era code (D-04).
+pub(crate) fn sessions_active(state: &ServerState, era: Option<Era>) -> bool {
+    sessions_active_for(state.config.session_id_generator.is_some(), era)
+}
+
+/// The session-id generator to use for THIS request, or `None` when sessions are
+/// not active for it.
+///
+/// The second (and last) permitted reader of `config.session_id_generator`: it
+/// gates the borrow behind [`sessions_active`] so no caller can reach the
+/// generator on a request whose era suppresses sessions.
+pub(crate) fn active_session_generator(
+    state: &ServerState,
+    era: Option<Era>,
+) -> Option<&(dyn Fn() -> String + Send + Sync)> {
+    if !sessions_active(state, era) {
+        return None;
+    }
+    state.config.session_id_generator.as_deref()
+}
+
+/// The ONE place a `Mcp-Session-Id` response header is emitted.
+///
+/// `response_session_id` is already `None` for a v2 request (both session
+/// resolvers return `None` when [`sessions_active`] is false), so this is
+/// defense in depth: even a future caller that manufactured a session id could
+/// not leak it onto a v2 response. Non-panicking — an unrepresentable id is
+/// skipped rather than unwrapped (T-112-13 discipline).
+pub(crate) fn apply_session_header(
+    headers: &mut HeaderMap,
+    response_session_id: Option<&String>,
+    sessions_on: bool,
+) {
+    if !sessions_on {
+        return;
+    }
+    let Some(sid) = response_session_id else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(sid) {
+        headers.insert(MCP_SESSION_ID, value);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resumability era gate (Plan 113-08, HTTP-05; MOVED here by plan 117-09).
+//
+// The 2026-07-28 transport spec is verbatim: "Resumable SSE streams via
+// `Last-Event-ID` are not supported", and a `Last-Event-ID` header "ignore it".
+// The official conformance suite has already retired its `sse-polling` scenario
+// for this revision.
+//
+// The gate mirrors [`sessions_active`] exactly: ONE predicate, consuming the
+// ALREADY-RESOLVED era, routing every read / replay / store decision. It is
+// deliberately INDEPENDENT of the session gate. Before plan 113-08 a v2 request
+// happened not to reach the event store, but only INCIDENTALLY — the store write
+// is conditioned on a `response_session_id`, which the session gate already
+// zeroes on v2. An incidental guarantee is not a guarantee: the SSE-stream
+// routing bug that plan fixed is exactly what happens when one of those two
+// couplings is broken and the other is assumed to cover it.
+//
+// `EventStoreHandle` itself stays in the transport rather than moving here —
+// see the SEVERABILITY note beside its declaration for why the null twin must
+// not be the thing that declares `Arc<dyn EventStore>`.
+// ---------------------------------------------------------------------------
+
+/// The pure resumability rule: is event replay/retention live for THIS request?
+///
+/// | `cfg_has_event_store` | `era`           | result | why |
+/// |-----------------------|-----------------|--------|-----|
+/// | `true`                | `Some(Era::V2)` | `false`| v2 does not offer resumability at all (HTTP-05) |
+/// | `true`                | `Some(Era::V1)` | `true` | v1 resumability is untouched |
+/// | `true`                | `None`          | `true` | not opted into v2 → zero era code, v1 path unchanged (D-04) |
+/// | `false`               | anything        | `false`| no store configured, nothing to read or write |
+///
+/// Split out from [`resumability_active`] so the RULE is unit- and
+/// property-testable without constructing a live [`ServerState`].
+pub(crate) const fn resumability_active_for(cfg_has_event_store: bool, era: Option<Era>) -> bool {
+    // The RULE is shared with `sessions_active_for` — both facilities are
+    // "v1-only, and only when configured". Sharing the pure predicate does NOT
+    // couple the two GATES (the point of keeping them independent): each still
+    // reads its own config field, `event_store` here and `session_id_generator`
+    // there. What it removes is a second copy of the era rule that had to be
+    // edited in lockstep, along with a cloned truth table and a cloned proptest.
+    sessions_active_for(cfg_has_event_store, era)
+}
+
+/// Is resumability live for this request? THE single reader of the event
+/// store's presence.
+///
+/// `era` is the ALREADY-RESOLVED [`ProtocolContext::era`](crate::types::protocol::ProtocolContext)
+/// being CONSUMED here — this layer never runs a second era resolver (Pitfall 2 /
+/// D-11), exactly as [`sessions_active`] does not.
+///
+/// `None` means the server is NOT opted into v2, so no era detection ran at all
+/// and the v1 path executes with zero era code (D-04).
+pub(crate) fn resumability_active(state: &ServerState, era: Option<Era>) -> bool {
+    resumability_active_for(state.v1.event_store.is_some(), era)
+}
+
+/// The event store to use for THIS request, or `None` when its era suppresses
+/// resumability.
+///
+/// The second (and last) permitted reader of the v1 event store: it gates
+/// the borrow behind [`resumability_active`], so no caller can reach the store —
+/// to REPLAY from it or to WRITE to it — on a v2 request. Storing without
+/// replaying would be dead retention of response envelopes, which is precisely
+/// the material an id-replay bug feeds on (T-113-30).
+pub(crate) fn resumability_store(
+    state: &ServerState,
+    era: Option<Era>,
+) -> Option<&EventStoreHandle> {
+    if !resumability_active(state, era) {
+        return None;
+    }
+    state.v1.event_store.as_ref()
 }
