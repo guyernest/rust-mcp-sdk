@@ -327,3 +327,59 @@ To incorporate:
 ```
 /gsd:plan-phase 117 --reviews
 ```
+
+
+---
+
+## Resolution Pass (`/gsd:plan-phase 117 --reviews`, 2026-08-08)
+
+Plan set is now **14 plans in 6 waves**. `117-01` is the only plan left byte-identical.
+
+### Confirmed blockers — FIXED
+
+| # | Finding | Resolution |
+|---|---|---|
+| HIGH #2 | 117-06 ↔ 117-09 tripwire contradiction | The substring blacklist is REPLACED by semantic checks in `117-06` Task 3. **FOUR of the eight tokens collided, not one** — measured table now lives in `117-06`'s `<cross_plan_constraint>` block: `sessions` ⊂ `sessions_active_for`/`sessions_on` (`:416`,`:463`); `event_store` ⊂ `cfg_has_event_store` (`:523`) and the `event_store` parameter (`:4377`,`:4408`); `EventStore` ⊂ `EventStoreHandle` in three signatures (`:509`,`:558`,`:4377`); `sse_streams` ⊂ the surviving `build_response` read (`:1936`). `HashMap`/`RwLock`/`LAST_EVENT_ID`/`Last-Event-ID` do NOT collide and stay forbidden. New checks: `V1State` must be a unit struct; no state-bearing type; no state/header OPERATION; nothing declared that `v1_session.rs` does not also declare (derived, not enumerated). One POSITIVE control (a required 117-09 identifier must be ACCEPTED) plus four negative controls. |
+| HIGH #8 | 117-13's 405 never executed under `full-v2` | New `117-13` Task 2 creates `tests/v2_verbs_405_on_severed_build.rs`, whole-file `#![cfg(… not(feature = "v1-compat") …)]`, and RUNS `cargo test --test v2_verbs_405_on_severed_build --no-default-features --features full-v2`. A `0 tests` result is an explicit FAILURE. Discriminates 405 from 404 (the unrouted answer) and carries a POST control. **Sibling audit:** 117-06/09/12 make COMPILATION claims, correctly proven by a build — only 117-13 made a runtime claim. 117-14 gets the same treatment for the client. |
+
+### Refuted — left alone
+
+| # | Finding | Evidence |
+|---|---|---|
+| HIGH #1 | "RED tests break the commit policy" | REFUTED upstream; `117-04`'s RED-test staging is unchanged. |
+| MEDIUM | "`Cargo.lock` omitted from `files_modified`" | **REFUTED.** `Cargo.lock` is in `.gitignore:3` and `git ls-files --error-unmatch Cargo.lock` errors — untracked. There is no lockfile to declare. `117-10` now asserts this rather than leaving it ambiguous. |
+| MEDIUM | "`pmat comply check` is never run" | Half-refuted upstream (`make comply` is in `quality-gate`). No redundant invocations added. |
+
+### The five unverified HIGHs — all CONFIRMED against source
+
+| # | Verdict | Evidence | Fix |
+|---|---|---|---|
+| #3 era classification | **CONFIRMED** | `src/shared/streamable_http.rs:1096` (connect/send failure) and `:1175`/`:1183` (non-2xx status) BOTH produce `Error::Transport(TransportError::Request(String))`. Only the pmcp-server case is separable (`is_v2()` JSON-RPC-envelope branch `:1160-1171` → `Error::Protocol`); third-party plain 400/404 is not. | `117-07` Task 1: `endpoint_is_reachable` TCP pre-check + typed `ProbeOutcome` built before stringification; structural invariant that era V1 is returned only on a real `initialize` success; two named imprecisions recorded; contract written once and CITED by `117-11` Task 1. `InvokerError` IS `#[non_exhaustive]` (`factory.rs:33`) so a variant there is permitted; `pmcp::Error`/`TransportError` are not. |
+| #4 tester observability | **CONFIRMED** | `TestResult` = `{name, category, status, duration, error, details}` (`report.rs:74-81`); `TestReport` = `{tests, duration, timestamp, summary}` (`:153-158`). No header, session id, envelope field, capability location, caching hint or HTTP status anywhere. | New `crates/mcp-tester/src/era_observations.rs` with stable `ObservationId`s (`method.initialize`, `header.mcp_session_id`, `result.cache_scope`, …); `117-08` adds a required `observation_id` to every baseline entry; `117-11` joins on the ID, never on display names, with a two-direction probe↔baseline coverage test. |
+| #5 `server/discover` vs untouched domain | **CONFIRMED** | `core_domain.rs:17` pushes `test_initialize_handshake` unconditionally; `:48` calls `tester.test_initialize()`; `:150` reads `server_capabilities()` with a `"initialize not called?"` message at `:98`. | `117-11` may now change `core_domain.rs` — and ONLY that domain file — making C-01/C-04 era-aware. Synthesising an `InitializeResult` on v2 is explicitly FORBIDDEN and acceptance-checked. `files_modified` updated. |
+| #6 CLNT-03 task polling conditional | **CONFIRMED** | `117-04` Task 2 said "if the result carries a related task"; `117-10` Task 1 permitted dropping the demo. | `117-04` Task 1's `pinned_server` now registers a tool whose result is GUARANTEED task-associated and requires ≥1 non-terminal poll; new test `agent_drives_task_polling_to_terminal_on_v2` asserts task-id discovery, a SERVER-observed poll count ≥ 1, and terminal state, with NO conditional. `117-10` may still drop the demo but must cite that test by name. |
+| #7 severability is server-only | **CONFIRMED** | `src/shared/streamable_http.rs` (2,677 lines) holds `SendOptions::resumption_token` `:52`, `StreamableHttpTransportConfig::session_id` `:107` / `::on_resumption_token` `:111`, builder fields/setters `:162-225`, `session_id()`/`set_session_id()` `:582-588`, the `Last-Event-ID` writer `:636-647`, the `Mcp-Session-Id` capture `:946`, the DELETE teardown `:1412-1428` — 55 sites, none gated by any plan. SMPL-01 names "initialize/session lifecycle" with no server-only qualifier. | **NEW PLAN `117-14`** (wave 5): derived client inventory, resumability + session-lifecycle gating, `LAST_EVENT_ID` co-gated with its one reader, A4/`MCP_SESSION_ID` measured, `Client::initialize` severability measured with a documented fallback, derived tripwire + a runtime proof RUN on `full-v2`. `117-13` moves to wave 6 and its policy now enumerates BOTH sides. |
+
+### MEDIUM/LOW findings actioned
+
+- **117-02** — `common::v2::get` reads to EOF and the v1 GET is a long-lived `text/event-stream`; a bounded frame-counting LOCAL reader is now required, and HEADER identity is asserted separately from body bytes (`Resp` stores `Mcp-Session-Id` outside `raw`). Third negative control added.
+- **117-07** — `EffectTrace` era is plumbed END TO END (derived construction-site list must be populated); the undeclared-live-era and legacy-trace policies are stated in code and each covered by a named test.
+- **117-07** — `pmcp-agent` 0.2.0 breaks TWO measured pins: `crates/pmcp-team-servers/Cargo.toml:22` and `cargo-pmcp/Cargo.toml:75` (both `version = "0.1"`, which `^0.1` will not satisfy → whole-workspace resolution failure). Both manifests added to `files_modified` with a `cargo metadata` acceptance check.
+- **117-05** — PyYAML replaced by root `[dev-dependencies] serde_yaml = "0.9"`. Zero new packages: `crates/mcp-tester/Cargo.toml:26` already deps it and `serde_yaml 0.9.34` is already resolved. Reasoning recorded in the module doc; `Cargo.toml` added to `files_modified`.
+- **117-08** — validation moved INTO `parse_baseline` (rejects empty/duplicate `id` and `observation_id`), so the fuzz invariant asserts what the parser actually guarantees.
+- **117-03** — `BTreeSet` → occurrence-counting `BTreeMap` multiset, with a duplicate-line negative control.
+- **117-10** — dev-dependency moved into Task 1 so its `cargo build --example` criterion is satisfiable when checked.
+- **`make test-examples` audit** — only `117-10` cites it, and it already asserts the `✓ … built successfully` line rather than the target's exit code. No other plan leans on a never-fails target.
+
+### Defects found during verification that no reviewer raised
+
+- **117-09 Task 1** — a raw `sse_streams()` accessor returning `&Arc<RwLock<HashMap<..>>>` is UNIMPLEMENTABLE on a ZST twin. The surviving `build_response` read (`:1936`) must become a `v1::` behavioural operation returning an owned answer; `Option`-returning accessors remain fine.
+- **117-12 → 117-13 orphaned handoff** — `117-12` defers `extract_session_and_protocol_headers` (`:2174-2188`) and `compute_outbound_protocol_version` (`:2285-2312`) to `117-13`, which never claimed them. `117-13` Task 1 now owns both explicitly.
+- **117-12 → 117-13 dead code** — once `handle_get_sse`'s body moves in `117-13`, the four SSE twins lose their only caller and `-D warnings` turns `dead_code` into an error. `117-13` Task 1 now deletes them rather than adding an `allow`.
+
+### Wave/dependency changes (called out per the revision rules)
+
+- New `117-14` at **wave 5**, `depends_on: ["117-12"]`.
+- `117-13` moves **wave 5 → wave 6**, `depends_on: ["117-12", "117-14"]`, so the sunset policy is written after the client inventory exists.
+- `src/shared/http_constants.rs` moves entirely to `117-14` (it already owns the file), keeping `117-13` at 3 tasks; `117-13` verifies the gating and reports absence as a finding.
+- All four requirement IDs still covered: CLNT-03 (04/07/10), CLNT-04 (03/08/11), SMPL-01 (01/05/06/13/14), SMPL-02 (02/06/09/12/13/14).
