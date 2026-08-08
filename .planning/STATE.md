@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 117-06-PLAN.md
-last_updated: "2026-08-08T06:00:07.328Z"
+last_updated: "2026-08-08T06:37:59.810Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 379
+  completed_plans: 380
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 6 of 14
+Plan: 7 of 14
 Plans complete: 16 of 16
 Remaining: none
 Status: Ready to execute
@@ -1008,6 +1008,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 117-06: the v1 severance seam is a PAIRED MODULE — one 'mod v1;' with two cfg_attr path attributes selects v1_session.rs (v1-compat) or the zero-sized v1_session_off.rs (full-v2). Repo's first conditional #[path]; proven on a ~30-line payload before the 6,408-line transport depends on it.
 - [Phase ?]: 117-06: SMPL-02 is asserted SEMANTICALLY (unit-struct V1State, no state-bearing type, no state/header operation, no declaration absent from the real half), never by substring blacklist — four of the eight naive tokens are required verbatim by 117-09/12/13.
 - [Phase ?]: 117-06: src/shared/event_store.rs (421 lines, 6-method trait) is gated behind v1-compat at BOTH its mod decl and its 8-symbol re-export; sse_parser.rs and sse_optimized.rs are deliberately NOT gated (A-D03: v2 subscriptions/listen returns a live text/event-stream).
+- [Phase ?]: 117-07: era probe lives in pmcp-agent client_for ONLY — pmcp::Client untouched (A-D08); fallback classified by a typed ProbeOutcome built from a host-layer TCP reachability probe, never by error text
+- [Phase ?]: 117-07: EffectTrace records the negotiated VERSION STRING, not an Era (zero core API change); ReplayInvoker fails deterministically on an era mismatch, with the undeclared-live-era and legacy-trace policies documented in code and each covered by a named test
 
 ### Pending Todos
 
@@ -1062,7 +1064,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T06:00:07.314Z
+Last session: 2026-08-08T06:37:43.697Z
 Stopped at: Completed 117-06-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1187,3 +1189,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P03 | 48min | 2 tasks | 1 files |
 | Phase 117 P04 | 47min | 2 tasks | 2 files |
 | Phase 117 P06 | 82min | 3 tasks | 6 files |
+| Phase 117 P07 | 95min | 3 tasks | 7 files |
