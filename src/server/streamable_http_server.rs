@@ -76,8 +76,14 @@ pub(crate) mod v1;
 /// (`store_event`, `replay_events_after`, `get_stream_for_event`), and is the
 /// trait the crate-internal `v1::EventStoreHandle` alias erases for the v1
 /// SSE-resumability path. The other
-/// lives in [`crate::shared::event_store`], has six methods, and is a separate
+/// lives in `crate::shared::event_store`, has six methods, and is a separate
 /// facility that plan 117-06 already gated behind `v1-compat` wholesale.
+///
+/// That path is a code span rather than an intra-doc link for the same reason as
+/// `http_constants`'s `LAST_EVENT_ID`: this doc is UNGATED, the module it names
+/// is not, so a link resolves to nothing under
+/// `cargo doc --no-default-features --features full-v2` and rustdoc warns. Do not
+/// "fix" any of the three spans below back into links.
 ///
 /// # v1-only surface, deliberately NOT gated
 ///
@@ -121,8 +127,9 @@ type EventsMap = HashMap<String, EventList>;
 /// In-memory event store implementation.
 ///
 /// Implements this module's three-method [`EventStore`] trait — NOT the
-/// six-method [`crate::shared::event_store::EventStore`], and NOT the
-/// same-named [`crate::shared::event_store::InMemoryEventStore`].
+/// six-method `crate::shared::event_store::EventStore`, and NOT the
+/// same-named `crate::shared::event_store::InMemoryEventStore` (both spans, not
+/// links: that module is gated behind `v1-compat` while this doc is not).
 ///
 /// # Public path
 ///

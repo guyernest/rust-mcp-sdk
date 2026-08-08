@@ -28,7 +28,7 @@ one that understates it, because a consumer plans a 3.0 migration against it.
 | The whole v1 session lifecycle: `initialize`-driven session creation, session validation, the session map, the per-session negotiated version, SSE stream registry | `src/server/streamable_http_server/v1_session.rs` (paired with `v1_session_off.rs`) | v2 is stateless — `initialize` is removed from the spec and there is no session to track |
 | SSE **resumability**: `Last-Event-ID` replay, the transport-local event store, the `EventStoreHandle` alias | `src/server/streamable_http_server/v1_session.rs` | v2 removes `Last-Event-ID`; a dropped v2 stream is re-issued as a new request rather than replayed |
 | The `GET /` and `DELETE /` **bodies** — SSE stream setup and session teardown | `src/server/streamable_http_server/v1_session.rs` (`handle_get_sse_body`, `handle_delete_body`) | Both verbs answer `405` on 2026-07-28. See “Refused, not unrouted” below |
-| The reader of the inbound `Mcp-Session-Id` request header on the POST path | `src/server/streamable_http_server/v1_session.rs` (`incoming_session_header`) | A build with no sessions never parses an inbound session id |
+| The reader of the inbound `Mcp-Session-Id` request header on the **fast** POST path | `src/server/streamable_http_server/v1_session.rs` (`incoming_session_header`) | A build with no sessions never parses an inbound session id **on the fast POST path**. The middleware POST path is a separate reader — see “deliberately NOT severed” below |
 | The standalone resumption-token store and its tokens | `src/shared/event_store.rs` (whole module, plus its `pub use` re-exports in `src/shared/mod.rs`) | Same reason as resumability above |
 | Four `StreamableHttpServerConfig` **public fields**: `session_id_generator`, `event_store`, `on_session_initialized`, `on_session_closed`, plus the private `SessionCallback` alias that types two of them | `src/server/streamable_http_server.rs` | They configure machinery that does not exist on `full-v2`. See “Semver” below — this is a public API change, and it is safe for exactly one reason |
 
@@ -48,8 +48,8 @@ Gated in `src/shared/streamable_http.rs` unless noted:
 | `StreamableHttpTransportConfigBuilder::on_resumption_token` | public method |
 | `StreamableHttpTransport::session_id()` | public method |
 | `StreamableHttpTransport::set_session_id()` | public method |
-| `StreamableHttpTransport::start_sse`'s cursor **parameter** | named `_ignored_cursor` on `full-v2`; arity and type unchanged, so no caller breaks |
-| The `Last-Event-ID` writer (`apply_resumption_header`), and the `v1-compat` halves of `resumption_cursor`, `resumption_callback`, `outbound_session`, `capture_session_header`, `terminate_session` and both `debug_v1_fields` | private surface |
+| The `Last-Event-ID` writer `apply_resumption_header` | private fn, gated |
+| The `v1-compat` halves of `resumption_cursor`, `resumption_callback`, `outbound_session`, `capture_session_header`, `terminate_session` and both `debug_v1_fields` | private surface |
 
 The observable consequence: on `full-v2` the client stores no `Mcp-Session-Id`, sends no
 `Mcp-Session-Id`, writes no `Last-Event-ID`, and contains **no DELETE construction site at
@@ -79,6 +79,8 @@ the source itself.
 | **`start_sse`'s cursor parameter on `full-v2`** | `src/shared/streamable_http.rs` | Present but INERT (`_ignored_cursor`, never read), kept at the same arity so no caller needs a `#[cfg]` |
 | **`session_id: Option<String>` threading the server POST pipeline** | `src/server/streamable_http_server.rs` | Kept at the same arity through ~10 functions and always `None` on `full-v2`. Dropping it would mean a call site that no longer has to supply a session id — one edit away from deciding for itself whether sessions apply, which is the second era decision the design forbids |
 | **The `EventStore` trait and `InMemoryEventStore`** | `src/server/streamable_http_server.rs` | Public API on both feature sets. What is gated is the config field that used to pin them and every path that reaches them; the type declarations themselves remain nameable |
+| **`build_middleware_context`'s read of `MCP_SESSION_ID`** | `src/server/streamable_http_server.rs` | Ungated, and it runs on the middleware POST path for **every** request on **both** feature sets — so a `full-v2` server DOES parse an attacker-supplied `Mcp-Session-Id` and hands it to every registered HTTP middleware as `ServerHttpContext::session_id`. Nothing downstream acts on it (no session map exists to look it up in), but "a `full-v2` build never parses an inbound session id" is true only of the fast path, and this row is why |
+| **The server-side `initialize` handler** | `src/server/core.rs` | A `full-v2` server still ANSWERS `initialize`. `v2_verb_rejection` is wired only to GET and DELETE, so an `initialize` POST reaches `Server` core and is dispatched normally: it returns a normal `InitializeResult`, and its `MCP-Protocol-Version` response header carries the negotiated version (pinned by `tests/v2_initialize_negotiated_version_header.rs`). What IS severed is the session BOOKKEEPING around it — nothing is minted, recorded, or echoed. Read the `v1_session_off.rs` prose accordingly: "there is no `initialize`" there means "no session is created by one", not "the endpoint refuses the method" |
 
 ## Refused, not unrouted
 
@@ -161,14 +163,32 @@ Three things that can **never** prove severance, and why:
 `tests/v1_severability_tripwire.rs` derives both from `Cargo.toml` at test time and fails if
 they differ by anything other than `v1-compat`.
 
+### The aggregate command
+
+```bash
+cargo test -p pmcp --no-default-features --features full-v2
+```
+
+Same three fences, applied to the TEST build: it compiles every test target and every example
+under `full-v2`. This is the command a developer naturally reaches for, and it was a hard
+BUILD failure until Phase 117's fix pass — the severed configuration had no working test build
+at all. It now reports a non-zero passing count.
+
 ### A compile is not a runtime answer
 
 The build above proves what the crate CONTAINS. It proves nothing about what the server
-ANSWERS. Two test files close that gap by RUNNING on the severed build:
+ANSWERS. Three test files close that gap by RUNNING on the severed build:
 
 ```bash
 cargo test --test v2_verbs_405_on_severed_build --no-default-features --features full-v2
 cargo test --test v2_client_carries_no_session_on_severed_build --no-default-features --features full-v2
+cargo test --test v2_initialize_negotiated_version_header --no-default-features --features full-v2
+```
+
+Or all of them plus the aggregate, with the zero-count guard applied:
+
+```bash
+make test-severance          # -> ./scripts/run-severance-proofs.sh
 ```
 
 Both files are gated by a file-level `#![cfg(..., not(feature = "v1-compat"), ...)]`. That is a
@@ -183,6 +203,15 @@ hypothetical: a dev-dependency of `pmcp` was taking `pmcp`'s default features an
 while the build proof stayed green. `cargo build -p pmcp` never sees dev-dependencies;
 `cargo test` does.
 
+That criterion is **enforced**, not merely stated: `scripts/run-severance-proofs.sh` greps
+each harness run for `running N tests` with N >= 1 and fails otherwise, and CI runs the script
+from the `v1-severance` job, which is in `gate.needs` and therefore blocks merge. It cannot be
+enforced from inside a proof file — a test in a `#![cfg]`-selected file can never observe its
+own absence, which is why the earlier `assert!(!cfg!(feature = "v1-compat"))` attempt was a
+tautology (`cfg!` expands to a bool literal, so the assertion was `!false`) and was deleted.
+`tests/ci_severance_gate_wiring.rs` pins the script's contents and its wiring into the
+blocking gate.
+
 ## Explicit non-commitments
 
 This policy deliberately does **not** do any of the following, and adding them later would be a
@@ -193,8 +222,16 @@ change to this policy rather than an implementation detail:
   `allow()` suppressions throughout the SDK's own source.
 - **No runtime warning on v1 negotiation.** Logging a warning when a client negotiates v1 would
   change v1 runtime behavior, which is exactly what the next point forbids.
-- **No behavior change on the wire.** v1 request/response bytes stay identical. Feature-gating
-  moves where code lives; it does not change what a v1 client observes.
+- **No behavior change on the wire — *on a `v1-compat` build*.** v1 request/response bytes stay
+  identical there; feature-gating moves where code lives, it does not change what a v1 client
+  observes. `tests/v1_byte_identity_after_cut.rs` pins nine of those responses byte-for-byte.
+
+  The qualifier is load-bearing and was missing until Phase 117's code review. A **`full-v2`**
+  build necessarily answers a v1 client differently — that is the severance, not a defect —
+  and the differences are enumerated above: `GET` and `DELETE` become `405`, no
+  `Mcp-Session-Id` is minted or echoed, no `Last-Event-ID` is honoured, and an `initialize`
+  POST is served statelessly rather than refused. This bullet is a promise about the DEFAULT
+  build every published consumer gets, not about the severed one.
 
 ## Scope of this document
 

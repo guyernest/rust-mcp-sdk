@@ -413,9 +413,10 @@ pub(crate) fn apply_session_header(
 // routing bug that plan fixed is exactly what happens when one of those two
 // couplings is broken and the other is assumed to cover it.
 //
-// `EventStoreHandle` itself stays in the transport rather than moving here —
-// see the SEVERABILITY note beside its declaration for why the null twin must
-// not be the thing that declares `Arc<dyn EventStore>`.
+// `EventStoreHandle` is declared at the top of THIS file (plan 117-13 moved it
+// here once the GET body arrived and the transport's own uses went away). The
+// twin deliberately declares no counterpart and must not: `Arc<dyn EventStore`
+// is in `tests/v1_severability_tripwire.rs`'s `FORBIDDEN_STATE_TYPES`.
 // ---------------------------------------------------------------------------
 
 /// The pure resumability rule: is event replay/retention live for THIS request?

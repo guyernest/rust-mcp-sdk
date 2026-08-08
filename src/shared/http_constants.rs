@@ -10,9 +10,17 @@
 //! # Severance is PER-CONST, never per-module (SMPL-01)
 //!
 //! Exactly one constant here is v1-only and carries
-//! `#[cfg(feature = "v1-compat")]`: [`LAST_EVENT_ID`]. Gating the MODULE
+//! `#[cfg(feature = "v1-compat")]`: `LAST_EVENT_ID`. Gating the MODULE
 //! instead would take `DEFAULT_HTTP_SSE_BUFFERED_BYTES`, [`MCP_METHOD`] and
 //! [`MCP_NAME`] with it, and the last two are v2-REQUIRED (VERS-05).
+//!
+//! `LAST_EVENT_ID` is a code span rather than an intra-doc link ON PURPOSE, here
+//! and in `MCP_SESSION_ID`'s doc below: both docs are UNGATED while the constant
+//! is not, so a link resolves to nothing under
+//! `cargo doc --no-default-features --features full-v2` and rustdoc emits a
+//! `broken_intra_doc_links` warning — leaving the crate's docs subtly wrong in
+//! exactly the configuration Phase 117 created. Do not "fix" either back into a
+//! link.
 //!
 //! [`MCP_SESSION_ID`] is deliberately UNGATED, and that is a MEASURED decision
 //! rather than an oversight — see its own doc for the trace.
@@ -24,7 +32,10 @@
 ///
 /// A4 claimed this constant's server-side readers were v1-reachable only, and
 /// that it could therefore be gated behind `v1-compat` alongside
-/// [`LAST_EVENT_ID`]. The claim was traced and is FALSE:
+/// `LAST_EVENT_ID` (a span, not a link: `MCP_SESSION_ID` is UNGATED and
+/// `LAST_EVENT_ID` is not, so a link here breaks under
+/// `cargo doc --no-default-features --features full-v2`). The claim was traced
+/// and is FALSE:
 ///
 /// * `extract_session_and_protocol_headers` reads it on EVERY POST — it is
 ///   shared by the fast path and the middleware path, and it is the same read
