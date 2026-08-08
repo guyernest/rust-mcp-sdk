@@ -189,7 +189,7 @@ fn job(name: &str) -> Option<&'static Value> {
 /// A job's `steps:` sequence, panicking with an actionable message when either
 /// the job or its `steps:` key is absent.
 ///
-/// Both [`run_scripts`] and [`gate_eval_step`] navigate job → `steps:`, so the
+/// Both [`step_script_containing`] and [`gate_eval_step`] navigate job → `steps:`, so the
 /// lookup and its two panics live here once. (The previous `gate_eval_step`
 /// copy justified its `expect` with "gate job presence is asserted by
 /// `gate_needs()`" — which does not hold: `severance_result_is_bound_and_evaluated`
@@ -273,24 +273,6 @@ fn proof_script_source() -> String {
              this test."
         )
     })
-}
-
-/// Every `run:` script in a job's `steps:`, concatenated.
-fn run_scripts(job_name: &str) -> String {
-    let mut collected = String::new();
-    for step in steps_of(job_name) {
-        if let Some(run) = step.get("run").and_then(Value::as_str) {
-            collected.push_str(run);
-            collected.push('\n');
-        }
-    }
-    assert!(
-        !collected.is_empty(),
-        "FAILURE MODE: job `{job_name}` in {WORKFLOW_REL} runs no commands at all — the \
-         `--all-features`/`--all-targets` absence checks below would pass over an empty string.\n\
-         WHAT TO DO: fix the reader or restore the build step; never relax the check."
-    );
-    collected
 }
 
 /// `gate.needs`, as a list of job names — a PURE structural read with no floor.
