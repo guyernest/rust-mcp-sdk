@@ -79,3 +79,24 @@ The measurement that matters for 117-06 IS clean: `make doc-check`'s exact featu
 
 **Remedy (whoever owns rustdoc scope):** either widen `make doc-check` to include `testing` and fix
 the two links, or record the exclusion deliberately.
+
+## From 117-08 (era-delta baseline)
+
+- **LIM-117-08-GATE (extends LIM-116-10):** `make quality-gate` does NOT compile or run ANY
+  `mcp-tester` test. Measured from the gate's own 9239-line transcript at commit `95acfa02`:
+  `era_baseline` and `era_diff` appear 0 times; `test-unit` is 1880, byte-identical to the
+  Phase-115/116 anchor. `make lint` and `make test-all` are scoped to the root `pmcp` package.
+  Consequence: a regression in `crates/mcp-tester/` passes the gate. Owner: UNASSIGNED. The
+  LIM-116-10 pairing requirement stands — clear the known failures FIRST, then widen `make lint`
+  and the gate's test stage TOGETHER. Not fixed in 117-08: no task in that plan owns the `Makefile`.
+
+- **D-117-08-EXAMPLE:** the CLAUDE.md ALWAYS "EXAMPLE demonstration" requirement is DEFERRED to
+  plan **117-11** for the era-delta baseline feature. 117-08 ships the data model and reader only;
+  the `--dual-run` CLI surface that consumes them is 117-11's. An example written at 117-08 would
+  demonstrate a loader with no consumer. FUZZ, PROPERTY and UNIT are all discharged in 117-08.
+
+- **OBS-117-08-SERDE:** `serde_yaml` 0.9 coerces a bare YAML scalar into a `String` field
+  (`v1_protocol: 1` deserializes as `"1"`). Not exploited or exploitable here — the baseline's
+  protocol versions are cross-checked against the pmcp constants by
+  `the_protocol_versions_match_the_sdk_constants` — but any future YAML schema in this repo that
+  relies on type strictness for validation should not.
