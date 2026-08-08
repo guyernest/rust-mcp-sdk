@@ -40,8 +40,23 @@
 //!
 //! A run that reports `0 tests` is a FAILURE, not a pass: it means the whole
 //! file was compiled out, which is exactly what happens under the default
-//! feature set. `the_severed_build_predicate_selected_this_file` exists so a
-//! zero-count run is visibly different from a green one.
+//! feature set.
+//!
+//! # Where that criterion is ENFORCED — and where it cannot be
+//!
+//! In `scripts/run-severance-proofs.sh`, which CI runs from the `v1-severance`
+//! job: it greps the harness output for `running N tests` with N >= 1 and fails
+//! the build otherwise.
+//!
+//! It is deliberately NOT enforced here. This file used to carry a test whose
+//! whole body was `assert!(!cfg!(feature = "v1-compat"))` — asserted from INSIDE
+//! a file whose own `#![cfg]` already guarantees it. `cfg!` expands to a bool
+//! literal, so the assertion was `!false`: it could not fail on any input, and on
+//! the build where it would be false the test did not exist to run. A test inside
+//! a conditionally-compiled file can never police whether that file was compiled;
+//! the observer has to be outside the compilation unit. It was deleted in Phase
+//! 117's fix pass and replaced by the script's guard, whose failure path is
+//! executed as its own negative control.
 
 #![cfg(all(
     feature = "streamable-http",
@@ -231,25 +246,6 @@ async fn within<F: std::future::Future>(label: &str, future: F) -> F::Output {
              make it pass."
         ),
     }
-}
-
-/// The whole-file `cfg` predicate actually selected this file.
-///
-/// `cargo test --test v2_client_carries_no_session_on_severed_build` under the
-/// DEFAULT feature set compiles this file away entirely and reports `0 tests`,
-/// exit code 0 — indistinguishable from a pass if nobody reads the count. This
-/// test's only job is to make the count non-zero, so "ran and passed" and
-/// "never compiled" are different observations.
-#[test]
-fn the_severed_build_predicate_selected_this_file() {
-    assert!(
-        !cfg!(feature = "v1-compat"),
-        "FAILURE MODE: this file compiled WITH `v1-compat`, so the whole-file `cfg` predicate is \
-         wrong.\n\
-         CONSEQUENCE: the assertions below would be measuring the v1 client, which of course \
-         stores a session id — a green run would mean nothing.\n\
-         WHAT TO DO: fix the `#![cfg(...)]` at the top of this file."
-    );
 }
 
 /// The severed client completes a POST exchange, stores no session id, and

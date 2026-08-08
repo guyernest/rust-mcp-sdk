@@ -90,6 +90,43 @@ const MINIMUM_GATE_NEEDS: usize = 6;
 /// unrelated to the wiring. Fix the reader, never lower the floor.
 const MINIMUM_JOBS: usize = 8;
 
+/// The script the `v1-severance` job must invoke to RUN the severance proofs.
+///
+/// Phase 117's code review found that the job ran exactly one command — the
+/// lib-only build — so neither runtime proof file was executed by CI, the
+/// Makefile, or any script. A repo-wide grep for their names returned nothing.
+/// That is the same class of gap the phase set out to close: a runtime claim
+/// needs a runtime execution on the build being claimed about.
+const PROOF_SCRIPT_REL: &str = "scripts/run-severance-proofs.sh";
+
+/// Absolute path to [`PROOF_SCRIPT_REL`].
+const PROOF_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/scripts/run-severance-proofs.sh"
+);
+
+/// Every runtime severance proof CI must EXECUTE, not merely compile.
+///
+/// Each of these drives a real severed server or client and asserts what it
+/// ANSWERS. The build step proves what does not EXIST; only these prove
+/// behaviour. Adding a fourth proof file means adding it here AND to the script.
+const RUNTIME_SEVERANCE_PROOFS: &[&str] = &[
+    "v2_verbs_405_on_severed_build",
+    "v2_client_carries_no_session_on_severed_build",
+    "v2_initialize_negotiated_version_header",
+];
+
+/// The three fences every severed cargo invocation must carry.
+///
+/// `-p pmcp` stops workspace feature unification turning `v1-compat` back on,
+/// `--no-default-features` stops it arriving via `default`, and
+/// `--features full-v2` stops the command "proving" severance by never compiling
+/// the transport at all.
+const SEVERED_FENCES: &[&str] = &["-p pmcp", "--no-default-features", "--features full-v2"];
+
+/// Flags that can NEVER appear in a severance command.
+const SEVERANCE_FORBIDDEN_FLAGS: &[&str] = &["--all-features", "--all-targets"];
+
 // ===========================================================================
 // Reader
 // ===========================================================================
@@ -172,6 +209,70 @@ fn steps_of(job_name: &str) -> &'static [Value] {
                  WHAT TO DO: fix the reader or the workflow."
             )
         })
+}
+
+/// The single `run:` script in `job_name` that contains `needle`.
+///
+/// Added in Phase 117's fix pass. Before it, every assertion here read the
+/// CONCATENATION of a job's `run:` scripts — fine while `v1-severance` ran one
+/// command, and quietly wrong the moment it ran two: the four build fences could
+/// then be satisfied by whichever step happened to carry them, so a build step
+/// that silently lost `--no-default-features` would still pass because the test
+/// step had it. Fences are properties of a COMMAND, so they are asserted against
+/// one command.
+fn step_script_containing(job_name: &str, needle: &str) -> String {
+    let matches: Vec<String> = steps_of(job_name)
+        .iter()
+        .filter_map(|step| step.get("run").and_then(Value::as_str))
+        .filter(|run| run.contains(needle))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "FAILURE MODE: expected EXACTLY ONE `run:` step in job `{job_name}` of {WORKFLOW_REL} to \
+         contain `{needle}`, found {}.\n\
+         CONSEQUENCE: zero means the command was deleted or renamed and the fences below would be \
+         asserted against nothing; more than one means a fence assertion could be satisfied by a \
+         DIFFERENT command than the one it names.\n\
+         WHAT TO DO: restore exactly one such step, or update the needle here to match the \
+         rename. Never relax this into a substring search over the whole job.\n\
+         steps read: {matches:?}",
+        matches.len()
+    );
+    matches.into_iter().next().unwrap_or_default()
+}
+
+/// [`proof_script_source`] with every `#` comment line removed.
+///
+/// The forbidden-flag assertions must read COMMANDS, not prose: the script's own
+/// rationale block explains at length why `--all-features` can never prove
+/// severance, and a naive `contains` over the whole file would flag that
+/// explanation as the violation it warns about.
+fn proof_script_commands() -> String {
+    proof_script_source()
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The contents of [`PROOF_SCRIPT`], read from disk.
+///
+/// The script is pinned as DATA rather than re-implemented here: the assertions
+/// below are about what CI will actually execute, and the only honest source for
+/// that is the file CI runs.
+fn proof_script_source() -> String {
+    std::fs::read_to_string(PROOF_SCRIPT).unwrap_or_else(|e| {
+        panic!(
+            "FAILURE MODE: cannot read {PROOF_SCRIPT_REL}: {e}\n\
+             CONSEQUENCE: the `{SEVERANCE_JOB}` job invokes this script, so a missing file means \
+             the runtime severance proofs do not run at all and the gate goes green on a build \
+             claim it never checked.\n\
+             WHAT TO DO: restore the script. If it moved, update PROOF_SCRIPT here; do not delete \
+             this test."
+        )
+    })
 }
 
 /// Every `run:` script in a job's `steps:`, concatenated.
@@ -266,7 +367,10 @@ fn gate_eval_step() -> (Mapping, String) {
 
 #[test]
 fn severance_job_exists() {
-    let script = run_scripts(SEVERANCE_JOB);
+    // The BUILD command specifically, not the concatenation of the job's steps:
+    // since Phase 117's fix pass this job also runs the proof script, and a fence
+    // asserted against the union could be satisfied by the wrong command.
+    let script = step_script_containing(SEVERANCE_JOB, "cargo build");
 
     // All FOUR fences the message below enumerates. Keeping one of them in a
     // separate hand-written assertion made the list labelled "four fences"
@@ -304,6 +408,141 @@ fn severance_job_exists() {
              Command read: {script}"
         );
     }
+}
+
+// ===========================================================================
+// 1b. The RUNTIME proofs are executed, and a zero test count is a FAILURE
+// ===========================================================================
+
+/// The `v1-severance` job invokes the proof script, and that script exists.
+///
+/// Without this, the job is back to proving only what the severed library does
+/// not CONTAIN — a strong claim about existence and no claim at all about
+/// behaviour. `tests/v2_verbs_405_on_severed_build.rs` argues at length that "a
+/// runtime claim needs a runtime execution ON THE BUILD BEING CLAIMED ABOUT", and
+/// until Phase 117's fix pass nothing executed it.
+#[test]
+fn the_runtime_severance_proofs_are_executed_by_ci() {
+    let invocation = step_script_containing(SEVERANCE_JOB, PROOF_SCRIPT_REL);
+    assert!(
+        invocation.contains(PROOF_SCRIPT_REL),
+        "FAILURE MODE: no `run:` step in `{SEVERANCE_JOB}` invokes `{PROOF_SCRIPT_REL}`.\n\
+         CONSEQUENCE: the runtime severance proofs run only when a human types the command out of \
+         `docs/v1-sunset-policy.md`, which is not enforcement.\n\
+         WHAT TO DO: restore the step. It must stay in `{SEVERANCE_JOB}`, which is in \
+         `{GATE_JOB}.needs`.\n\
+         step read: {invocation}"
+    );
+
+    let source = proof_script_source();
+    for proof in RUNTIME_SEVERANCE_PROOFS {
+        assert!(
+            source.contains(proof),
+            "FAILURE MODE: `{PROOF_SCRIPT_REL}` does not name the runtime severance proof \
+             `{proof}`.\n\
+             CONSEQUENCE: that file then runs only by hand. Every proof in \
+             RUNTIME_SEVERANCE_PROOFS is a behaviour claim about the severed build that no \
+             compilation can make for it.\n\
+             WHAT TO DO: add `{proof}` to the script's PROOFS list, or — if the file was \
+             deliberately deleted — remove it from RUNTIME_SEVERANCE_PROOFS here in the SAME \
+             commit, so the two lists cannot drift."
+        );
+    }
+}
+
+/// The severed TEST command runs in CI, carrying the same three fences.
+///
+/// `cargo test -p pmcp --no-default-features --features full-v2` is the aggregate
+/// command a developer naturally reaches for, and it was a hard BUILD failure
+/// until Phase 117's fix pass — the severed configuration had no working test
+/// build at all, and nothing in CI would have noticed it rotting. Unlike the
+/// lib-only build step, this one compiles every test target and example under
+/// `full-v2`.
+#[test]
+fn the_severed_test_command_runs_in_ci() {
+    let source = proof_script_source();
+    assert!(
+        source.contains("cargo test"),
+        "FAILURE MODE: `{PROOF_SCRIPT_REL}` runs no `cargo test` at all.\n\
+         CONSEQUENCE: the severed configuration's test build is unchecked, so it silently stops \
+         compiling between releases — which is exactly what Phase 117's review found.\n\
+         WHAT TO DO: restore the aggregate `cargo test` invocation."
+    );
+    for fence in SEVERED_FENCES {
+        assert!(
+            source.contains(fence),
+            "FAILURE MODE: `{PROOF_SCRIPT_REL}` is missing the severance fence `{fence}`.\n\
+             CONSEQUENCE: without all three the command silently tests a build that still carries \
+             `v1-compat`, and every proof it runs becomes vacuous while staying green.\n\
+             WHAT TO DO: restore the fence; the rationale block above the `{SEVERANCE_JOB}` job in \
+             {WORKFLOW_REL} explains why none of the three is redundant."
+        );
+    }
+    let commands = proof_script_commands();
+    assert!(
+        commands.contains("cargo test"),
+        "FAILURE MODE: every `cargo test` in `{PROOF_SCRIPT_REL}` is inside a comment.\n\
+         CONSEQUENCE: the comment-stripping reader below would then assert the absence of the \
+         forbidden flags over a file with no commands in it — a vacuous pass.\n\
+         WHAT TO DO: fix the reader, not the script."
+    );
+    for forbidden in SEVERANCE_FORBIDDEN_FLAGS {
+        assert!(
+            !commands.contains(forbidden),
+            "FAILURE MODE: a COMMAND in `{PROOF_SCRIPT_REL}` contains `{forbidden}`.\n\
+             CONSEQUENCE: `--all-features` can NEVER prove severance — cargo features are \
+             additive, so it enables `full-v2` AND `v1-compat` at once.\n\
+             WHAT TO DO: remove it."
+        );
+    }
+}
+
+/// A run reporting `0 tests` is a FAILURE, and something can actually enforce it.
+///
+/// Every proof file is selected by `#![cfg(all(…, not(feature = "v1-compat"), …))]`,
+/// so on a build that DOES carry `v1-compat` it compiles to zero tests and
+/// `cargo test` prints `running 0 tests` and exits 0. "Ran and passed" and "never
+/// compiled" then look identical.
+///
+/// Two of the proof files used to police this themselves, with
+/// `assert!(!cfg!(feature = "v1-compat"))` from INSIDE a file whose own `#![cfg]`
+/// already guaranteed it. `cfg!` expands to a bool literal, so the assertion was
+/// `!false` — it could not fail on any input, and on the build where it would be
+/// false the test did not exist to run. A test inside a conditionally-compiled
+/// file can never police whether that file was compiled, which is why the guard
+/// now lives in the script and this test pins it there.
+#[test]
+fn a_zero_test_count_is_enforced_outside_the_compilation_unit() {
+    let source = proof_script_source();
+    assert!(
+        source.contains("assert_nonzero_test_count"),
+        "FAILURE MODE: `{PROOF_SCRIPT_REL}` no longer defines/calls `assert_nonzero_test_count`.\n\
+         CONSEQUENCE: a severed proof that ran ZERO tests exits 0, so CI goes green on a run that \
+         proved nothing. Plan 117-14 hit exactly that: a dev-dependency taking `pmcp`'s default \
+         features unified `v1-compat` back on for every `cargo test`.\n\
+         WHAT TO DO: restore the guard. Do NOT move it back into a proof file — a `#![cfg]`-\
+         selected test cannot observe its own absence."
+    );
+    assert!(
+        source.contains("running [1-9]"),
+        "FAILURE MODE: `{PROOF_SCRIPT_REL}` no longer greps the harness output for a NON-ZERO \
+         `running N tests` line.\n\
+         CONSEQUENCE: the guard exists in name only; `running 0 tests` would pass it.\n\
+         WHAT TO DO: restore the `^running [1-9][0-9]* tests?$` match."
+    );
+    assert!(
+        source.contains("exit 1"),
+        "FAILURE MODE: `{PROOF_SCRIPT_REL}` has no failing exit path.\n\
+         CONSEQUENCE: a script that only PRINTS a diagnosis and exits 0 does not gate anything.\n\
+         WHAT TO DO: restore `exit 1` in the failure path."
+    );
+    assert!(
+        source.contains("set -euo pipefail"),
+        "FAILURE MODE: `{PROOF_SCRIPT_REL}` does not `set -euo pipefail`.\n\
+         CONSEQUENCE: a failing `cargo test` inside the loop would not stop the script, so the \
+         step could exit 0 with a red proof in its log.\n\
+         WHAT TO DO: restore the shell fence."
+    );
 }
 
 // ===========================================================================

@@ -42,6 +42,13 @@
 //! exit 0, while proving nothing. `cargo build -p pmcp` never sees dev-deps;
 //! `cargo test` does.
 //!
+//! That criterion is ENFORCED by `scripts/run-severance-proofs.sh`, which the
+//! `v1-severance` CI job runs: it greps the harness output for `running N tests`
+//! with N >= 1 and fails the build otherwise. It cannot be enforced from inside
+//! this file — a test in a `#![cfg]`-selected file can never observe its own
+//! absence, which is why the earlier `assert!(!cfg!(feature = "v1-compat"))`
+//! attempt in the sibling proof was a tautology and was deleted.
+//!
 //! # Run it with
 //!
 //! ```text

@@ -415,6 +415,23 @@ jobs:
     - name: Build pmcp with v1 severed (SMPL-01 severance proof)
       run: RUSTFLAGS="-D warnings" cargo build -p pmcp --no-default-features --features full-v2
 
+    # The RUNTIME half of the same claim (SMPL-02). The build step above proves
+    # what does not EXIST in the severed library; this step proves what the
+    # severed server ANSWERS, by running the three proof files ON that build —
+    # and fails if any of them ran ZERO tests.
+    #
+    # Deliberately a SEPARATE step, not extra flags on the step above: the
+    # rationale block forbids `--all-targets` on the lib-only build precisely so
+    # that proof stays about the library consumers link. This step is the
+    # "separate job" that block tells you to add instead.
+    #
+    # The commands live in the script, not inline, so `tests/ci_severance_gate_wiring.rs`
+    # can pin them as DATA — including the zero-count guard, which cannot live
+    # inside a `#![cfg]`-selected test file (a test in a conditionally-compiled
+    # file can never police whether that file was compiled).
+    - name: Runtime severance proofs + severed test build (SMPL-02)
+      run: ./scripts/run-severance-proofs.sh
+
   # Phase 108 (D-13) pmcp-agent target matrix. Two independent guarantees:
   #  1. The LOOP + SEAMS + config path compiles for wasm32 under DEFAULT features
   #     (no url-connector/reqwest/StreamableHttpTransport). The agent-as-server

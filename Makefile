@@ -306,6 +306,22 @@ test-integration:
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --test '*' --features "full"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
 
+# Phase 117 (SMPL-01/02) — RUN the v1-severance proofs on the severed build.
+#
+# Deliberately NOT chained into `quality-gate`: it compiles every test target and
+# every example under a SECOND feature set, which roughly doubles the dev loop.
+# CI runs it on every PR from the `v1-severance` job (which is in `gate.needs`,
+# so it blocks merge); this target is the local spelling of the same command.
+#
+# The script's zero-count guard is the load-bearing part — see its header, and
+# `tests/ci_severance_gate_wiring.rs`, which pins both the script's contents and
+# its wiring into the blocking gate.
+.PHONY: test-severance
+test-severance:
+	@echo "$(BLUE)Running v1-severance proofs on --features full-v2...$(NC)"
+	./scripts/run-severance-proofs.sh
+	@echo "$(GREEN)✓ Severance proofs ran with non-zero test counts$(NC)"
+
 # Feature flag verification for pmcp-tasks crate
 .PHONY: test-feature-flags
 test-feature-flags:
