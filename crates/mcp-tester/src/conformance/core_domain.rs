@@ -143,11 +143,21 @@ async fn test_v2_no_initialize_handshake(tester: &mut ServerTester) -> TestResul
         );
     }
 
+    // The probe MUST be a WELL-FORMED `initialize`. MEASURED: a request whose
+    // params omit `clientInfo`/`capabilities` is refused `-32601` by the typed
+    // parse before method dispatch is even reached — so a refusal of a MALFORMED
+    // request is not evidence that the METHOD is gone. C-01 would then pass
+    // against a server that happily serves `initialize` on the v2 wire, which is
+    // the exact regression it exists to catch.
     match tester
         .raw_jsonrpc_probe(
             "initialize",
             "",
-            json!({ "protocolVersion": pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28 }),
+            json!({
+                "protocolVersion": pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28,
+                "clientInfo": { "name": "mcp-tester", "version": env!("CARGO_PKG_VERSION") },
+                "capabilities": {},
+            }),
             Era::V2,
             V2HeaderMode::Standard,
         )

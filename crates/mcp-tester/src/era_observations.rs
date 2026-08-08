@@ -233,9 +233,6 @@ pub const PROBE_REGISTRY: &[ObservationId] = &[
 /// The `_meta`/capability key the v2 wire uses for the tasks extension (ERA-10).
 const TASKS_EXTENSION_KEY: &str = "io.modelcontextprotocol/tasks";
 
-/// JSON-RPC "method not found".
-const METHOD_NOT_FOUND: i64 = -32601;
-
 // ===========================================================================
 // Probes.
 // ===========================================================================
@@ -248,29 +245,43 @@ const METHOD_NOT_FOUND: i64 = -32601;
 /// HEADER state, which concurrent requests would make unreadable.
 pub async fn observe(tester: &ServerTester, era: Era) -> EraObservations {
     let mut out = BTreeMap::new();
-    out.insert(METHOD_INITIALIZE, probe_initialize(tester, era).await);
+
+    // Establish a session FIRST on the v1 path.
+    //
+    // A stateful v1 server refuses every non-initialization request that
+    // arrives without an `Mcp-Session-Id` (400, "Session ID required for
+    // non-initialization requests"). Without this, four probes below would
+    // observe that refusal and report it as though it were the fact they were
+    // sent to establish. v2 mints no session (ERA-03), so on that path the
+    // initialize attempt is the ERA-01 observation and nothing else.
+    let initialize = probe_initialize_raw(tester, era).await;
+    let session = initialize
+        .as_ref()
+        .ok()
+        .and_then(|o| o.session_header.clone());
+    let session = session.as_deref();
+
+    out.insert(METHOD_INITIALIZE, classify_initialize(&initialize));
     out.insert(
         METHOD_SERVER_DISCOVER,
-        probe_server_discover(tester, era).await,
+        probe_server_discover(tester, era, session).await,
     );
-    out.insert(
-        HEADER_MCP_SESSION_ID,
-        probe_session_header(tester, era).await,
-    );
+    out.insert(HEADER_MCP_SESSION_ID, classify_session_header(&initialize));
     out.insert(
         HEADER_MCP_METHOD_AND_NAME,
-        probe_required_headers(tester, era).await,
+        probe_required_headers(tester, era, session).await,
     );
     out.insert(HEADER_LAST_EVENT_ID, probe_last_event_id(tester, era).await);
     out.insert(HTTP_VERB_GET_DELETE, probe_get_delete(tester, era).await);
 
     let list = tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "tools/list",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await;
     out.insert(
@@ -280,22 +291,25 @@ pub async fn observe(tester: &ServerTester, era: Era) -> EraObservations {
     out.insert(RESULT_SERVER_INFO, classify_server_info(&list));
     out.insert(RESULT_CACHE_SCOPE, classify_cache_hints(&list));
 
-    out.insert(METHOD_TASKS_LIST, probe_tasks_list(tester, era).await);
+    out.insert(
+        METHOD_TASKS_LIST,
+        probe_tasks_list(tester, era, session).await,
+    );
     out.insert(
         CAPABILITY_TASKS_LOCATION,
         probe_tasks_capability_location(tester),
     );
     out.insert(
         METHOD_RESOURCES_SUBSCRIBE,
-        probe_resources_subscribe(tester, era).await,
+        probe_resources_subscribe(tester, era, session).await,
     );
     out.insert(
         METHOD_SUBSCRIPTIONS_LISTEN,
-        probe_subscriptions_listen(tester, era).await,
+        probe_subscriptions_listen(tester, era, session).await,
     );
     out.insert(
         HTTP_STATUS_ERROR_CODE_MAPPING,
-        probe_error_status_mapping(tester, era).await,
+        probe_error_status_mapping(tester, era, session).await,
     );
 
     EraObservations(out)
@@ -306,21 +320,57 @@ fn unavailable(e: &str) -> ObservedValue {
     ObservedValue::Unavailable(e.to_string())
 }
 
-/// ERA-01. Rule: a JSON-RPC `result` means the method is `served`; anything
-/// else means it is `absent`.
-async fn probe_initialize(tester: &ServerTester, era: Era) -> ObservedValue {
+/// Send a WELL-FORMED `initialize` for `era`.
+///
+/// The params MUST be well-formed. MEASURED: a request whose params omit
+/// `clientInfo`/`capabilities` is refused `-32601` by the TYPED PARSE before
+/// dispatch, so a refusal of a malformed request says nothing about whether the
+/// METHOD exists — and a probe built that way would report `absent` against a
+/// server that serves `initialize` perfectly well.
+///
+/// Its response answers TWO observations: ERA-01 (was the method served) and
+/// ERA-03 (did a session header come back), which is why it is sent once and
+/// classified twice.
+async fn probe_initialize_raw(
+    tester: &ServerTester,
+    era: Era,
+) -> std::result::Result<crate::tester::RawProbeOutcome, String> {
+    let version = if era == Era::V2 {
+        pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28
+    } else {
+        "2025-11-25"
+    };
     let params = serde_json::json!({
-        "protocolVersion": pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28,
+        "protocolVersion": version,
         "clientInfo": { "name": "mcp-tester", "version": env!("CARGO_PKG_VERSION") },
         "capabilities": {},
     });
-    match tester
+    tester
         .raw_jsonrpc_probe("initialize", "", params, era, V2HeaderMode::Standard)
         .await
-    {
+}
+
+/// ERA-01. Rule: a JSON-RPC `result` means the method is `served`; anything
+/// else means it is `absent`.
+fn classify_initialize(
+    probe: &std::result::Result<crate::tester::RawProbeOutcome, String>,
+) -> ObservedValue {
+    match probe {
         Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
         Ok(_) => ObservedValue::Text("absent".into()),
-        Err(e) => unavailable(&e),
+        Err(e) => unavailable(e),
+    }
+}
+
+/// ERA-03. Rule: an `Mcp-Session-Id` on the initialization response means the
+/// server is minting and echoing; its absence means it is doing neither.
+fn classify_session_header(
+    probe: &std::result::Result<crate::tester::RawProbeOutcome, String>,
+) -> ObservedValue {
+    match probe {
+        Ok(o) if o.session_header.is_some() => ObservedValue::Text("minted-and-echoed".into()),
+        Ok(_) => ObservedValue::Text("never-minted-inbound-ignored".into()),
+        Err(e) => unavailable(e),
     }
 }
 
@@ -328,48 +378,24 @@ async fn probe_initialize(tester: &ServerTester, era: Era) -> ObservedValue {
 /// recorded as `error:-32601` because that exact code is what the baseline
 /// records for v1; any other refusal is recorded with its own code so a
 /// changed rejection shape shows up as a finding rather than as agreement.
-async fn probe_server_discover(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_server_discover(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "server/discover",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await
     {
         Ok(o) if o.is_result() => ObservedValue::Text("served".into()),
         Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
-        Err(e) => unavailable(&e),
-    }
-}
-
-/// ERA-03. Rule: send a request carrying an INBOUND session id; if the server
-/// answers with an `Mcp-Session-Id` header it is minting/echoing, otherwise it
-/// is neither minting nor echoing.
-///
-/// The initialize/discover pair is used because a v1 server mints its session
-/// on the initialization request specifically.
-async fn probe_session_header(tester: &ServerTester, era: Era) -> ObservedValue {
-    let (method, params) = if era == Era::V2 {
-        ("server/discover", serde_json::json!({}))
-    } else {
-        (
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": "2025-11-25",
-                "clientInfo": { "name": "mcp-tester", "version": env!("CARGO_PKG_VERSION") },
-                "capabilities": {},
-            }),
-        )
-    };
-    match tester
-        .raw_jsonrpc_probe(method, "", params, era, V2HeaderMode::Standard)
-        .await
-    {
-        Ok(o) if o.session_header.is_some() => ObservedValue::Text("minted-and-echoed".into()),
-        Ok(_) => ObservedValue::Text("never-minted-inbound-ignored".into()),
         Err(e) => unavailable(&e),
     }
 }
@@ -381,14 +407,19 @@ async fn probe_session_header(tester: &ServerTester, era: Era) -> ObservedValue 
 /// This is the one observation that cannot be made by watching a conformant
 /// request — a header that is not required looks exactly like one that is,
 /// until you leave it out.
-async fn probe_required_headers(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_required_headers(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "tools/list",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::OmitMethodAndName,
+            session,
         )
         .await
     {
@@ -493,14 +524,15 @@ fn classify_cache_hints(
 }
 
 /// ERA-09. Rule: a `result` means `served`; a refusal is recorded with its code.
-async fn probe_tasks_list(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_tasks_list(tester: &ServerTester, era: Era, session: Option<&str>) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "tasks/list",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await
     {
@@ -541,14 +573,19 @@ fn probe_tasks_capability_location(tester: &ServerTester) -> ObservedValue {
 }
 
 /// ERA-12. Rule: a `result` means `served`; any refusal means `retired`.
-async fn probe_resources_subscribe(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_resources_subscribe(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "resources/subscribe",
             "",
             serde_json::json!({ "uri": "mcp-tester://era-probe" }),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await
     {
@@ -562,21 +599,28 @@ async fn probe_resources_subscribe(tester: &ServerTester, era: Era) -> ObservedV
 /// serves is the capability-gated stream. A server that is method-aware but
 /// capability-gated answers something other than `-32601`, which the baseline
 /// note explicitly calls SKIPPED-conformant.
-async fn probe_subscriptions_listen(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_subscriptions_listen(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "subscriptions/listen",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await
     {
-        Ok(o) if o.error_code == Some(METHOD_NOT_FOUND) => {
-            ObservedValue::Text(format!("error:{METHOD_NOT_FOUND}"))
-        },
-        Ok(_) => ObservedValue::Text("sse-stream-capability-gated".into()),
+        // Only a RESULT counts as served. Recording any non-`-32601` refusal as
+        // "the stream is capability-gated" would read a `-32600` parse failure
+        // as a served method, which is the same mis-inference the malformed
+        // `initialize` probe would have made.
+        Ok(o) if o.is_result() => ObservedValue::Text("sse-stream-capability-gated".into()),
+        Ok(o) => ObservedValue::Text(error_token(o.error_code, o.http_status)),
         Err(e) => unavailable(&e),
     }
 }
@@ -590,14 +634,19 @@ async fn probe_subscriptions_listen(tester: &ServerTester, era: Era) -> Observed
 /// Note this reads the status, NOT the era: it is the mapping that is being
 /// observed, and consulting the era to decide would make the observation
 /// circular.
-async fn probe_error_status_mapping(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_error_status_mapping(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_jsonrpc_probe(
+        .raw_jsonrpc_probe_with_session(
             "mcp-tester/definitely-not-a-method",
             "",
             serde_json::json!({}),
             era,
             V2HeaderMode::Standard,
+            session,
         )
         .await
     {
@@ -733,7 +782,6 @@ mod tests {
     fn envelope_key_classifier_treats_null_as_absent() {
         let present = Ok(crate::tester::RawProbeOutcome {
             http_status: 200,
-            content_type: "application/json".into(),
             session_header: None,
             result: Some(serde_json::json!({ "resultType": "complete" })),
             error_code: None,
@@ -745,7 +793,6 @@ mod tests {
 
         let null = Ok(crate::tester::RawProbeOutcome {
             http_status: 200,
-            content_type: "application/json".into(),
             session_header: None,
             result: Some(serde_json::json!({ "resultType": null })),
             error_code: None,
@@ -765,7 +812,6 @@ mod tests {
         let outcome = |result: serde_json::Value| {
             Ok(crate::tester::RawProbeOutcome {
                 http_status: 200,
-                content_type: "application/json".into(),
                 session_header: None,
                 result: Some(result),
                 error_code: None,
@@ -793,7 +839,6 @@ mod tests {
         let outcome = |result: serde_json::Value| {
             Ok(crate::tester::RawProbeOutcome {
                 http_status: 200,
-                content_type: "application/json".into(),
                 session_header: None,
                 result: Some(result),
                 error_code: None,

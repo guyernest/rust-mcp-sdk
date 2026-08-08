@@ -147,6 +147,21 @@ enum Commands {
         /// Run only specific domains (comma-separated: core,tools,resources,prompts,tasks)
         #[arg(long, value_delimiter = ',')]
         domain: Option<Vec<String>>,
+
+        /// Detect whether the server serves BOTH MCP eras and, if so, run the
+        /// suite twice and print a v1-vs-v2 comparison.
+        ///
+        /// OFF by default. With the flag absent, nothing about the output
+        /// changes — single-run output stays byte-identical to 0.7.0, which is
+        /// the additivity contract `tests/report_compat.rs` pins.
+        ///
+        /// Differences are classified against the checked-in expected-difference
+        /// baseline (`baselines/era-deltas.yaml`): a listed delta is correct by
+        /// design, an unlisted one is a finding, and a listed one that no longer
+        /// reproduces is also a finding. Against a server that serves only one
+        /// era this degrades to a single run and says so.
+        #[arg(long)]
+        dual_run: bool,
     },
 
     /// List and test available tools
@@ -339,19 +354,33 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             url,
             strict,
             domain,
+            dual_run,
         } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
-            run_conformance_test(
-                url,
-                *strict,
-                domain.clone(),
-                cli.timeout,
-                cli.insecure,
-                cli.api_key.as_deref(),
-                cli.transport.as_deref(),
-                oauth,
-            )
-            .await
+            if *dual_run {
+                run_dual_conformance_test(
+                    url,
+                    *strict,
+                    domain.clone(),
+                    cli.timeout,
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                    oauth,
+                )
+                .await
+            } else {
+                run_conformance_test(
+                    url,
+                    *strict,
+                    domain.clone(),
+                    cli.timeout,
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                    cli.transport.as_deref(),
+                    oauth,
+                )
+                .await
+            }
         },
         Commands::Tools { url, test_all } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
@@ -710,6 +739,115 @@ async fn run_conformance_test(
     )?;
 
     tester.run_conformance_tests(strict, domain).await
+}
+
+/// `conformance --dual-run`: detect the eras, then run the suite once per era
+/// and print the baseline-keyed comparison.
+///
+/// # Degradation is explicit, never silent
+///
+/// A dual run is only possible against a server that serves BOTH eras. Against
+/// a single-era server this returns that era's ordinary `TestReport` and SAYS
+/// SO on stderr, rather than failing — a v1-only server is not
+/// non-conformant, it simply has not opted into `2026-07-28`.
+///
+/// An UNREACHABLE endpoint routes through `TestReport::from_error`, which is the
+/// existing connectivity-failure path and exits non-zero. A REACHABLE endpoint
+/// that speaks no era we know is a different thing — a conformance finding — and
+/// gets its own Core-domain failure instead.
+#[allow(clippy::too_many_arguments)]
+async fn run_dual_conformance_test(
+    url: &str,
+    strict: bool,
+    domain: Option<Vec<String>>,
+    timeout: u64,
+    insecure: bool,
+    api_key: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+) -> Result<TestReport> {
+    use conformance::{ConformanceDomain, ConformanceRunner};
+    use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
+    use pmcp::types::ProtocolVersion;
+    use tester::EraSupport;
+
+    let budget = Duration::from_secs(timeout);
+    let parsed_domains = domain.map(|ds| {
+        ds.iter()
+            .filter_map(|s| ConformanceDomain::from_str_loose(s))
+            .collect::<Vec<_>>()
+    });
+    let runner = ConformanceRunner::new(strict, parsed_domains);
+
+    // The dual-run path is Streamable-HTTP only: both era probes and every raw
+    // wire observation are HTTP facts, so the transport is pinned rather than
+    // auto-detected here.
+    let build = |pin_v2: bool| -> Result<ServerTester> {
+        let tester = ServerTester::new(
+            url,
+            budget,
+            insecure,
+            api_key,
+            Some("http"),
+            oauth_middleware.clone(),
+        )?;
+        Ok(if pin_v2 {
+            tester.with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))
+        } else {
+            tester
+        })
+    };
+
+    let era_support = tester::detect_eras(url, budget).await;
+    match era_support {
+        EraSupport::Dual => {
+            eprintln!(
+                "{} {url} serves BOTH eras ({}); running the suite twice.",
+                "note:".cyan(),
+                era_support.label()
+            );
+            let mut v1 = build(false)?;
+            let mut v2 = build(true)?;
+            let report = runner.run_dual(&mut v1, &mut v2).await;
+            let mut stdout = std::io::stdout();
+            // Best-effort, exactly as `TestReport::print` is: the CLI entry
+            // point cannot act on a broken pipe at the report layer.
+            let _ = report.print_to_writer(&mut stdout);
+            // The v1 report is what the caller receives, so the process exit
+            // code keeps meaning "did the suite pass" and does not silently
+            // change meaning when --dual-run is passed.
+            Ok(report.v1_report)
+        },
+        EraSupport::V1Only => {
+            eprintln!(
+                "{} {url} serves only MCP 2025-11-25; --dual-run degraded to a single v1 run.",
+                "note:".yellow()
+            );
+            runner_run(&runner, build(false)?).await
+        },
+        EraSupport::V2Only => {
+            eprintln!(
+                "{} {url} serves only MCP 2026-07-28; --dual-run degraded to a single v2 run.",
+                "note:".yellow()
+            );
+            runner_run(&runner, build(true)?).await
+        },
+        // Reachable but speaking no era we know is a CONFORMANCE finding about
+        // whatever answered, so it is a Core-domain failure.
+        EraSupport::NoEraSpoken => Ok(tester::no_era_spoken_report(url)),
+        // Unreachable is an INFRASTRUCTURE fault, so it routes through
+        // `TestReport::from_error` — the existing connectivity-failure path.
+        // The report carries a failure, so `handle_command_result` still exits
+        // non-zero.
+        EraSupport::Unreachable => Ok(tester::unreachable_report(url)),
+    }
+}
+
+/// Run the suite once against an owned tester.
+async fn runner_run(
+    runner: &conformance::ConformanceRunner,
+    mut tester: ServerTester,
+) -> Result<TestReport> {
+    Ok(runner.run(&mut tester).await)
 }
 
 #[allow(clippy::too_many_arguments)]

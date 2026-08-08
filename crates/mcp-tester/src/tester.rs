@@ -3488,8 +3488,6 @@ pub enum V2HeaderMode {
 pub struct RawProbeOutcome {
     /// HTTP status of the response.
     pub http_status: u16,
-    /// `Content-Type` of the response, lowercased, `""` when absent.
-    pub content_type: String,
     /// The `Mcp-Session-Id` response header, if the server sent one.
     pub session_header: Option<String>,
     /// The JSON-RPC `result` object, when the response carried one.
@@ -3559,6 +3557,39 @@ impl ServerTester {
         era: Era,
         header_mode: V2HeaderMode,
     ) -> std::result::Result<RawProbeOutcome, String> {
+        self.raw_jsonrpc_probe_with_session(method, name, params, era, header_mode, None)
+            .await
+    }
+
+    /// [`Self::raw_jsonrpc_probe`] carrying an explicit `Mcp-Session-Id`.
+    ///
+    /// # Why this exists
+    ///
+    /// MEASURED: a STATEFUL v1 server rejects every non-initialization request
+    /// that arrives without a session id — `400` with
+    /// `"Session ID required for non-initialization requests"`
+    /// (`src/server/streamable_http_server.rs:1666-1673`). A v1 probe that
+    /// carried no session would therefore be refused for a SESSION reason while
+    /// looking exactly like a refusal for the reason the probe is about, and
+    /// would mis-observe `header.mcp_method_and_name`,
+    /// `http.status.error_code_mapping`, `method.tasks_list` and
+    /// `method.resources_subscribe` all at once.
+    ///
+    /// v2 never mints a session (ERA-03), so on that path this is always `None`
+    /// and the parameter costs nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport failure as a `String`.
+    pub async fn raw_jsonrpc_probe_with_session(
+        &self,
+        method: &str,
+        name: &str,
+        params: Value,
+        era: Era,
+        header_mode: V2HeaderMode,
+        session_id: Option<&str>,
+    ) -> std::result::Result<RawProbeOutcome, String> {
         use pmcp::shared::http_constants::{
             ACCEPT_STREAMABLE, MCP_METHOD, MCP_NAME, MCP_PROTOCOL_VERSION, MCP_SESSION_ID,
         };
@@ -3574,6 +3605,9 @@ impl ServerTester {
             if header_mode == V2HeaderMode::Standard {
                 request = request.header(MCP_METHOD, method).header(MCP_NAME, name);
             }
+        }
+        if let Some(session) = session_id {
+            request = request.header(MCP_SESSION_ID, session);
         }
         if let Some(key) = &self.api_key {
             request = request.header("Authorization", format!("Bearer {key}"));
@@ -3613,7 +3647,6 @@ impl ServerTester {
 
         Ok(RawProbeOutcome {
             http_status,
-            content_type,
             session_header,
             result,
             error_code,
@@ -3743,11 +3776,6 @@ pub enum EraSupport {
 }
 
 impl EraSupport {
-    /// Whether a dual run is possible — true only for [`Self::Dual`].
-    pub fn is_dual(self) -> bool {
-        matches!(self, Self::Dual)
-    }
-
     /// Short stable label for reports and logs.
     pub fn label(self) -> &'static str {
         match self {
@@ -4058,8 +4086,6 @@ mod era_detection {
         assert_eq!(EraSupport::V2Only.label(), "v2-only");
         assert_eq!(EraSupport::Unreachable.label(), "unreachable");
         assert_eq!(EraSupport::NoEraSpoken.label(), "no-era-spoken");
-        assert!(EraSupport::Dual.is_dual());
-        assert!(!EraSupport::V1Only.is_dual());
     }
 
     /// The two "neither" outcomes must stay DISTINCT values — collapsing them
