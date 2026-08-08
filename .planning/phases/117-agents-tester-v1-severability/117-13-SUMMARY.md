@@ -594,3 +594,21 @@ Two threat-register items are worth marking as DISCHARGED rather than merely mit
 `T-117-48` and `T-117-49` were TRANSFERRED to plan 117-14 and are verified here as present
 (`LAST_EVENT_ID` gated) and as deliberately-not-applied with a recorded reason
 (`MCP_SESSION_ID`), with `git diff --stat src/shared/http_constants.rs` empty.
+
+## Self-Check: PASSED
+
+Files claimed created/modified, verified on disk:
+
+- `FOUND: tests/v2_verbs_405_on_severed_build.rs`
+- `FOUND: src/server/streamable_http_server.rs`
+- `FOUND: src/server/streamable_http_server/v1_session.rs`
+- `FOUND: src/server/streamable_http_server/v1_session_off.rs`
+- `FOUND: docs/v1-sunset-policy.md`
+- `FOUND: .planning/phases/117-agents-tester-v1-severability/117-13-SUMMARY.md`
+
+Commits claimed, verified in `git log --oneline --all`:
+
+- `FOUND: 1a473e6d` — refactor(117-13): split the GET/DELETE verbs so the v2 405 stays always-compiled
+- `FOUND: 50f039ab` — test(117-13): prove the GET/DELETE 405 by EXECUTION on the severed build
+- `FOUND: ea301460` — refactor(117-13): gate the four v1-only config fields and close the sunset policy
+- `FOUND: 5e7ea91a` — docs(117-13): add plan summary
