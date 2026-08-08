@@ -917,7 +917,7 @@ checkboxes a verifier can fail on.
 ### Simplification & v1 Sunset (SMPL)
 
 - [x] **SMPL-01**: v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor
-- [ ] **SMPL-02**: The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits
+- [x] **SMPL-02**: The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits
 
 ### Conformance (CONF)
 
@@ -1035,7 +1035,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLNT-03 | Phase 117 | Pending |
 | CLNT-04 | Phase 117 | Complete |
 | SMPL-01 | Phase 117 | Complete |
-| SMPL-02 | Phase 117 | Pending |
+| SMPL-02 | Phase 117 | Complete |
 | CONF-01 | Phase 118 | Pending |
 | CONF-02 | Phase 118 | Pending |
 | CONF-03 | Phase 118 | Pending |
