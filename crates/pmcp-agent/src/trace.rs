@@ -1,7 +1,8 @@
-//! Public serde replay substrate: `EffectTrace` (recorded effect RESULTS) and
-//! `DecisionTrace` (the ordered DECISIONS the engine took), plus the
-//! `ReplaySource` / `ReplayInvoker` seams that feed a recorded `EffectTrace`
-//! back through the SAME engine.
+//! Public serde replay substrate for the agent loop.
+//!
+//! It carries `EffectTrace` (recorded effect RESULTS) and `DecisionTrace` (the
+//! ordered DECISIONS the engine took), plus the `ReplaySource` / `ReplayInvoker`
+//! seams that feed a recorded `EffectTrace` back through the SAME engine.
 //!
 //! This is the durability contract of the phase (design §8.1): feeding identical
 //! effect results to the loop must yield identical decision sequences. The
