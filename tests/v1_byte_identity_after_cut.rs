@@ -52,9 +52,14 @@
 //! per process, so a two-entry array is not byte-stable. Registering exactly one
 //! of each makes those arrays singletons and therefore deterministic, without
 //! weakening the comparison by a single byte.
+// `v1-compat` joins the predicate for Phase 117: these goldens pin the v1 wire,
+// and the v1 wire does not exist on `--no-default-features --features full-v2`.
+// Without this the aggregate severed test command is a BUILD failure rather than
+// a green run — which is the whole point of a severability proof.
 #![cfg(all(
     feature = "streamable-http",
     feature = "http-client",
+    feature = "v1-compat",
     not(target_arch = "wasm32")
 ))]
 

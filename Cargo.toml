@@ -438,7 +438,12 @@ required-features = ["streamable-http"]
 [[example]]
 name = "t06_streamable_http_client"
 path = "examples/t06_streamable_http_client.rs"
-required-features = ["streamable-http"]
+# `v1-compat`: this example's stated subject is "Session management when
+# connecting to stateful servers" — it reads `transport.session_id()` in three
+# places, and that accessor does not exist on a `full-v2` build (Phase 117).
+# Declared here rather than `#![cfg]`-ing the file, because an example whose
+# `fn main` is cfg'd away fails to link rather than being skipped.
+required-features = ["streamable-http", "v1-compat"]
 
 [[example]]
 name = "t02_websocket_server_enhanced"

@@ -2236,13 +2236,43 @@ mod tests {
                 .into_bytes()
         }
 
+        /// Plant a v1 session id on a fresh config, where a field exists to hold
+        /// one.
+        ///
+        /// `StreamableHttpTransportConfig::session_id` is gated behind
+        /// `v1-compat`, so a bare `config.session_id = …` here made
+        /// `cargo test -p pmcp --no-default-features --features full-v2` a hard
+        /// BUILD failure rather than a green run — the whole lib-test target,
+        /// including the ~40 era-neutral tests around this one. This pair keeps
+        /// the call sites identical on both feature sets, exactly as the
+        /// production `v1` module pair does, so no `#[cfg]` reaches the fixtures
+        /// below.
+        ///
+        /// The `full-v2` half is not a weakened assertion: on that build there is
+        /// no field to plant a session id IN, which is the severance claim stated
+        /// structurally. The tests that assert what a STORED session id does are
+        /// gated individually below.
+        #[cfg(feature = "v1-compat")]
+        fn plant_session_id(config: &mut StreamableHttpTransportConfig, session_id: Option<&str>) {
+            config.session_id = session_id.map(str::to_string);
+        }
+
+        /// The `full-v2` half of [`plant_session_id`]: there is nowhere to plant it.
+        #[cfg(not(feature = "v1-compat"))]
+        #[allow(clippy::missing_const_for_fn)]
+        fn plant_session_id(
+            _config: &mut StreamableHttpTransportConfig,
+            _session_id: Option<&str>,
+        ) {
+        }
+
         /// A transport with the v2 era selected through the PRODUCTION seam.
         fn v2_transport(session_id: Option<&str>) -> StreamableHttpTransport {
             let mut config = StreamableHttpTransportConfigBuilder::new(
                 Url::parse("http://127.0.0.1:1/").unwrap(),
             )
             .build();
-            config.session_id = session_id.map(str::to_string);
+            plant_session_id(&mut config, session_id);
             let mut transport = StreamableHttpTransport::new(config);
             transport
                 .set_negotiated_protocol_version(Some(PROTOCOL_VERSION_2026_07_28.to_string()));
@@ -2254,7 +2284,7 @@ mod tests {
                 Url::parse("http://127.0.0.1:1/").unwrap(),
             )
             .build();
-            config.session_id = session_id.map(str::to_string);
+            plant_session_id(&mut config, session_id);
             StreamableHttpTransport::new(config)
         }
 
@@ -2433,6 +2463,13 @@ mod tests {
             );
         }
 
+        /// Gated with its v1 sibling below: `StreamableHttpTransport::session_id`
+        /// is itself severed on `full-v2`, so the property this test measures —
+        /// "the response header was not STORED" — has no observer there because
+        /// there is no store. The structural form of the same claim is proven by
+        /// `tests/v2_client_carries_no_session_on_severed_build.rs`, which RUNS
+        /// on the severed build.
+        #[cfg(feature = "v1-compat")]
         #[test]
         fn v2_does_not_store_a_session_id_from_a_response() {
             let transport = v2_transport(None);
@@ -2449,6 +2486,7 @@ mod tests {
             );
         }
 
+        #[cfg(feature = "v1-compat")]
         #[test]
         fn v1_still_stores_a_session_id_from_a_response() {
             let transport = v1_transport(None);
@@ -2477,6 +2515,16 @@ mod tests {
 
         // ---- v1 is unchanged ---------------------------------------------
 
+        /// `true` when the compiled client transport is the one that HAS a v1
+        /// session.
+        ///
+        /// `StreamableHttpTransportConfig::session_id` is severed on `full-v2`,
+        /// so the session half of the assertion below has nothing to be true
+        /// about there. Expressed as a const rather than a `#[cfg]` on the whole
+        /// test so the v2-routing-header half — which is era-neutral and is the
+        /// part CLNT-01 is actually about — keeps RUNNING on the severed build.
+        const V1_SESSION_EXISTS: bool = cfg!(feature = "v1-compat");
+
         #[tokio::test]
         async fn v1_emits_no_v2_routing_headers_and_keeps_its_session() {
             let transport = v1_transport(Some("session-123"));
@@ -2488,7 +2536,11 @@ mod tests {
 
             assert!(!map.contains_key(MCP_METHOD));
             assert!(!map.contains_key(MCP_NAME));
-            assert_eq!(header(&map, MCP_SESSION_ID).as_deref(), Some("session-123"));
+            assert_eq!(
+                header(&map, MCP_SESSION_ID).as_deref(),
+                V1_SESSION_EXISTS.then_some("session-123"),
+                "a v1 client emits its stored session id; a severed client has none to emit"
+            );
         }
 
         // ---- non-panicking emission (T-113-20) ---------------------------

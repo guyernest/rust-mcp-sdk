@@ -897,6 +897,14 @@ fn read_workspace_source(relative: &str) -> String {
 /// `Mcp-Session-Id` — otherwise it is answered `-32600`, which looks like a tasks
 /// bug and is not one.
 async fn v1_session_headers(addr: SocketAddr) -> Vec<(String, String)> {
+    // On `--no-default-features --features full-v2` there is no session
+    // machinery at all: `validate_non_init_session` is the null twin, so a v1
+    // caller needs no handshake and carries no `Mcp-Session-Id`. Returning the
+    // auth headers alone keeps every caller below RUNNING on the severed build,
+    // instead of this whole file being gated away for one handshake.
+    if !cfg!(feature = "v1-compat") {
+        return Vec::new();
+    }
     let initialized = post(
         addr,
         &[],

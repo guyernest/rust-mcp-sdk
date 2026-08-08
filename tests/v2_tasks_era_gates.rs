@@ -91,6 +91,13 @@ async fn v1_session(addr: SocketAddr) -> String {
 /// it. One body rather than two so an authenticated leg and an anonymous leg
 /// cannot drift apart in anything but the headers they send.
 async fn v1_session_as(addr: SocketAddr, extra: &[(String, String)]) -> String {
+    // A `--no-default-features --features full-v2` build mints nothing and
+    // validates nothing: the transport spec's "an inbound Mcp-Session-Id is
+    // IGNORED" is structural there. Carrying a placeholder id exercises exactly
+    // that and keeps every v1 leg below RUNNING on the severed build.
+    if !cfg!(feature = "v1-compat") {
+        return "no-session-on-a-severed-build".to_string();
+    }
     let init = post(
         addr,
         extra,

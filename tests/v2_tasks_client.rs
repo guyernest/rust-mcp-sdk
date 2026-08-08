@@ -198,8 +198,15 @@ fn v2_transport(addr: SocketAddr) -> StreamableHttpTransport {
         url: Url::parse(&format!("http://{addr}")).expect("a loopback URL"),
         extra_headers: vec![],
         auth_provider: None,
+        // `StreamableHttpTransportConfig::{session_id, on_resumption_token}` are v1-only
+        // and gated behind `v1-compat` (Phase 117). This file is era-NEUTRAL, so the
+        // fields are gated per-field rather than the file being gated as a whole — that
+        // keeps these tests RUNNING on `cargo test -p pmcp --no-default-features
+        // --features full-v2`, which is where the severed build gets its coverage.
+        #[cfg(feature = "v1-compat")]
         session_id: None,
         enable_json_response: true,
+        #[cfg(feature = "v1-compat")]
         on_resumption_token: None,
         http_middleware_chain: None,
     })

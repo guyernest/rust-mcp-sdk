@@ -176,11 +176,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Creating stateless HTTP server on {}", addr);
 
     // Create stateless configuration
+    // The four v1-only fields below are gated behind `v1-compat` (Phase 117), so
+    // they are named per-field rather than the example being excluded wholesale:
+    // a STATELESS server is exactly what a `full-v2` build is, so this example
+    // must keep building — and running — on `--no-default-features --features
+    // full-v2`.
     let config = StreamableHttpServerConfig {
-        session_id_generator: None,   // STATELESS MODE - no session IDs
-        enable_json_response: true,   // Use simple JSON responses (no streaming)
-        event_store: None,            // No event store needed
+        #[cfg(feature = "v1-compat")]
+        session_id_generator: None, // STATELESS MODE - no session IDs
+        enable_json_response: true, // Use simple JSON responses (no streaming)
+        #[cfg(feature = "v1-compat")]
+        event_store: None, // No event store needed
+        #[cfg(feature = "v1-compat")]
         on_session_initialized: None, // No session callbacks
+        #[cfg(feature = "v1-compat")]
         on_session_closed: None,
         http_middleware: None, // No HTTP middleware
         allowed_origins: None,
