@@ -55,6 +55,7 @@
 // unused remainder is another file's entry point, not dead code.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -316,19 +317,26 @@ impl ServerHttpMiddleware for RecordingMiddleware {
 ///    the same task is reachable from a v1 connection and a v2 connection even
 ///    though the SDK binds unauthenticated owners differently per era.
 /// 2. **A scripted settle.** The first [`NON_TERMINAL_POLLS_BEFORE_TERMINAL`]
-///    reads answer `working`; the next read settles the task on
+///    reads OF A GIVEN TASK answer `working`; the next read settles that task on
 ///    [`TERMINAL_TASK_STATUS`] with a persisted terminal result carrying
 ///    [`TERMINAL_RESULT_MARKER`]. The trigger is a COUNTER, not a clock, so the
 ///    fixture has no timing dependency.
+///
+/// The read counter is PER TASK, not global. A test that calls the task tool
+/// more than once (e.g. once directly to inspect the envelope, once through the
+/// invoker) mints more than one task, and a global counter would let the second
+/// task settle on its FIRST read — silently removing the non-terminal poll the
+/// whole fixture exists to guarantee.
 pub struct ScriptedTaskStore {
     inner: InMemoryTaskStore,
-    reads: AtomicUsize,
+    reads_by_task: StdMutex<HashMap<String, usize>>,
+    total_reads: AtomicUsize,
 }
 
 impl std::fmt::Debug for ScriptedTaskStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScriptedTaskStore")
-            .field("reads", &self.reads.load(Ordering::SeqCst))
+            .field("total_reads", &self.total_reads.load(Ordering::SeqCst))
             .finish()
     }
 }
@@ -339,14 +347,40 @@ impl ScriptedTaskStore {
     pub fn new() -> Self {
         Self {
             inner: InMemoryTaskStore::new(),
-            reads: AtomicUsize::new(0),
+            reads_by_task: StdMutex::new(HashMap::new()),
+            total_reads: AtomicUsize::new(0),
         }
     }
 
-    /// How many times the store has been READ (`tasks/get` reaching storage).
+    /// How many times the store has been READ (`tasks/get` reaching storage),
+    /// across all tasks.
     #[must_use]
     pub fn reads(&self) -> usize {
-        self.reads.load(Ordering::SeqCst)
+        self.total_reads.load(Ordering::SeqCst)
+    }
+
+    /// How many times `task_id` specifically has been read.
+    #[must_use]
+    pub fn reads_for(&self, task_id: &str) -> usize {
+        self.reads_by_task
+            .lock()
+            .map(|map| map.get(task_id).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// Record one read of `task_id` and return that task's new read count.
+    ///
+    /// A poisoned lock is recovered rather than panicked on: a fixture must
+    /// fail the assertion under test, never abort the test process.
+    fn record_read(&self, task_id: &str) -> usize {
+        self.total_reads.fetch_add(1, Ordering::SeqCst);
+        let mut map = self
+            .reads_by_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let count = map.entry(task_id.to_string()).or_insert(0);
+        *count += 1;
+        *count
     }
 
     /// The terminal result the scripted settle persists.
@@ -391,8 +425,7 @@ impl TaskStore for ScriptedTaskStore {
     }
 
     async fn get(&self, task_id: &str, _owner_id: &str) -> Result<Task, TaskStoreError> {
-        let read = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
-        if read > NON_TERMINAL_POLLS_BEFORE_TERMINAL {
+        if self.record_read(task_id) > NON_TERMINAL_POLLS_BEFORE_TERMINAL {
             self.settle(task_id).await?;
         }
         self.inner.get(task_id, PINNED_OWNER).await
