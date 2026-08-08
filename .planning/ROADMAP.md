@@ -2685,13 +2685,13 @@ Plans:
   3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
   4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
 
-**Plans:** 1/14 plans executed
+**Plans:** 2/14 plans executed
 
 Plans:
 **Wave 1**
 
 - [x] 117-01-PLAN.md — Wave 1. `v1-compat` + `full-v2` features, the DERIVED full/full-v2 drift tripwire, and the condition-gated sunset policy wired into the blocking rustdoc gate (SMPL-01; D-01/D-02/D-04; re-confirms A-A1)
-- [ ] 117-02-PLAN.md — Wave 1. Golden v1 wire fixtures captured BEFORE the cut — body bytes AND headers, read through a bounded frame-counting SSE reader rather than the read-to-EOF helper: initialize, `Mcp-Session-Id` emission, `Last-Event-ID` replay, GET/DELETE (SMPL-02)
+- [x] 117-02-PLAN.md — Wave 1. Golden v1 wire fixtures captured BEFORE the cut — body bytes AND headers, read through a bounded frame-counting SSE reader rather than the read-to-EOF helper: initialize, `Mcp-Session-Id` emission, `Last-Event-ID` replay, GET/DELETE (SMPL-02)
 - [ ] 117-03-PLAN.md — Wave 1. `mcp-tester` single-run report goldens captured against 0.7.0 as it stands, plus the A2 re-measurement that bounds what 117-11 may add (CLNT-04; D-11/A-D11/A-CI)
 - [ ] 117-04-PLAN.md — Wave 1. First `pmcp-agent` live-server harness (incl. a GUARANTEED task-associated tool result) + the four CLNT-03 cases written RED: v2 e2e, unconditional task polling to terminal, v1 fallback, unreachable-host propagation (CLNT-03; D-07/A-D08/D-09)
 
@@ -2758,7 +2758,7 @@ Plans:
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
 | 116. Auth Hardening SEPs | 16/16 | Complete   | 2026-08-07 |
-| 117. Agents, Tester & v1 Severability | 1/14 | In Progress|  |
+| 117. Agents, Tester & v1 Severability | 2/14 | In Progress|  |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
 

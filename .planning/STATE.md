@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 117-01-PLAN.md
-last_updated: "2026-08-08T04:07:11.040Z"
+last_updated: "2026-08-08T04:34:36.393Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 375
+  completed_plans: 376
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 2 of 14
+Plan: 3 of 14
 Plans complete: 16 of 16
 Remaining: none
 Status: Ready to execute
@@ -998,6 +998,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 117-01: v1-compat is a default-on additive cargo marker feature; the inverted v2-only feature stays REJECTED because cargo features cannot be subtracted
 - [Phase ?]: 117-01: A-A1 is measured by a compile_error! probe against the real severance build, not by cargo tree — cargo tree includes dev-deps and reports a v1-compat node the lib-only build never activates (use --edges features,no-dev)
 - [Phase ?]: 117-01: docs.rs metadata deliberately not edited — v1-compat gates zero modules today; logged as forward hazard D-117-01-A for 117-02/117-06
+- [Phase ?]: 117-02: v1 wire goldens captured pre-cut at anchor 624e89b7; header identity asserted separately from body identity, proven independent by a source-mutation negative control
+- [Phase ?]: 117-02: v1 SSE fixtures use a bounded LOCAL frame-counting reader (N=2 success bound, 5s timeout failure bound) because common::v2::get reads to EOF and cannot read a long-lived text/event-stream
 
 ### Pending Todos
 
@@ -1052,7 +1054,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T04:07:11.028Z
+Last session: 2026-08-08T04:34:23.194Z
 Stopped at: Completed 117-01-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1173,3 +1175,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P14 | 4h | 1 tasks | 1 files |
 | Phase 116 P15 | 2h05m | 4 tasks | 5 files |
 | Phase 117 P01 | 35min | 3 tasks | 6 files |
+| Phase 117 P02 | 45min | 2 tasks | 1 files |
