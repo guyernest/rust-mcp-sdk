@@ -2,11 +2,39 @@
 //!
 //! Validates: initialize handshake, protocol version, server info,
 //! capabilities structure, unknown method error, malformed request.
+//!
+//! # Era awareness (Phase 117, CLNT-04)
+//!
+//! This is the ONE domain file that is era-aware, because it is the only one
+//! that touches the HANDSHAKE. C-01 and C-04 branch on
+//! [`ServerTester::era`](crate::tester::ServerTester::era); C-02 and C-03 stay
+//! single-bodied by reading the connection through the tester's era-agnostic
+//! `negotiated_*` accessors.
+//!
+//! **No `InitializeResult` is ever synthesised for v2.** v2 removed
+//! `initialize`, so a locally-manufactured result would make C-01 report a
+//! handshake that never happened and would put the capabilities back at their
+//! v1 LOCATION — concealing ERA-01 and ERA-10, two of the fourteen entries in
+//! `crates/mcp-tester/baselines/era-deltas.yaml` that this tester exists to
+//! detect. A tool that certifies the difference it was built to find is worse
+//! than no tool.
+//!
+//! On the v1 path every test NAME and every branch below is byte-identical to
+//! 0.7.0; `crates/mcp-tester/tests/report_compat.rs` is the proof.
 
 use crate::report::{TestCategory, TestResult, TestStatus};
-use crate::tester::ServerTester;
+use crate::tester::{ServerTester, V2HeaderMode};
+use pmcp::types::protocol::Era;
 use serde_json::json;
 use std::time::Instant;
+
+/// The `_meta`/capability key the v2 wire uses for the tasks extension.
+///
+/// Spelled here rather than imported because the crate-side constant is not
+/// public API of `pmcp` at the version this crate depends on. C-04 only reads
+/// it, and `crates/mcp-tester/tests/dual_run.rs` carries the drift tripwire
+/// against a live server.
+const TASKS_EXTENSION_KEY: &str = "io.modelcontextprotocol/tasks";
 
 /// Run all core conformance scenarios.
 /// Core domain handles initialization -- must run before other domains.
@@ -42,8 +70,16 @@ pub async fn run_core_conformance(tester: &mut ServerTester) -> Vec<TestResult> 
     results
 }
 
-/// C-01: Validate that the server completes the initialize handshake.
+/// C-01: Validate that the server completes the era's connection handshake.
+///
+/// On v1 (the default) this is the `initialize` handshake and the body below is
+/// unchanged from 0.7.0, NAME included. On v2 it delegates to
+/// [`test_v2_no_initialize_handshake`], which asserts the OPPOSITE fact:
+/// `initialize` must be ABSENT.
 async fn test_initialize_handshake(tester: &mut ServerTester) -> TestResult {
+    if tester.era() == Era::V2 {
+        return test_v2_no_initialize_handshake(tester).await;
+    }
     let start = Instant::now();
     let init_result = tester.test_initialize().await;
 
@@ -67,15 +103,102 @@ async fn test_initialize_handshake(tester: &mut ServerTester) -> TestResult {
     }
 }
 
+/// C-01 on v2: `initialize` must be ABSENT and `server/discover` must work.
+///
+/// This is the MIRROR IMAGE of the v1 assertion, not a relaxation of it. Two
+/// independent facts are required:
+///
+/// 1. `server/discover` SUCCEEDED — proven structurally, by the tester holding
+///    a projection it could only have obtained from that call; and
+/// 2. `initialize` is not served — proven on the WIRE, by sending a real
+///    `initialize` request with v2 framing and requiring the server to refuse
+///    it.
+///
+/// Fact 2 is what makes this test worth running. Without it a v2 server that
+/// still answered `initialize` would pass, which is precisely the regression
+/// ERA-01 exists to catch.
+async fn test_v2_no_initialize_handshake(tester: &mut ServerTester) -> TestResult {
+    let start = Instant::now();
+    let name = "Core: initialize absent (v2 server/discover)";
+
+    let discover = tester.test_initialize().await;
+    if discover.status != TestStatus::Passed {
+        return TestResult::failed(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            format!(
+                "server/discover did not establish a 2026-07-28 connection: {}",
+                discover.error.unwrap_or_else(|| "unknown failure".into())
+            ),
+        );
+    }
+    if tester.server_info().is_some() {
+        return TestResult::failed(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            "a v2 connection must carry NO InitializeResult; one is present, which \
+             means an initialize handshake was performed or synthesised",
+        );
+    }
+
+    match tester
+        .raw_jsonrpc_probe(
+            "initialize",
+            "",
+            json!({ "protocolVersion": pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28 }),
+            Era::V2,
+            V2HeaderMode::Standard,
+        )
+        .await
+    {
+        Ok(outcome) if outcome.is_result() => TestResult::failed(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            format!(
+                "the server ANSWERED `initialize` on the 2026-07-28 wire (HTTP {}); \
+                 v2 removed the method, so it must be refused",
+                outcome.http_status
+            ),
+        ),
+        Ok(outcome) => TestResult::passed(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            format!(
+                "server/discover established the connection; `initialize` refused \
+                 (HTTP {}, JSON-RPC code {})",
+                outcome.http_status,
+                outcome
+                    .error_code
+                    .map_or_else(|| "none".to_string(), |c| c.to_string())
+            ),
+        ),
+        // A transport failure on the probe is itself a refusal to serve the
+        // method; it is reported as a warning rather than a pass so the reader
+        // can see that the evidence is weaker than a clean JSON-RPC rejection.
+        Err(e) => TestResult::warning(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            format!("server/discover succeeded; `initialize` probe did not complete: {e}"),
+        ),
+    }
+}
+
 /// C-02: Validate the protocol version is a recognized MCP version.
 fn test_protocol_version(tester: &ServerTester) -> TestResult {
     let start = Instant::now();
     let name = "Core: protocol version";
 
-    match tester.server_info() {
-        Some(info) => {
-            let version = &info.protocol_version.0;
-            if pmcp::SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str()) {
+    match tester.negotiated_protocol_version() {
+        Some(version) => {
+            let version = version.to_string();
+            if pmcp::SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str())
+                || pmcp::types::protocol::protocol_era(&version) == Era::V2
+            {
                 TestResult::passed(
                     name,
                     TestCategory::Core,
@@ -105,10 +228,10 @@ fn test_server_info(tester: &ServerTester) -> TestResult {
     let start = Instant::now();
     let name = "Core: server info";
 
-    match tester.server_info() {
+    match tester.negotiated_server_info() {
         Some(info) => {
-            let srv_name = &info.server_info.name;
-            let srv_version = &info.server_info.version;
+            let srv_name = &info.name;
+            let srv_version = &info.version;
 
             if srv_name.is_empty() || srv_version.is_empty() {
                 let mut missing = Vec::new();
@@ -143,7 +266,17 @@ fn test_server_info(tester: &ServerTester) -> TestResult {
 }
 
 /// C-04: Validate the capabilities structure is present and well-formed.
+///
+/// On v1 the capabilities come from the `initialize` response and `tasks` lives
+/// at `capabilities.tasks`. On v2 they come from the `server/discover`
+/// projection and the tasks surface has MOVED to
+/// `capabilities.extensions["io.modelcontextprotocol/tasks"]` (ERA-10), so the
+/// v2 branch reads it at that LOCATION. Reporting the v1 location on a v2
+/// connection would silently assert the relocation had not happened.
 fn test_capabilities_structure(tester: &ServerTester) -> TestResult {
+    if tester.era() == Era::V2 {
+        return test_v2_capabilities_structure(tester);
+    }
     let start = Instant::now();
     let name = "Core: capabilities structure";
 
@@ -178,6 +311,75 @@ fn test_capabilities_structure(tester: &ServerTester) -> TestResult {
             "No capabilities available",
         ),
     }
+}
+
+/// C-04 on v2: validate the projection's capability structure at its v2
+/// LOCATION.
+///
+/// Reads the `server/discover` projection directly rather than
+/// `server_capabilities()`, so the test can distinguish "no projection" (a
+/// broken v2 connection) from "a projection advertising nothing". The tasks
+/// surface is looked for under `extensions`, NOT under `capabilities.tasks`:
+/// per ERA-10 both v1 spellings are suppressed on the v2 wire, so finding
+/// `tasks` at its v1 location on a v2 connection is a FINDING and is reported
+/// as a warning rather than quietly counted as an advertised capability.
+fn test_v2_capabilities_structure(tester: &ServerTester) -> TestResult {
+    let start = Instant::now();
+    let name = "Core: capabilities structure (v2 projection)";
+
+    let Some(discovered) = tester.discover_result() else {
+        return TestResult::failed(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            "No server/discover projection available (v2 connection not established)",
+        );
+    };
+    let caps = &discovered.capabilities;
+    let mut advertised = Vec::new();
+    if caps.tools.is_some() {
+        advertised.push("tools".to_string());
+    }
+    if caps.resources.is_some() {
+        advertised.push("resources".to_string());
+    }
+    if caps.prompts.is_some() {
+        advertised.push("prompts".to_string());
+    }
+    let extensions: Vec<String> = caps
+        .extensions
+        .as_ref()
+        .map(|ext| {
+            let mut keys: Vec<String> = ext.keys().cloned().collect();
+            keys.sort();
+            keys
+        })
+        .unwrap_or_default();
+    for key in &extensions {
+        advertised.push(format!("extensions[{key}]"));
+    }
+
+    let details = if advertised.is_empty() {
+        "No optional capabilities advertised".to_string()
+    } else {
+        advertised.join(", ")
+    };
+
+    if caps.tasks.is_some() {
+        return TestResult::warning(
+            name,
+            TestCategory::Core,
+            start.elapsed(),
+            format!(
+                "the v2 projection still advertises `capabilities.tasks`; on the \
+                 2026-07-28 wire the tasks surface belongs at \
+                 extensions[{TASKS_EXTENSION_KEY}] and both v1 spellings are \
+                 suppressed (ERA-10). Advertised: {details}"
+            ),
+        );
+    }
+
+    TestResult::passed(name, TestCategory::Core, start.elapsed(), details)
 }
 
 /// C-05: Validate that the server returns -32601 (Method not found) for unknown methods.

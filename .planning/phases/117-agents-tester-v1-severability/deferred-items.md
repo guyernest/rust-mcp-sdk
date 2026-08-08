@@ -143,3 +143,18 @@ forbids creating a branch, and the execution context forbids pushing or opening 
 
 Until step 5 exists, the correct phrasing everywhere is "wired to block" / "wired into `gate` in all
 three required places", never "blocks merge".
+
+## 117-11 — pre-existing `pmcp` unused-import warnings (OUT OF SCOPE)
+
+Observed while building `mcp-tester` (which enables `pmcp`'s `streamable-http` + `oauth`
+features). Both predate this plan and live in files 117-11 does not touch:
+
+```
+warning: unused imports: `DEFAULT_AUTH_RESPONSE_BYTES` and `collect_reqwest_body_within_cap`
+  --> src/server/auth/jwt.rs:18:36
+  --> src/server/auth/jwt_validator.rs:53:36
+```
+
+`git diff --name-only src/` is EMPTY for this plan, so these are not caused by it. They do not
+appear under `make lint`'s `--features full` scope, which is why the gate is green. Left
+untouched per the executor scope boundary (only auto-fix what the current task's changes caused).
