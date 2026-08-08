@@ -126,6 +126,27 @@ pub(crate) struct V1State {
     pub(crate) event_store: Option<EventStoreHandle>,
 }
 
+/// Hand-written because `EventStoreHandle` is `Arc<dyn EventStore>` and that
+/// trait carries no `Debug` bound, so `#[derive(Debug)]` cannot be used here.
+///
+/// It is written anyway, and that is NOT cosmetic. The null twin derives
+/// `Debug`; a `V1State` that implemented it on only one half of the pair would
+/// let `#[derive(Debug)]` on `ServerState` — or any `tracing` field capture of
+/// this field — compile on `full-v2` and FAIL on the DEFAULT build, i.e. break
+/// in the configuration every consumer actually ships. The twin must declare
+/// nothing this module does not, trait impls included.
+///
+/// Takes NO lock: a `Debug` impl that acquired the session or stream lock could
+/// deadlock inside a panic formatter or a log line emitted while the lock is
+/// already held. Cardinality is deliberately not reported for that reason.
+impl std::fmt::Debug for V1State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("V1State")
+            .field("event_store", &self.event_store.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl V1State {
     /// Build the v1 state a server starts with, from its configuration.
     ///

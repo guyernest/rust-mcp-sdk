@@ -229,6 +229,12 @@ mod url_impl {
         let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
             return false;
         };
+        // `Url::host_str` returns an IPv6 literal WITH its URL brackets
+        // (`http://[::1]:8080/` -> `"[::1]"`), and `ToSocketAddrs` would try to
+        // resolve that as a DNS name and fail — classifying a live IPv6
+        // endpoint as "did not answer" and suppressing the legitimate v1
+        // fallback. The brackets are URL syntax, not part of the address.
+        let host = host.trim_start_matches('[').trim_end_matches(']');
         // The stream is dropped immediately: the ANSWER is the whole fact.
         matches!(
             tokio::time::timeout(
@@ -325,9 +331,6 @@ mod url_impl {
                 "http" | "https" => {},
                 other => return Err(InvokerError::UnsupportedScheme(other.to_string())),
             }
-            // The TYPED reachability fact, established BEFORE attempt 1 — that
-            // is, before any error exists that could be stringified.
-            let answered = endpoint_is_reachable(&url).await;
             match try_v2(&url).await {
                 Ok(client) => Ok(Arc::new(UrlConnectorClient::new(
                     client,
@@ -335,7 +338,22 @@ mod url_impl {
                 ))),
                 // The ONE site that turns the reachability fact into an era
                 // decision. The error is logged, never inspected.
-                Err(V2Failure::Rejected(rejection)) if answered => {
+                //
+                // The probe is paid LAZILY, only here. Establishing it ahead of
+                // attempt 1 added a full TCP handshake to every SUCCESSFUL v2
+                // connection for a fact only this failure path reads. The
+                // contract on `endpoint_is_reachable` is about not deriving
+                // reachability from an ERROR STRING; a TCP connect run at this
+                // point still stringifies nothing, so it is preserved — the same
+                // lazy shape `mcp_tester::detect_eras` uses. (An `if` inside the
+                // arm rather than a match guard, because guards cannot `.await`.)
+                Err(V2Failure::Rejected(rejection)) => {
+                    if !endpoint_is_reachable(&url).await {
+                        // No v1 attempt: a host that never answered is
+                        // infrastructure, not a protocol signal (T-117-21 /
+                        // Pitfall 7).
+                        return Err(InvokerError::Transport(rejection.to_string()));
+                    }
                     // The v2 client is DROPPED here; a fresh v1 client is built.
                     tracing::debug!(
                         endpoint,
@@ -345,9 +363,6 @@ mod url_impl {
                     let (client, version) = try_v1(&url).await?;
                     Ok(Arc::new(UrlConnectorClient::new(client, version)))
                 },
-                // No v1 attempt: a host that never answered is infrastructure,
-                // not a protocol signal (T-117-21 / Pitfall 7).
-                Err(V2Failure::Rejected(err)) => Err(InvokerError::Transport(err.to_string())),
                 Err(V2Failure::NotAttempted(err)) => Err(err),
             }
         }

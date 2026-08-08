@@ -768,7 +768,7 @@ async fn run_dual_conformance_test(
     use conformance::{ConformanceDomain, ConformanceRunner};
     use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
     use pmcp::types::ProtocolVersion;
-    use tester::EraSupport;
+    use tester::{EraProbeAuth, EraSupport};
 
     let budget = Duration::from_secs(timeout);
     let parsed_domains = domain.map(|ds| {
@@ -797,7 +797,17 @@ async fn run_dual_conformance_test(
         })
     };
 
-    let era_support = tester::detect_eras(url, budget).await;
+    // The detector opens REAL connections, so it must carry the SAME
+    // credentials and TLS posture the two suite runs will. Detecting with none
+    // of them made `--dual-run --api-key …` (or `--insecure`, or OAuth) report
+    // every authenticated endpoint as unreachable and silently degrade to a
+    // single run.
+    let probe_auth = EraProbeAuth {
+        api_key: api_key.map(str::to_string),
+        insecure,
+        oauth_middleware: oauth_middleware.clone(),
+    };
+    let era_support = tester::detect_eras_with_auth(url, budget, &probe_auth).await;
     match era_support {
         EraSupport::Dual => {
             eprintln!(

@@ -271,8 +271,6 @@ pub async fn observe(tester: &ServerTester, era: Era) -> EraObservations {
         HEADER_MCP_METHOD_AND_NAME,
         probe_required_headers(tester, era, session).await,
     );
-    out.insert(HEADER_LAST_EVENT_ID, probe_last_event_id(tester, era).await);
-    out.insert(HTTP_VERB_GET_DELETE, probe_get_delete(tester, era).await);
 
     let list = tester
         .raw_jsonrpc_probe_with_session(
@@ -312,7 +310,61 @@ pub async fn observe(tester: &ServerTester, era: Era) -> EraObservations {
         probe_error_status_mapping(tester, era, session).await,
     );
 
+    // THE GET PROBES RUN LAST, and they run on the session established above.
+    //
+    // Both orderings matter, for different reasons:
+    //
+    //  * REUSING the session is what stops them LEAKING. A `GET` with no
+    //    `Mcp-Session-Id` makes a stateful v1 server MINT a fresh session and
+    //    register an SSE stream against it, and nothing ever tears those down —
+    //    two leaked sessions and two live stream entries per era run, which is
+    //    exactly hazard (b) that `detect_eras` already guards against.
+    //
+    //  * Running them LAST is what stops the reuse CORRUPTING every other
+    //    observation. Once a `GET` registers an SSE stream for a session, the
+    //    transport routes every later POST response for that session INTO the
+    //    stream and answers the POST `202 Accepted` with no envelope — so
+    //    `tasks/list`, `resources/subscribe` and the error-status mapping would
+    //    all observe `status:202` instead of the fact they were sent to
+    //    establish.
+    //
+    // The observation map is a `BTreeMap`, so call order does not affect the
+    // rendered order. These two probes read only HTTP verb behaviour and depend
+    // on nothing the POST probes did.
+    out.insert(
+        HEADER_LAST_EVENT_ID,
+        probe_last_event_id(tester, era, session).await,
+    );
+    out.insert(
+        HTTP_VERB_GET_DELETE,
+        probe_get_delete(tester, era, session).await,
+    );
+
+    // TEAR THE SESSION DOWN, for the same reason `detect_eras` does: the
+    // `initialize` above made a stateful v1 server MINT and store a session, and
+    // the GET probes just registered an SSE stream against it. Best effort: a
+    // stateless server answers 405 and a v2 connection has no session to tear
+    // down.
+    teardown_session(tester, era, session).await;
+
     EraObservations(out)
+}
+
+/// Issue the spec's `DELETE` teardown for a session these probes minted.
+///
+/// Best effort by design: its outcome is not an observation, and a failure to
+/// tear down must never change what the probes reported.
+async fn teardown_session(tester: &ServerTester, era: Era, session: Option<&str>) {
+    let Some(session) = session else {
+        return;
+    };
+    let _ = tester
+        .raw_verb_probe(
+            "DELETE",
+            era,
+            &[(pmcp::shared::http_constants::MCP_SESSION_ID, session)],
+        )
+        .await;
 }
 
 /// Shorthand for the transport-failure answer.
@@ -458,12 +510,39 @@ async fn probe_required_headers(
     }
 }
 
+/// The header list for a `GET` probe, carrying the ALREADY-ESTABLISHED session
+/// when there is one.
+///
+/// A `GET` with no `Mcp-Session-Id` makes a stateful v1 server MINT a fresh
+/// session and register an SSE stream against it, neither of which anything ever
+/// tears down — one leak per GET probe, per dual run. Reusing the session
+/// `observe` already established keeps the count at one, which
+/// [`teardown_session`] then deletes.
+fn get_probe_headers<'a>(
+    session: Option<&'a str>,
+    extra: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, &'a str)> {
+    let mut headers: Vec<(&str, &str)> = extra.to_vec();
+    if let Some(session) = session {
+        headers.push((pmcp::shared::http_constants::MCP_SESSION_ID, session));
+    }
+    headers
+}
+
 /// ERA-05. Rule: `GET` the endpoint with a `Last-Event-ID` header. A `200` with
 /// an SSE content type means resumability is `supported`; anything else means
 /// the header is `ignored`.
-async fn probe_last_event_id(tester: &ServerTester, era: Era) -> ObservedValue {
+async fn probe_last_event_id(
+    tester: &ServerTester,
+    era: Era,
+    session: Option<&str>,
+) -> ObservedValue {
     match tester
-        .raw_verb_probe("GET", era, &[("Last-Event-ID", "0")])
+        .raw_verb_probe(
+            "GET",
+            era,
+            &get_probe_headers(session, &[("Last-Event-ID", "0")]),
+        )
         .await
     {
         Ok((status, ct)) if status == 200 && ct.contains("text/event-stream") => {
@@ -477,8 +556,16 @@ async fn probe_last_event_id(tester: &ServerTester, era: Era) -> ObservedValue {
 /// ERA-06. Rule: probe both `GET` and `DELETE`. When BOTH answer `405` the verb
 /// surface is rejected; otherwise at least one verb is still serving its v1
 /// role (an SSE stream or a session teardown).
-async fn probe_get_delete(tester: &ServerTester, era: Era) -> ObservedValue {
-    let get = tester.raw_verb_probe("GET", era, &[]).await;
+///
+/// The `GET` carries the established session (see [`get_probe_headers`]); the
+/// `DELETE` deliberately does NOT, because a `DELETE` that named the session
+/// would tear it down MID-OBSERVATION and every probe after this one would be
+/// refused for an unknown session. Teardown is [`teardown_session`]'s job, at
+/// the end.
+async fn probe_get_delete(tester: &ServerTester, era: Era, session: Option<&str>) -> ObservedValue {
+    let get = tester
+        .raw_verb_probe("GET", era, &get_probe_headers(session, &[]))
+        .await;
     let delete = tester.raw_verb_probe("DELETE", era, &[]).await;
     match (get, delete) {
         (Ok((405, _)), Ok((405, _))) => ObservedValue::Text("status:405".into()),

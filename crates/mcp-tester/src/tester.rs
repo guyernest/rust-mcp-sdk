@@ -3514,6 +3514,27 @@ impl RawProbeOutcome {
 /// Maximum response bytes a raw probe reads. Bounds a streaming SSE server.
 const MAX_PROBE_BODY_BYTES: usize = 64 * 1024;
 
+/// Truncate a probe response body to [`MAX_PROBE_BODY_BYTES`] on a CHARACTER
+/// boundary.
+///
+/// Slicing a `str` at a raw byte index PANICS when that index lands inside a
+/// multi-byte UTF-8 sequence, and a 64 KiB cut through a body containing any
+/// non-ASCII text (a server name, an error message, a tool description) lands
+/// there roughly three times in four. A testing tool must not panic on what a
+/// server sent it, so the cut is walked back to the nearest boundary.
+///
+/// PURE and unit-tested below.
+fn truncate_probe_body(text: &str) -> &str {
+    if text.len() <= MAX_PROBE_BODY_BYTES {
+        return text;
+    }
+    let mut end = MAX_PROBE_BODY_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// Extract the JSON-RPC envelope from a response body that may be SSE-framed.
 ///
 /// A Streamable-HTTP server may answer a POST either with `application/json`
@@ -3639,8 +3660,7 @@ impl ServerTester {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         let text = response.text().await.unwrap_or_default();
-        let text = &text[..text.len().min(MAX_PROBE_BODY_BYTES)];
-        let envelope = extract_jsonrpc_envelope(&content_type, text);
+        let envelope = extract_jsonrpc_envelope(&content_type, truncate_probe_body(&text));
 
         let result = envelope
             .as_ref()
@@ -3849,6 +3869,12 @@ async fn endpoint_is_reachable(url: &Url) -> bool {
     let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
         return false;
     };
+    // `Url::host_str` returns an IPv6 literal WITH its URL brackets
+    // (`http://[::1]:8080/` -> `"[::1]"`), and `ToSocketAddrs` would try to
+    // resolve that as a DNS name and fail — reporting a perfectly live IPv6
+    // endpoint as "did not answer". The brackets are URL syntax, not part of
+    // the address.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     // The stream is dropped immediately: the ANSWER is the whole fact.
     matches!(
         tokio::time::timeout(
@@ -3899,14 +3925,75 @@ async fn endpoint_is_reachable(url: &Url) -> bool {
 /// Applies the contract cited on [`endpoint_is_reachable`]. An era is reported
 /// ONLY when its handshake SUCCEEDED, so no reachability verdict can invent
 /// one; reachability decides only WHICH "neither" is reported.
+///
+/// Correct only against an UNAUTHENTICATED, publicly-trusted endpoint — it
+/// presents no credentials. The CLI uses [`detect_eras_with_auth`]; see
+/// [`EraProbeAuth`].
+///
+// Why the allow: this module is compiled into BOTH the library and the binary,
+// which are separate crates with independent dead-code analysis. The library
+// exports this as public API (where `dead_code` cannot fire); the binary reaches
+// only `detect_eras_with_auth`. The same bin/lib split `main.rs` documents for
+// the `era_diff` / `era_observations` modules.
+#[allow(dead_code)]
 pub async fn detect_eras(url: &str, timeout: Duration) -> EraSupport {
+    detect_eras_with_auth(url, timeout, &EraProbeAuth::default()).await
+}
+
+/// The credentials and TLS posture the two era probes must present.
+///
+/// # Why this exists
+///
+/// [`detect_eras`] opens REAL connections, so it needs the SAME credentials the
+/// suite it gates will use. Without them, `--dual-run` against any endpoint
+/// behind an API key, an OAuth chain or a self-signed certificate reports
+/// [`EraSupport::Unreachable`] or [`EraSupport::NoEraSpoken`] and degrades to a
+/// single run — a silent false negative that looks exactly like a v1-only
+/// server. The CLI's `--api-key`, `--insecure` and OAuth options must reach the
+/// detector, not just the suite.
+///
+/// A struct rather than three positional arguments: it is threaded through two
+/// probes and grows whenever a new auth surface lands, and
+/// [`Default`] keeps the unauthenticated case a one-word call.
+#[derive(Clone, Default)]
+pub struct EraProbeAuth {
+    /// Bearer token to present, as `--api-key` supplies it.
+    pub api_key: Option<String>,
+    /// Skip TLS certificate verification, as `--insecure` supplies it.
+    pub insecure: bool,
+    /// The OAuth/HTTP middleware chain the suite was built with.
+    pub oauth_middleware:
+        Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+}
+
+impl std::fmt::Debug for EraProbeAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // NEVER print the token itself.
+        f.debug_struct("EraProbeAuth")
+            .field("api_key", &self.api_key.is_some())
+            .field("insecure", &self.insecure)
+            .field("oauth_middleware", &self.oauth_middleware.is_some())
+            .finish()
+    }
+}
+
+/// [`detect_eras`] carrying explicit credentials and TLS posture.
+///
+/// See [`EraProbeAuth`] for why the plain `detect_eras` — which passes
+/// [`EraProbeAuth::default`] — is only correct against an unauthenticated,
+/// publicly-trusted endpoint.
+pub async fn detect_eras_with_auth(
+    url: &str,
+    timeout: Duration,
+    auth: &EraProbeAuth,
+) -> EraSupport {
     let Ok(parsed) = Url::parse(url) else {
         // A URL that cannot be parsed cannot answer. Reported as infrastructure
         // rather than as a conformance finding: no server was ever contacted.
         return EraSupport::Unreachable;
     };
-    let v2_ok = probe_v2(url, timeout).await;
-    let v1_ok = probe_v1(url, timeout).await;
+    let v2_ok = probe_v2(url, timeout, auth).await;
+    let v1_ok = probe_v1(url, timeout, auth).await;
 
     match (v1_ok, v2_ok) {
         (true, true) => EraSupport::Dual,
@@ -3929,8 +4016,15 @@ pub async fn detect_eras(url: &str, timeout: Duration) -> EraSupport {
 }
 
 /// Attempt 1 — the `2026-07-28` era, PINNED. Mints no session (ERA-03).
-async fn probe_v2(url: &str, timeout: Duration) -> bool {
-    let Ok(mut tester) = ServerTester::new(url, timeout, false, None, Some("http"), None) else {
+async fn probe_v2(url: &str, timeout: Duration, auth: &EraProbeAuth) -> bool {
+    let Ok(mut tester) = ServerTester::new(
+        url,
+        timeout,
+        auth.insecure,
+        auth.api_key.as_deref(),
+        Some("http"),
+        auth.oauth_middleware.clone(),
+    ) else {
         return false;
     };
     tester = tester.with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()));
@@ -3943,18 +4037,24 @@ async fn probe_v2(url: &str, timeout: Duration) -> bool {
 /// Built from the transport directly rather than through [`ServerTester`]
 /// because the teardown needs a handle on the transport, and `ServerTester`
 /// hands its transport to `pmcp::Client` by value.
-async fn probe_v1(url: &str, timeout: Duration) -> bool {
+async fn probe_v1(url: &str, timeout: Duration, auth: &EraProbeAuth) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
+    // The probe must present the SAME credentials the suite will — otherwise an
+    // authenticated endpoint answers 401 to both attempts and the detector
+    // reports `NoEraSpoken` for a perfectly conformant dual-era server.
+    let extra_headers = auth.api_key.as_ref().map_or_else(Vec::new, |key| {
+        vec![("Authorization".to_string(), format!("Bearer {key}"))]
+    });
     let config = StreamableHttpTransportConfig {
         url: parsed,
-        extra_headers: vec![],
+        extra_headers,
         auth_provider: None,
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
-        http_middleware_chain: None,
+        http_middleware_chain: auth.oauth_middleware.clone(),
     };
     let mut probe_handle = StreamableHttpTransport::new(config);
     let mut client = pmcp::Client::new(probe_handle.clone());
@@ -4070,6 +4170,31 @@ mod raw_probe_seam {
         assert!(extract_jsonrpc_envelope("application/json", "not json").is_none());
     }
 
+    /// An oversized body whose 64 KiB mark falls INSIDE a multi-byte character
+    /// must be cut back to a boundary, not sliced through — a raw byte slice
+    /// there panics, and a testing tool must not panic on what a server sent.
+    #[test]
+    fn probe_body_truncation_never_splits_a_character() {
+        // Pad to one byte short of the cap, then push multi-byte characters so
+        // the cap lands mid-sequence.
+        let mut body = "a".repeat(MAX_PROBE_BODY_BYTES - 1);
+        body.push_str(&"é".repeat(64));
+        let cut = truncate_probe_body(&body);
+        assert!(cut.len() <= MAX_PROBE_BODY_BYTES);
+        assert_eq!(
+            cut.len(),
+            MAX_PROBE_BODY_BYTES - 1,
+            "the cut must walk back off the multi-byte sequence"
+        );
+
+        let short = "under the cap";
+        assert_eq!(
+            truncate_probe_body(short),
+            short,
+            "a short body is untouched"
+        );
+    }
+
     // CLAUDE.md ALWAYS / PROPERTY testing: both pure seams are TOTAL.
     proptest::proptest! {
         /// `extract_jsonrpc_envelope` returns, never unwinds, for arbitrary
@@ -4077,6 +4202,15 @@ mod raw_probe_seam {
         #[test]
         fn envelope_extraction_never_panics(ct in ".*", body in ".*") {
             let _ = extract_jsonrpc_envelope(&ct, &body);
+        }
+
+        /// `truncate_probe_body` is TOTAL: it returns a valid prefix for any
+        /// text, at any length, without unwinding.
+        #[test]
+        fn probe_body_truncation_never_panics(body in ".*") {
+            let cut = truncate_probe_body(&body);
+            proptest::prop_assert!(cut.len() <= body.len());
+            proptest::prop_assert!(body.starts_with(cut));
         }
 
         /// Whatever the method name, a v2 body is valid JSON carrying the era

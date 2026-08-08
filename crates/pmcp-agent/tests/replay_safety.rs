@@ -396,6 +396,84 @@ fn a_legacy_version_less_trace_is_v1_and_fails_under_a_declared_v2_replay() {
     );
 }
 
+/// A mismatched batch answers EVERY call in it, not just the first.
+///
+/// `invoke_batch` is a POSITIONAL contract — the Nth result belongs to the Nth
+/// call — so a single error for an N-call batch leaves N-1 calls unanswered and
+/// mis-attributes the one answer it does give. The failure must be visible on
+/// each call the caller made.
+#[test]
+fn an_era_mismatch_answers_every_call_in_the_batch() {
+    let trace = trace_recorded_at("2025-11-25");
+    let invoker = ReplayInvoker::from_trace(&trace).with_live_era(Era::V2);
+
+    let calls: Vec<ToolCall> = ["a", "b", "c"]
+        .iter()
+        .map(|id| ToolCall {
+            id: (*id).to_string(),
+            name: "act".to_string(),
+            arguments: json!({}),
+            connector: None,
+        })
+        .collect();
+    let results = futures::executor::block_on(invoker.invoke_batch(calls));
+
+    assert_eq!(
+        results.len(),
+        3,
+        "one result per CALL, not one per batch; got {results:?}"
+    );
+    let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["a", "b", "c"],
+        "each error must carry the id of the call it answers"
+    );
+    assert!(results.iter().all(|r| r.is_error));
+}
+
+/// The guard covers `invoke` too, not only `invoke_batch`.
+///
+/// `ReplayInvoker` is PUBLIC, so the single-call path is reachable by any
+/// caller. A silent `ok(null)` there would be exactly the cross-era replay D-08
+/// exists to close, reached through the other door.
+#[test]
+fn an_era_mismatch_also_fails_the_single_call_path() {
+    let trace = trace_recorded_at("2025-11-25");
+    let call = || ToolCall {
+        id: "single".to_string(),
+        name: "act".to_string(),
+        arguments: json!({}),
+        connector: None,
+    };
+
+    let mismatched = futures::executor::block_on(
+        ReplayInvoker::from_trace(&trace)
+            .with_live_era(Era::V2)
+            .invoke(call()),
+    );
+    assert!(
+        mismatched.is_error,
+        "a mismatched single call must NOT come back ok; got {mismatched:?}"
+    );
+    assert_eq!(mismatched.id, "single");
+    let message = mismatched.error.clone().unwrap_or_default();
+    assert!(
+        message.contains("V1") && message.contains("V2"),
+        "{message:?}"
+    );
+
+    // The matching and undeclared cases stay byte-identical to before.
+    let matching = futures::executor::block_on(
+        ReplayInvoker::from_trace(&trace)
+            .with_live_era(Era::V1)
+            .invoke(call()),
+    );
+    assert!(!matching.is_error);
+    let undeclared = futures::executor::block_on(ReplayInvoker::from_trace(&trace).invoke(call()));
+    assert!(!undeclared.is_error);
+}
+
 proptest! {
     /// Under a mismatch, two independent replays are ALWAYS equal, for any
     /// number of batches.

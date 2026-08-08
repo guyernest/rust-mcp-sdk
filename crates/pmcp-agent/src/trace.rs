@@ -317,23 +317,44 @@ impl ReplayInvoker {
         if index > 0 {
             return Vec::new();
         }
-        let call_id = calls.first().map_or("", |call| call.id.as_str());
-        vec![ToolCallResult::error(
-            call_id,
-            format!(
-                "replay era mismatch: trace recorded under era {:?} but replayed under live era \
-                 {live_era:?}",
-                self.recorded_era
-            ),
-        )]
+        // ONE result per call, not one per BATCH. `invoke_batch`'s contract is
+        // positional — the engine pairs the Nth result with the Nth call — so a
+        // single error for an N-call batch leaves N-1 calls unanswered and
+        // mis-associates the one answer it does give. An empty batch still
+        // yields one unattributed error rather than nothing, so a mismatch is
+        // never silent.
+        if calls.is_empty() {
+            return vec![ToolCallResult::error("", self.mismatch_message(live_era))];
+        }
+        calls
+            .iter()
+            .map(|call| ToolCallResult::error(call.id.as_str(), self.mismatch_message(live_era)))
+            .collect()
+    }
+
+    /// The single wording of the era-mismatch failure, shared by every result
+    /// [`Self::mismatch_batch`] and [`ToolInvoker::invoke`] produce.
+    fn mismatch_message(&self, live_era: Era) -> String {
+        format!(
+            "replay era mismatch: trace recorded under era {:?} but replayed under live era \
+             {live_era:?}",
+            self.recorded_era
+        )
     }
 }
 
 #[async_trait]
 impl ToolInvoker for ReplayInvoker {
     async fn invoke(&self, call: ToolCall) -> ToolCallResult {
-        // The engine always dispatches via invoke_batch; the single-call path is
-        // only here to satisfy the trait. It echoes an empty, non-error result.
+        // The engine always dispatches via invoke_batch, but `ReplayInvoker` is
+        // PUBLIC, so this path is reachable by any caller — and D-08's whole
+        // point is that a cross-era replay must never proceed silently. The
+        // guard is therefore applied on BOTH entry points, not only the one the
+        // in-repo engine happens to take.
+        if let Some(live_era) = self.mismatched_live_era() {
+            return ToolCallResult::error(call.id.as_str(), self.mismatch_message(live_era));
+        }
+        // Otherwise the single-call path echoes an empty, non-error result.
         ToolCallResult::ok(call.id, serde_json::Value::Null)
     }
 

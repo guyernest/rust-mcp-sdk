@@ -198,9 +198,10 @@ fn test_protocol_version(tester: &ServerTester) -> TestResult {
 
     match tester.negotiated_protocol_version() {
         Some(version) => {
-            let version = version.to_string();
-            if pmcp::SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str())
-                || pmcp::types::protocol::protocol_era(&version) == Era::V2
+            // `negotiated_protocol_version` already borrows from the tester, so
+            // no owned copy is needed to read it.
+            if pmcp::SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+                || pmcp::types::protocol::protocol_era(version) == Era::V2
             {
                 TestResult::passed(
                     name,

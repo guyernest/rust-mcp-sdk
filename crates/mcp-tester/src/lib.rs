@@ -83,7 +83,10 @@ pub use report::{
 pub use scenario::TestScenario;
 pub use scenario_executor::ScenarioExecutor;
 pub use scenario_generator::ScenarioGenerator;
-pub use tester::{detect_eras, no_era_spoken_report, unreachable_report, EraSupport, ServerTester};
+pub use tester::{
+    detect_eras, detect_eras_with_auth, no_era_spoken_report, unreachable_report, EraProbeAuth,
+    EraSupport, ServerTester,
+};
 
 use anyhow::{Context, Result};
 use std::time::Duration;
