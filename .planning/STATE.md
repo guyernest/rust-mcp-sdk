@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 117-09-PLAN.md
-last_updated: "2026-08-08T15:43:51.618Z"
+last_updated: "2026-08-08T16:37:05.280Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 384
+  completed_plans: 385
   percent: 86
 ---
 
@@ -26,10 +26,55 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 11 of 14
-Plans complete: 10 of 14 (117-01..117-10)
-Remaining: 117-11..117-14
+Plan: 12 of 14
+Plans complete: 11 of 14 (117-01..117-11)
+Remaining: 117-12..117-14
 Status: Ready to execute
+
+**117-11 HAS LANDED — CLNT-04 IS BOOKED `[x]`, AND THE TESTER IMMEDIATELY FOUND A REAL GAP.**
+Commits `1bd44f21` + `5d80fa07` + `2451527a` (+3855/−34 across 8 files) + `14db84f7` / `09aaf4ef`
+(summary). `mcp-tester` gained `--dual-run` (opt-in, default OFF), `ServerTester::with_protocol_version`
+(a builder — `new`'s six positional args are byte-identical, so all five `cargo-pmcp` call sites
+compile unchanged), `detect_eras`, 14 wire probes emitting stable `ObservationId`s, and
+`ConformanceRunner::run_dual`. Live against a real opted-in pmcp server: **9 EXPECTED / 0 UNEXPECTED
+/ 5 MISSING**.
+
+**⚠ THE HEADLINE FINDING — HAND-OFF TO 117-12 / 117-13 / PHASE 118.** The pmcp **SERVER** still
+answers a WELL-FORMED `initialize` on the `2026-07-28` wire (HTTP 200 + a result), and the result is
+a MIXED ENVELOPE: `protocolVersion: "2025-11-25"` alongside the v2 `resultType` and
+`_meta["io.modelcontextprotocol/serverInfo"]`. Baseline ERA-01 records v2 as `absent`, but its
+`source` column cites only CLIENT-side artifacts (`CLNT-01`, `v2_synthetic_initialize_result`) — the
+client's `initialize` is local and synthetic; the SERVER side was never severed.
+**`era-deltas.yaml` was deliberately NOT edited**; ERA-01 reporting MISSING is the tool working.
+Pinned by `tests/dual_run.rs::the_server_still_answers_initialize_on_the_v2_wire`.
+
+**⚠ TWO OF MY OWN PROBES WERE WRONG, AND ONLY A LIVE SOCKET SAID SO.** (1) C-01's v2 probe sent a
+MALFORMED `initialize` (no `clientInfo`/`capabilities`), which is refused `-32601` by the TYPED PARSE
+before dispatch — so C-01 was passing for the wrong reason and would have CERTIFIED a server that
+serves `initialize`. (2) The raw v1 probes carried no `Mcp-Session-Id`, and a stateful v1 server
+refuses every non-init request without one, contaminating FOUR observations at once. Fixing (2)
+moved the live comparison from **6 EXPECTED / 3 UNEXPECTED** to **9 EXPECTED / 0 UNEXPECTED** — the
+`method.server_discover` "`-32600` server defect" an earlier draft would have reported was MY BUG,
+not the server's. A unit-test-only plan would have shipped both.
+
+**⚠ `make quality-gate` RUNS ZERO `mcp-tester` TESTS — RE-MEASURED, STILL TRUE.**
+`grep -c 'dual_run'` and `grep -c 'era_baseline'` in the 9268-line gate log are both **0**. Every
+claim here was verified by running the suite directly: `--test dual_run` **12 passed** in 1.41s,
+`--test report_compat` **7 passed** (single-run output still byte-identical to 0.7.0), whole crate
+**328 passed / 12 suites**. `cargo build -p cargo-pmcp` AND `cargo check -p cargo-pmcp --tests` both
+exit 0 (the second reaches the `TestResult` literal in `check.rs:522` that `cargo build` structurally
+cannot). `git diff` is EMPTY for `report.rs`, `src/`, and `crates/mcp-tester/Cargo.toml`.
+
+**⚠ TWO ENVIRONMENT/TOOLING FAULTS FAKED CODE FAILURES.** (1) **Disk exhaustion**: `cargo check -p
+cargo-pmcp --tests` reported a compile error with an EMPTY body; `df -h /` showed **217Mi free,
+100%**. Removing `target/debug/incremental` (48G of an 80G `target/`) freed 89Gi and the command
+passed unchanged — it was never a code defect. (2) **rtk corrupts `make`**: `make quality-gate`
+through the hook wrote a 774-line log ending in a literal `... (7421 lines truncated)` marker with NO
+success banner while still reporting exit 0. Re-run as `/usr/bin/make -C <repo> quality-gate` it
+produced 9268 lines, exit 0, and the real `✅ ALL TOYOTA WAY QUALITY CHECKS PASSED` banner. **Use the
+absolute binary path for the gate.** Also: macOS `sed` BRE has no `\s`, so a `sed -i '' '/^\s*.../d'`
+silently deleted nothing and reported success — caught only by `cargo test`, because
+`cargo build --lib` does not compile `#[cfg(test)]` blocks.
 
 **117-09 HAS LANDED — SMPL-02 IS NOW STRUCTURAL AND IS BOOKED `[x]`.** Commits `9044eb70` +
 `64856c15` (+673/−310 across 3 files) + `2c05d2bd` / `d57d4672` (summary). `ServerState` went
@@ -1073,6 +1118,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 117]: 117-10: a root PATH dev-dependency drags its crate into make lint's unit graph — cargo does NOT apply --cap-lints allow to path deps, so wiring pmcp-agent surfaced seven pre-existing clippy errors as gate-blocking. All seven were FIXED, not #[allow]-ed; pmcp-agent is now covered by the root lint gate.
 - [Phase 117]: 117-10: the plan's 'v1-compat tree count must be 0' criterion measures the wrong graph — cargo tree includes DEV edges by default and the single v1-compat node hangs off the pre-existing pmcp-code-mode dev-dep (baseline measured at 1 with the new dep removed). The correct spelling is -e features,no-dev, which yields 0; the lib-only severance BUILD is what actually proves A-A1.
 - [Phase 117]: 117-10: demo_task_polling DROPPED rather than faked — no in-repo v2 server example settles a related task without a tasks/update round trip. The example header cites agent_drives_task_polling_to_terminal_on_v2 (117-04) as where the CLNT-03 proof lives, so the evidence stays discoverable from the example.
+- [Phase ?]: 117-11: session-leak mitigation is DELETE (Transport::close on a retained transport handle), not client reuse — asserted by 3 mints / 3 DELETEs over 3 detections
+- [Phase ?]: 117-11: era-deltas.yaml NOT edited to silence the comparison — ERA-01 reporting MISSING is the tool correctly finding that the pmcp SERVER still serves initialize on the v2 wire
 
 ### Pending Todos
 
@@ -1100,6 +1147,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - D-116-TRIPWIRE: v2_bounded_reads_tripwire::every_peer_byte_accumulation_is_reviewed has been RED since 116-05 (ec80e5b1) because of src/shared/credential_store.rs:742. make quality-gate runs test-integration, so this would fail CI. Fix is ONE reviewed ALLOWLIST entry naming the bound (port is a u16 = at most 6 bytes appended once), not a code change. Owner: 116-15 or a 116-05 follow-up
 - D-116-FUZZGATE: make test-fuzz runs ZERO fuzzing iterations and reports success on a stable default toolchain (21/21 targets died on the nightly-only -Z flag; gate exit 0). Do not close the ALWAYS-FUZZ row on make quality-gate's exit code. Owner: 116-15.
 - D-116-LINT-OAUTH test-side twin: make quality-gate runs 0 of 116-09's 25 oauth-gated security tests (25 run under full,oauth). Fix is PAIRED — clear the 24 pre-existing src/client/oauth.rs clippy errors, THEN enable oauth in make lint and the gate test stage. Owner 116-15.
+- 117-11 FINDING (hand-off to 117-12/117-13/Phase 118): the pmcp SERVER still answers a well-formed initialize on the 2026-07-28 wire, returning a mixed envelope (v1 protocolVersion 2025-11-25 + v2 resultType and _meta.serverInfo). Baseline ERA-01 records v2 as absent; its source cites only client-side artifacts, so the server side was never severed. Pinned by tests/dual_run.rs::the_server_still_answers_initialize_on_the_v2_wire.
 
 ## Deferred Items
 
@@ -1127,7 +1175,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T15:43:11.720Z
+Last session: 2026-08-08T16:36:51.768Z
 Stopped at: Completed 117-09-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1257,3 +1305,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P05 | 95min | 3 tasks | 4 files |
 | Phase 117 P09 | 74 | 2 tasks | 3 files |
 | Phase 117 P10 | 78 | 2 tasks | 7 files |
+| Phase 117 P11 | 48 | 3 tasks | 8 files |

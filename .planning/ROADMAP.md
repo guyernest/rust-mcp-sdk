@@ -2685,7 +2685,7 @@ Plans:
   3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
   4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
 
-**Plans:** 10/14 plans executed
+**Plans:** 11/14 plans executed
 
 Plans:
 **Wave 1**
@@ -2706,7 +2706,7 @@ Plans:
 
 - [x] 117-09-PLAN.md — Wave 3. `ServerState` collapses to one `V1State` (a ZST on `full-v2`); the seven era chokepoints move with signatures intact (SMPL-02; D-03/D-10)
 - [x] 117-10-PLAN.md — Wave 3. The ALWAYS runnable example `s53_v2_agent_client`, placed where `make test-examples` actually builds it (CLNT-03)
-- [ ] 117-11-PLAN.md — Wave 3. Opt-in `--dual-run`, `run_dual` wrapping the existing orchestrator twice, era-observation probes emitting stable IDs (a `TestReport` carries no wire facts), era-aware `core_domain.rs` C-01/C-04 with no synthesised `InitializeResult`, baseline-driven `DualRunReport` in a NEW top-level struct (CLNT-04; D-05/D-11/A-D11)
+- [x] 117-11-PLAN.md — Wave 3. Opt-in `--dual-run`, `run_dual` wrapping the existing orchestrator twice, era-observation probes emitting stable IDs (a `TestReport` carries no wire facts), era-aware `core_domain.rs` C-01/C-04 with no synthesised `InitializeResult`, baseline-driven `DualRunReport` in a NEW top-level struct (CLNT-04; D-05/D-11/A-D11)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -2758,7 +2758,7 @@ Plans:
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
 | 116. Auth Hardening SEPs | 16/16 | Complete   | 2026-08-07 |
-| 117. Agents, Tester & v1 Severability | 10/14 | In Progress|  |
+| 117. Agents, Tester & v1 Severability | 11/14 | In Progress|  |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
 
