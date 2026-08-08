@@ -59,6 +59,7 @@ use super::{EventStoreHandle, ServerState, StreamableHttpServerConfig};
 use crate::shared::TransportMessage;
 use crate::types::protocol::Era;
 use axum::http::HeaderMap;
+use axum::response::Response;
 use tokio::sync::mpsc;
 
 /// The zero-sized stand-in for the v1 session and resumability state.
@@ -91,25 +92,12 @@ pub(crate) const fn session_exists(_state: &V1State, _session_id: &str) -> bool 
     false
 }
 
-/// Nothing was ever initialized, because nothing was ever created.
-pub(crate) const fn session_is_initialized(_state: &V1State, _session_id: &str) -> bool {
-    false
-}
-
 /// Recording a session is a no-op: there is nowhere to record it.
 pub(crate) fn insert_session(
     _state: &V1State,
     _session_id: String,
     _initialized: bool,
     _protocol_version: Option<String>,
-) {
-}
-
-/// Marking a session initialized is a no-op: no session was created to mark.
-pub(crate) fn mark_session_initialized(
-    _state: &V1State,
-    _session_id: &str,
-    _negotiated_version: Option<String>,
 ) {
 }
 
@@ -249,4 +237,124 @@ pub(crate) const fn resumability_store(
     _era: Option<Era>,
 ) -> Option<&EventStoreHandle> {
     None
+}
+
+// ---------------------------------------------------------------------------
+// v1 session LIFECYCLE — the v2 constant answers (plan 117-12, SMPL-02).
+//
+// The 2026-07-28 transport is handshake-free and session-free: there is no
+// `initialize`, no `Mcp-Session-Id` to mint, demand or echo, and no session
+// record to hold a negotiated version. Every stage below therefore collapses to
+// the answer "there is no session", and the v1 bodies that computed those
+// answers are not compiled into this build at all.
+//
+// # Why the parameters are still here — `session_id: Option<String>` in particular
+//
+// The POST pipeline threads `session_id: Option<String>` through roughly ten
+// functions. Keeping it means it is simply always `None` on this build; dropping
+// it would mean rewriting all ten, in a plan whose whole point is that the v1
+// wire stays byte-identical. Worse, a call site that no longer had to supply a
+// session id would be one edit away from deciding for itself whether sessions
+// apply — a SECOND era decision, which Phase 112 D-11 and Phase 113 Pitfall 2
+// exist to forbid. Identical signatures are what keep the single decision
+// single.
+// ---------------------------------------------------------------------------
+
+// Four of the seven twins below are plain `fn` rather than `const fn`: they take
+// an OWNED `Option<String>`, whose destructor cannot be evaluated at compile
+// time (E0493). Constness follows the SIGNATURE, which is fixed by the real
+// half; it is never bought by changing a parameter type.
+
+/// No session is ever minted, because there is no `initialize` to mint one for.
+///
+/// `(None, false)` is exactly what the real function answers when sessions are
+/// inactive — "no session id, and nothing was newly created".
+pub(crate) fn process_init_session(
+    _state: &ServerState,
+    _era: Option<Era>,
+    _session_id: Option<String>,
+    _protocol_version: Option<String>,
+) -> std::result::Result<(Option<String>, bool), Response> {
+    Ok((None, false))
+}
+
+/// Nothing is required and nothing is validated, so nothing can be rejected.
+///
+/// An inbound `Mcp-Session-Id` is IGNORED rather than rejected, which is the
+/// transport spec taken literally — and here it is structural: there is no
+/// session map to look the id up in, so it cannot be consulted by accident.
+pub(crate) fn validate_non_init_session(
+    _state: &ServerState,
+    _era: Option<Era>,
+    _session_id: Option<String>,
+) -> std::result::Result<Option<String>, Response> {
+    Ok(None)
+}
+
+/// No version is ever negotiated out of an `initialize` result, because this
+/// build has no `initialize` exchange to read one from.
+///
+/// The 2026-07-28 transport carries its version per request, in a header, so a
+/// handshake-negotiated version would be the wrong authority even if one existed.
+pub(crate) const fn extract_negotiated_version(_response: &TransportMessage) -> Option<String> {
+    None
+}
+
+/// Recording the outcome of an initialization is a no-op: nothing was recorded
+/// to update.
+pub(crate) fn update_session_after_init(
+    _state: &ServerState,
+    _session_id: Option<&String>,
+    _negotiated_version: Option<String>,
+) {
+}
+
+/// A per-request version can never disagree with a session-recorded one,
+/// because no session records one.
+///
+/// This is the same `Ok(())` the real function returns from its own first line
+/// when sessions are inactive — so the twin is not a behaviour change but the
+/// compile-time realisation of a behaviour that already held. On this build the
+/// per-request `MCP-Protocol-Version` is the sole authority, which is the
+/// Phase-112 lock stated positively.
+pub(crate) const fn validate_protocol_version_matches_session(
+    _state: &ServerState,
+    _era: Option<Era>,
+    _session_id: Option<&String>,
+    _protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    Ok(())
+}
+
+/// Nothing is ever an `initialize` request, because the 2026-07-28 transport
+/// has no handshake.
+///
+/// The caller uses this flag to decide session minting, so a constant `false`
+/// means the mint path is unreachable on this build by construction rather than
+/// by a runtime guard.
+pub(crate) const fn is_initialize_request(_message: &TransportMessage) -> bool {
+    false
+}
+
+/// There is never a response session id, on any request, ever.
+///
+/// Both branches — mint on `initialize`, validate otherwise — collapse to the
+/// same `Ok(None)`. They are still WRITTEN as two branches, mirroring the real
+/// half, for the reason plan 117-09 recorded for the era twins: routing through
+/// the two stage functions keeps them the single place the answer comes from on
+/// BOTH halves, and keeps `is_init_request` visibly CONSUMED rather than
+/// discarded.
+pub(crate) fn resolve_session_for_request(
+    state: &ServerState,
+    era: Option<Era>,
+    is_init_request: bool,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+) -> std::result::Result<Option<String>, Response> {
+    if is_init_request {
+        let (sid, _is_new) = process_init_session(state, era, session_id, protocol_version)?;
+        Ok(sid)
+    } else {
+        validate_non_init_session(state, era, session_id)
+    }
 }

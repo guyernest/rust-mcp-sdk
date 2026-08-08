@@ -71,11 +71,13 @@
 // `src/shared/http_body_cap.rs`. The twin carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{EventStoreHandle, ServerState, StreamableHttpServerConfig};
+use super::{create_error_response, EventStoreHandle, ServerState, StreamableHttpServerConfig};
 use crate::shared::http_constants::MCP_SESSION_ID;
 use crate::shared::TransportMessage;
-use crate::types::protocol::Era;
-use axum::http::{HeaderMap, HeaderValue};
+use crate::types::protocol::{error_codes, Era};
+use crate::types::{ClientRequest, Request};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::Response;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -178,19 +180,6 @@ pub(crate) fn session_exists(state: &V1State, session_id: &str) -> bool {
     state.sessions.read().contains_key(session_id)
 }
 
-/// Has this session already completed `initialize`?
-///
-/// `false` for an id we have never seen, which is exactly what the
-/// re-initialization guard wants: an unknown session cannot have been
-/// initialized, so the guard falls through rather than rejecting.
-pub(crate) fn session_is_initialized(state: &V1State, session_id: &str) -> bool {
-    state
-        .sessions
-        .read()
-        .get(session_id)
-        .is_some_and(|info| info.initialized)
-}
-
 /// Start tracking a v1 session.
 ///
 /// Takes the two [`SessionInfo`] fields as arguments rather than the struct, so
@@ -208,23 +197,6 @@ pub(crate) fn insert_session(
             protocol_version,
         },
     );
-}
-
-/// Mark a session initialized and record the version it negotiated.
-///
-/// A session that negotiated nothing explicit is recorded at
-/// `DEFAULT_PROTOCOL_VERSION`, unchanged from before the move. An unknown id is
-/// a no-op.
-pub(crate) fn mark_session_initialized(
-    state: &V1State,
-    session_id: &str,
-    negotiated_version: Option<String>,
-) {
-    if let Some(info) = state.sessions.write().get_mut(session_id) {
-        info.initialized = true;
-        info.protocol_version =
-            negotiated_version.or_else(|| Some(crate::DEFAULT_PROTOCOL_VERSION.to_string()));
-    }
 }
 
 /// The protocol version recorded against a session, if it has one.
@@ -453,4 +425,234 @@ pub(crate) fn resumability_store(
         return None;
     }
     state.v1.event_store.as_ref()
+}
+
+// ---------------------------------------------------------------------------
+// v1 session LIFECYCLE (MOVED here by plan 117-12, SMPL-02).
+//
+// These are the pipeline stages that only MCP 2025-11-25 has: minting a session
+// on `initialize`, requiring and validating one on every later request, reading
+// the negotiated version out of the `initialize` RESULT, and recording it. The
+// 2026-07-28 transport is handshake-free and session-free, so on a `full-v2`
+// build the twin answers each of them with a constant and none of this code is
+// compiled at all.
+//
+// Every signature below is the SHIPPED one, unchanged. In particular
+// `session_id: Option<String>` keeps threading through the POST pipeline on both
+// builds — it is simply always `None` on `full-v2`. That is deliberate: dropping
+// the parameter would mean surgery on ~10 pipeline functions and would tempt a
+// call site into making a second era decision of its own (Phase 112 D-11 /
+// Phase 113 Pitfall 2).
+// ---------------------------------------------------------------------------
+
+/// Process session for initialization request.
+///
+/// `era` is the resolved per-request era (see [`sessions_active`]). A v2 request
+/// never reaches `initialize` — v2 has no handshake — but the site is defensive:
+/// with sessions inactive it mints nothing.
+pub(crate) fn process_init_session(
+    state: &ServerState,
+    era: Option<Era>,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+) -> std::result::Result<(Option<String>, bool), Response> {
+    if let Some(generator) = active_session_generator(state, era) {
+        // Stateful mode
+        if let Some(sid) = session_id {
+            // Check if session already exists and is initialized
+            // Inlined from plan 117-09's `session_is_initialized` seam: that
+            // operation existed only so the transport could ask this question
+            // across the pair boundary, and its one caller is now on this side
+            // of it. `false` for an unknown id is what the re-initialization
+            // guard wants — an unknown session cannot have been initialized, so
+            // the guard falls through rather than rejecting. The answer is bound
+            // first so the read lock is released before the error is built.
+            let already_initialized = state
+                .v1
+                .sessions
+                .read()
+                .get(&sid)
+                .is_some_and(|info| info.initialized);
+            if already_initialized {
+                // Session already initialized - reject re-initialization
+                return Err(create_error_response(
+                    StatusCode::BAD_REQUEST,
+                    error_codes::INVALID_REQUEST,
+                    "Session already initialized",
+                ));
+            }
+            // Use existing session ID
+            Ok((Some(sid), false))
+        } else {
+            // Generate new session ID
+            let new_id = generator();
+            // Create new session entry
+            insert_session(&state.v1, new_id.clone(), false, protocol_version);
+            if let Some(callback) = &state.config.on_session_initialized {
+                callback(&new_id);
+            }
+            Ok((Some(new_id), true))
+        }
+    } else {
+        // Sessions inactive (stateless config, or a v2 request) — mint nothing.
+        Ok((None, false))
+    }
+}
+
+/// Validate session for non-initialization request.
+///
+/// When sessions are inactive for this request — a `stateless()` server, or ANY
+/// v2 request regardless of config — nothing is required and nothing is
+/// validated. An inbound `Mcp-Session-Id` on a v2 request is IGNORED rather than
+/// rejected, per the transport spec: "An `Mcp-Session-Id` header on a request:
+/// ignore it, and do not mint or echo session IDs."
+pub(crate) fn validate_non_init_session(
+    state: &ServerState,
+    era: Option<Era>,
+    session_id: Option<String>,
+) -> std::result::Result<Option<String>, Response> {
+    if sessions_active(state, era) {
+        // Stateful mode - require and validate session ID
+        match session_id {
+            None => {
+                // Missing session ID
+                Err(create_error_response(
+                    StatusCode::BAD_REQUEST,
+                    error_codes::INVALID_REQUEST,
+                    "Session ID required for non-initialization requests",
+                ))
+            },
+            Some(sid) => {
+                // Validate session exists
+                if session_exists(&state.v1, &sid) {
+                    Ok(Some(sid))
+                } else {
+                    // Unknown session ID
+                    Err(create_error_response(
+                        StatusCode::NOT_FOUND,
+                        error_codes::INVALID_REQUEST,
+                        "Unknown session ID",
+                    ))
+                }
+            },
+        }
+    } else {
+        // Sessions inactive (stateless config, or a v2 request) — any inbound
+        // `Mcp-Session-Id` is ignored, and none is echoed back.
+        Ok(None)
+    }
+}
+
+/// Extract negotiated protocol version from initialize response
+pub(crate) fn extract_negotiated_version(response: &TransportMessage) -> Option<String> {
+    if let TransportMessage::Response(ref json_resp) = response {
+        if let crate::types::jsonrpc::ResponsePayload::Result(ref value) = json_resp.payload {
+            if let Ok(init_result) =
+                serde_json::from_value::<crate::types::InitializeResult>(value.clone())
+            {
+                return Some(init_result.protocol_version.0);
+            }
+        }
+    }
+    None
+}
+
+/// Update session info after initialization
+pub(crate) fn update_session_after_init(
+    state: &ServerState,
+    session_id: Option<&String>,
+    negotiated_version: Option<String>,
+) {
+    let Some(sid) = session_id else {
+        return;
+    };
+    // Inlined from plan 117-09's `mark_session_initialized` seam, for the same
+    // reason as `session_is_initialized` above. A session that negotiated
+    // nothing explicit is recorded at `DEFAULT_PROTOCOL_VERSION`, unchanged from
+    // before the move; an unknown id is a no-op.
+    if let Some(info) = state.v1.sessions.write().get_mut(sid.as_str()) {
+        info.initialized = true;
+        info.protocol_version =
+            negotiated_version.or_else(|| Some(crate::DEFAULT_PROTOCOL_VERSION.to_string()));
+    }
+}
+
+/// In stateful mode, verify that a provided protocol version matches the
+/// session's recorded negotiated version (if any). Pure early-return chain.
+///
+/// Short-circuits `Ok(())` whenever sessions are inactive for this request. On v2
+/// that is not merely an optimization: there IS no session, and the PER-REQUEST
+/// version is authoritative over any session state (the Phase-112 lock), so a
+/// session-recorded version must never be consulted. The null twin returns that
+/// same `Ok(())` unconditionally, which turns the early return below into a
+/// compile-time fact on `full-v2` rather than a runtime one.
+pub(crate) fn validate_protocol_version_matches_session(
+    state: &ServerState,
+    era: Option<Era>,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    if !sessions_active(state, era) {
+        return Ok(());
+    }
+    let Some(sid) = session_id else {
+        return Ok(());
+    };
+    // Ordered so the CHEAP check runs first: `MCP-Protocol-Version` is an
+    // optional header, and with nothing to compare against there is no point
+    // taking the session read-lock and cloning the recorded version out of it
+    // (`session_protocol_version` returns an owned `String` so the ZST twin can
+    // implement it). Every request that omits the header now skips both.
+    let Some(provided_version) = protocol_version else {
+        return Ok(());
+    };
+    let Some(negotiated_version) = session_protocol_version(&state.v1, sid.as_str()) else {
+        return Ok(());
+    };
+    if *provided_version == negotiated_version {
+        return Ok(());
+    }
+    Err(create_error_response(
+        StatusCode::BAD_REQUEST,
+        error_codes::INVALID_REQUEST,
+        &format!(
+            "Protocol version mismatch: expected {}, got {}",
+            negotiated_version, provided_version
+        ),
+    ))
+}
+
+/// Classify a `TransportMessage` as an `initialize` request or not.
+///
+/// Extracted so both POST handlers can short-circuit protocol-version
+/// validation and session creation without re-implementing the `matches!`.
+///
+/// v1-only because `initialize` is: the 2026-07-28 transport has no handshake,
+/// so the twin answers `false` for every message and no session is ever minted.
+pub(crate) fn is_initialize_request(message: &TransportMessage) -> bool {
+    matches!(
+        message,
+        TransportMessage::Request { request: Request::Client(boxed), .. }
+            if matches!(**boxed, ClientRequest::Initialize(_))
+    )
+}
+
+/// Resolve the response session ID given the request type and incoming headers.
+///
+/// For initialize requests this delegates to [`process_init_session`]; for
+/// subsequent requests to [`validate_non_init_session`]. Used by both POST
+/// handlers.
+pub(crate) fn resolve_session_for_request(
+    state: &ServerState,
+    era: Option<Era>,
+    is_init_request: bool,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+) -> std::result::Result<Option<String>, Response> {
+    if is_init_request {
+        let (sid, _is_new) = process_init_session(state, era, session_id, protocol_version)?;
+        Ok(sid)
+    } else {
+        validate_non_init_session(state, era, session_id)
+    }
 }

@@ -1371,7 +1371,7 @@ impl HttpIngress {
     /// `HttpIngress` variant has exactly one place to answer the question.
     fn is_initialize(&self) -> bool {
         match self {
-            Self::Public(msg) => is_initialize_request(msg),
+            Self::Public(msg) => v1::is_initialize_request(msg),
             Self::Discover { .. } | Self::SubscriptionsListen { .. } | Self::TasksUpdate { .. } => {
                 false
             },
@@ -1608,116 +1608,6 @@ fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<()
     Ok(())
 }
 
-/// Process session for initialization request.
-///
-/// `era` is the resolved per-request era (see [`v1::sessions_active`]). A v2 request
-/// never reaches `initialize` — v2 has no handshake — but the site is defensive:
-/// with sessions inactive it mints nothing.
-fn process_init_session(
-    state: &ServerState,
-    era: Option<crate::types::protocol::Era>,
-    session_id: Option<String>,
-    protocol_version: Option<String>,
-) -> std::result::Result<(Option<String>, bool), Response> {
-    if let Some(generator) = v1::active_session_generator(state, era) {
-        // Stateful mode
-        if let Some(sid) = session_id {
-            // Check if session already exists and is initialized
-            if v1::session_is_initialized(&state.v1, &sid) {
-                // Session already initialized - reject re-initialization
-                return Err(create_error_response(
-                    StatusCode::BAD_REQUEST,
-                    crate::types::protocol::error_codes::INVALID_REQUEST,
-                    "Session already initialized",
-                ));
-            }
-            // Use existing session ID
-            Ok((Some(sid), false))
-        } else {
-            // Generate new session ID
-            let new_id = generator();
-            // Create new session entry
-            v1::insert_session(&state.v1, new_id.clone(), false, protocol_version);
-            if let Some(callback) = &state.config.on_session_initialized {
-                callback(&new_id);
-            }
-            Ok((Some(new_id), true))
-        }
-    } else {
-        // Sessions inactive (stateless config, or a v2 request) — mint nothing.
-        Ok((None, false))
-    }
-}
-
-/// Validate session for non-initialization request.
-///
-/// When sessions are inactive for this request — a `stateless()` server, or ANY
-/// v2 request regardless of config — nothing is required and nothing is
-/// validated. An inbound `Mcp-Session-Id` on a v2 request is IGNORED rather than
-/// rejected, per the transport spec: "An `Mcp-Session-Id` header on a request:
-/// ignore it, and do not mint or echo session IDs."
-fn validate_non_init_session(
-    state: &ServerState,
-    era: Option<crate::types::protocol::Era>,
-    session_id: Option<String>,
-) -> std::result::Result<Option<String>, Response> {
-    if v1::sessions_active(state, era) {
-        // Stateful mode - require and validate session ID
-        match session_id {
-            None => {
-                // Missing session ID
-                Err(create_error_response(
-                    StatusCode::BAD_REQUEST,
-                    crate::types::protocol::error_codes::INVALID_REQUEST,
-                    "Session ID required for non-initialization requests",
-                ))
-            },
-            Some(sid) => {
-                // Validate session exists
-                if !v1::session_exists(&state.v1, &sid) {
-                    // Unknown session ID
-                    Err(create_error_response(
-                        StatusCode::NOT_FOUND,
-                        crate::types::protocol::error_codes::INVALID_REQUEST,
-                        "Unknown session ID",
-                    ))
-                } else {
-                    Ok(Some(sid))
-                }
-            },
-        }
-    } else {
-        // Sessions inactive (stateless config, or a v2 request) — any inbound
-        // `Mcp-Session-Id` is ignored, and none is echoed back.
-        Ok(None)
-    }
-}
-
-/// Extract negotiated protocol version from initialize response
-fn extract_negotiated_version(response: &TransportMessage) -> Option<String> {
-    if let TransportMessage::Response(ref json_resp) = response {
-        if let crate::types::jsonrpc::ResponsePayload::Result(ref value) = json_resp.payload {
-            if let Ok(init_result) =
-                serde_json::from_value::<crate::types::InitializeResult>(value.clone())
-            {
-                return Some(init_result.protocol_version.0);
-            }
-        }
-    }
-    None
-}
-
-/// Update session info after initialization
-fn update_session_after_init(
-    state: &ServerState,
-    session_id: Option<&String>,
-    negotiated_version: Option<String>,
-) {
-    if let Some(sid) = session_id {
-        v1::mark_session_initialized(&state.v1, sid, negotiated_version);
-    }
-}
-
 /// Build response with appropriate format (JSON or SSE).
 /// Serialize a `TransportMessage` and re-parse as a `serde_json::Value`, or
 /// return a 500 error response on failure.
@@ -1841,55 +1731,12 @@ fn validate_protocol_version_supported(
     ))
 }
 
-/// In stateful mode, verify that a provided protocol version matches the
-/// session's recorded negotiated version (if any). Pure early-return chain.
-///
-/// Short-circuits `Ok(())` whenever sessions are inactive for this request. On v2
-/// that is not merely an optimization: there IS no session, and the PER-REQUEST
-/// version is authoritative over any session state (the Phase-112 lock), so a
-/// session-recorded version must never be consulted.
-fn validate_protocol_version_matches_session(
-    state: &ServerState,
-    era: Option<crate::types::protocol::Era>,
-    session_id: Option<&String>,
-    protocol_version: Option<&String>,
-) -> std::result::Result<(), Response> {
-    if !v1::sessions_active(state, era) {
-        return Ok(());
-    }
-    let Some(sid) = session_id else {
-        return Ok(());
-    };
-    // Ordered so the CHEAP check runs first: `MCP-Protocol-Version` is an
-    // optional header, and with nothing to compare against there is no point
-    // taking the session read-lock and cloning the recorded version out of it
-    // (`session_protocol_version` returns an owned `String` so the ZST twin can
-    // implement it). Every request that omits the header now skips both.
-    let Some(provided_version) = protocol_version else {
-        return Ok(());
-    };
-    let Some(negotiated_version) = v1::session_protocol_version(&state.v1, sid.as_str()) else {
-        return Ok(());
-    };
-    if *provided_version == negotiated_version {
-        return Ok(());
-    }
-    Err(create_error_response(
-        StatusCode::BAD_REQUEST,
-        crate::types::protocol::error_codes::INVALID_REQUEST,
-        &format!(
-            "Protocol version mismatch: expected {}, got {}",
-            negotiated_version, provided_version
-        ),
-    ))
-}
-
 /// Validate the `MCP-Protocol-Version` header (if any) against the supported
 /// set and any negotiated session version.
 ///
 /// Refactored in 75-01 Task 1a-A (P2): extracted
 /// [`validate_protocol_version_supported`] and
-/// [`validate_protocol_version_matches_session`] as early-return chains.
+/// [`v1::validate_protocol_version_matches_session`] as early-return chains.
 fn validate_protocol_version(
     state: &ServerState,
     era: Option<crate::types::protocol::Era>,
@@ -1897,7 +1744,7 @@ fn validate_protocol_version(
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
     validate_protocol_version_supported(protocol_version)?;
-    validate_protocol_version_matches_session(state, era, session_id, protocol_version)
+    v1::validate_protocol_version_matches_session(state, era, session_id, protocol_version)
 }
 
 /// Handle POST requests
@@ -2070,38 +1917,6 @@ fn extract_session_and_protocol_headers(headers: &HeaderMap) -> (Option<String>,
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     (session_id, protocol_version)
-}
-
-/// Classify a `TransportMessage` as an `initialize` request or not.
-///
-/// Extracted so both POST handlers can short-circuit protocol-version
-/// validation and session creation without re-implementing the `matches!`.
-fn is_initialize_request(message: &TransportMessage) -> bool {
-    matches!(
-        message,
-        TransportMessage::Request { request: Request::Client(boxed), .. }
-            if matches!(**boxed, ClientRequest::Initialize(_))
-    )
-}
-
-/// Resolve the response session ID given the request type and incoming headers.
-///
-/// For initialize requests this delegates to [`process_init_session`]; for
-/// subsequent requests to [`validate_non_init_session`]. Used by both POST
-/// handlers.
-fn resolve_session_for_request(
-    state: &ServerState,
-    era: Option<crate::types::protocol::Era>,
-    is_init_request: bool,
-    session_id: Option<String>,
-    protocol_version: Option<String>,
-) -> std::result::Result<Option<String>, Response> {
-    if is_init_request {
-        let (sid, _is_new) = process_init_session(state, era, session_id, protocol_version)?;
-        Ok(sid)
-    } else {
-        validate_non_init_session(state, era, session_id)
-    }
 }
 
 /// Resolved output of the v2 required-header gate for one request: the
@@ -2473,8 +2288,8 @@ async fn handle_fast_path_request(
         TransportMessage::Response(envelope_for_live_request(json_response.payload, live_id));
 
     let negotiated_version = if is_init_request {
-        let version = extract_negotiated_version(&response_msg);
-        update_session_after_init(state, response_session_id.as_ref(), version.clone());
+        let version = v1::extract_negotiated_version(&response_msg);
+        v1::update_session_after_init(state, response_session_id.as_ref(), version.clone());
         version
     } else {
         None
@@ -3409,8 +3224,8 @@ async fn read_and_classify_fast(
 /// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
 /// [`parse_transport_message_fast`], and [`handle_fast_path_request`] so
 /// this orchestrator is a thin early-return pipeline, sharing
-/// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
-/// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
+/// [`extract_session_and_protocol_headers`], [`v1::is_initialize_request`],
+/// [`v1::resolve_session_for_request`], and [`compute_outbound_protocol_version`]
 /// with the middleware path.
 ///
 /// # The pipeline, in order (plans 113.1-01 and 113.1-05)
@@ -3420,7 +3235,7 @@ async fn read_and_classify_fast(
 /// 2. [`resolve_v2_gate`] — the v2 required-header gate (113.1-01). **Runs
 ///    BEFORE session resolution and BEFORE the legacy version check**; see its
 ///    own rustdoc for why that ordering is load-bearing
-/// 3. [`resolve_session_for_request`] — session minting / validation
+/// 3. [`v1::resolve_session_for_request`] — session minting / validation
 /// 4. [`guard_legacy_version_fast`] — the v1 protocol-version guard (113.1-05),
 ///    asymmetric with its middleware twin BY DESIGN (D-08)
 /// 5. [`extract_and_validate_auth`] — authentication
@@ -3471,7 +3286,7 @@ async fn handle_post_fast_path_inner(
     let era = protocol_context.as_ref().map(|pc| pc.era);
     let sessions_on = v1::sessions_active(&state, era);
 
-    let response_session_id = resolve_session_for_request(
+    let response_session_id = v1::resolve_session_for_request(
         &state,
         era,
         is_init_request,
@@ -3543,7 +3358,7 @@ async fn convert_axum_to_middleware_request(
 
 /// Resolve the session ID and run the middleware error hook on failure.
 ///
-/// Wraps [`resolve_session_for_request`] so the caller doesn't have to
+/// Wraps [`v1::resolve_session_for_request`] so the caller doesn't have to
 /// branch on `is_init_request` for the error-kind string.
 async fn resolve_session_with_error_hook(
     state: &ServerState,
@@ -3554,7 +3369,8 @@ async fn resolve_session_with_error_hook(
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> std::result::Result<Option<String>, Response> {
-    match resolve_session_for_request(state, era, is_init_request, session_id, protocol_version) {
+    match v1::resolve_session_for_request(state, era, is_init_request, session_id, protocol_version)
+    {
         Ok(sid) => Ok(sid),
         Err(error_response) => {
             let kind = if is_init_request {
@@ -3903,8 +3719,8 @@ async fn dispatch_message_with_middleware(
             ));
 
             let negotiated_version = if is_init_request {
-                let version = extract_negotiated_version(&response_msg);
-                update_session_after_init(state, response_session_id.as_ref(), version.clone());
+                let version = v1::extract_negotiated_version(&response_msg);
+                v1::update_session_after_init(state, response_session_id.as_ref(), version.clone());
                 version
             } else {
                 None
@@ -4082,7 +3898,7 @@ async fn read_and_classify_with_middleware(
 /// Refactored in 75-01 Task 1a-A: extracted
 /// [`convert_axum_to_middleware_request`], [`build_middleware_context`],
 /// [`run_request_middleware`], [`parse_transport_message_with_middleware`],
-/// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
+/// [`v1::resolve_session_for_request`], [`extract_auth_with_middleware`], and
 /// [`dispatch_message_with_middleware`] so this orchestrator is a thin
 /// early-return pipeline.
 ///
