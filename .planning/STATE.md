@@ -4,13 +4,13 @@ milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
 stopped_at: Completed 117-09-PLAN.md
-last_updated: "2026-08-08T15:18:57.929Z"
+last_updated: "2026-08-08T15:43:51.618Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 383
+  completed_plans: 384
   percent: 86
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 10 of 14
-Plans complete: 9 of 14 (117-01..117-09)
-Remaining: 117-10..117-14
+Plan: 11 of 14
+Plans complete: 10 of 14 (117-01..117-10)
+Remaining: 117-11..117-14
 Status: Ready to execute
 
 **117-09 HAS LANDED — SMPL-02 IS NOW STRUCTURAL AND IS BOOKED `[x]`.** Commits `9044eb70` +
@@ -1068,6 +1068,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 117]: 117-09: `EventStoreHandle` stays in the transport rather than moving into the v1 pair — the null twin declaring it would put the literal `Arc<dyn EventStore` into `v1_session_off.rs`, which the tripwire's FORBIDDEN_STATE_TYPES rejects BY DESIGN. Both halves carry it in SIGNATURES via `use super::EventStoreHandle`; neither declares it. The tripwire is right and was not modified.
 - [Phase 117]: 117-09: the 113-08 SEVERABILITY comment records what is TRUE at this commit — era decisions and ALL v1 session/SSE/resumability STATE are gated structurally via a zero-sized twin, while the EventStore trait, InMemoryEventStore, LAST_EVENT_ID and the replay path are still compiled on both feature sets and are 117-12/117-13's subject. The plan's proposed text would have claimed gating this plan does not perform.
 - [Phase 117]: 117-09: every remaining `sessions`/`sse_streams` read got a behavioural `v1::` operation NOW rather than following its function in 117-12/13 — those functions are still in the transport at this commit and the `full-v2` build must compile. Re-derived counts: 4 sse_streams code sites (research said 5, one was prose), 10 sessions sites (matches), 2 event_store production readers + 1 test writer (research said 1).
+- [Phase 117]: 117-10: paired the CLNT-03 agent example with s47_v2_stateless_mrtr, not s50_v2_tasks_server — s50's task is already paused on input_required and needs tasks/update, which is deliberately not on the ConnectorClient seam (D-09)
+- [Phase 117]: 117-10: the root pmcp-agent dev-dependency is PATH-ONLY (no version key) — crates/pmcp-agent is at 0.2.0, 0.2.0 is not on crates.io, and release.yml publishes pmcp (line 198) long before pmcp-agent (line 489), so a version key would make every cargo publish -p pmcp fail on an unresolvable dev-dependency. Cargo strips path-only dev-deps at publish and the example's required-features keep the publish VERIFY build from reaching it.
+- [Phase 117]: 117-10: a root PATH dev-dependency drags its crate into make lint's unit graph — cargo does NOT apply --cap-lints allow to path deps, so wiring pmcp-agent surfaced seven pre-existing clippy errors as gate-blocking. All seven were FIXED, not #[allow]-ed; pmcp-agent is now covered by the root lint gate.
+- [Phase 117]: 117-10: the plan's 'v1-compat tree count must be 0' criterion measures the wrong graph — cargo tree includes DEV edges by default and the single v1-compat node hangs off the pre-existing pmcp-code-mode dev-dep (baseline measured at 1 with the new dep removed). The correct spelling is -e features,no-dev, which yields 0; the lib-only severance BUILD is what actually proves A-A1.
+- [Phase 117]: 117-10: demo_task_polling DROPPED rather than faked — no in-repo v2 server example settles a related task without a tasks/update round trip. The example header cites agent_drives_task_polling_to_terminal_on_v2 (117-04) as where the CLNT-03 proof lives, so the evidence stays discoverable from the example.
 
 ### Pending Todos
 
@@ -1122,7 +1127,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T15:18:35.855Z
+Last session: 2026-08-08T15:43:11.720Z
 Stopped at: Completed 117-09-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1251,3 +1256,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P08 | 82 | 3 tasks | 6 files |
 | Phase 117 P05 | 95min | 3 tasks | 4 files |
 | Phase 117 P09 | 74 | 2 tasks | 3 files |
+| Phase 117 P10 | 78 | 2 tasks | 7 files |
