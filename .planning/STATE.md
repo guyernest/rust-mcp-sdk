@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 117-12-PLAN.md
-last_updated: "2026-08-08T19:38:54.562Z"
+stopped_at: Completed 117-14-PLAN.md (117-13 still outstanding)
+last_updated: "2026-08-08T20:37:18.143Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 386
+  completed_plans: 387
   percent: 86
 ---
 
@@ -27,9 +27,46 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
 Plan: 13 of 14
-Plans complete: 12 of 14 (117-01..117-12)
-Remaining: 117-13, 117-14
+Plans complete: 13 of 14 (117-01..117-12, 117-14)
+Remaining: **117-13 ONLY** (it and 117-14 are both wave 5; 117-14 ran first)
 Status: Ready to execute
+
+**117-14 HAS LANDED — THE CLIENT HALF OF SMPL-01/SMPL-02 IS NOW SEVERED TOO.** Commits `dd62342f`
+(resumability) + `70d92d16` (session lifecycle) + `40eb06b5` (tests) + `b0b878d6` (summary),
++1612/−144 across 7 files. On `full-v2` the client transport stores no session id, echoes none back,
+sends **no DELETE at all** (the twin names neither `Method::DELETE` nor `self.client`), and writes no
+`Last-Event-ID` — with `LAST_EVENT_ID` gated in `http_constants.rs` alongside its last remaining
+reader, so **nothing in `pmcp` names that header on a `full-v2` build, server OR client**. Twelve v1
+reads route through five paired accessors, leaving exactly ONE call-site `#[cfg]` in the whole
+transport. Proven by a derived, self-tested gate-region scanner (tripwire 11 → **15 tests**, with a
+LIVE ungated counter-example) and by a runtime test that actually RAN on the severed build
+(**2 tests, non-zero**), plus three executed negative controls. 1880/1880 lib tests EXACT, goldens
+9/9, `make quality-gate` exit 0.
+
+**⚠ THREE THINGS 117-13 MUST CARRY FROM 117-14** (full detail in `117-14-SUMMARY.md` § HANDOFF):
+
+1. **`docs/v1-sunset-policy.md` MUST name `Client::initialize` as a known limitation.** Gating it was
+   MEASURED and the documented fallback taken, for two independent reasons: it is DUAL-era (its
+   `is_v2()` branch is a deliberate Phase-113 no-op affordance, so gating deletes v2 behaviour), and
+   `src/composition/mcp_client.rs:181` calls it while `composition` is in `full-v2`. **SMPL-01's
+   "initialize" clause is met on the SERVER side only** — the policy must say so rather than claiming
+   full severance. The verbatim compiler output is in the summary.
+2. **`MCP_SESSION_ID` stays UNGATED, and that is now MEASURED, not assumed.** Assumption A4 is FALSE:
+   `extract_session_and_protocol_headers` (every POST, fast path AND middleware path — it is the same
+   read that yields `MCP-Protocol-Version`) and `build_middleware_context` are v2-reachable, and the
+   v2 test surface names the constant precisely to assert its ABSENCE. The call-path trace lives in
+   the constant's own rustdoc. `src/server/streamable_http_server.rs` was NOT edited.
+3. **A dev-dependency taking a crate's DEFAULT features silently un-severs its own severance TESTS.**
+   `pmcp-code-mode` (a dev-dep of `pmcp`) was unifying `default = ["logging", "v1-compat"]` back on,
+   so `cargo test --test <severed> --no-default-features --features full-v2` reported **`0 tests`,
+   exit 0** — green, and proving nothing. Fixed in `crates/pmcp-code-mode/Cargo.toml`. **117-13's
+   `tests/v2_verbs_405_on_severed_build.rs` would have been equally vacuous**; when you run it,
+   confirm a NON-ZERO test count before believing the pass. Ship a trivial always-true test in the
+   same file so a zero-count run is visibly different from a green one.
+
+Also still open for 117-13: `StreamableHttpServerConfig::event_store` (which pins the concrete
+`InMemoryEventStore` and is why the trait could not move in 117-12), and `shared::event_store`'s
+`create/validate_resumption_token`.
 
 **117-12 HAS LANDED — SMPL-02'S LARGEST CHUNK IS STRUCTURAL.** Commits `124e132f` + `fc21378b`
 (+744/−444 across 3 files) + `b5f326b8` (summary). Twelve v1-only functions — the seven session
@@ -1142,6 +1179,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 117-12: EventStore trait / InMemoryEventStore / EventList / EventsMap could NOT move into the v1 pair — public API + a public config field pinning the concrete type + the tripwire's FORBIDDEN_STATE_TYPES. Trait, store and config field are ONE edit and belong to 117-13.
 - [Phase ?]: 117-12: active_session_generator and insert_session are now PRIVATE to v1_session.rs and absent from the null twin — every caller moved onto the real half, so neither is a seam any more.
 - [Phase ?]: 117-12: the full-v2 build has NO reader of Last-Event-ID at all — the replay twin names no header, so T-113-29/30 is structural rather than an ordering to preserve.
+- [Phase ?]: 117-14: assumption A4 measured FALSE — MCP_SESSION_ID stays UNGATED because extract_session_and_protocol_headers and build_middleware_context read it on the shared v2 POST path, and the v2 test surface names it to assert ABSENCE
+- [Phase ?]: 117-14: Client::initialize NOT gated — documented fallback. It is dual-era (its is_v2() branch is a Phase-113 no-op affordance) and src/composition/mcp_client.rs calls it while composition is in full-v2. SMPL-01's initialize clause is met on the SERVER side only; docs/v1-sunset-policy.md must name it
+- [Phase ?]: 117-14: a dev-dependency taking a crate's DEFAULT features silently un-severs that crate's own severance TESTS — pmcp-code-mode forced v1-compat back on, so the severed test target reported '0 tests, exit 0'. cargo build -p pmcp never sees dev-deps; cargo test does
 
 ### Pending Todos
 
@@ -1197,8 +1237,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T19:38:40.939Z
-Stopped at: Completed 117-09-PLAN.md
+Last session: 2026-08-08T20:37:18.130Z
+Stopped at: Completed 117-14-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -1329,3 +1369,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P10 | 78 | 2 tasks | 7 files |
 | Phase 117 P11 | 48 | 3 tasks | 8 files |
 | Phase 117 P12 | 95min | 2 tasks | 3 files |
+| Phase 117 P14 | 130min | 3 tasks | 7 files |

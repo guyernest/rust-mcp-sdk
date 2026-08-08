@@ -2685,7 +2685,7 @@ Plans:
   3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
   4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
 
-**Plans:** 12/14 plans executed
+**Plans:** 13/14 plans executed
 
 Plans:
 **Wave 1**
@@ -2714,7 +2714,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 117-14-PLAN.md — Wave 5. CLIENT-side severance: the transport's session lifecycle, stored session id, DELETE teardown and resumption surface gated; `LAST_EVENT_ID` co-gated with its one client reader; A4 measured for `MCP_SESSION_ID`; `Client::initialize` severability measured; derived inventory tripwire + a runtime proof RUN on `full-v2` (SMPL-01/SMPL-02; D-03/D-10)
+- [x] 117-14-PLAN.md — Wave 5. CLIENT-side severance: the transport's session lifecycle, stored session id, DELETE teardown and resumption surface gated; `LAST_EVENT_ID` co-gated with its one client reader; A4 measured for `MCP_SESSION_ID`; `Client::initialize` severability measured; derived inventory tripwire + a runtime proof RUN on `full-v2` (SMPL-01/SMPL-02; D-03/D-10)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -2758,7 +2758,7 @@ Plans:
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
 | 116. Auth Hardening SEPs | 16/16 | Complete   | 2026-08-07 |
-| 117. Agents, Tester & v1 Severability | 12/14 | In Progress|  |
+| 117. Agents, Tester & v1 Severability | 13/14 | In Progress|  |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
 
