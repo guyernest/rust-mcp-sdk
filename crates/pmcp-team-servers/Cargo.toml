@@ -19,7 +19,7 @@ exclude = [".planning/", "fuzz/", "tests/"]
 # (RequestHandlerExtra.request_meta) landed additively in the local 2.17.x via
 # 109-00; the path dep provides the source regardless of exact minor.
 pmcp = { version = "2.17.0", path = "../..", default-features = false }
-pmcp-agent = { version = "0.1", path = "../pmcp-agent" }
+pmcp-agent = { version = "0.2", path = "../pmcp-agent" }
 pmcp-package = { version = "0.1", path = "../pmcp-package" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

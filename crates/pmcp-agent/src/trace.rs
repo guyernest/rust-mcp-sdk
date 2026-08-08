@@ -35,6 +35,28 @@ pub struct EffectTrace {
     /// Optional pre-seeded state the store loads (drives resume). `None` = fresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<RunState>,
+    /// The protocol version this trace was RECORDED against, as the wire string
+    /// (e.g. `"2026-07-28"`).
+    ///
+    /// `None` means the trace was recorded before era tracking existed
+    /// (pre-117). Classify it with [`pmcp::types::protocol::protocol_era`]
+    /// rather than comparing strings: that classifier's unknown-to-`V1`
+    /// conservative fallback makes any unrecognised value SAFE instead of a
+    /// panic or an accidental v2 claim.
+    ///
+    /// Populate it from
+    /// [`ConnectorClient::negotiated_protocol_version`](crate::invoker::ConnectorClient::negotiated_protocol_version)
+    /// via [`Self::with_negotiated_version`] when recording against a live
+    /// connector. Without it, [`ReplayInvoker`] cannot tell that a v1-recorded
+    /// trace is being replayed as v2 — the exact hole D-08 exists to close.
+    ///
+    /// Stored as the VERSION STRING, not an `Era`: `Era` derives no
+    /// `Serialize`/`Deserialize`, and adding those derives would put a new wire
+    /// spelling (`"V1"`/`"V2"`) onto the core's compatibility surface for no
+    /// benefit. The string preserves strictly more information and touches zero
+    /// core API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negotiated_version: Option<String>,
     /// Ordered completion results, one returned per `create_message` call.
     pub completions: Vec<CreateMessageResultWithTools>,
     /// Ordered tool-batch results, one returned per `invoke_batch` call.
@@ -44,6 +66,11 @@ pub struct EffectTrace {
 
 impl EffectTrace {
     /// Build a trace from completions and tool batches (fresh initial state).
+    ///
+    /// Deliberately UNCHANGED in arity: `EffectTrace` is a public,
+    /// all-`pub`-fields struct and this is its in-repo construction path, so
+    /// the era is attached with [`Self::with_negotiated_version`] rather than by
+    /// widening this signature.
     #[must_use]
     pub fn new(
         completions: Vec<CreateMessageResultWithTools>,
@@ -51,9 +78,23 @@ impl EffectTrace {
     ) -> Self {
         Self {
             initial_state: None,
+            negotiated_version: None,
             completions,
             tool_batches,
         }
+    }
+
+    /// Record the protocol version this trace was captured against.
+    ///
+    /// Feed it
+    /// [`ConnectorClient::negotiated_protocol_version`](crate::invoker::ConnectorClient::negotiated_protocol_version)
+    /// from the live connector the run used. A trace recorded without it stays
+    /// byte-identical on the wire to a pre-117 trace — the key is omitted
+    /// entirely rather than emitted as `null` — so this is purely additive.
+    #[must_use]
+    pub fn with_negotiated_version(mut self, version: impl Into<String>) -> Self {
+        self.negotiated_version = Some(version.into());
+        self
     }
 }
 
@@ -201,6 +242,7 @@ mod tests {
     use super::{DecisionStep, DecisionTrace, EffectTrace, OutcomeTag, ReplaySource};
     use crate::seams::{CompletionSource, RetryClass};
     use pmcp::types::content::Role;
+    use pmcp::types::protocol::{protocol_era, Era, PROTOCOL_VERSION_2026_07_28};
     use pmcp::types::sampling::{
         CreateMessageParams, CreateMessageResultWithTools, SamplingMessageContent,
     };
@@ -224,6 +266,80 @@ mod tests {
         assert!(json.contains("completions"));
         let back: EffectTrace = serde_json::from_str(&json).unwrap();
         assert_eq!(back.completions.len(), 1);
+        assert_eq!(back.negotiated_version, None);
+    }
+
+    /// A version-less trace must serialize with NO `negotiatedVersion` key at
+    /// all — not merely with the key set to `null`.
+    ///
+    /// Omitting the key entirely — rather than emitting `null` — is what makes
+    /// the field additive: a `None`-version trace is byte-identical to a pre-117
+    /// trace of the same content, so no already-recorded fixture or stored trace
+    /// changes shape.
+    #[test]
+    fn a_version_less_trace_omits_the_key_entirely() {
+        let trace = EffectTrace::new(vec![end_turn_completion()], vec![]);
+        let json = serde_json::to_string(&trace).unwrap();
+        assert!(
+            !json.contains("negotiatedVersion"),
+            "a None-version trace must omit the key, not emit null; got {json}"
+        );
+        assert!(
+            !json.contains("null"),
+            "no null placeholder may appear: {json}"
+        );
+
+        // And the SAME trace with a version attached does carry the key.
+        let versioned = EffectTrace::new(vec![end_turn_completion()], vec![])
+            .with_negotiated_version(PROTOCOL_VERSION_2026_07_28);
+        let versioned_json = serde_json::to_string(&versioned).unwrap();
+        assert!(versioned_json.contains("negotiatedVersion"));
+        let back: EffectTrace = serde_json::from_str(&versioned_json).unwrap();
+        assert_eq!(
+            back.negotiated_version.as_deref(),
+            Some(PROTOCOL_VERSION_2026_07_28)
+        );
+        assert_eq!(
+            back.negotiated_version.as_deref().map(protocol_era),
+            Some(Era::V2)
+        );
+    }
+
+    /// Both pre-117 golden fixtures are ERA-LESS on disk, and they must keep
+    /// deserializing untouched. Their shape IS the backward-compatibility
+    /// evidence, which is why they are never regenerated.
+    #[test]
+    fn pre_117_golden_fixtures_deserialize_with_no_recorded_version() {
+        for (name, raw) in [
+            (
+                "golden_trace_end_turn.json",
+                include_str!("../tests/fixtures/golden_trace_end_turn.json"),
+            ),
+            (
+                "golden_trace_tool_loop.json",
+                include_str!("../tests/fixtures/golden_trace_tool_loop.json"),
+            ),
+        ] {
+            assert!(
+                !raw.contains("negotiatedVersion"),
+                "{name} must stay era-less on disk"
+            );
+            let trace: EffectTrace = serde_json::from_str(raw)
+                .unwrap_or_else(|err| panic!("{name} must still deserialize: {err}"));
+            assert_eq!(
+                trace.negotiated_version, None,
+                "{name} must classify as recorded before era tracking existed"
+            );
+            // The conservative unknown-to-V1 fallback is what makes an absent
+            // version safe rather than ambiguous.
+            assert_eq!(
+                trace
+                    .negotiated_version
+                    .as_deref()
+                    .map_or(Era::V1, protocol_era),
+                Era::V1
+            );
+        }
     }
 
     #[test]

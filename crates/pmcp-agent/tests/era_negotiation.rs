@@ -38,9 +38,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
+use pmcp::types::protocol::{protocol_era, Era, PROTOCOL_VERSION_2026_07_28};
 use pmcp_agent::invoker::{ConnectorClientFactory, InvokerError, UrlConnectorClientFactory};
+use pmcp_agent::EffectTrace;
 
-use v2_server::BOUNDED_WAIT;
+use v2_server::{spawn_v1_only, spawn_v2, teardown, BOUNDED_WAIT};
 
 /// The JSON-RPC method a v2 era probe sends.
 const V2_PROBE_METHOD: &str = "server/discover";
@@ -219,4 +221,86 @@ async fn a_third_party_404_endpoint_is_classified_answered_and_triggers_the_v1_a
     );
 
     stub.handle.abort();
+}
+
+// ===========================================================================
+// The RECORDING end of the era plumbing.
+//
+// A field nobody populates closes no hole. These two cases drive a LIVE
+// connector through `client_for` and record its negotiated version into an
+// `EffectTrace`, so the accessor -> builder -> replay-guard chain is proven end
+// to end rather than only at its endpoints.
+// ===========================================================================
+
+/// Against a live v2 server, the connector reports `2026-07-28` and that is what
+/// lands in the recorded trace.
+#[tokio::test]
+async fn a_live_v2_connector_populates_the_recorded_negotiated_version() {
+    let live = spawn_v2().await;
+    let factory = UrlConnectorClientFactory::new();
+
+    let connector = timeout(BOUNDED_WAIT, factory.client_for(&live.endpoint()))
+        .await
+        .expect("client_for completed within BOUNDED_WAIT")
+        .expect("a connector is established against a v2-accepting server");
+
+    let recorded = connector
+        .negotiated_protocol_version()
+        .map(str::to_string)
+        .unwrap_or_default();
+    let trace = EffectTrace::new(vec![], vec![]).with_negotiated_version(recorded);
+
+    assert!(
+        trace.negotiated_version.is_some(),
+        "a trace recorded through the LIVE path must carry the negotiated version; the recording \
+         end of D-08's plumbing is what makes the replay guard reachable"
+    );
+    assert_eq!(
+        trace.negotiated_version.as_deref(),
+        Some(PROTOCOL_VERSION_2026_07_28),
+        "a v2 connection records the 2026-07-28 wire string verbatim"
+    );
+    assert_eq!(
+        trace.negotiated_version.as_deref().map(protocol_era),
+        Some(Era::V2)
+    );
+
+    teardown(live.handle, connector).await;
+}
+
+/// Against a live v1-only server, the connector reports the version the server
+/// ECHOED in its `initialize` result — not a hardcoded guess — and it classifies
+/// as V1.
+#[tokio::test]
+async fn a_live_v1_fallback_records_the_server_echoed_version() {
+    let live = spawn_v1_only().await;
+    let factory = UrlConnectorClientFactory::new();
+
+    let connector = timeout(BOUNDED_WAIT, factory.client_for(&live.endpoint()))
+        .await
+        .expect("client_for completed within BOUNDED_WAIT")
+        .expect("a connector is established over the v1 fallback");
+
+    let recorded = connector
+        .negotiated_protocol_version()
+        .map(str::to_string)
+        .unwrap_or_default();
+    let trace = EffectTrace::new(vec![], vec![]).with_negotiated_version(recorded);
+
+    assert!(
+        trace.negotiated_version.is_some(),
+        "the v1 fallback must record a version too, or a v1 trace replays as era-less"
+    );
+    assert_ne!(
+        trace.negotiated_version.as_deref(),
+        Some(PROTOCOL_VERSION_2026_07_28),
+        "the v1 fallback must NOT record the v2 wire string"
+    );
+    assert_eq!(
+        trace.negotiated_version.as_deref().map(protocol_era),
+        Some(Era::V1),
+        "the v1 fallback's recorded version classifies as V1 via protocol_era"
+    );
+
+    teardown(live.handle, connector).await;
 }
