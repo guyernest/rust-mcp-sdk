@@ -916,7 +916,7 @@ checkboxes a verifier can fail on.
 
 ### Simplification & v1 Sunset (SMPL)
 
-- [ ] **SMPL-01**: v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor
+- [x] **SMPL-01**: v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor
 - [ ] **SMPL-02**: The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits
 
 ### Conformance (CONF)
@@ -1034,7 +1034,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-03 | Phase 116 | **Complete** — booked by `116-15` against the text amended in `0aebf7f6`, with SEP-2350 explicitly out of scope. `binary(oauth_credential_store)` 54, `binary(oauth_store_wiring)` 18, `binary(oauth_credential_file)` 29, `binary(oauth_refresh)` 21, `binary(oauth_discovery_urls)` 38, `binary(auth_integration)` 20, `binary(v2_bounded_reads_tripwire)` 13. **Carries the named precondition `D-116-PRM`: the key shape is proven, but the two-servers-one-authorization-server SCENARIO is not constructible through the live flow until RFC 9728 lands, so its test seeds the second server.** Three in-scope limitations recorded in the booking |
 | CLNT-03 | Phase 117 | Pending |
 | CLNT-04 | Phase 117 | Pending |
-| SMPL-01 | Phase 117 | Pending |
+| SMPL-01 | Phase 117 | Complete |
 | SMPL-02 | Phase 117 | Pending |
 | CONF-01 | Phase 118 | Pending |
 | CONF-02 | Phase 118 | Pending |
