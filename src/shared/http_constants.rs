@@ -6,9 +6,40 @@
 //! `crate::shared::http`: that module is gated on `feature = "http"`, and
 //! `feature = "sse"` does not enable it, yet `sse_optimized` needs the same
 //! number. One ceiling for every SSE read in the crate.
+//!
+//! # Severance is PER-CONST, never per-module (SMPL-01)
+//!
+//! Exactly one constant here is v1-only and carries
+//! `#[cfg(feature = "v1-compat")]`: [`LAST_EVENT_ID`]. Gating the MODULE
+//! instead would take `DEFAULT_HTTP_SSE_BUFFERED_BYTES`, [`MCP_METHOD`] and
+//! [`MCP_NAME`] with it, and the last two are v2-REQUIRED (VERS-05).
+//!
+//! [`MCP_SESSION_ID`] is deliberately UNGATED, and that is a MEASURED decision
+//! rather than an oversight — see its own doc for the trace.
 
 // Header Names
-/// MCP session ID header name
+/// MCP session ID header name.
+///
+/// # Deliberately UNGATED, measured (plan 117-14, assumption A4)
+///
+/// A4 claimed this constant's server-side readers were v1-reachable only, and
+/// that it could therefore be gated behind `v1-compat` alongside
+/// [`LAST_EVENT_ID`]. The claim was traced and is FALSE:
+///
+/// * `extract_session_and_protocol_headers` reads it on EVERY POST — it is
+///   shared by the fast path and the middleware path, and it is the same read
+///   that yields `MCP-Protocol-Version`, which v2 needs. A v2 POST goes
+///   through it.
+/// * `build_middleware_context` reads it off the middleware-adapted request on
+///   the middleware POST path, which serves v2 traffic (`http_middleware` is a
+///   SHARED, ungated config field).
+/// * The v2 test surface reads it precisely to assert its ABSENCE — a v2
+///   server must not emit it and a v2 client must not send it. Gating it would
+///   delete the vocabulary the v2 side needs to state that property.
+///
+/// The name of a header a build refuses to honour is not v1 machinery. What is
+/// severed is the STORING and SENDING of a session id (the client's capture,
+/// accessors and DELETE teardown; the server's session map), not the string.
 pub const MCP_SESSION_ID: &str = "mcp-session-id";
 
 /// MCP protocol version header name
@@ -30,7 +61,26 @@ pub const MCP_METHOD: &str = "mcp-method";
 /// rejected fail-closed (same class as D-06).
 pub const MCP_NAME: &str = "mcp-name";
 
-/// SSE Last-Event-ID header name for resumption
+/// SSE Last-Event-ID header name for resumption.
+///
+/// v1-ONLY (`feature = "v1-compat"`). MCP `2026-07-28` removed SSE
+/// resumability entirely: there is no event store, no replay cursor, and
+/// therefore no header to name. On a `full-v2` build this constant does not
+/// exist, which is what makes "the severed client never writes an
+/// attacker-influenced replay cursor onto the wire" (T-117-53) a property of
+/// the compiled crate rather than an ordering someone has to preserve.
+///
+/// # Gated together with its readers
+///
+/// The const and every reader of it carry the SAME `#[cfg]`, applied in one
+/// edit: gating either alone is a compile break. Its readers are
+/// `crate::server::streamable_http_server::v1::replay_sse_events_from_header`
+/// (inside the `v1-compat` half of the paired module, so gated by the module —
+/// plan 117-12) and the client's own resumption-header writer
+/// `StreamableHttpTransport::apply_resumption_header` (plan 117-14).
+///
+/// Per-CONST gating only. Do NOT gate this module — see the module doc.
+#[cfg(feature = "v1-compat")]
 pub const LAST_EVENT_ID: &str = "Last-Event-ID";
 
 /// HTTP Accept header name

@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
-use crate::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use crate::shared::streamable_http::{
+    StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+};
 use crate::types::ClientCapabilities;
 use crate::Client;
 
@@ -144,20 +146,22 @@ impl McpFoundationClient {
             CompositionError::Configuration(format!("Invalid URL for {}: {}", server_id, e))
         })?;
 
-        // Build transport configuration
-        let mut transport_config = StreamableHttpTransportConfig {
-            url,
-            extra_headers: endpoint
-                .headers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            auth_provider: None,
-            session_id: None,
-            enable_json_response: endpoint.enable_json_response,
-            on_resumption_token: None,
-            http_middleware_chain: None,
-        };
+        // Build transport configuration.
+        //
+        // Through the BUILDER rather than a struct literal: `session_id` and
+        // `on_resumption_token` exist only behind `v1-compat` (plan 117-14), and
+        // a literal naming them would not compile on a `full-v2` build — which
+        // includes `composition`. The builder leaves both at their default and
+        // names neither, so this call site compiles on both feature sets with no
+        // `#[cfg]` of its own.
+        let mut builder = StreamableHttpTransportConfigBuilder::new(url);
+        for (name, value) in &endpoint.headers {
+            builder = builder.with_header(name.clone(), value.clone());
+        }
+        if endpoint.enable_json_response {
+            builder = builder.enable_json_response();
+        }
+        let mut transport_config = builder.build();
 
         // Add auth header if configured
         if let Some(token) = &endpoint.auth_token {

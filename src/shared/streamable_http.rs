@@ -1,8 +1,15 @@
 use crate::error::{Error, Result, TransportError};
 use crate::shared::http_constants::{
-    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, LAST_EVENT_ID, MCP_METHOD, MCP_NAME,
+    ACCEPT, ACCEPT_STREAMABLE, APPLICATION_JSON, CONTENT_TYPE, MCP_METHOD, MCP_NAME,
     MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
 };
+// The resumption cursor header, imported behind the SAME gate as the constant
+// itself (`http_constants::LAST_EVENT_ID`). This transport holds the LAST
+// remaining reader of it in the crate — the server's moved into the paired
+// module in plan 117-12 — so on a `full-v2` build nothing in `pmcp` names
+// `Last-Event-ID` at all.
+#[cfg(feature = "v1-compat")]
+use crate::shared::http_constants::LAST_EVENT_ID;
 use crate::shared::sse_parser::SseParser;
 use crate::shared::{Transport, TransportMessage};
 use crate::types::mrtr::encode_header_value;
@@ -24,76 +31,107 @@ use url::Url;
 ///
 /// # Examples
 ///
+/// Constructed with functional-update syntax so the example compiles on BOTH
+/// feature sets: `resumption_token` exists only behind `v1-compat`, and
+/// `..SendOptions::default()` names no gated field.
+///
 /// ```rust
 /// use pmcp::shared::streamable_http::SendOptions;
 ///
 /// // Default options for a simple message
 /// let opts = SendOptions::default();
 /// assert!(opts.related_request_id.is_none());
-/// assert!(opts.resumption_token.is_none());
 ///
 /// // Options with request correlation
 /// let opts = SendOptions {
 ///     related_request_id: Some("req-123".to_string()),
-///     resumption_token: None,
+///     ..SendOptions::default()
 /// };
-///
-/// // Options for resuming after disconnection
-/// let opts = SendOptions {
-///     related_request_id: None,
-///     resumption_token: Some("event-456".to_string()),
-/// };
+/// assert_eq!(opts.related_request_id.as_deref(), Some("req-123"));
 /// ```
+#[cfg_attr(
+    feature = "v1-compat",
+    doc = r#"
+Resuming an interrupted stream is v1-only (`v1-compat`), so this example is
+compiled only when that feature is on:
+
+```rust
+use pmcp::shared::streamable_http::SendOptions;
+
+let opts = SendOptions {
+    related_request_id: None,
+    resumption_token: Some("event-456".to_string()),
+};
+assert_eq!(opts.resumption_token.as_deref(), Some("event-456"));
+```
+"#
+)]
 #[derive(Debug, Clone, Default)]
 pub struct SendOptions {
     /// Related request ID for associating responses
     pub related_request_id: Option<String>,
-    /// Resumption token for continuing interrupted streams
+    /// Resumption token for continuing interrupted streams.
+    ///
+    /// v1-ONLY (`v1-compat`): MCP `2026-07-28` removed SSE resumability, so a
+    /// `full-v2` build has no cursor to resume from and this field does not
+    /// exist. The private `SendOptions::resumption_cursor` accessor answers the
+    /// question for the send path on both feature sets.
+    #[cfg(feature = "v1-compat")]
     pub resumption_token: Option<String>,
+}
+
+impl SendOptions {
+    /// The resumption cursor this send should restart an SSE stream from.
+    ///
+    /// The `v1-compat` half: whatever the caller put in
+    /// [`Self::resumption_token`].
+    #[cfg(feature = "v1-compat")]
+    fn resumption_cursor(&self) -> Option<String> {
+        self.resumption_token.clone()
+    }
+
+    /// The null twin: a `full-v2` build carries no resumption cursor, so the
+    /// answer is the constant `None`.
+    ///
+    /// Do NOT "improve" this by inspecting `self` — there is no field to
+    /// inspect, and the point of the constant is that `send_with_options`
+    /// needs no `#[cfg]` at its call site.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn resumption_cursor(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Configuration for the `StreamableHttpTransport`.
 ///
 /// # Examples
 ///
+/// Built through [`StreamableHttpTransportConfigBuilder`] rather than through a
+/// struct literal, because `on_resumption_token` exists only behind
+/// `v1-compat`: a literal naming it does not compile on a `full-v2` build,
+/// while the builder compiles on both.
+///
 /// ```rust
-/// use pmcp::shared::streamable_http::StreamableHttpTransportConfig;
+/// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
 /// use url::Url;
 ///
 /// // Minimal configuration for stateless operation
-/// let config = StreamableHttpTransportConfig {
-///     url: Url::parse("http://localhost:8080").unwrap(),
-///     extra_headers: vec![],
-///     auth_provider: None,
-///     session_id: None,
-///     enable_json_response: false,
-///     on_resumption_token: None,
-///     http_middleware_chain: None,
-/// };
+/// let config = StreamableHttpTransportConfigBuilder::new(
+///     Url::parse("http://localhost:8080").unwrap(),
+/// )
+/// .build();
+/// assert!(!config.enable_json_response);
 ///
-/// // Configuration with session for stateful operation
-/// let config = StreamableHttpTransportConfig {
-///     url: Url::parse("http://localhost:8080").unwrap(),
-///     extra_headers: vec![
-///         ("X-API-Key".to_string(), "secret".to_string()),
-///     ],
-///     auth_provider: None,
-///     session_id: Some("session-123".to_string()),
-///     enable_json_response: false,
-///     on_resumption_token: None,
-///     http_middleware_chain: None,
-/// };
-///
-/// // Configuration for simple request/response (no streaming)
-/// let config = StreamableHttpTransportConfig {
-///     url: Url::parse("http://localhost:8080").unwrap(),
-///     extra_headers: vec![],
-///     auth_provider: None,
-///     session_id: None,
-///     enable_json_response: true,  // JSON instead of SSE
-///     on_resumption_token: None,
-///     http_middleware_chain: None,
-/// };
+/// // Configuration for simple request/response (JSON instead of SSE)
+/// let config = StreamableHttpTransportConfigBuilder::new(
+///     Url::parse("http://localhost:8080").unwrap(),
+/// )
+/// .with_header("X-API-Key", "secret")
+/// .enable_json_response()
+/// .build();
+/// assert!(config.enable_json_response);
+/// assert_eq!(config.extra_headers.len(), 1);
 /// ```
 #[derive(Clone)]
 pub struct StreamableHttpTransportConfig {
@@ -107,26 +145,47 @@ pub struct StreamableHttpTransportConfig {
     pub session_id: Option<String>,
     /// Enable JSON responses instead of SSE (for simple request/response)
     pub enable_json_response: bool,
-    /// Callback when resumption token is received
+    /// Callback when resumption token is received.
+    ///
+    /// v1-ONLY (`v1-compat`). MCP `2026-07-28` removed SSE resumability, so
+    /// there is no cursor to report back and a `full-v2` build has no such
+    /// callback. `StreamableHttpTransport::resumption_callback` answers the
+    /// question for both feature sets.
+    #[cfg(feature = "v1-compat")]
     pub on_resumption_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// HTTP middleware chain for request/response transformation
     pub http_middleware_chain: Option<Arc<crate::client::http_middleware::HttpMiddlewareChain>>,
 }
 
+impl StreamableHttpTransportConfig {
+    /// Render the `v1-compat`-only fields into a `Debug` struct builder.
+    ///
+    /// Split out of [`Debug::fmt`] so the gate sits on an ITEM rather than as a
+    /// `#[cfg]` wedged into the middle of a method-call chain.
+    #[cfg(feature = "v1-compat")]
+    fn debug_v1_fields(&self, out: &mut std::fmt::DebugStruct<'_, '_>) {
+        out.field("on_resumption_token", &self.on_resumption_token.is_some());
+    }
+
+    /// The null twin: a `full-v2` config carries no v1 fields to render.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn debug_v1_fields(&self, _out: &mut std::fmt::DebugStruct<'_, '_>) {}
+}
+
 impl Debug for StreamableHttpTransportConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamableHttpTransportConfig")
-            .field("url", &self.url)
+        let mut out = f.debug_struct("StreamableHttpTransportConfig");
+        out.field("url", &self.url)
             .field("extra_headers", &self.extra_headers)
             .field("auth_provider", &self.auth_provider.is_some())
-            .field("session_id", &self.session_id)
             .field("enable_json_response", &self.enable_json_response)
-            .field("on_resumption_token", &self.on_resumption_token.is_some())
             .field(
                 "http_middleware_chain",
                 &self.http_middleware_chain.is_some(),
-            )
-            .finish()
+            );
+        self.debug_v1_fields(&mut out);
+        out.finish()
     }
 }
 
@@ -161,24 +220,41 @@ pub struct StreamableHttpTransportConfigBuilder {
     auth_provider: Option<Arc<dyn AuthProvider>>,
     session_id: Option<String>,
     enable_json_response: bool,
+    /// v1-ONLY (`v1-compat`) — mirrors
+    /// `StreamableHttpTransportConfig::on_resumption_token`.
+    #[cfg(feature = "v1-compat")]
     on_resumption_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
     http_middleware_chain: Option<Arc<crate::client::http_middleware::HttpMiddlewareChain>>,
 }
 
+impl StreamableHttpTransportConfigBuilder {
+    /// Render the `v1-compat`-only builder fields into a `Debug` struct
+    /// builder — the builder's counterpart of
+    /// `StreamableHttpTransportConfig::debug_v1_fields`.
+    #[cfg(feature = "v1-compat")]
+    fn debug_v1_fields(&self, out: &mut std::fmt::DebugStruct<'_, '_>) {
+        out.field("on_resumption_token", &self.on_resumption_token.is_some());
+    }
+
+    /// The null twin: a `full-v2` builder carries no v1 fields to render.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn debug_v1_fields(&self, _out: &mut std::fmt::DebugStruct<'_, '_>) {}
+}
+
 impl Debug for StreamableHttpTransportConfigBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamableHttpTransportConfigBuilder")
-            .field("url", &self.url)
+        let mut out = f.debug_struct("StreamableHttpTransportConfigBuilder");
+        out.field("url", &self.url)
             .field("extra_headers", &self.extra_headers)
             .field("auth_provider", &self.auth_provider.is_some())
-            .field("session_id", &self.session_id)
             .field("enable_json_response", &self.enable_json_response)
-            .field("on_resumption_token", &self.on_resumption_token.is_some())
             .field(
                 "http_middleware_chain",
                 &self.http_middleware_chain.is_some(),
-            )
-            .finish()
+            );
+        self.debug_v1_fields(&mut out);
+        out.finish()
     }
 }
 
@@ -191,6 +267,7 @@ impl StreamableHttpTransportConfigBuilder {
             auth_provider: None,
             session_id: None,
             enable_json_response: false,
+            #[cfg(feature = "v1-compat")]
             on_resumption_token: None,
             http_middleware_chain: None,
         }
@@ -221,6 +298,11 @@ impl StreamableHttpTransportConfigBuilder {
     }
 
     /// Set callback for resumption token updates.
+    ///
+    /// v1-ONLY (`v1-compat`): MCP `2026-07-28` removed SSE resumability, so
+    /// there is no cursor to report and this method does not exist on a
+    /// `full-v2` build.
+    #[cfg(feature = "v1-compat")]
     pub fn on_resumption_token(mut self, callback: Arc<dyn Fn(String) + Send + Sync>) -> Self {
         self.on_resumption_token = Some(callback);
         self
@@ -271,6 +353,7 @@ impl StreamableHttpTransportConfigBuilder {
             auth_provider: self.auth_provider,
             session_id: self.session_id,
             enable_json_response: self.enable_json_response,
+            #[cfg(feature = "v1-compat")]
             on_resumption_token: self.on_resumption_token,
             http_middleware_chain: self.http_middleware_chain,
         }
@@ -578,6 +661,70 @@ impl StreamableHttpTransport {
         self.v2_mode.load(Ordering::Relaxed)
     }
 
+    /// The callback to notify when an SSE event carries a resumption cursor.
+    ///
+    /// The `v1-compat` half: whatever
+    /// [`StreamableHttpTransportConfig::on_resumption_token`] holds.
+    #[cfg(feature = "v1-compat")]
+    fn resumption_callback(&self) -> Option<Arc<dyn Fn(String) + Send + Sync>> {
+        self.config.read().on_resumption_token.clone()
+    }
+
+    /// The null twin: a `full-v2` build has no resumption cursor to report, so
+    /// the answer is the constant `None`.
+    ///
+    /// Do NOT "improve" this by reading the config — the field does not exist
+    /// on this build. Answering here is what keeps the two SSE-parse loops free
+    /// of a `#[cfg]` at their call sites.
+    #[cfg(not(feature = "v1-compat"))]
+    #[allow(clippy::unused_self)]
+    const fn resumption_callback(&self) -> Option<Arc<dyn Fn(String) + Send + Sync>> {
+        None
+    }
+
+    /// Write the SSE resumption cursor onto an outgoing GET request.
+    ///
+    /// The `v1-compat` half: emits `Last-Event-ID` when the caller supplied a
+    /// cursor. This is the LAST remaining reader of
+    /// [`crate::shared::http_constants::LAST_EVENT_ID`] in the crate — the
+    /// server's moved into the paired module in plan 117-12 — so the constant
+    /// and this function carry the same `#[cfg]`, applied in one edit. Gating
+    /// either alone is a compile break.
+    #[cfg(feature = "v1-compat")]
+    fn apply_resumption_header(
+        request: &mut Request<Full<Bytes>>,
+        resumption_token: Option<&str>,
+    ) -> Result<()> {
+        if let Some(token) = resumption_token {
+            request.headers_mut().insert(
+                LAST_EVENT_ID,
+                token.parse().map_err(|e| {
+                    Error::Transport(TransportError::InvalidMessage(format!(
+                        "Invalid header: {}",
+                        e
+                    )))
+                })?,
+            );
+        }
+        Ok(())
+    }
+
+    /// The null twin: a `full-v2` build writes no replay cursor at all.
+    ///
+    /// It NAMES no header — the client-side mirror of the server's
+    /// `v1_session_off::replay_sse_events_from_header`, which takes a
+    /// `&HeaderMap` and never touches it (plan 117-12). Do NOT "improve" this
+    /// by logging the ignored cursor: naming `Last-Event-ID` here would put the
+    /// token back into a build whose whole claim is that nothing in it writes
+    /// an attacker-influenced replay cursor onto the wire (T-117-53).
+    #[cfg(not(feature = "v1-compat"))]
+    const fn apply_resumption_header(
+        _request: &mut Request<Full<Bytes>>,
+        _resumption_token: Option<&str>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Get the current session ID
     pub fn session_id(&self) -> Option<String> {
         self.config.read().session_id.clone()
@@ -633,18 +780,12 @@ impl StreamableHttpTransport {
             })?,
         );
 
-        // Add Last-Event-ID for resumability
-        if let Some(token) = &resumption_token {
-            request.headers_mut().insert(
-                LAST_EVENT_ID,
-                token.parse().map_err(|e| {
-                    Error::Transport(TransportError::InvalidMessage(format!(
-                        "Invalid header: {}",
-                        e
-                    )))
-                })?,
-            );
-        }
+        // Add the SSE resumption cursor, on the builds that have one.
+        //
+        // Routed through the paired helper rather than written inline: on a
+        // `full-v2` build the twin names no header, so nothing in the compiled
+        // crate writes a replay cursor.
+        Self::apply_resumption_header(&mut request, resumption_token.as_deref())?;
 
         // Send request
         let response = self
@@ -694,7 +835,7 @@ impl StreamableHttpTransport {
 
         // Start streaming task
         let sender = self.sender.clone();
-        let on_resumption = self.config.read().on_resumption_token.clone();
+        let on_resumption = self.resumption_callback();
         let last_event_id = self.last_event_id.clone();
 
         let handle = tokio::spawn(async move {
@@ -962,8 +1103,13 @@ impl StreamableHttpTransport {
         message: TransportMessage,
         options: SendOptions,
     ) -> Result<()> {
-        // If we have a resumption token, restart the SSE stream
-        if let Some(token) = options.resumption_token {
+        // If we have a resumption cursor, restart the SSE stream.
+        //
+        // Read through `SendOptions::resumption_cursor` rather than the field:
+        // on a `full-v2` build the field does not exist and the accessor is the
+        // constant `None`, so this branch is dead code the optimiser removes
+        // rather than a `#[cfg]` wedged into the send path.
+        if let Some(token) = options.resumption_cursor() {
             self.start_sse(Some(token)).await?;
             return Ok(());
         }
@@ -1334,7 +1480,7 @@ impl StreamableHttpTransport {
         } else if content_type.contains(TEXT_EVENT_STREAM) {
             // SSE stream response - handle streaming
             let sender = self.sender.clone();
-            let on_resumption = self.config.read().on_resumption_token.clone();
+            let on_resumption = self.resumption_callback();
             let last_event_id = self.last_event_id.clone();
 
             tokio::spawn(async move {
