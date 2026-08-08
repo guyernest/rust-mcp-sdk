@@ -13,6 +13,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use pmcp::types::protocol::{protocol_era, Era};
 use pmcp::types::sampling::{CreateMessageParams, CreateMessageResultWithTools};
 use serde::{Deserialize, Serialize};
 
@@ -200,26 +201,130 @@ impl CompletionSource for ReplaySource {
 ///
 /// Each `invoke_batch` call returns the next recorded batch; an exhausted trace
 /// returns an empty batch (deterministic).
+///
+/// # Era mismatch (D-08)
+///
+/// A trace recorded against one protocol era and replayed under another is a
+/// silent correctness hole: the two runs produce equal [`DecisionTrace`]s while
+/// the underlying effects came from different protocols. This invoker carries
+/// the era its trace was RECORDED under and, when a live era has been declared
+/// with [`Self::with_live_era`], refuses to replay across a mismatch. See that
+/// method for the two policies (undeclared live era, legacy version-less trace)
+/// this behaviour deliberately encodes.
 #[derive(Debug)]
 pub struct ReplayInvoker {
     batches: Vec<Vec<ToolCallResult>>,
     cursor: AtomicUsize,
+    /// The era the trace was RECORDED under, classified from the trace's
+    /// `negotiated_version` by [`pmcp::types::protocol::protocol_era`].
+    recorded_era: Era,
+    /// The era the replay run is DECLARED to be executing under. `None` means
+    /// no era claim was made, so no mismatch can be detected — see
+    /// [`ReplayInvoker::with_live_era`].
+    live_era: Option<Era>,
 }
 
 impl ReplayInvoker {
     /// Build a replay invoker over an ordered list of tool-batch results.
+    ///
+    /// A raw batch list carries no recorded version, so it classifies
+    /// conservatively as [`Era::V1`] — the same unknown-to-`V1` rule the core's
+    /// [`pmcp::types::protocol::protocol_era`] applies.
     #[must_use]
     pub fn new(batches: Vec<Vec<ToolCallResult>>) -> Self {
         Self {
             batches,
             cursor: AtomicUsize::new(0),
+            recorded_era: Era::V1,
+            live_era: None,
         }
     }
 
     /// Build a replay invoker from the tool batches recorded in `trace`.
+    ///
+    /// The trace's `negotiated_version` is classified with
+    /// [`pmcp::types::protocol::protocol_era`]; a `None` version (every pre-117
+    /// trace) classifies conservatively as [`Era::V1`].
     #[must_use]
     pub fn from_trace(trace: &EffectTrace) -> Self {
-        Self::new(trace.tool_batches.clone())
+        let recorded_era = trace
+            .negotiated_version
+            .as_deref()
+            .map_or(Era::V1, protocol_era);
+        Self {
+            recorded_era,
+            ..Self::new(trace.tool_batches.clone())
+        }
+    }
+
+    /// Declare the protocol era this replay run is executing under.
+    ///
+    /// # The default is a POLICY, not a convenience
+    ///
+    /// A replay constructed WITHOUT this call performs no era check at all: an
+    /// undeclared live era means "no era claim was made, so no mismatch can be
+    /// detected", and it is deliberately NOT treated as matching. That preserves
+    /// every pre-117 caller byte-for-byte. Any caller that cares about replay
+    /// determinism is expected to declare the live era.
+    ///
+    /// # The LEGACY-TRACE policy
+    ///
+    /// A trace with `negotiated_version == None` (every pre-117 fixture)
+    /// classifies via the unknown-to-`V1` conservative fallback, so replaying it
+    /// under an explicitly declared [`Era::V2`] live era IS a mismatch and DOES
+    /// fail. That is deliberate: a v1-recorded trace replayed as v2 is exactly
+    /// the hole D-08 exists to close, and a legacy trace is a v1 trace. Do not
+    /// "fix" this into silence.
+    #[must_use]
+    pub fn with_live_era(mut self, era: Era) -> Self {
+        self.live_era = Some(era);
+        self
+    }
+
+    /// The era this invoker's trace was recorded under.
+    #[must_use]
+    pub fn recorded_era(&self) -> Era {
+        self.recorded_era
+    }
+
+    /// The declared live era, when it disagrees with the recorded one.
+    ///
+    /// `None` whenever no live era was declared — an absent claim is not a
+    /// match, it is simply not a check.
+    fn mismatched_live_era(&self) -> Option<Era> {
+        self.live_era.filter(|live| *live != self.recorded_era)
+    }
+
+    /// The deterministic result an era mismatch produces for a batch.
+    ///
+    /// # Three constraints, and why each one
+    ///
+    /// - **Fail fast** — the first batch carries the error, so a mismatched
+    ///   replay cannot quietly consume recorded effects from the wrong era.
+    /// - **Fail DETERMINISTICALLY** — `tests/replay_safety.rs` (AGNT-03) asserts
+    ///   two runs over one trace produce EQUAL `DecisionTrace`s, so the failure
+    ///   shape must depend only on the batch index and the two eras. It is
+    ///   modelled on [`ReplaySource`]'s exhaustion path for exactly that reason.
+    /// - **Do NOT panic and do NOT silently proceed** — a panic breaks the
+    ///   property harness, and silence is the hole D-08 exists to close.
+    fn mismatch_batch(
+        &self,
+        index: usize,
+        calls: &[ToolCall],
+        live_era: Era,
+    ) -> Vec<ToolCallResult> {
+        if index > 0 {
+            return Vec::new();
+        }
+        let call_id = calls.first().map_or("", |call| call.id.as_str());
+        vec![ToolCallResult::error(
+            call_id,
+            format!(
+                "replay era mismatch: trace recorded under era {:?} but replayed under live era \
+                 {live_era:?}",
+                self.recorded_era
+            ),
+        )]
     }
 }
 
@@ -231,8 +336,11 @@ impl ToolInvoker for ReplayInvoker {
         ToolCallResult::ok(call.id, serde_json::Value::Null)
     }
 
-    async fn invoke_batch(&self, _calls: Vec<ToolCall>) -> Vec<ToolCallResult> {
+    async fn invoke_batch(&self, calls: Vec<ToolCall>) -> Vec<ToolCallResult> {
         let index = self.cursor.fetch_add(1, Ordering::SeqCst);
+        if let Some(live_era) = self.mismatched_live_era() {
+            return self.mismatch_batch(index, &calls, live_era);
+        }
         self.batches.get(index).cloned().unwrap_or_default()
     }
 }
