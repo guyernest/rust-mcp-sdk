@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 117-09-PLAN.md
-last_updated: "2026-08-08T16:37:05.280Z"
+stopped_at: Completed 117-12-PLAN.md
+last_updated: "2026-08-08T19:38:54.562Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 385
+  completed_plans: 386
   percent: 86
 ---
 
@@ -26,10 +26,29 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 12 of 14
-Plans complete: 11 of 14 (117-01..117-11)
-Remaining: 117-12..117-14
+Plan: 13 of 14
+Plans complete: 12 of 14 (117-01..117-12)
+Remaining: 117-13, 117-14
 Status: Ready to execute
+
+**117-12 HAS LANDED — SMPL-02'S LARGEST CHUNK IS STRUCTURAL.** Commits `124e132f` + `fc21378b`
+(+744/−444 across 3 files) + `b5f326b8` (summary). Twelve v1-only functions — the seven session
+lifecycle stages and the five SSE-replay / event-write functions — now live in `v1_session.rs` with
+signature-identical constant twins. **The `full-v2` build has NO reader of `Last-Event-ID` anywhere:**
+the replay twin takes a `&HeaderMap` and names no header, so T-113-29/30 stops being an ordering to
+preserve and becomes a property of the compiled crate. `session_id: Option<String>` still threads the
+~10-function POST pipeline (always `None` on `full-v2`) — zero pipeline surgery, zero `#[cfg]` at any
+call site, 1880/1880 lib tests EXACT, goldens 9/9, tripwire 9/9, `make quality-gate` exit 0.
+
+**⚠ HAND-OFF TO 117-13 — ONE PRE-DIAGNOSED FIRST EDIT.** The `EventStore` trait,
+`InMemoryEventStore`, `EventList`/`EventsMap` and `SessionCallback` could NOT move: they are PUBLIC
+API, the PUBLIC field `StreamableHttpServerConfig::event_store` pins the concrete store (so
+`full-v2` cannot compile without it), and `InMemoryEventStore` is in the tripwire's
+`FORBIDDEN_STATE_TYPES` so the twin can never declare it. **Gate the config fields FIRST, then the
+types, in ONE commit.** `LAST_EVENT_ID` is the same shape — its two readers (the pair's replay path
+and `src/shared/streamable_http.rs`) must be gated together. The blocker chain is written into the
+SEVERABILITY note beside `EventStoreHandle` in the transport. `handle_get_sse` /
+`handle_delete_session` remain the untouched MIXED verb-split subject.
 
 **117-11 HAS LANDED — CLNT-04 IS BOOKED `[x]`, AND THE TESTER IMMEDIATELY FOUND A REAL GAP.**
 Commits `1bd44f21` + `5d80fa07` + `2451527a` (+3855/−34 across 8 files) + `14db84f7` / `09aaf4ef`
@@ -1120,6 +1139,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 117]: 117-10: demo_task_polling DROPPED rather than faked — no in-repo v2 server example settles a related task without a tasks/update round trip. The example header cites agent_drives_task_polling_to_terminal_on_v2 (117-04) as where the CLNT-03 proof lives, so the evidence stays discoverable from the example.
 - [Phase ?]: 117-11: session-leak mitigation is DELETE (Transport::close on a retained transport handle), not client reuse — asserted by 3 mints / 3 DELETEs over 3 detections
 - [Phase ?]: 117-11: era-deltas.yaml NOT edited to silence the comparison — ERA-01 reporting MISSING is the tool correctly finding that the pmcp SERVER still serves initialize on the v2 wire
+- [Phase ?]: 117-12: EventStore trait / InMemoryEventStore / EventList / EventsMap could NOT move into the v1 pair — public API + a public config field pinning the concrete type + the tripwire's FORBIDDEN_STATE_TYPES. Trait, store and config field are ONE edit and belong to 117-13.
+- [Phase ?]: 117-12: active_session_generator and insert_session are now PRIVATE to v1_session.rs and absent from the null twin — every caller moved onto the real half, so neither is a seam any more.
+- [Phase ?]: 117-12: the full-v2 build has NO reader of Last-Event-ID at all — the replay twin names no header, so T-113-29/30 is structural rather than an ordering to preserve.
 
 ### Pending Todos
 
@@ -1175,7 +1197,7 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T16:36:51.768Z
+Last session: 2026-08-08T19:38:40.939Z
 Stopped at: Completed 117-09-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
@@ -1306,3 +1328,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P09 | 74 | 2 tasks | 3 files |
 | Phase 117 P10 | 78 | 2 tasks | 7 files |
 | Phase 117 P11 | 48 | 3 tasks | 8 files |
+| Phase 117 P12 | 95min | 2 tasks | 3 files |

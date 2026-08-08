@@ -379,3 +379,12 @@ None — no external service configuration required. Zero packages added; this p
 ---
 *Phase: 117-agents-tester-v1-severability*
 *Completed: 2026-08-08*
+
+## Self-Check: PASSED
+
+All three modified source files and this summary exist on disk, and all three commits
+(`124e132f`, `fc21378b`, `b5f326b8`) resolve in `git log --all`.
+
+Note: the repository has no `.git/hooks/pre-commit` installed, so `make quality-gate` was run
+MANUALLY (exit **0**) rather than by a hook. It was run against the final tree of Task 2, after
+`cargo fmt --all`, and the severance build was re-verified afterwards.
