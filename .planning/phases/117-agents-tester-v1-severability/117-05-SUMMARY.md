@@ -267,3 +267,15 @@ LIM-116-10 / LIM-117-08-GATE warning, this was checked directly:
 - **`feature-flags` is load-bearing as a counter-example.** If it is ever promoted into
   `gate.needs`, re-point `NON_BLOCKING_JOB` at another genuinely non-blocking job rather than
   deleting the control — the assertion's own failure message says so.
+
+## Self-Check: PASSED
+
+All five claimed files exist on disk; all four claimed commits resolve
+(`6dcb3da0`, `e4788be3`, `23992fba`, `4f7cc32a`). Task 3's `<verify>` command,
+`grep -c 'Adversarial gate-blocking check'`, returns 1. The only two occurrences
+of the phrase "blocks merge" in this file are the guarded ones that explicitly
+DISCLAIM it as an observed fact.
+
+_Measurement note: `git log --oneline --all | grep` returned false MISSINGs under
+the `rtk` proxy, which reformats that command's output. Commit existence was
+re-checked with `git cat-file -e <sha>^{commit}` via an absolute-path `git`._
