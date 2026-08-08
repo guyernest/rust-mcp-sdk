@@ -191,6 +191,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.43", features = ["json", "redactions"] }
 mockito = "1.5.0"
 tokio-util = { version = "0.7", features = ["rt"] }
+serde_yaml = "0.9"  # Consumer: tests/ci_severance_gate_wiring.rs (parses .github/workflows/ci.yml). Version matches crates/mcp-tester/Cargo.toml:26, so no new package enters the graph.
 
 # For examples
 clap = { version = "4.5", features = ["derive"] }
