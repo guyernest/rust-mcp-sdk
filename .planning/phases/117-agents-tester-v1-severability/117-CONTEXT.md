@@ -110,6 +110,56 @@ public-client v2 adoption. v2.5 only makes removal *cheap*. See `<deferred>`.
   (`crates/pmcp-agent/src/trace.rs:163`) could replay a v1-recorded trace as v2, silently
   invalidating the one guarantee — deterministic replay — that the trace module exists to provide.
 
+### Amendments (post-research, 2026-08-07)
+
+- **A-D08 — D-08 AMENDED (user-approved 2026-08-07): the era probe lives in `pmcp-agent`, NOT in
+  `Client`.** Research proved D-08 as originally written is both forbidden and impossible:
+  Phase 113 D-08 (`113-CONTEXT.md:30`) locks "**NO auto-probe** via `server/discover` to choose an
+  era (CLNT-01 lock)", the source carries that lock as a literal "do not 'restore' the latter"
+  comment (`src/client/mod.rs:871-878`), and `server_discover()` opens with
+  `require_v2(...)` (`src/client/mod.rs:892`) which fails **locally with no network round trip**
+  on a v1 client — so it can *confirm* a v2 selection but can never *decide* one.
+
+  **Amended mechanism:** `pmcp-agent`'s `UrlConnectorClientFactory::client_for`
+  (`crates/pmcp-agent/src/invoker/factory.rs:125-146`) makes two explicit era-pinned construction
+  attempts: (1) build a v2 `Client` via `.with_protocol_version(PROTOCOL_VERSION_2026_07_28)` and
+  call `server_discover()` — success ⇒ era = V2; (2) on failure **drop that client**, build a fresh
+  default v1 `Client` and `initialize(...)` — success ⇒ era = V1. This is a *host* making explicit
+  per-connection choices, which is exactly what 113 D-08 permits. **Zero `Client` change.**
+  D-08's actual payload is unchanged: the negotiated era is still recorded in `EffectTrace`,
+  still closing the `ReplayInvoker` hole (`crates/pmcp-agent/src/trace.rs:163`).
+  **The planner MUST NOT implement an auto-probe inside `Client`.**
+
+- **A-D03 — D-03's related-surface list is CORRECTED.** `src/shared/sse_parser.rs` and
+  `src/shared/sse_optimized.rs` are **NOT v1-only** and must not be whole-file gated: v2 uses SSE.
+  `subscriptions/listen` is a **v2-only** method returning a long-lived `text/event-stream`
+  (`src/server/streamable_http_server.rs:3283-3296`, which *rejects* any non-V2 era at `:3296`),
+  framed via `listen_sse_event` (`:3126`) and parsed client-side by `SubscriptionStream`
+  (`src/client/mod.rs:4676-4713`). SSE **framing/parsing is shared**; only SSE **resumability**
+  (`Last-Event-ID` + event store) is v1-only. `src/shared/event_store.rs` remains the only
+  whole-file gate candidate.
+
+- **A-CI — the CONTEXT.md claim "CI validates examples with it [`mcp-tester`]" is FALSE.**
+  `.github/workflows/mcp-tester-validation.yml:59-62` stubs the binary to `echo`, and that workflow
+  is not in `ci.yml`'s `gate` `needs:`. **No CI job anywhere runs `mcp-tester` against a live
+  server.** This *removes* a constraint — CI is not a consumer of the tester's report shape. The
+  real consumers are in-repo *library* linkers (see D-11 resolution below).
+
+- **A-D11 — D-11 is RESOLVED to (a) ADDITIVE, decided by the compiler rather than by a parser.**
+  `cargo-pmcp` links `mcp-tester` as a **library** (five more crates dev-dep on it), constructs
+  `TestResult` as a struct literal (`cargo-pmcp/src/commands/test/apps.rs:874-878`) and matches
+  `TestCategory` **exhaustively with no `_` arm** (`cargo-pmcp/src/commands/test/conformance.rs:276-289`).
+  A new field on `TestResult` or a new `TestCategory` variant is a hard workspace compile break.
+  Therefore: dual-run is an **opt-in flag**, the comparison output rides in a **new top-level
+  struct**, and neither `TestResult` nor `TestCategory` is touched.
+
+- **A-A1 — assumption A1 is CONFIRMED TRUE (measured 2026-08-07, before planning).**
+  `cargo build/tree -p pmcp` does **not** unify features with sibling workspace members:
+  `cargo tree -p pmcp --no-default-features -e features` yields **0** axum nodes even though
+  `crates/pmcp-server-toolkit/Cargo.toml:125` enables `pmcp/streamable-http`, while
+  `--features streamable-http` yields 25. The D-02 `full-v2` severance build is therefore **not**
+  a false green from sibling unification. The researcher's Wave-0 blocking spike is already closed.
+
 ### Cross-cutting
 
 - **D-09: Phase 114's surface is treated as PROVISIONAL; 117 proceeds anyway.** Phase 114 is
