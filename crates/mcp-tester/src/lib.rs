@@ -49,6 +49,7 @@
 pub mod app_validator;
 pub mod conformance;
 pub mod diagnostics;
+pub mod era_diff;
 pub mod post_deploy_report;
 pub mod report;
 pub mod scenario;
@@ -60,6 +61,10 @@ pub mod validators;
 // OAuth support -- re-exported from core SDK
 pub use app_validator::{AppValidationMode, AppValidator};
 pub use conformance::{ConformanceDomain, ConformanceRunner};
+pub use era_diff::{
+    default_baseline_path, load_baseline, load_default_baseline, parse_baseline, EraBaseline,
+    EraDelta,
+};
 pub use pmcp::client::oauth;
 pub use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
 pub use post_deploy_report::{
