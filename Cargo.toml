@@ -711,6 +711,14 @@ features = [
     "sse",
     "streamable-http",
     "validation",
+    # EXPLICIT, not inherited. `v1-compat` is a member of `default` and this block
+    # does NOT set `no-default-features = true`, so docs.rs would document the
+    # v1-gated surface either way — today. As of plan 117-06 that surface is real
+    # (`crate::shared::event_store` and the `v1` paired module), so if anyone ever
+    # adds `no-default-features = true` here it would vanish from docs.rs with no
+    # error and no warning. Naming it makes the coverage a statement rather than a
+    # side effect. Closes deferred item D-117-01-A.
+    "v1-compat",
     "websocket",
 ]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
