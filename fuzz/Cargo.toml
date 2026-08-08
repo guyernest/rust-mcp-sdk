@@ -226,3 +226,16 @@ path = "fuzz_targets/fuzz_schema_draft_pin.rs"
 test = false
 doc = false
 bench = false
+
+# Phase 117-08 (CLNT-04): the expected-difference baseline parser. The baseline
+# is reachable from a user-supplied path, so arbitrary file bytes flow into
+# `mcp_tester::era_diff::parse_baseline` — a panic there is a reachable unwind
+# (T-117-27). Registration only: this target adds NO dependency, it reaches the
+# parser through the `[dependencies.mcp-tester]` path entry already declared
+# above.
+[[bin]]
+name = "era_deltas_parser"
+path = "fuzz_targets/era_deltas_parser.rs"
+test = false
+doc = false
+bench = false
