@@ -452,3 +452,9 @@ all new traffic is outbound probes from a testing tool to a URL the operator alr
 | `http.status.error_code_mapping` — baseline wording vs probe rule needs adjudication | Phase 118 |
 | Three MISSING rows are fixture limitations (no task store, no subscribable caps) — a richer fixture would raise EXPECTED from 9 | Phase 118 |
 | Pre-existing `pmcp` unused-import warnings in `src/server/auth/jwt{,_validator}.rs` | logged to `deferred-items.md`, out of scope |
+
+## Self-Check: PASSED
+
+All 8 claimed files exist on disk; all 4 claimed commits resolve in `git log`; all 6 key symbols
+(`with_protocol_version`, `detect_eras`, `run_dual`, `DualRunReport`, `compare_eras`, the
+`dual_run: bool` CLI field) are present in the tree.
