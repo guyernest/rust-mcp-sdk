@@ -2685,7 +2685,22 @@ Plans:
   3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
   4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
 
-**Plans**: TBD
+**Plans:** 13 plans in 5 waves
+
+Plans:
+- [ ] 117-01-PLAN.md — Wave 1. `v1-compat` + `full-v2` features, the DERIVED full/full-v2 drift tripwire, and the condition-gated sunset policy wired into the blocking rustdoc gate (SMPL-01; D-01/D-02/D-04; re-confirms A-A1)
+- [ ] 117-02-PLAN.md — Wave 1. Golden v1 wire fixtures captured BEFORE the cut: initialize, `Mcp-Session-Id` emission, `Last-Event-ID` replay, GET/DELETE (SMPL-02)
+- [ ] 117-03-PLAN.md — Wave 1. `mcp-tester` single-run report goldens captured against 0.7.0 as it stands, plus the A2 re-measurement that bounds what 117-11 may add (CLNT-04; D-11/A-D11/A-CI)
+- [ ] 117-04-PLAN.md — Wave 1. First `pmcp-agent` live-server harness + the three CLNT-03 cases written RED: v2 e2e, v1 fallback, unreachable-host propagation (CLNT-03; D-07/A-D08/D-09)
+- [ ] 117-05-PLAN.md — Wave 2. Blocking `v1-severance` CI job + all THREE `gate` edits, proved from the workflow file by a tripwire with `feature-flags` as its live negative control (SMPL-01; A-CI)
+- [ ] 117-06-PLAN.md — Wave 2. Prove the repo's FIRST `#[cfg_attr(…, path = …)]` paired module on a minimal payload, whole-file gate `src/shared/event_store.rs`, add the null-twin source-content check (SMPL-01/SMPL-02; D-03/A-D03)
+- [ ] 117-07-PLAN.md — Wave 2. Two-attempt era-pinned `client_for` classified by REACHABILITY, additive `EffectTrace` version field, deterministic `ReplayInvoker` era-mismatch guard (CLNT-03; D-07/D-08/A-D08/D-09)
+- [ ] 117-08-PLAN.md — Wave 2. The 14-entry expected-difference baseline as reviewable YAML (no new dep), its non-vacuity tripwire, and the ALWAYS fuzz target (CLNT-04; D-06)
+- [ ] 117-09-PLAN.md — Wave 3. `ServerState` collapses to one `V1State` (a ZST on `full-v2`); the seven era chokepoints move with signatures intact (SMPL-02; D-03/D-10)
+- [ ] 117-10-PLAN.md — Wave 3. The ALWAYS runnable example `s53_v2_agent_client`, placed where `make test-examples` actually builds it (CLNT-03)
+- [ ] 117-11-PLAN.md — Wave 3. Opt-in `--dual-run`, `run_dual` wrapping the existing orchestrator twice, baseline-driven `DualRunReport` in a NEW top-level struct (CLNT-04; D-05/D-11/A-D11)
+- [ ] 117-12-PLAN.md — Wave 4. The session-lifecycle and SSE-replay bodies move; the `full-v2` twin has NO `Last-Event-ID` reader at all, preserving the T-113-29/30 ordering structurally (SMPL-02; D-03/D-10)
+- [ ] 117-13-PLAN.md — Wave 5. GET/DELETE SPLIT so the v2 405 stays reachable, config-field gating (with a documented fallback), `LAST_EVENT_ID` co-gated with both readers, A4 measured, policy reconciled to code (SMPL-02; D-03/D-10/A-D03)
 
 ### Phase 118: Conformance Against the Official Suite
 
