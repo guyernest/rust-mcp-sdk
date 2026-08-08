@@ -911,7 +911,7 @@ checkboxes a verifier can fail on.
 - [~] **CLNT-01**: The pmcp `Client` can speak v2: per-request `_meta` emission, `server/discover`, required headers, no `initialize` — selected explicitly per connection — *implemented; pending final schema*
 - [~] **CLNT-02**: The pmcp `Client` fulfills MRTR `input_required` results by producing `inputResponses` — the Phase-106 host handlers (sampling/elicitation/roots) are folded into this flow on v2 — *implemented; pending final schema*
 - [ ] **CLNT-03**: `pmcp-agent` (including its `ToolInvoker` and task polling) works end-to-end against a v2 server
-- [ ] **CLNT-04**: `mcp-tester` can exercise a v2 server (headers, discover, stateless flow) for dual-version testing
+- [x] **CLNT-04**: `mcp-tester` can exercise a v2 server (headers, discover, stateless flow) for dual-version testing
 - [~] **CLNT-05**: The pmcp `Client` exposes `subscriptions_listen` returning a typed `SubscriptionStream` of notifications, and the retired `subscribe_resource`/`unsubscribe_resource` methods fail fast with a typed `retired_on_v2` error on v2 (client half of HTTP-04/07/08) — *implemented; pending final schema*
 
 ### Simplification & v1 Sunset (SMPL)
@@ -1033,7 +1033,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AUTH-02 | Phase 116 | **Complete** — booked by `116-15`; `binary(oauth_application_type)` 14, `binary(oauth_dcr_integration)` 24 (5 at the phase base). `application_type` asserted on the WIRE BODY, additive via the `#[serde(flatten)] extra` carrier (`semver-checks --baseline-rev b2bf9157` 196/196). SEP-837's retry MAY deliberately not adopted |
 | AUTH-03 | Phase 116 | **Complete** — booked by `116-15` against the text amended in `0aebf7f6`, with SEP-2350 explicitly out of scope. `binary(oauth_credential_store)` 54, `binary(oauth_store_wiring)` 18, `binary(oauth_credential_file)` 29, `binary(oauth_refresh)` 21, `binary(oauth_discovery_urls)` 38, `binary(auth_integration)` 20, `binary(v2_bounded_reads_tripwire)` 13. **Carries the named precondition `D-116-PRM`: the key shape is proven, but the two-servers-one-authorization-server SCENARIO is not constructible through the live flow until RFC 9728 lands, so its test seeds the second server.** Three in-scope limitations recorded in the booking |
 | CLNT-03 | Phase 117 | Pending |
-| CLNT-04 | Phase 117 | Pending |
+| CLNT-04 | Phase 117 | Complete |
 | SMPL-01 | Phase 117 | Complete |
 | SMPL-02 | Phase 117 | Pending |
 | CONF-01 | Phase 118 | Pending |

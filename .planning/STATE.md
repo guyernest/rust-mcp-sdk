@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
 status: executing
-stopped_at: Completed 117-01-PLAN.md
-last_updated: "2026-08-08T04:34:36.393Z"
+stopped_at: Completed 117-03-PLAN.md
+last_updated: "2026-08-08T04:57:22.832Z"
 last_activity: 2026-08-08
 progress:
   total_phases: 72
   completed_phases: 62
   total_plans: 388
-  completed_plans: 376
+  completed_plans: 377
   percent: 86
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 ## Current Position
 
 Phase: 117 (agents-tester-v1-severability) — EXECUTING
-Plan: 3 of 14
+Plan: 4 of 14
 Plans complete: 16 of 16
 Remaining: none
 Status: Ready to execute
@@ -1000,6 +1000,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 117-01: docs.rs metadata deliberately not edited — v1-compat gates zero modules today; logged as forward hazard D-117-01-A for 117-02/117-06
 - [Phase ?]: 117-02: v1 wire goldens captured pre-cut at anchor 624e89b7; header identity asserted separately from body identity, proven independent by a source-mutation negative control
 - [Phase ?]: 117-02: v1 SSE fixtures use a bounded LOCAL frame-counting reader (N=2 success bound, 5s timeout failure bound) because common::v2::get reads to EOF and cannot read a long-lived text/event-stream
+- [Phase ?]: serde Duration needs no width-preserving dynamic at from_secs(0) — proven by an executed test, not prose
+- [Phase ?]: 117-11 must run BOTH cargo build -p cargo-pmcp AND cargo check -p cargo-pmcp --tests: the second TestResult literal (check.rs:522) is #[cfg(test)] and invisible to cargo build
 
 ### Pending Todos
 
@@ -1054,8 +1056,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-08T04:34:23.194Z
-Stopped at: Completed 117-01-PLAN.md
+Last session: 2026-08-08T04:57:22.819Z
+Stopped at: Completed 117-03-PLAN.md
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -1176,3 +1178,4 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P15 | 2h05m | 4 tasks | 5 files |
 | Phase 117 P01 | 35min | 3 tasks | 6 files |
 | Phase 117 P02 | 45min | 2 tasks | 1 files |
+| Phase 117 P03 | 48min | 2 tasks | 1 files |
