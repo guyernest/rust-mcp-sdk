@@ -296,3 +296,8 @@ worked around.
 | 1 | `76317a2a` | dev-dependency + `examples/s53_v2_agent_client.rs` |
 | 2 | `978d74af` | `[[example]]` block in the root manifest |
 | Rule 3 | `5ed128f0` | seven pmcp-agent clippy fixes the dev-dep exposed |
+
+## Self-Check: PASSED
+
+All 8 claimed files exist on disk; all 4 claimed commits (`76317a2a`, `978d74af`, `5ed128f0`,
+`bf5349f9`) resolve in `git log`.
