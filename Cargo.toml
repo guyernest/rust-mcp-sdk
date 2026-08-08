@@ -200,6 +200,18 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-macros = { version = "0.6.1", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
 pmcp-code-mode = { version = "0.5.3", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
 pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
+# For the CLNT-03 agent example (s53_v2_agent_client): the era-aware connector
+# factory lives behind pmcp-agent's non-default `url-connector` feature.
+#
+# PATH-ONLY, deliberately, unlike the three entries above. `crates/pmcp-agent` is
+# at 0.2.0 (bumped by plan 117-07) and 0.2.0 is not on crates.io yet, while
+# `.github/workflows/release.yml` publishes `pmcp` (line 198) long BEFORE
+# `pmcp-agent` (line 489). A `version` key here would therefore make every
+# `cargo publish -p pmcp` fail on an unresolvable dev-dependency. Cargo strips
+# path-only dev-deps at publish time, and the `[[example]]` below carries
+# `required-features` that `default` does not satisfy, so the publish VERIFY
+# build skips the example rather than failing on the stripped dep.
+pmcp-agent = { path = "crates/pmcp-agent", features = ["url-connector"] }  # For the agent example (s53_v2_agent_client)
 
 [features]
 default = ["logging", "v1-compat"]
