@@ -2685,7 +2685,7 @@ Plans:
   3. v1-only machinery (initialize/session lifecycle, SSE resumability) is isolated behind a clearly severable era-gated layer with a documented legacy-support sunset policy — removal in a future major is a deletion, not a refactor (SMPL-01)
   4. The v2 code path carries no session/SSE-resumability baggage, and a simplification pass removes code the v2 model obsoletes wherever v1 compatibility permits (SMPL-02)
 
-**Plans:** 7/14 plans executed
+**Plans:** 8/14 plans executed
 
 Plans:
 **Wave 1**
@@ -2697,7 +2697,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 117-05-PLAN.md — Wave 2. Blocking `v1-severance` CI job + all THREE `gate` edits, proved from the workflow file by a `serde_yaml` tripwire (no undeclared PyYAML) with `feature-flags` as its live negative control (SMPL-01; A-CI)
+- [x] 117-05-PLAN.md — Wave 2. Blocking `v1-severance` CI job + all THREE `gate` edits, proved from the workflow file by a `serde_yaml` tripwire (no undeclared PyYAML) with `feature-flags` as its live negative control (SMPL-01; A-CI)
 - [x] 117-06-PLAN.md — Wave 2. Prove the repo's FIRST `#[cfg_attr(…, path = …)]` paired module on a minimal payload, whole-file gate `src/shared/event_store.rs`, add the SEMANTIC null-twin check (no state held, no state/header operation, nothing declared the real module lacks) (SMPL-01/SMPL-02; D-03/A-D03)
 - [x] 117-07-PLAN.md — Wave 2. Two-attempt era-pinned `client_for` classified by a TYPED reachability outcome built before stringification, additive `EffectTrace` version field plumbed end-to-end, deterministic `ReplayInvoker` era-mismatch guard, `pmcp-agent` 0.2.0 with both workspace pins updated (CLNT-03; D-07/D-08/A-D08/D-09)
 - [x] 117-08-PLAN.md — Wave 2. The 14-entry expected-difference baseline as reviewable YAML (no new dep), its non-vacuity tripwire, and the ALWAYS fuzz target (CLNT-04; D-06)
@@ -2758,7 +2758,7 @@ Plans:
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
 | 116. Auth Hardening SEPs | 16/16 | Complete   | 2026-08-07 |
-| 117. Agents, Tester & v1 Severability | 7/14 | In Progress|  |
+| 117. Agents, Tester & v1 Severability | 8/14 | In Progress|  |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
 
