@@ -1591,7 +1591,22 @@ match v2.server_discover().await {
 
 ---
 
-## Open Questions
+## Open Questions (ALL RESOLVED — 2026-08-07, before planning)
+
+> **Resolution index.** Every question below was closed before any plan was written; none is
+> outstanding for the executor.
+>
+> | Q | Resolution | Authority |
+> |---|---|---|
+> | Q1 — does D-08 stand as written? | **No — amended.** The era probe moves to `pmcp-agent`'s `UrlConnectorClientFactory::client_for`; `Client` is untouched and Phase 113's CLNT-01 lock stands. | User decision 2026-08-07, recorded as `A-D08` in `117-CONTEXT.md` |
+> | Q2 | Recommendation followed verbatim by plans 117-01 / 117-05. | Planning decision |
+> | Q3 — baseline file format | **YAML** (`era-deltas.yaml`) via `mcp-tester`'s existing `serde_yaml`; no new dep on a published 0.7.0 crate. | `117-PATTERNS.md` finding 2 → plan 117-08 |
+> | Q4 | Recommendation followed; no plan adds clippy to the severance build. | Planning decision |
+> | Q5 | Recommendation followed. | Planning decision |
+>
+> Assumption **A1** (the document's self-declared highest risk) was additionally **measured and
+> confirmed TRUE** before planning — see `A-A1` in `117-CONTEXT.md`. Its "Wave-0 spike blocks
+> everything" instruction is therefore **discharged**; no plan should re-run it.
 
 1. **Does D-08 stand as written, or is it amended to "probe in the agent's connector factory"?**
    - What we know: `Client::server_discover` requires v2 already selected (`src/client/mod.rs:892`),

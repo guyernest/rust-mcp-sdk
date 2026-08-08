@@ -1,5 +1,20 @@
 # Phase 117: Agents, Tester & v1 Severability - Pattern Map
 
+> **⚠ SUPERSEDED NAMES — the plans are authoritative, not this document.** Two artifact names in this
+> pattern map were drafted before the naming decisions were finalized:
+>
+> - `crates/mcp-tester/baselines/era-deltas.toml` → **`era-deltas.yaml`**. `crates/mcp-tester/Cargo.toml`
+>   has **no** `toml` dependency but already carries `serde_yaml = "0.9"` (used by
+>   `src/scenario.rs:234-249`); adding a dependency to a published 0.7.0 crate was rejected. Plan
+>   117-08 ships YAML.
+> - `examples/s49_v2_agent_client.rs` → **`examples/s53_v2_agent_client.rs`**. `s49` is occupied twice
+>   and `s50`/`s51`/`s52` exist. Plan 117-10 ships `s53`, at the **repo root** so `make test-examples`
+>   (which globs root `examples/*.rs` only) actually builds it.
+>
+> Every other reference to `.toml` or `s49` below should be read with these substitutions applied.
+
+
+
 **Mapped:** 2026-08-07
 **Files analyzed:** 14 new · 16 modified
 **Analogs found:** 12 exact/role-match / 14 new files
