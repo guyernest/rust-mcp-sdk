@@ -61,16 +61,25 @@
 mod common;
 
 use async_trait::async_trait;
-use common::v2::{header, post, spawn_default_config, teardown, v1_body, Resp, V1};
+use common::v2::{
+    delete, header, post, spawn_default_config, spawn_with, teardown, v1_body, Resp, V1,
+};
+use pmcp::server::streamable_http_server::{InMemoryEventStore, StreamableHttpServerConfig};
 use pmcp::server::typed_tool::TypedTool;
 use pmcp::server::{PromptHandler, Server};
-use pmcp::shared::http_constants::MCP_SESSION_ID;
+// The header NAMES come from the crate's own constants, never from a string
+// literal: a constant rename must surface as a COMPILE ERROR here rather than as
+// a silently-skipped fixture.
+use pmcp::shared::http_constants::{LAST_EVENT_ID, MCP_SESSION_ID};
 use pmcp::types::{GetPromptResult, PromptArgument, PromptInfo};
 use pmcp::RequestHandlerExtra;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 // ===========================================================================
 // Dynamic-value normalization.
@@ -262,6 +271,9 @@ enum Structural {
     JsonRpcResult { id: i64, result: Value },
     /// Every `data:` payload in an SSE capture, in order.
     Frames(Vec<Value>),
+    /// The capture parsed as a whole JSON document that is NOT a JSON-RPC frame
+    /// — the v1 DELETE answer is a bare `{"status":"ok"}`.
+    Bare(Value),
     /// No structural cross-check — the capture is not JSON (a rendered header
     /// block).
     RawOnly,
@@ -349,6 +361,14 @@ fn assert_v1_bytes(raw: &str, golden: &V1Golden<'_>) {
                 "every SSE `data:` payload must match the golden, in order"
             );
         },
+        Structural::Bare(expected) => {
+            let parsed: Value =
+                serde_json::from_str(&normalized).expect("a v1 JSON body must be valid JSON");
+            assert_eq!(
+                &parsed, expected,
+                "the whole JSON body must match the golden"
+            );
+        },
         Structural::RawOnly => {},
     }
 }
@@ -358,8 +378,8 @@ fn assert_v1_bytes(raw: &str, golden: &V1Golden<'_>) {
 ///
 /// Header identity is a SEPARATE claim from body identity: `common::v2::Resp`
 /// keeps `Mcp-Session-Id` outside `raw`, so a body fixture says nothing about
-/// headers. Rendering them into the same [`Form::FieldLine`] shape the SSE
-/// frames already use means one width-preserving normalizer serves both claims.
+/// headers. Rendering them into the same field-line shape the SSE frames
+/// already use means one width-preserving normalizer serves both claims.
 fn render_headers(pairs: &[(&str, &str)]) -> String {
     let mut out = String::new();
     for (name, value) in pairs {
@@ -369,6 +389,132 @@ fn render_headers(pairs: &[(&str, &str)]) -> String {
         out.push('\n');
     }
     out
+}
+
+// ===========================================================================
+// The BOUNDED SSE reader.
+//
+// `common::v2::get` reads the response body to EOF. The v1 GET endpoint
+// (`handle_get_sse`, `src/server/streamable_http_server.rs:4441-4503`) returns a
+// LONG-LIVED `text/event-stream` that never reaches EOF, so driving an SSE
+// fixture through it would block until a timeout and return nothing to compare.
+// A timeout is not a golden, and a fixture that times out and then asserts on an
+// empty capture is vacuous. Hence a bounded reader, LOCAL to this file:
+// `tests/common/v2.rs` serves other suites and this plan does not modify it.
+// ===========================================================================
+
+/// Upper bound on ONE bounded read of a live v1 SSE stream.
+///
+/// This is the reader's FAILURE bound and never a success path: a hung stream
+/// must FAIL the test, not hang it. [`REPLAY_FRAME_COUNT`] is its SUCCESS bound.
+/// Both are needed — a timeout alone cannot tell "the server sent nothing" from
+/// "the server is still streaming correctly".
+const SSE_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many complete SSE frames [`read_bounded_sse`] waits for — the reader's
+/// SUCCESS bound, `N`.
+///
+/// The replay fixture stores exactly two v1 responses before reconnecting (the
+/// `initialize` reply and one session-carrying `tools/list` reply, each written
+/// to the event store by `store_response_event`), so two frames is the whole
+/// replay. The reader returns as soon as it has parsed this many and never waits
+/// for the end of a stream that, being live, does not have one.
+const REPLAY_FRAME_COUNT: usize = 2;
+
+/// An SSE frame ends at a blank line.
+const FRAME_TERMINATOR: &str = "\n\n";
+
+/// One bounded read of a LIVE v1 SSE stream.
+struct SseCapture {
+    /// HTTP status of the GET response.
+    status: u16,
+    /// Every response header, lowercased name and value, in emission order.
+    headers: Vec<(String, String)>,
+    /// The accumulated RAW stream bytes, SSE framing included — the wire form,
+    /// which is the whole point of this file. NOT parsed structs.
+    raw: String,
+    /// How many complete frames [`Self::raw`] contains.
+    frames: usize,
+}
+
+impl SseCapture {
+    /// This capture's value for `name`, or a panic naming the missing header.
+    fn header(&self, name: &str) -> &str {
+        let found = self
+            .headers
+            .iter()
+            .find(|(header_name, _)| header_name == name);
+        let Some((_, value)) = found else {
+            panic!(
+                "the v1 GET response is missing the `{name}` header. A header this file \
+                 pins going ABSENT is a V1 WIRE BREAK just as much as one changing value. \
+                 Headers were: {:?}",
+                self.headers
+            )
+        };
+        value.as_str()
+    }
+}
+
+/// GET the MCP endpoint and read exactly `want_frames` complete SSE frames.
+///
+/// Returns the response STATUS and HEADERS alongside the RAW bytes, because
+/// header identity and body identity are two distinct claims and this file makes
+/// both.
+async fn read_bounded_sse(
+    addr: SocketAddr,
+    extra: &[(String, String)],
+    want_frames: usize,
+) -> SseCapture {
+    let client = reqwest::Client::new();
+    let mut request = client
+        .get(format!("http://{addr}"))
+        .header("accept", "text/event-stream");
+    for (name, value) in extra {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let mut response = request.send().await.expect("the v1 GET is sent");
+
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or("<non-ascii>").to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut raw = String::new();
+    let deadline = tokio::time::Instant::now() + SSE_READ_TIMEOUT;
+    while raw.matches(FRAME_TERMINATOR).count() < want_frames {
+        // Any of: the deadline, a transport error, or EOF. Stop accumulating and
+        // let the assertion below report how far the stream actually got — the
+        // timeout is a FAILURE path, never a quiet success.
+        let Ok(Ok(Some(chunk))) = tokio::time::timeout_at(deadline, response.chunk()).await else {
+            break;
+        };
+        raw.push_str(&String::from_utf8_lossy(&chunk));
+    }
+
+    let frames = raw.matches(FRAME_TERMINATOR).count();
+    assert!(
+        frames >= want_frames,
+        "FAILURE MODE: the v1 SSE stream produced {frames} complete frames, not the \
+         {want_frames} this fixture requires, within {SSE_READ_TIMEOUT:?}. \
+         WHAT TO DO: a timeout is NOT a golden — fix the v1 replay path rather than \
+         relaxing the frame count, because a fixture that compares an empty capture \
+         passes over nothing. Capture so far: {raw:?}"
+    );
+
+    SseCapture {
+        status,
+        headers,
+        raw,
+        frames,
+    }
 }
 
 // ===========================================================================
@@ -458,6 +604,43 @@ fn initialize_body(id: i64) -> String {
 /// fixture.
 async fn spawn_session_minting() -> (SocketAddr, JoinHandle<()>) {
     spawn_default_config(pinned_server()).await
+}
+
+/// Spawn a server that mints sessions AND retains events for replay.
+///
+/// `session_id_generator` and `event_store` are named EXPLICITLY because they
+/// are the two v1-only config fields whose severance this phase later gates —
+/// naming them here is the point of the fixture. Everything else is reached
+/// through `..Default::default()` rather than a field-by-field literal a later
+/// plan would have to edit.
+async fn spawn_resumable() -> (SocketAddr, JoinHandle<()>) {
+    let config = StreamableHttpServerConfig {
+        session_id_generator: Some(Box::new(|| Uuid::new_v4().to_string())),
+        event_store: Some(Arc::new(InMemoryEventStore::default())),
+        ..Default::default()
+    };
+    spawn_with(pinned_server(), config).await
+}
+
+/// Drive a resumable server to the point where its event store holds exactly
+/// [`REPLAY_FRAME_COUNT`] v1 responses, and return the live session id.
+///
+/// `store_response_event` writes one event per POST that has a response session
+/// id, so an `initialize` plus one session-carrying `tools/list` is exactly two.
+async fn prime_replayable_events(addr: SocketAddr) -> String {
+    let (_init, session_id) = initialize(addr, 10).await;
+    let follow_up = post(
+        addr,
+        &[header(MCP_SESSION_ID, &session_id)],
+        &v1_body("tools/list", json!(11), json!({})),
+    )
+    .await;
+    assert_eq!(
+        follow_up.status, 200,
+        "priming the event store requires the follow-up POST to succeed: {}",
+        follow_up.raw
+    );
+    session_id
 }
 
 /// POST `initialize` and return both the response and the session id it minted.
@@ -604,6 +787,262 @@ async fn v1_session_carrying_follow_up_post_bytes_are_pinned() {
             })]),
             dynamics: SSE_EVENT_ID_DYNAMICS,
         },
+    );
+}
+
+// ===========================================================================
+// Golden captures — v1 GET (SSE), Last-Event-ID replay, and DELETE.
+// ===========================================================================
+
+/// A well-formed cursor that is NOT in the store's `event_order`.
+///
+/// `InMemoryEventStore::replay_events_after` resolves an unknown cursor to
+/// position `0` (`position(...).map_or(0, |pos| pos + 1)`), so an unknown
+/// `Last-Event-ID` replays the stream FROM THE BEGINNING. That is today's v1
+/// answer and this file pins it deliberately: it is the reach an
+/// attacker-supplied replay cursor has on v1 (T-117-05), and the D-03 cut must
+/// not change it while making the v2 side unreachable.
+const UNKNOWN_LAST_EVENT_ID: &str = "00000000-0000-4000-8000-000000000000";
+
+/// The v1 GET response headers this file pins, in a fixed order.
+///
+/// `content-type` plus the three `attach_sse_response_headers`
+/// (`src/server/streamable_http_server.rs:4426-4439`) emits. Asserted as an
+/// explicit name-to-value set, SEPARATE from any body comparison.
+const PINNED_GET_HEADERS: [&str; 4] = [
+    "content-type",
+    MCP_SESSION_ID,
+    "cache-control",
+    "connection",
+];
+
+/// The pinned v1 GET response headers, rendered.
+const GET_SSE_HEADERS: &str = concat!(
+    "content-type: text/event-stream\n",
+    "mcp-session-id: <session-id>\n",
+    "cache-control: no-cache, no-transform\n",
+    "connection: keep-alive\n",
+);
+
+/// The two frames a `Last-Event-ID` GET replays: the stored `initialize` reply
+/// then the stored `tools/list` reply, in `event_order`, each re-framed with a
+/// FRESH SSE event id by `sse_event_for_message`.
+const REPLAYED_FRAMES: &str = concat!(
+    "id: <sse-event-id>\n",
+    "event: message\n",
+    r#"data: {"jsonrpc":"2.0","id":10,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false},"prompts":{"listChanged":false}},"serverInfo":{"name":"v1-byte-identity","version":"1.0.0"}}}"#,
+    "\n\n",
+    "id: <sse-event-id>\n",
+    "event: message\n",
+    r#"data: {"jsonrpc":"2.0","id":11,"result":{"tools":[{"name":"pin_lookup","description":"a fixed tool whose v1 wire shape is pinned by this file","inputSchema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}}"#,
+    "\n\n",
+);
+
+/// The v1 DELETE answer for a live session. Not a JSON-RPC frame — a bare
+/// `{"status":"ok"}` — and that is itself pinned.
+const DELETE_OK_BODY: &str = r#"{"status":"ok"}"#;
+
+/// A v1 POST that names a session DELETE has already torn down.
+///
+/// Note the key order (`jsonrpc`, `error`, `id`) and the explicit `"id":null`:
+/// neither survives a structural-only assertion, and both are part of the v1
+/// answer this file freezes.
+const DELETE_THEN_REUSE_BODY: &str =
+    r#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"Unknown session ID"},"id":null}"#;
+
+/// [`PINNED_GET_HEADERS`], read off `capture` and rendered as a `name: value`
+/// block.
+fn pinned_header_block(capture: &SseCapture) -> String {
+    let values: Vec<(&str, &str)> = PINNED_GET_HEADERS
+        .iter()
+        .map(|name| (*name, capture.header(name)))
+        .collect();
+    render_headers(&values)
+}
+
+/// Open a v1 GET SSE stream against a primed resumable server and read the
+/// replay.
+///
+/// The `Last-Event-ID` header is what makes the stream produce anything at all:
+/// without it `replay_sse_events_from_header` returns before it ever LOOKS at
+/// the store, the stream stays silent, and [`read_bounded_sse`] fails on its
+/// frame bound rather than quietly passing over an empty capture.
+async fn replay_capture(addr: SocketAddr, session_id: &str) -> SseCapture {
+    read_bounded_sse(
+        addr,
+        &[
+            header(MCP_SESSION_ID, session_id),
+            header(LAST_EVENT_ID, UNKNOWN_LAST_EVENT_ID),
+        ],
+        REPLAY_FRAME_COUNT,
+    )
+    .await
+}
+
+// ===========================================================================
+// Fixture 4 — the v1 GET response HEADERS (a claim independent of the body).
+// ===========================================================================
+
+#[tokio::test]
+async fn v1_get_sse_response_headers_are_pinned() {
+    let (addr, handle) = spawn_resumable().await;
+    let session_id = prime_replayable_events(addr).await;
+    let capture = replay_capture(addr, &session_id).await;
+    teardown(handle, ()).await;
+
+    assert_eq!(
+        capture.status, 200,
+        "a v1 GET with a valid session id must still open an SSE stream"
+    );
+    assert_v1_bytes(
+        &pinned_header_block(&capture),
+        &V1Golden {
+            raw: GET_SSE_HEADERS,
+            structural: Structural::RawOnly,
+            dynamics: SESSION_ID_DYNAMICS,
+        },
+    );
+}
+
+// ===========================================================================
+// Fixture 5 — the v1 `Last-Event-ID` replay BODY bytes.
+// ===========================================================================
+
+#[tokio::test]
+async fn v1_last_event_id_replay_frame_bytes_are_pinned() {
+    let (addr, handle) = spawn_resumable().await;
+    let session_id = prime_replayable_events(addr).await;
+    let capture = replay_capture(addr, &session_id).await;
+    teardown(handle, ()).await;
+
+    assert_v1_bytes(
+        &capture.raw,
+        &V1Golden {
+            raw: REPLAYED_FRAMES,
+            structural: Structural::Frames(vec![
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "result": {
+                        "protocolVersion": V1,
+                        "capabilities": {
+                            "tools": { "listChanged": false },
+                            "prompts": { "listChanged": false }
+                        },
+                        "serverInfo": { "name": "v1-byte-identity", "version": "1.0.0" }
+                    }
+                }),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "pin_lookup",
+                                "description": "a fixed tool whose v1 wire shape is pinned by this file",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": { "query": { "type": "string" } },
+                                    "required": ["query"]
+                                }
+                            }
+                        ]
+                    }
+                }),
+            ]),
+            dynamics: SSE_EVENT_ID_DYNAMICS,
+        },
+    );
+}
+
+// ===========================================================================
+// Fixture 6 — the v1 DELETE answer.
+// ===========================================================================
+
+#[tokio::test]
+async fn v1_delete_session_answer_is_pinned() {
+    let (addr, handle) = spawn_session_minting().await;
+    let (_init, session_id) = initialize(addr, 20).await;
+    let response = delete(addr, &[header(MCP_SESSION_ID, &session_id)]).await;
+    teardown(handle, ()).await;
+
+    assert_eq!(
+        response.status, 200,
+        "a v1 DELETE must still tear a session down"
+    );
+    assert_v1_bytes(
+        &response.raw,
+        &V1Golden {
+            raw: DELETE_OK_BODY,
+            structural: Structural::Bare(json!({ "status": "ok" })),
+            dynamics: NO_DYNAMICS,
+        },
+    );
+}
+
+// ===========================================================================
+// Fixture 7 — reusing a session DELETE already tore down.
+// ===========================================================================
+
+#[tokio::test]
+async fn v1_delete_then_reusing_the_session_is_rejected_as_today() {
+    let (addr, handle) = spawn_session_minting().await;
+    let (_init, session_id) = initialize(addr, 21).await;
+    let torn_down = delete(addr, &[header(MCP_SESSION_ID, &session_id)]).await;
+    assert_eq!(torn_down.status, 200, "the DELETE must succeed first");
+    let reuse = post(
+        addr,
+        &[header(MCP_SESSION_ID, &session_id)],
+        &v1_body("tools/list", json!(22), json!({})),
+    )
+    .await;
+    teardown(handle, ()).await;
+
+    assert_eq!(
+        reuse.status, 404,
+        "a v1 request naming a torn-down session must still be rejected: {}",
+        reuse.raw
+    );
+    assert_v1_bytes(
+        &reuse.raw,
+        &V1Golden {
+            raw: DELETE_THEN_REUSE_BODY,
+            structural: Structural::Bare(json!({
+                "jsonrpc": "2.0",
+                "error": { "code": -32600, "message": "Unknown session ID" },
+                "id": null
+            })),
+            dynamics: NO_DYNAMICS,
+        },
+    );
+}
+
+// ===========================================================================
+// Anti-vacuity — the replay fixture is comparing a NON-EMPTY stream.
+// ===========================================================================
+
+/// The replay fixture really replayed something.
+#[tokio::test]
+async fn the_replay_fixture_actually_replayed_something() {
+    let (addr, handle) = spawn_resumable().await;
+    let session_id = prime_replayable_events(addr).await;
+    let capture = replay_capture(addr, &session_id).await;
+    teardown(handle, ()).await;
+
+    assert!(
+        capture.frames > 0,
+        "FAILURE MODE: the v1 `Last-Event-ID` replay produced ZERO frames, so \
+         `v1_last_event_id_replay_frame_bytes_are_pinned` would be comparing an \
+         empty capture against an empty golden and passing over nothing. \
+         WHAT TO DO: fix the v1 replay path (or the priming of the event store) — \
+         do NOT weaken the byte comparison to accommodate an empty stream. \
+         Capture was: {:?}",
+        capture.raw
+    );
+    assert_eq!(
+        capture.frames, REPLAY_FRAME_COUNT,
+        "the store was primed with exactly {REPLAY_FRAME_COUNT} v1 responses, so the \
+         replay must deliver exactly that many"
     );
 }
 
