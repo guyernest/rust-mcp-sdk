@@ -296,17 +296,6 @@ impl StreamableHttpServerConfig {
     }
 }
 
-/// Session information
-///
-/// `pub(crate)` rather than private because the `v1-compat` half of the `v1`
-/// paired module names it in a field type; a private type in a `pub(crate)`
-/// field is a `private_interfaces` error.
-#[derive(Debug, Clone)]
-pub(crate) struct SessionInfo {
-    initialized: bool,
-    protocol_version: Option<String>,
-}
-
 /// Server state shared across routes.
 #[derive(Clone)]
 pub(crate) struct ServerState {
@@ -314,19 +303,18 @@ pub(crate) struct ServerState {
     config: Arc<StreamableHttpServerConfig>,
     /// Pre-resolved allowed origins for CORS and DNS rebinding protection.
     allowed_origins: AllowedOrigins,
-    /// Active SSE streams by session ID
-    sse_streams: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<TransportMessage>>>>,
-    /// Session tracking (session ID -> session info)
-    sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
-    /// The resumability event store, type-erased from `config.event_store`.
+    /// Everything that exists ONLY for MCP 2025-11-25: the session map, the live
+    /// SSE fan-out those sessions address, and the resumability event store.
     ///
-    /// Always derived from the config in production ([`make_server_state`] is the
-    /// only constructor). It lives here rather than being read straight off the
-    /// config so every resumability helper can be written against the
-    /// [`EventStore`] trait — see [`EventStoreHandle`] for why the public config
-    /// field's concrete type must not change. Reach it ONLY through
-    /// [`resumability_store`], never directly.
-    event_store: Option<EventStoreHandle>,
+    /// One field, not three, and its type comes from the `v1` paired module — so
+    /// on a `full-v2` build it is a zero-sized twin and this struct allocates no
+    /// session map at all. That is the STRUCTURAL half of SMPL-02 (D-03 / D-10):
+    /// a property of the type, not of a runtime branch someone can forget to
+    /// take. Call sites hand this field to a `v1::` operation and never reach
+    /// past it: nothing outside the pair touches a session map, a stream map or
+    /// the event store, and every operation returns an OWNED answer rather than
+    /// a borrow the zero-sized twin could not produce.
+    v1: v1::V1State,
 }
 
 /// Build the base MCP Router without any Tower layers applied.
@@ -352,19 +340,17 @@ pub(crate) fn make_server_state(
         .allowed_origins
         .clone()
         .unwrap_or_else(AllowedOrigins::localhost);
-    // Type-erase the configured store ONCE, here, so the resumability helpers
-    // never touch the concrete `InMemoryEventStore` (see [`EventStoreHandle`]).
-    let event_store: Option<EventStoreHandle> = config
-        .event_store
-        .clone()
-        .map(|store| store as EventStoreHandle);
+    // THE single `V1State` construction site, and deliberately `#[cfg]`-free:
+    // the paired module supplies whichever half the feature set selected, and on
+    // `full-v2` this line allocates nothing. It runs before `config` is moved
+    // into the `Arc` because the real half type-erases `config.event_store` on
+    // the way in.
+    let v1 = v1::V1State::new(&config);
     ServerState {
         server,
         config: Arc::new(config),
         allowed_origins,
-        sse_streams: Arc::new(RwLock::new(HashMap::new())),
-        sessions: Arc::new(RwLock::new(HashMap::new())),
-        event_store,
+        v1,
     }
 }
 
@@ -581,13 +567,13 @@ const fn resumability_active_for(
 /// `None` means the server is NOT opted into v2, so no era detection ran at all
 /// and the v1 path executes with zero era code (D-04).
 fn resumability_active(state: &ServerState, era: Option<crate::types::protocol::Era>) -> bool {
-    resumability_active_for(state.event_store.is_some(), era)
+    resumability_active_for(v1::event_store(&state.v1).is_some(), era)
 }
 
 /// The event store to use for THIS request, or `None` when its era suppresses
 /// resumability.
 ///
-/// The second (and last) permitted reader of `ServerState::event_store`: it gates
+/// The second (and last) permitted reader of the v1 event store: it gates
 /// the borrow behind [`resumability_active`], so no caller can reach the store —
 /// to REPLAY from it or to WRITE to it — on a v2 request. Storing without
 /// replaying would be dead retention of response envelopes, which is precisely
@@ -599,7 +585,7 @@ fn resumability_store(
     if !resumability_active(state, era) {
         return None;
     }
-    state.event_store.as_ref()
+    v1::event_store(&state.v1)
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +621,7 @@ fn resumability_store(
 // | `build_response` | framing | dispatches an ALREADY-constructed envelope by transport mode; constructs none of its own |
 // | `build_json_response` / `build_sse_response_from_single_message` | framing | serialize/frame one already-constructed envelope; construct none of their own |
 // | `build_success_response_with_middleware` | framing | serializes one already-constructed envelope |
-// | `state.sse_streams` send inside `build_response` | routing | gated on `sessions_on`, so a v2 reply can never be handed to another caller's stream (the T-113-07 fix) |
+// | `v1::route_to_session_stream` inside `build_response` | routing | gated on `sessions_on`, so a v2 reply can never be handed to another caller's stream (the T-113-07 fix) |
 // | `store_response_event` | caching | gated on `resumability_active`; on v1 it retains a whole envelope, which is CORRECT — that is the historical-event record replay re-emits |
 // | `sse_event_for_message` | caching | same gate, same verdict |
 // | `replay_sse_events_from_header` | historical | re-emits stored events verbatim, ORIGINAL ids intact — intentional, and asserted by `v1_replayed_event_retains_original_id` |
@@ -643,7 +629,7 @@ fn resumability_store(
 // | `create_error_response` | direct (error) | pre-dispatch transport failure with no live id at all; emits `id: null`, unchanged since before v2 |
 //
 // No site was found reusing an envelope for a direct response. One site WAS
-// found handing a direct response to the WRONG caller — the `sse_streams` route
+// found handing a direct response to the WRONG caller — the SSE-stream route
 // above — and it is fixed in `build_response`.
 // ---------------------------------------------------------------------------
 
@@ -1768,15 +1754,13 @@ fn process_init_session(
         // Stateful mode
         if let Some(sid) = session_id {
             // Check if session already exists and is initialized
-            if let Some(session_info) = state.sessions.read().get(&sid) {
-                if session_info.initialized {
-                    // Session already initialized - reject re-initialization
-                    return Err(create_error_response(
-                        StatusCode::BAD_REQUEST,
-                        crate::types::protocol::error_codes::INVALID_REQUEST,
-                        "Session already initialized",
-                    ));
-                }
+            if v1::session_is_initialized(&state.v1, &sid) {
+                // Session already initialized - reject re-initialization
+                return Err(create_error_response(
+                    StatusCode::BAD_REQUEST,
+                    crate::types::protocol::error_codes::INVALID_REQUEST,
+                    "Session already initialized",
+                ));
             }
             // Use existing session ID
             Ok((Some(sid), false))
@@ -1784,13 +1768,7 @@ fn process_init_session(
             // Generate new session ID
             let new_id = generator();
             // Create new session entry
-            state.sessions.write().insert(
-                new_id.clone(),
-                SessionInfo {
-                    initialized: false,
-                    protocol_version,
-                },
-            );
+            v1::insert_session(&state.v1, new_id.clone(), false, protocol_version);
             if let Some(callback) = &state.config.on_session_initialized {
                 callback(&new_id);
             }
@@ -1827,7 +1805,7 @@ fn validate_non_init_session(
             },
             Some(sid) => {
                 // Validate session exists
-                if !state.sessions.read().contains_key(&sid) {
+                if !v1::session_exists(&state.v1, &sid) {
                     // Unknown session ID
                     Err(create_error_response(
                         StatusCode::NOT_FOUND,
@@ -1867,11 +1845,7 @@ fn update_session_after_init(
     negotiated_version: Option<String>,
 ) {
     if let Some(sid) = session_id {
-        if let Some(session_info) = state.sessions.write().get_mut(sid) {
-            session_info.initialized = true;
-            session_info.protocol_version =
-                negotiated_version.or_else(|| Some(crate::DEFAULT_PROTOCOL_VERSION.to_string()));
-        }
+        v1::mark_session_initialized(&state.v1, sid, negotiated_version);
     }
 }
 
@@ -1972,11 +1946,13 @@ fn build_response(
     let Some(sid) = session_id.filter(|_| sessions_on) else {
         return build_json_response(&response, "SSE no-session fallback");
     };
-    if let Some(sender) = state.sse_streams.read().get(sid) {
-        let _ = sender.send(response);
+    // A `v1::` OPERATION, not a borrow of the stream map: the zero-sized twin has
+    // no map to lend out, so the seam hands ownership of the message across and
+    // gets it back only when nothing took it.
+    let Some(undelivered) = v1::route_to_session_stream(&state.v1, sid, response) else {
         return StatusCode::ACCEPTED.into_response();
-    }
-    build_sse_response_from_single_message(response)
+    };
+    build_sse_response_from_single_message(undelivered)
 }
 
 /// Validate that a provided protocol version is in the supported set.
@@ -2015,17 +1991,13 @@ fn validate_protocol_version_matches_session(
     let Some(sid) = session_id else {
         return Ok(());
     };
-    let sessions = state.sessions.read();
-    let Some(session_info) = sessions.get(sid.as_str()) else {
-        return Ok(());
-    };
-    let Some(negotiated_version) = session_info.protocol_version.as_ref() else {
+    let Some(negotiated_version) = v1::session_protocol_version(&state.v1, sid.as_str()) else {
         return Ok(());
     };
     let Some(provided_version) = protocol_version else {
         return Ok(());
     };
-    if provided_version == negotiated_version {
+    if *provided_version == negotiated_version {
         return Ok(());
     }
     Err(create_error_response(
@@ -2340,11 +2312,11 @@ fn compute_outbound_protocol_version(
         );
     }
     if let Some(sid) = response_session_id {
-        if let Some(session_info) = state.sessions.read().get(sid) {
-            return session_info
-                .protocol_version
-                .clone()
-                .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string());
+        // A tracked session with no recorded version and an untracked session
+        // both fall through to the default, exactly as before the collapse —
+        // which is why `session_protocol_version` may return one `None` for both.
+        if let Some(negotiated_version) = v1::session_protocol_version(&state.v1, sid.as_str()) {
+            return negotiated_version;
         }
     }
     crate::DEFAULT_PROTOCOL_VERSION.to_string()
@@ -4373,7 +4345,7 @@ fn resolve_sse_session(
 ) -> std::result::Result<String, Response> {
     let sessions_on = sessions_active(state, None);
     if let Some(sid) = incoming_session_id {
-        if sessions_on && !state.sessions.read().contains_key(&sid) {
+        if sessions_on && !v1::session_exists(&state.v1, &sid) {
             return Err(create_error_response(
                 StatusCode::NOT_FOUND,
                 crate::types::protocol::error_codes::INVALID_REQUEST,
@@ -4390,13 +4362,8 @@ fn resolve_sse_session(
         ));
     };
     let new_id = generator();
-    state.sessions.write().insert(
-        new_id.clone(),
-        SessionInfo {
-            initialized: true, // GET SSE implicitly initializes
-            protocol_version: None,
-        },
-    );
+    // `true`: a GET SSE implicitly initializes the session it mints.
+    v1::insert_session(&state.v1, new_id.clone(), true, None);
     if let Some(callback) = &state.config.on_session_initialized {
         callback(&new_id);
     }
@@ -4500,7 +4467,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
         Err(response) => return response,
     };
 
-    if state.sse_streams.read().contains_key(&session_id) {
+    if v1::sse_stream_exists(&state.v1, &session_id) {
         return create_error_response(
             StatusCode::CONFLICT,
             crate::types::protocol::error_codes::INVALID_REQUEST,
@@ -4509,10 +4476,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     }
 
     let (tx, rx) = mpsc::unbounded_channel();
-    state
-        .sse_streams
-        .write()
-        .insert(session_id.clone(), tx.clone());
+    v1::register_sse_stream(&state.v1, session_id.clone(), tx.clone());
 
     // A GET carries no body and therefore no `_meta`, so `era = None` — and a v2
     // GET is already answered `405` at the top of this function, so only v1 /
@@ -4557,7 +4521,7 @@ async fn handle_delete_session(
 
     if let Some(sid) = session_id {
         // Check if session exists
-        let session_exists = state.sessions.read().contains_key(&sid);
+        let session_exists = v1::session_exists(&state.v1, &sid);
 
         // A DELETE carries no body, so `era = None` — and a v2 DELETE is already
         // answered `405` above, so only v1 / non-opted-in traffic reaches here.
@@ -4572,10 +4536,10 @@ async fn handle_delete_session(
         }
 
         // Remove SSE stream if exists
-        state.sse_streams.write().remove(&sid);
+        v1::remove_sse_stream(&state.v1, &sid);
 
         // Remove session from tracking
-        state.sessions.write().remove(&sid);
+        v1::remove_session(&state.v1, &sid);
 
         // Notify callback
         if let Some(callback) = &state.config.on_session_closed {
@@ -5909,7 +5873,7 @@ mod tests {
     fn spy_state() -> (ServerState, Arc<SpyEventStore>) {
         let spy = Arc::new(SpyEventStore::default());
         let mut state = dual_era_state();
-        state.event_store = Some(spy.clone() as EventStoreHandle);
+        state.v1.event_store = Some(spy.clone() as EventStoreHandle);
         (state, spy)
     }
 
@@ -6086,7 +6050,8 @@ mod tests {
 
     /// **The discovery-cache bug class, at the transport layer.**
     ///
-    /// `build_response` routes a reply into `state.sse_streams[sid]` keyed on the
+    /// `build_response` routes a reply into the v1 SSE stream registered for
+    /// `sid` keyed on the
     /// RAW INBOUND `Mcp-Session-Id` header — not on the era-resolved
     /// `response_session_id`, which is always `None` on v2. So a v2 POST that
     /// merely NAMES a v1 caller's open session id had its response delivered into

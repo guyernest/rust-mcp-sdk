@@ -28,6 +28,17 @@
 //! nothing its twin does not, i.e. that severance never grows machinery of its
 //! own.
 //!
+//! # Why the parameters are still here
+//!
+//! Every function below takes the same arguments as its real counterpart and
+//! ignores them — most visibly the resolved `era`. Dropping a parameter the twin
+//! does not read would make the two signatures diverge, and a caller that no
+//! longer has to supply an era is a caller that is one edit away from resolving
+//! one for itself. Phase 112 D-11 and Phase 113 Pitfall 2 forbid a second era
+//! resolver in the transport: the era is resolved ONCE at ingress and CONSUMED
+//! everywhere else. Identical parameter lists are how that stays true on both
+//! builds.
+//!
 //! # This file is temporary
 //!
 //! Gating v1 off is reversible and semver-safe. DELETING the pair outright is a
@@ -44,6 +55,10 @@
 // `src/shared/http_body_cap.rs`. The real half carries the identical allow.
 #![allow(clippy::redundant_pub_crate)]
 
+use super::{EventStoreHandle, StreamableHttpServerConfig};
+use crate::shared::TransportMessage;
+use tokio::sync::mpsc;
+
 /// The zero-sized stand-in for the v1 session and resumability state.
 ///
 /// A unit struct, not an empty-braced one: the absence of fields is the whole
@@ -52,7 +67,6 @@
 /// and nothing is retained, because on this build there are no sessions to track
 /// and no events to replay.
 #[derive(Clone, Debug, Default)]
-#[allow(dead_code)] // Why: plan 117-09 wires this into `ServerState`; remove the allow there.
 pub(crate) struct V1State;
 
 impl V1State {
@@ -61,8 +75,98 @@ impl V1State {
     /// Callable identically to its twin so the transport's construction site is
     /// written once. Allocating nothing here is not an optimisation; it is the
     /// observable difference between the two builds.
-    #[allow(dead_code)] // Why: plan 117-09 calls this from `make_server_state`.
-    pub(crate) const fn new() -> Self {
+    pub(crate) const fn new(_config: &StreamableHttpServerConfig) -> Self {
         Self
     }
+}
+
+// ---------------------------------------------------------------------------
+// v1 session-map operations — every answer is a constant.
+// ---------------------------------------------------------------------------
+
+/// No session is ever tracked, so no session id is ever known.
+pub(crate) const fn session_exists(_state: &V1State, _session_id: &str) -> bool {
+    false
+}
+
+/// Nothing was ever initialized, because nothing was ever created.
+pub(crate) const fn session_is_initialized(_state: &V1State, _session_id: &str) -> bool {
+    false
+}
+
+/// Recording a session is a no-op: there is nowhere to record it.
+pub(crate) fn insert_session(
+    _state: &V1State,
+    _session_id: String,
+    _initialized: bool,
+    _protocol_version: Option<String>,
+) {
+}
+
+/// Marking a session initialized is a no-op: no session was created to mark.
+pub(crate) fn mark_session_initialized(
+    _state: &V1State,
+    _session_id: &str,
+    _negotiated_version: Option<String>,
+) {
+}
+
+/// No session, so no version was ever negotiated against one.
+///
+/// The 2026-07-28 transport carries its version per request, so a session-scoped
+/// version would be the wrong authority even if one existed.
+pub(crate) const fn session_protocol_version(
+    _state: &V1State,
+    _session_id: &str,
+) -> Option<String> {
+    None
+}
+
+/// Forgetting a session is a no-op: there is nothing to forget.
+pub(crate) const fn remove_session(_state: &V1State, _session_id: &str) {}
+
+// ---------------------------------------------------------------------------
+// v1 SSE stream operations — every answer is a constant.
+// ---------------------------------------------------------------------------
+
+/// No stream is ever open, because none is ever registered.
+pub(crate) const fn sse_stream_exists(_state: &V1State, _session_id: &str) -> bool {
+    false
+}
+
+/// Registering a stream is a no-op; the sender is dropped on the spot.
+pub(crate) fn register_sse_stream(
+    _state: &V1State,
+    _session_id: String,
+    _sender: mpsc::UnboundedSender<TransportMessage>,
+) {
+}
+
+/// Closing a stream is a no-op: none was ever opened.
+pub(crate) const fn remove_sse_stream(_state: &V1State, _session_id: &str) {}
+
+/// The message is always handed straight back, never routed anywhere.
+///
+/// There is no stream to deliver into, so the caller always frames the reply for
+/// the caller that actually asked for it. That is the v2 rule stated positively:
+/// a response goes to its requester and to nobody else.
+pub(crate) const fn route_to_session_stream(
+    _state: &V1State,
+    _session_id: &str,
+    message: TransportMessage,
+) -> Option<TransportMessage> {
+    Some(message)
+}
+
+// ---------------------------------------------------------------------------
+// v1 resumability state — there is none.
+// ---------------------------------------------------------------------------
+
+/// There is no store to hand out, on any request, ever.
+///
+/// The 2026-07-28 transport spec is verbatim that resumable SSE streams via
+/// `Last-Event-ID` are not supported, so `None` is the whole answer rather than
+/// a degraded one.
+pub(crate) const fn event_store(_state: &V1State) -> Option<&EventStoreHandle> {
+    None
 }
