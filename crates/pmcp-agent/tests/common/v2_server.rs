@@ -57,7 +57,6 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -75,7 +74,7 @@ use pmcp::server::{ToolHandler, ToolOutput};
 use pmcp::shared::http_constants::MCP_PROTOCOL_VERSION;
 use pmcp::testing::META_PROTOCOL_VERSION;
 use pmcp::types::protocol::{
-    protocol_era, Era, ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
+    ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
 };
 use pmcp::types::tasks::{Task, TaskMetadata, TaskStatus};
 use pmcp::types::{CallToolResult, Content, ToolInfo};
@@ -199,46 +198,6 @@ impl RequestLog {
             .count()
     }
 
-    /// The observed methods, in arrival order (for failure messages).
-    #[must_use]
-    pub fn methods(&self) -> Vec<String> {
-        self.entries()
-            .into_iter()
-            .map(|entry| entry.method)
-            .collect()
-    }
-
-    /// The declared protocol versions, in arrival order, with a readable
-    /// sentinel for a request that declared none.
-    #[must_use]
-    pub fn declared_versions(&self) -> Vec<String> {
-        self.entries()
-            .into_iter()
-            .map(|entry| {
-                entry
-                    .protocol_version
-                    .unwrap_or_else(|| "<none>".to_string())
-            })
-            .collect()
-    }
-
-    /// The era of every observed request.
-    ///
-    /// Classified with the crate's own [`protocol_era`], whose unknown-version
-    /// fallback is `V1` — the same conservative default the SERVER applies.
-    #[must_use]
-    pub fn eras(&self) -> Vec<Era> {
-        self.entries()
-            .into_iter()
-            .map(|entry| {
-                entry
-                    .protocol_version
-                    .as_deref()
-                    .map_or(Era::V1, protocol_era)
-            })
-            .collect()
-    }
-
     /// A single-line rendering of the whole log, for assertion messages.
     #[must_use]
     pub fn render(&self) -> String {
@@ -327,18 +286,10 @@ impl ServerHttpMiddleware for RecordingMiddleware {
 /// invoker) mints more than one task, and a global counter would let the second
 /// task settle on its FIRST read — silently removing the non-terminal poll the
 /// whole fixture exists to guarantee.
+#[derive(Debug)]
 pub struct ScriptedTaskStore {
     inner: InMemoryTaskStore,
     reads_by_task: StdMutex<HashMap<String, usize>>,
-    total_reads: AtomicUsize,
-}
-
-impl std::fmt::Debug for ScriptedTaskStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScriptedTaskStore")
-            .field("total_reads", &self.total_reads.load(Ordering::SeqCst))
-            .finish()
-    }
 }
 
 impl ScriptedTaskStore {
@@ -348,24 +299,7 @@ impl ScriptedTaskStore {
         Self {
             inner: InMemoryTaskStore::new(),
             reads_by_task: StdMutex::new(HashMap::new()),
-            total_reads: AtomicUsize::new(0),
         }
-    }
-
-    /// How many times the store has been READ (`tasks/get` reaching storage),
-    /// across all tasks.
-    #[must_use]
-    pub fn reads(&self) -> usize {
-        self.total_reads.load(Ordering::SeqCst)
-    }
-
-    /// How many times `task_id` specifically has been read.
-    #[must_use]
-    pub fn reads_for(&self, task_id: &str) -> usize {
-        self.reads_by_task
-            .lock()
-            .map(|map| map.get(task_id).copied().unwrap_or(0))
-            .unwrap_or(0)
     }
 
     /// Record one read of `task_id` and return that task's new read count.
@@ -373,7 +307,6 @@ impl ScriptedTaskStore {
     /// A poisoned lock is recovered rather than panicked on: a fixture must
     /// fail the assertion under test, never abort the test process.
     fn record_read(&self, task_id: &str) -> usize {
-        self.total_reads.fetch_add(1, Ordering::SeqCst);
         let mut map = self
             .reads_by_task
             .lock()

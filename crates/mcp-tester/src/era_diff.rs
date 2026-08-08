@@ -224,13 +224,33 @@ pub fn load_baseline<P: AsRef<Path>>(path: P) -> Result<EraBaseline> {
         .with_context(|| format!("Failed to parse era-delta baseline: {}", path.display()))
 }
 
-/// Read and parse the baseline shipped with this crate.
+/// The baseline text, COMPILED IN rather than read from disk at runtime.
+///
+/// `default_baseline_path()` resolves through `CARGO_MANIFEST_DIR`, which for a
+/// `cargo install`ed binary points into `~/.cargo/registry/src/…/mcp-tester-*`
+/// — a cache directory that `cargo cache` and manual cleanup delete. Reading it
+/// at runtime therefore works in every in-repo test and fuzz run (which execute
+/// from the source tree) while silently failing for end users, so the failure
+/// mode is structurally untestable in CI. Embedding the bytes removes it.
+const DEFAULT_BASELINE_TEXT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/baselines/era-deltas.yaml"
+));
+
+/// Parse the baseline shipped with this crate.
+///
+/// The text is embedded at compile time, so this does no file I/O and cannot
+/// fail for a missing or unreadable file. [`default_baseline_path`] remains
+/// available for callers that deliberately want the on-disk copy (a reviewer
+/// diffing it, or an explicit `--baseline` override).
 ///
 /// # Errors
 ///
-/// Same conditions as [`load_baseline`].
+/// Only for the reasons [`parse_baseline`] rejects its contents — which, for
+/// the checked-in file, is gated by `crates/mcp-tester/tests/era_baseline.rs`.
 pub fn load_default_baseline() -> Result<EraBaseline> {
-    load_baseline(default_baseline_path())
+    parse_baseline(DEFAULT_BASELINE_TEXT)
+        .context("Failed to parse the compiled-in era-delta baseline")
 }
 
 #[cfg(test)]

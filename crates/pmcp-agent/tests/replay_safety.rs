@@ -34,9 +34,27 @@ fn replay_config() -> ResolvedAgentConfig {
 /// timers or real I/O), so no tokio runtime is needed and each proptest case is
 /// cheap.
 fn run_once(trace: &EffectTrace, config: &ResolvedAgentConfig) -> DecisionTrace {
+    run_with(trace, config, None)
+}
+
+/// The shared engine wiring behind [`run_once`] and [`run_once_with_live_era`].
+///
+/// `live_era` is the ONLY difference between the two. Keeping one body is what
+/// makes "identical in every other respect" a fact rather than a claim two
+/// copies have to be manually kept in step with — and three of the tests below
+/// compare the two runs directly, so a drift between them would silently
+/// invalidate the comparison rather than fail it.
+fn run_with(
+    trace: &EffectTrace,
+    config: &ResolvedAgentConfig,
+    live_era: Option<Era>,
+) -> DecisionTrace {
     futures::executor::block_on(async {
         let source = ReplaySource::from_trace(trace);
-        let invoker = ReplayInvoker::from_trace(trace);
+        let invoker = match live_era {
+            Some(era) => ReplayInvoker::from_trace(trace).with_live_era(era),
+            None => ReplayInvoker::from_trace(trace),
+        };
         let store = InMemoryStore::new();
         let run_id = "replay";
         if let Some(state) = &trace.initial_state {
@@ -195,19 +213,7 @@ fn run_once_with_live_era(
     config: &ResolvedAgentConfig,
     live_era: Era,
 ) -> DecisionTrace {
-    futures::executor::block_on(async {
-        let source = ReplaySource::from_trace(trace);
-        let invoker = ReplayInvoker::from_trace(trace).with_live_era(live_era);
-        let store = InMemoryStore::new();
-        let run_id = "replay";
-        if let Some(state) = &trace.initial_state {
-            store.save(run_id, state).await.expect("seed initial state");
-        }
-        let engine = AgentEngine::new(source, invoker, store, config.clone());
-        let mut decisions = DecisionTrace::default();
-        engine.run_traced(run_id, &mut decisions).await;
-        decisions
-    })
+    run_with(trace, config, Some(live_era))
 }
 
 /// A one-tool-call trace recorded at `version`.

@@ -94,8 +94,16 @@ const MINIMUM_JOBS: usize = 8;
 // Reader
 // ===========================================================================
 
-/// The whole workflow, parsed structurally.
-fn workflow() -> Value {
+/// The whole workflow, parsed structurally — ONCE.
+///
+/// Every reader below funnels through here, and `job()` is called from five
+/// tests, so a per-call read would re-parse the workflow once per lookup. The
+/// amplification is invisible at the call sites, which is exactly why it is
+/// closed here rather than left to grow.
+static WORKFLOW_DOC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(parse_workflow);
+
+/// Read and parse the workflow. Called exactly once, through [`WORKFLOW_DOC`].
+fn parse_workflow() -> Value {
     let text = std::fs::read_to_string(WORKFLOW).unwrap_or_else(|e| {
         panic!(
             "FAILURE MODE: cannot read {WORKFLOW_REL}: {e}\n\
@@ -113,9 +121,8 @@ fn workflow() -> Value {
 }
 
 /// The `jobs:` mapping.
-fn jobs() -> Mapping {
-    let doc = workflow();
-    let jobs = doc.get("jobs").unwrap_or_else(|| {
+fn jobs() -> &'static Mapping {
+    let jobs = WORKFLOW_DOC.get("jobs").unwrap_or_else(|| {
         panic!(
             "FAILURE MODE: {WORKFLOW_REL} has no top-level `jobs:` key.\n\
              WHAT TO DO: fix the reader or the workflow; do not weaken the assertion."
@@ -134,24 +141,30 @@ fn jobs() -> Mapping {
          WHAT TO DO: fix the reader; never lower the floor.",
         mapping.len()
     );
-    mapping.clone()
+    mapping
 }
 
 /// One job by name, or `None` if the workflow does not declare it.
-fn job(name: &str) -> Option<Value> {
-    jobs().get(name).cloned()
+fn job(name: &str) -> Option<&'static Value> {
+    jobs().get(name)
 }
 
-/// Every `run:` script in a job's `steps:`, concatenated.
-fn run_scripts(job_name: &str) -> String {
+/// A job's `steps:` sequence, panicking with an actionable message when either
+/// the job or its `steps:` key is absent.
+///
+/// Both [`run_scripts`] and [`gate_eval_step`] navigate job → `steps:`, so the
+/// lookup and its two panics live here once. (The previous `gate_eval_step`
+/// copy justified its `expect` with "gate job presence is asserted by
+/// `gate_needs()`" — which does not hold: `severance_result_is_bound_and_evaluated`
+/// calls it with no prior `gate_needs()`.)
+fn steps_of(job_name: &str) -> &'static [Value] {
     let job = job(job_name).unwrap_or_else(|| {
         panic!(
             "FAILURE MODE: {WORKFLOW_REL} declares no job named `{job_name}`.\n\
              WHAT TO DO: restore the job; a missing job cannot gate anything."
         )
     });
-    let steps = job
-        .get("steps")
+    job.get("steps")
         .and_then(Value::as_sequence)
         .unwrap_or_else(|| {
             panic!(
@@ -159,9 +172,12 @@ fn run_scripts(job_name: &str) -> String {
                  WHAT TO DO: fix the reader or the workflow."
             )
         })
-        .clone();
+}
+
+/// Every `run:` script in a job's `steps:`, concatenated.
+fn run_scripts(job_name: &str) -> String {
     let mut collected = String::new();
-    for step in &steps {
+    for step in steps_of(job_name) {
         if let Some(run) = step.get("run").and_then(Value::as_str) {
             collected.push_str(run);
             collected.push('\n');
@@ -227,18 +243,7 @@ fn gate_needs() -> Vec<String> {
 
 /// The `gate`'s single evaluation step: its `env:` bindings and its `run:` script.
 fn gate_eval_step() -> (Mapping, String) {
-    let gate = job(GATE_JOB).expect("gate job presence is asserted by gate_needs()");
-    let steps = gate
-        .get("steps")
-        .and_then(Value::as_sequence)
-        .unwrap_or_else(|| {
-            panic!(
-                "FAILURE MODE: `{GATE_JOB}` in {WORKFLOW_REL} has no `steps:` sequence.\n\
-                 WHAT TO DO: fix the reader or the workflow."
-            )
-        })
-        .clone();
-    for step in &steps {
+    for step in steps_of(GATE_JOB) {
         let (Some(env), Some(run)) = (
             step.get("env").and_then(Value::as_mapping),
             step.get("run").and_then(Value::as_str),
@@ -263,8 +268,12 @@ fn gate_eval_step() -> (Mapping, String) {
 fn severance_job_exists() {
     let script = run_scripts(SEVERANCE_JOB);
 
+    // All FOUR fences the message below enumerates. Keeping one of them in a
+    // separate hand-written assertion made the list labelled "four fences"
+    // check three, and gave a fifth fence two plausible homes.
     for required in [
         "--features full-v2",
+        "--no-default-features",
         "-p pmcp",
         r#"RUSTFLAGS="-D warnings""#,
     ] {
@@ -281,15 +290,6 @@ fn severance_job_exists() {
              Command read: {script}"
         );
     }
-
-    assert!(
-        script.contains("--no-default-features"),
-        "FAILURE MODE: the `{SEVERANCE_JOB}` build command in {WORKFLOW_REL} is missing \
-         `--no-default-features`, so `v1-compat` arrives via `default` and the severance proof is \
-         vacuous.\n\
-         WHAT TO DO: restore the fence.\n\
-         Command read: {script}"
-    );
 
     for forbidden in ["--all-features", "--all-targets"] {
         assert!(

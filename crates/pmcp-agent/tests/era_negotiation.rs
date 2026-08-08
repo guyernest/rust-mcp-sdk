@@ -31,6 +31,7 @@
 #[path = "common/v2_server.rs"]
 mod v2_server;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
@@ -62,7 +63,7 @@ const V1_HANDSHAKE_METHOD: &str = "initialize";
 struct FourOhFourStub {
     endpoint: String,
     methods: Arc<StdMutex<Vec<String>>>,
-    bare_connections: Arc<StdMutex<usize>>,
+    bare_connections: Arc<AtomicUsize>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -80,11 +81,12 @@ impl FourOhFourStub {
 
     /// How many connections were accepted that carried NO request at all —
     /// i.e. the host-layer reachability probe's footprint.
+    ///
+    /// An atomic rather than a mutex: a poisoned counter lock would have made
+    /// the recording side silently DROP an increment, which weakens the
+    /// `>= 1` assertion this exists to support.
     fn bare_connections(&self) -> usize {
-        *self
-            .bare_connections
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.bare_connections.load(Ordering::Relaxed)
     }
 }
 
@@ -97,7 +99,7 @@ async fn spawn_404_stub() -> FourOhFourStub {
         .local_addr()
         .expect("the bound address is readable");
     let methods: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
-    let bare_connections: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
+    let bare_connections: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let recorder = Arc::clone(&methods);
     let bare_recorder = Arc::clone(&bare_connections);
 
@@ -109,9 +111,7 @@ async fn spawn_404_stub() -> FourOhFourStub {
             let body = read_request_body(&mut stream).await;
             if body.is_empty() {
                 // A connection that carried no request: the reachability probe.
-                if let Ok(mut bare) = bare_recorder.lock() {
-                    *bare += 1;
-                }
+                bare_recorder.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             let method = serde_json::from_str::<Value>(&body)

@@ -84,11 +84,30 @@ use uuid::Uuid;
 // ===========================================================================
 // Dynamic-value normalization.
 //
-// Restated from `tests/v1_lists_golden.rs:88-180` rather than shared: a Rust
-// integration test is its own crate, so the two files cannot import each other.
+// Restated from `tests/v1_lists_golden.rs:88-180` and `tests/v1_tasks_golden.rs:82-160`.
 // The one adaptation is that substitution is FIELD-LINE anchored rather than
 // JSON-key anchored, because this file pins SSE-framed responses and rendered
 // header blocks, whose per-run values are not JSON string values.
+//
+// KNOWN DEBT, stated accurately. An earlier version of this note claimed the
+// restatement was FORCED — "a Rust integration test is its own crate, so the
+// two files cannot import each other". That is false, and this very file
+// disproves it: it declares `mod common;` at line 61 and imports
+// `common::v2::{…}` at line 64, which is the `tests/common/` sharing mechanism
+// the root test tree already uses. So the restatement is a CHOICE, and the
+// sharing home exists.
+//
+// What is actually duplicated: `width_preserving` is byte-identical across all
+// three files, and `DynamicField` differs only in a doc line. A change to the
+// same-width invariant must therefore be made in three places, with nothing
+// detecting a missed one. Extracting them into `tests/common/` would touch two
+// files outside this phase's scope, so it is recorded here rather than done.
+//
+// Note also that `is_uuid_v4` below is a STRICTER fork of
+// `v1_tasks_golden.rs`'s `is_uuid_shaped` (it checks the version nibble and
+// requires lowercase; that one accepts any `is_ascii_hexdigit`). Two divergent
+// answers to "is this a UUID" now coexist in this test tree — deliberate here,
+// because a golden that accepts a malformed id pins less than it claims.
 // ===========================================================================
 
 /// A response value that cannot be pinned because it is minted per run.

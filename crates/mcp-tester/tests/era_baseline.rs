@@ -6,10 +6,14 @@
 //! The baseline is a SPEC ARTIFACT: it is the written statement of what
 //! "dual-version" means for this SDK, and it is meant to be reviewed by a human
 //! who does not read Rust. So this file gates its SCHEMA — every entry has a
-//! unique id, a unique machine-facing observation id, a real citation, and a
-//! named owner when it is provisional — and deliberately does NOT gate its
-//! CONTENT. Deciding that `resultType` is expected on v2 is a spec question for
-//! a reviewer, not an assertion for a test.
+//! well-shaped machine-facing observation id, a real citation, and a named
+//! owner when it is provisional — and deliberately does NOT gate its CONTENT.
+//! Deciding that `resultType` is expected on v2 is a spec question for a
+//! reviewer, not an assertion for a test.
+//!
+//! Presence and UNIQUENESS of `id` / `observation_id` are not gated here: they
+//! are `parse_baseline` contracts, so `baseline()` cannot return a violation of
+//! them. See the note above section 1.
 //!
 //! # Why there is a non-vacuity floor
 //!
@@ -31,12 +35,10 @@
 //! # If a test in this file fails
 //!
 //! The remedy is ALWAYS to fix the reader or restore the file. It is NEVER to
-//! lower the floor, relax the uniqueness rule, or delete an assertion. Every
-//! failure message below states this inline, because the tempting fix is the
-//! wrong one.
+//! lower the floor, relax a shape rule, or delete an assertion. Every failure
+//! message below states this inline, because the tempting fix is the wrong one.
 
 use mcp_tester::era_diff::{load_baseline, parse_baseline, EraBaseline};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 // ===========================================================================
@@ -95,63 +97,37 @@ fn baseline() -> EraBaseline {
 /// Does `text` name a phase by number (e.g. "Phase 114")? Hand-rolled rather
 /// than pulled through `regex`, so this gate has no dependency of its own.
 fn names_a_phase(text: &str) -> bool {
-    let mut rest = text;
-    while let Some(at) = rest.find("Phase ") {
-        let after = &rest[at + "Phase ".len()..];
-        if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            return true;
-        }
-        rest = after;
-    }
-    false
+    text.split("Phase ")
+        .skip(1)
+        .any(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 // ===========================================================================
-// 1. Ids are unique
+// 1. Ids are unique — ENFORCED BY THE PARSER, not here
+// ===========================================================================
+//
+// `parse_baseline` rejects an empty or duplicated `id`/`observation_id`, and
+// `baseline()` above goes through it — so a violation panics in the loader and
+// every test in this file fails together, naming the offender. Re-asserting
+// those four properties here would be unreachable code: the assertion arms
+// could never run. The parser's own negative cases live in `era_diff.rs`'s
+// `mod tests`; the checks below are the ones the parser deliberately does NOT
+// make, because they are baseline-CONTENT rules rather than properties of
+// arbitrary input.
+
+// ===========================================================================
+// 2. Observation ids are well shaped
 // ===========================================================================
 
 #[test]
-fn every_delta_id_is_unique() {
+fn every_delta_observation_id_is_well_shaped() {
     let baseline = baseline();
 
-    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
     for delta in &baseline.deltas {
-        *seen.entry(delta.id.as_str()).or_insert(0) += 1;
-    }
-    let duplicates: Vec<&&str> = seen
-        .iter()
-        .filter(|(_, n)| **n > 1)
-        .map(|(id, _)| id)
-        .collect();
-
-    assert!(
-        duplicates.is_empty(),
-        "FAILURE MODE: duplicated `id` in {BASELINE_FILE}: {duplicates:?}. Two entries sharing an \
-         id cannot be told apart in a report, and one of them is silently unreviewable.\n\
-         WHAT TO DO: give each entry its own ERA-NN; never reuse a retired one."
-    );
-}
-
-// ===========================================================================
-// 2. Observation ids are present, unique and well shaped
-// ===========================================================================
-
-#[test]
-fn every_delta_observation_id_is_present_and_unique() {
-    let baseline = baseline();
-
-    let mut seen: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for delta in &baseline.deltas {
+        // Non-empty and unique are PARSER guarantees (see the note above), so
+        // `trim()` here only normalises for the shape checks that follow.
         let observation_id = delta.observation_id.trim();
 
-        assert!(
-            !observation_id.is_empty(),
-            "FAILURE MODE: entry `{}` in {BASELINE_FILE} has an empty `observation_id`. That field \
-             is the join key a dual-run comparison diffs on, so an empty one makes the entry \
-             permanently unobservable.\n\
-             WHAT TO DO: name the wire fact (e.g. `header.mcp_session_id`); do not drop the field.",
-            delta.id
-        );
         assert!(
             observation_id.contains('.'),
             "FAILURE MODE: `observation_id` `{observation_id}` (entry `{}`) is not namespaced — it \
@@ -170,19 +146,7 @@ fn every_delta_observation_id_is_present_and_unique() {
              WHAT TO DO: use `[a-z0-9_.]` only; never rename one for readability.",
             delta.id
         );
-
-        seen.entry(observation_id).or_default().push(&delta.id);
     }
-
-    let duplicates: Vec<(&&str, &Vec<&str>)> =
-        seen.iter().filter(|(_, ids)| ids.len() > 1).collect();
-    assert!(
-        duplicates.is_empty(),
-        "FAILURE MODE: duplicated `observation_id` in {BASELINE_FILE}: {duplicates:?}. Two entries \
-         sharing one silently MERGE two distinct wire facts, so one of them can never be observed \
-         as missing.\n\
-         WHAT TO DO: give each wire fact its own key; do not relax this check."
-    );
 }
 
 // ===========================================================================

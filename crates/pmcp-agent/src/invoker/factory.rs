@@ -148,20 +148,19 @@ mod url_impl {
     /// fast, unambiguous fact.
     const REACHABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// The classified result of the v2 era attempt.
+    /// Why the v2 era attempt did not yield a client.
     ///
-    /// Constructed AT THE POINT OF FAILURE from the reachability fact that was
-    /// established before the attempt ran — never by reading an error after the
-    /// fact, and never after a `to_string()`. See [`endpoint_is_reachable`] for
-    /// the contract this enum encodes and the measurements that force it.
+    /// This enum deliberately does NOT encode the era-rejection-vs-infrastructure
+    /// split. That split is decided by the reachability fact established before
+    /// the attempt ran (see [`endpoint_is_reachable`]) and is applied in ONE
+    /// place — the match in `client_for` — so there is a single site that answers
+    /// "who decides reachability". The error below is never read to classify.
     #[derive(Debug)]
-    enum ProbeOutcome {
-        /// The endpoint ANSWERED at the host layer and the v2 attempt still
-        /// failed ⇒ this is an era rejection ⇒ fall back to v1.
-        Answered(Box<pmcp::Error>),
-        /// The endpoint did NOT answer ⇒ infrastructure ⇒ propagate this error
-        /// and make NO v1 attempt.
-        Unreachable(Box<pmcp::Error>),
+    enum V2Failure {
+        /// The v2 attempt was SENT and the server did not accept the era.
+        /// Whether this means "era rejection, fall back to v1" or
+        /// "infrastructure, propagate" is the caller's reachability call.
+        Rejected(Box<pmcp::Error>),
         /// The v2 client could not be CONSTRUCTED, so nothing was ever sent.
         /// A local configuration failure — it says nothing about the server, so
         /// it is neither a rejection nor a reachability signal.
@@ -170,9 +169,11 @@ mod url_impl {
 
     /// Establish, at the HOST layer, whether `url`'s endpoint ANSWERS at all.
     ///
-    /// `Ok(())` means the endpoint accepted a TCP connection, so any subsequent
-    /// protocol-level failure is "the server ANSWERED". `Err(..)` is
-    /// unambiguously "the server did NOT answer".
+    /// `true` means the endpoint accepted a TCP connection, so any subsequent
+    /// protocol-level failure is "the server ANSWERED". `false` is
+    /// unambiguously "the server did NOT answer" — including the degenerate
+    /// cases of a URL with no host and a URL with no resolvable port, which
+    /// cannot answer either.
     ///
     /// # THE CLASSIFICATION CONTRACT
     ///
@@ -220,35 +221,23 @@ mod url_impl {
     /// downgrade in which an agent claims "connected via v1" against a host that
     /// never answered.
     ///
-    /// # Errors
-    ///
-    /// Returns [`InvokerError::Config`] when the URL carries no host or no
-    /// resolvable port, and [`InvokerError::Transport`] when the connection was
-    /// refused, failed, or exceeded [`REACHABILITY_PROBE_TIMEOUT`].
-    async fn endpoint_is_reachable(url: &Url) -> Result<(), InvokerError> {
-        let host = url
-            .host_str()
-            .ok_or_else(|| InvokerError::Config(format!("endpoint URL has no host: {url}")))?;
-        let port = url.port_or_known_default().ok_or_else(|| {
-            InvokerError::Config(format!(
-                "endpoint URL has no port and no scheme default: {url}"
-            ))
-        })?;
-        match tokio::time::timeout(
-            REACHABILITY_PROBE_TIMEOUT,
-            tokio::net::TcpStream::connect((host, port)),
+    /// This returns a plain `bool` rather than a `Result` ON PURPOSE: every
+    /// failure mode here means exactly one thing to the only caller — "did not
+    /// answer" — so an error type would carry prose that nothing may read
+    /// without violating the contract above.
+    async fn endpoint_is_reachable(url: &Url) -> bool {
+        let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+            return false;
+        };
+        // The stream is dropped immediately: the ANSWER is the whole fact.
+        matches!(
+            tokio::time::timeout(
+                REACHABILITY_PROBE_TIMEOUT,
+                tokio::net::TcpStream::connect((host, port)),
+            )
+            .await,
+            Ok(Ok(_stream))
         )
-        .await
-        {
-            // The stream is dropped immediately: the ANSWER is the whole fact.
-            Ok(Ok(_stream)) => Ok(()),
-            Ok(Err(err)) => Err(InvokerError::Transport(format!(
-                "endpoint did not answer at the host layer: {err}"
-            ))),
-            Err(_elapsed) => Err(InvokerError::Transport(format!(
-                "endpoint did not answer within {REACHABILITY_PROBE_TIMEOUT:?}"
-            ))),
-        }
     }
 
     /// Attempt 1 — the `2026-07-28` era, PINNED.
@@ -261,13 +250,11 @@ mod url_impl {
     /// `ClientBuilder::with_protocol_version` is never in v2 mode at all, which
     /// is why `initialize` used to run its full v1 path here.
     ///
-    /// `answered` is the reachability fact from [`endpoint_is_reachable`],
-    /// captured BEFORE this attempt so the failure can be classified without
-    /// ever reading the error.
-    async fn try_v2(
-        url: &Url,
-        answered: bool,
-    ) -> Result<Client<StreamableHttpTransport>, ProbeOutcome> {
+    /// This attempt does NOT classify its own failure. The reachability fact
+    /// from [`endpoint_is_reachable`] is captured by `client_for` BEFORE this
+    /// runs, and applied there — so the error below is never read to decide an
+    /// era.
+    async fn try_v2(url: &Url) -> Result<Client<StreamableHttpTransport>, V2Failure> {
         let config = StreamableHttpTransportConfigBuilder::new(url.clone()).build();
         let transport = StreamableHttpTransport::new(config);
         let builder = match ClientBuilder::new(transport)
@@ -275,7 +262,7 @@ mod url_impl {
         {
             Ok(builder) => builder.with_tasks_extension(),
             Err(err) => {
-                return Err(ProbeOutcome::NotAttempted(InvokerError::Config(
+                return Err(V2Failure::NotAttempted(InvokerError::Config(
                     err.to_string(),
                 )))
             },
@@ -285,8 +272,7 @@ mod url_impl {
         let mut client = builder.build();
         match client.server_discover().await {
             Ok(_projection) => Ok(client),
-            Err(err) if answered => Err(ProbeOutcome::Answered(Box::new(err))),
-            Err(err) => Err(ProbeOutcome::Unreachable(Box::new(err))),
+            Err(err) => Err(V2Failure::Rejected(Box::new(err))),
         }
     }
 
@@ -341,13 +327,15 @@ mod url_impl {
             }
             // The TYPED reachability fact, established BEFORE attempt 1 — that
             // is, before any error exists that could be stringified.
-            let answered = endpoint_is_reachable(&url).await.is_ok();
-            match try_v2(&url, answered).await {
+            let answered = endpoint_is_reachable(&url).await;
+            match try_v2(&url).await {
                 Ok(client) => Ok(Arc::new(UrlConnectorClient::new(
                     client,
                     PROTOCOL_VERSION_2026_07_28.to_string(),
                 ))),
-                Err(ProbeOutcome::Answered(rejection)) => {
+                // The ONE site that turns the reachability fact into an era
+                // decision. The error is logged, never inspected.
+                Err(V2Failure::Rejected(rejection)) if answered => {
                     // The v2 client is DROPPED here; a fresh v1 client is built.
                     tracing::debug!(
                         endpoint,
@@ -359,10 +347,8 @@ mod url_impl {
                 },
                 // No v1 attempt: a host that never answered is infrastructure,
                 // not a protocol signal (T-117-21 / Pitfall 7).
-                Err(ProbeOutcome::Unreachable(err)) => {
-                    Err(InvokerError::Transport(err.to_string()))
-                },
-                Err(ProbeOutcome::NotAttempted(err)) => Err(err),
+                Err(V2Failure::Rejected(err)) => Err(InvokerError::Transport(err.to_string())),
+                Err(V2Failure::NotAttempted(err)) => Err(err),
             }
         }
     }
