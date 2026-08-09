@@ -366,6 +366,7 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
                     cli.insecure,
                     cli.api_key.as_deref(),
                     oauth,
+                    cli.format,
                 )
                 .await
             } else {
@@ -755,6 +756,26 @@ async fn run_conformance_test(
 /// existing connectivity-failure path and exits non-zero. A REACHABLE endpoint
 /// that speaks no era we know is a different thing — a conformance finding — and
 /// gets its own Core-domain failure instead.
+///
+/// # The comparison is rendered only for HUMAN formats
+///
+/// `format` is threaded in for one reason: `handle_command_result` renders the
+/// returned report to the SAME stdout this function writes the comparison to, so
+/// under `--format json` a prepended text block makes the whole stream
+/// unparseable. Machine formats therefore get the comparison on stderr instead;
+/// nothing is dropped, and stdout stays exactly one document.
+///
+/// # The exit code reports the v1 suite ONLY — a KNOWN limitation
+///
+/// The returned report is the v1 one, so `--dual-run` exits 0 even when the v2
+/// suite failed every test and the comparison reported UNEXPECTED findings. That
+/// is the contract plan 117-11 chose (the flag must not change what the exit code
+/// MEANS) and `the_binary_runs_in_both_modes_against_a_live_server` pins it.
+///
+/// The cost is real and worth stating: an opt-in flag whose findings cannot fail
+/// a CI job cannot gate anything, so `--dual-run` is a reporting tool, not a gate.
+/// Changing that is a deliberate contract change — it needs the pinning test
+/// updated in the same commit, not a silent roll-up.
 #[allow(clippy::too_many_arguments)]
 async fn run_dual_conformance_test(
     url: &str,
@@ -764,6 +785,7 @@ async fn run_dual_conformance_test(
     insecure: bool,
     api_key: Option<&str>,
     oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+    format: OutputFormat,
 ) -> Result<TestReport> {
     use conformance::{ConformanceDomain, ConformanceRunner};
     use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
@@ -818,13 +840,21 @@ async fn run_dual_conformance_test(
             let mut v1 = build(false)?;
             let mut v2 = build(true)?;
             let report = runner.run_dual(&mut v1, &mut v2).await;
-            let mut stdout = std::io::stdout();
             // Best-effort, exactly as `TestReport::print` is: the CLI entry
-            // point cannot act on a broken pipe at the report layer.
-            let _ = report.print_to_writer(&mut stdout);
+            // point cannot act on a broken pipe at the report layer. Routed to
+            // stderr for machine formats so stdout stays a single parseable
+            // document (see this function's rustdoc).
+            if matches!(format, OutputFormat::Pretty | OutputFormat::Verbose) {
+                let _ = report.print_to_writer(&mut std::io::stdout());
+            } else {
+                let _ = report.print_to_writer(&mut std::io::stderr());
+            }
             // The v1 report is what the caller receives, so the process exit
             // code keeps meaning "did the suite pass" and does not silently
-            // change meaning when --dual-run is passed.
+            // change meaning when --dual-run is passed. This contract is PINNED
+            // by `the_binary_runs_in_both_modes_against_a_live_server` in
+            // `tests/dual_run.rs`; see this function's rustdoc for the open
+            // question about whether it should hold.
             Ok(report.v1_report)
         },
         EraSupport::V1Only => {

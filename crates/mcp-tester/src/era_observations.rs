@@ -420,10 +420,15 @@ async fn probe_initialize_raw(
     tester: &ServerTester,
     era: Era,
 ) -> std::result::Result<crate::tester::RawProbeOutcome, String> {
+    // Both sides come from pmcp's own constants. A hardcoded `"2025-11-25"` here
+    // rots the moment the SDK's v1 constant moves: the probe would then offer a
+    // version the server does not support, be refused, and report ERA-01 as
+    // `absent` against every conformant v1 server — a permanent false finding
+    // produced by a string literal.
     let version = if era == Era::V2 {
         pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28
     } else {
-        "2025-11-25"
+        pmcp::LATEST_PROTOCOL_VERSION
     };
     let params = serde_json::json!({
         "protocolVersion": version,

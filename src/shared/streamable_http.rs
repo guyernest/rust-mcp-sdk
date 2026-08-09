@@ -180,6 +180,7 @@ pub struct StreamableHttpTransportConfig {
     /// callback. `StreamableHttpTransport::resumption_callback` answers the
     /// question for both feature sets.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub on_resumption_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// HTTP middleware chain for request/response transformation
     pub http_middleware_chain: Option<Arc<crate::client::http_middleware::HttpMiddlewareChain>>,
@@ -300,8 +301,12 @@ impl StreamableHttpTransportConfigBuilder {
             #[cfg(feature = "v1-compat")]
             session_id: None,
             enable_json_response: false,
+            // `#[cfg]` only. A `doc(cfg(..))` badge on a struct-EXPRESSION field
+            // documents nothing — there is no item here for rustdoc to badge —
+            // and rustc rejects it as a misplaced `#[doc]` under `--cfg docsrs`,
+            // which is exactly the configuration docs.rs builds with. The badge
+            // belongs on the FIELD DECLARATION, where it already is.
             #[cfg(feature = "v1-compat")]
-            #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
             on_resumption_token: None,
             http_middleware_chain: None,
         }
@@ -342,6 +347,7 @@ impl StreamableHttpTransportConfigBuilder {
     /// there is no cursor to report and this method does not exist on a
     /// `full-v2` build.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub fn on_resumption_token(mut self, callback: Arc<dyn Fn(String) + Send + Sync>) -> Self {
         self.on_resumption_token = Some(callback);
         self
@@ -768,6 +774,7 @@ impl StreamableHttpTransport {
     ///
     /// v1-ONLY (`v1-compat`), for the same reason as [`Self::session_id`].
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub fn set_session_id(&self, session_id: Option<String>) {
         self.config.write().session_id = session_id;
     }

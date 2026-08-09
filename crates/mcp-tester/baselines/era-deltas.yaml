@@ -78,7 +78,7 @@ deltas:
     v1: served
     v2: absent
     kind: method-removed
-    source: ".planning/REQUIREMENTS.md:911 (CLNT-01); src/client/mod.rs:726-741 (v2_synthetic_initialize_result)"
+    source: ".planning/REQUIREMENTS.md:911 (CLNT-01); src/client/mod.rs:761 (v2_synthetic_initialize_result)"
     note: >-
       A v2 client's InitializeResult is LOCAL AND SYNTHETIC — no byte of it came
       from the server.
@@ -90,7 +90,7 @@ deltas:
     v1: "error:-32601"
     v2: served
     kind: method-added
-    source: "src/client/mod.rs:887 (a v1 server answers -32601); src/server/core.rs:1180-1187 (project_capabilities_for_v2)"
+    source: "src/client/mod.rs:722 (a v1 server answers -32601); src/server/core.rs:1180 (project_capabilities_for_v2)"
     note: >-
       v2 replaces the initialize handshake with a read-only capability
       projection.
@@ -102,7 +102,7 @@ deltas:
     v1: minted-and-echoed
     v2: never-minted-inbound-ignored
     kind: header-removed
-    source: "src/server/streamable_http_server.rs:455-460 (sessions_active_for); :1809-1811 (spec quote: \"ignore it, and do not mint or echo session IDs\")"
+    source: "src/server/streamable_http_server/v1_session.rs:333 (sessions_active_for); :552 (spec quote: \"ignore it, and do not mint or echo session IDs\")"
     provisional: false
 
   - id: ERA-04
@@ -111,7 +111,7 @@ deltas:
     v1: not-sent
     v2: required-and-cross-checked
     kind: header-required-on-v2
-    source: "src/shared/http_constants.rs:17-31 (MCP_METHOD, MCP_NAME); .planning/REQUIREMENTS.md VERS-05"
+    source: "src/shared/http_constants.rs:65,73 (MCP_METHOD, MCP_NAME); .planning/REQUIREMENTS.md VERS-05"
     note: >-
       A header/body desync is a smuggling signal and is rejected fail-closed.
     provisional: false
@@ -122,7 +122,7 @@ deltas:
     v1: supported
     v2: ignored
     kind: feature-removed
-    source: "src/server/streamable_http_server.rs:514-535 (resumability era gate) and :561-566 (resumability_active_for); .planning/REQUIREMENTS.md:992 (standing out-of-scope ruling)"
+    source: "src/server/streamable_http_server/v1_session.rs:400-420 (resumability era gate) and :433 (resumability_active_for); .planning/REQUIREMENTS.md:992 (standing out-of-scope ruling)"
     provisional: false
 
   - id: ERA-06
@@ -131,7 +131,7 @@ deltas:
     v1: sse-stream-or-session-teardown
     v2: "status:405"
     kind: verb-rejected-on-v2
-    source: "src/server/streamable_http_server.rs:1649-1658 (v2_method_not_allowed) and :1664-1677 (v2_verb_rejection)"
+    source: "src/server/streamable_http_server.rs:1701 (v2_method_not_allowed) and :1712 (v2_verb_rejection)"
     note: >-
       Also gated on the server's v2 accept-list, so a v1-only server never
       answers 405 to a legitimate v1 GET.
@@ -187,7 +187,7 @@ deltas:
     v1: "capabilities.tasks + experimental.tasks"
     v2: "extensions[io.modelcontextprotocol/tasks] = {}"
     kind: capability-relocated
-    source: ".planning/phases/114-tasks-extension-migration/114-CONTEXT.md:52-60 (D-02) and :62-70 (D-03); src/server/core.rs:1156 and :1180-1187"
+    source: ".planning/phases/114-tasks-extension-migration/114-CONTEXT.md:52-60 (D-02) and :62-70 (D-03); src/server/core.rs:1168 and :1180"
     note: >-
       Phase 114 owns this. Both v1 spellings are SUPPRESSED on the v2 wire; the
       extension value is {} until the published schema fills it.
@@ -212,7 +212,7 @@ deltas:
     v1: served
     v2: retired
     kind: method-retired
-    source: ".planning/REQUIREMENTS.md:915 (CLNT-05); src/client/mod.rs:697-705 (reject_if_retired_on_v2); src/error/mod.rs:126-131 (RETIRED_ON_V2_MARKER)"
+    source: ".planning/REQUIREMENTS.md:915 (CLNT-05); src/client/mod.rs:727 (reject_if_retired_on_v2); src/error/mod.rs:131 (RETIRED_ON_V2_MARKER)"
     note: >-
       The client fails fast with a typed retired_on_v2 error naming the
       replacement, rather than spending a round trip on an opaque -32601.
@@ -224,7 +224,7 @@ deltas:
     v1: "error:-32601"
     v2: sse-stream-capability-gated
     kind: method-added
-    source: ".planning/phases/113-v2-transport-mrtr-subscriptions/113-CONTEXT.md:41 (D-13); src/server/streamable_http_server.rs:3322-3329 (assemble_subscriptions_listen)"
+    source: ".planning/phases/113-v2-transport-mrtr-subscriptions/113-CONTEXT.md:41 (D-13); src/server/streamable_http_server.rs:3223 (assemble_subscriptions_listen)"
     note: >-
       Capability-gated: a server advertising none of tools/prompts/resources
       listChanged or resources.subscribe and answering -32601 is
@@ -237,5 +237,5 @@ deltas:
     v1: unchanged-legacy-table
     v2: era-gated-table
     kind: status-mapping-era-gated
-    source: "src/server/streamable_http_server.rs:729-747 (v2_status_for_code); test status_mapping_is_era_gated_so_v1_is_untouched at :4988"
+    source: "src/server/streamable_http_server.rs:727 (v2_status_for_code); test status_mapping_is_era_gated_so_v1_is_untouched at :4734"
     provisional: false

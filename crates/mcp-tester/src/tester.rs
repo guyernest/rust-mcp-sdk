@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use pmcp::{
     shared::{
-        streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig},
+        streamable_http::{
+            StreamableHttpTransport, StreamableHttpTransportConfig,
+            StreamableHttpTransportConfigBuilder,
+        },
         StdioTransport, Transport,
     },
     types::{
@@ -21,6 +24,37 @@ use url::Url;
 use crate::report::{TestCategory, TestReport, TestResult, TestStatus};
 use crate::validators::Validator;
 use std::collections::HashMap;
+
+/// The JSON-response Streamable-HTTP config every HTTP path in this file uses.
+///
+/// Built through [`StreamableHttpTransportConfigBuilder`] rather than a struct
+/// literal, and that is load-bearing rather than stylistic: `session_id` and
+/// `on_resumption_token` exist only behind pmcp's `v1-compat` feature as of
+/// Phase 117, so a literal naming them pins `mcp-tester` to a pmcp built WITH
+/// that feature and breaks the moment this crate's pmcp dependency drops it (the
+/// exact maneuver `crates/pmcp-code-mode/Cargo.toml` performs). The builder
+/// names neither field and compiles on both feature sets — the rule Phase 117
+/// applied to `tests/transport.rs`, `tests/tool_output_result_http.rs` and
+/// `src/composition/mcp_client.rs`.
+///
+/// One helper rather than three call sites, because the three had already been
+/// written out identically and a fourth would have been written out again.
+fn json_transport_config(
+    url: Url,
+    extra_headers: Vec<(String, String)>,
+    http_middleware_chain: Option<
+        std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>,
+    >,
+) -> StreamableHttpTransportConfig {
+    let mut builder = StreamableHttpTransportConfigBuilder::new(url).enable_json_response();
+    for (name, value) in extra_headers {
+        builder = builder.with_header(name, value);
+    }
+    if let Some(chain) = http_middleware_chain {
+        builder = builder.with_http_middleware(chain);
+    }
+    builder.build()
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -126,15 +160,8 @@ impl ServerTester {
                     "HTTP middleware chain present: {}",
                     http_middleware_chain.is_some()
                 );
-                let config = StreamableHttpTransportConfig {
-                    url: parsed_url,
-                    extra_headers,
-                    auth_provider: None,
-                    session_id: None,
-                    enable_json_response: true,
-                    on_resumption_token: None,
-                    http_middleware_chain: http_middleware_chain.clone(),
-                };
+                let config =
+                    json_transport_config(parsed_url, extra_headers, http_middleware_chain.clone());
                 (TransportType::Http, Some(config), None)
             },
             Some("jsonrpc") => {
@@ -186,15 +213,11 @@ impl ServerTester {
                             "HTTP middleware chain (jsonrpc path) present: {}",
                             http_middleware_chain.is_some()
                         );
-                        let config = StreamableHttpTransportConfig {
-                            url: parsed_url,
+                        let config = json_transport_config(
+                            parsed_url,
                             extra_headers,
-                            auth_provider: None,
-                            session_id: None,
-                            enable_json_response: true,
-                            on_resumption_token: None,
-                            http_middleware_chain: http_middleware_chain.clone(),
-                        };
+                            http_middleware_chain.clone(),
+                        );
                         (TransportType::Http, Some(config), None)
                     }
                 }
@@ -3455,7 +3478,7 @@ impl ServerTester {
 /// cannot be built without the key: the server's era gate requires the
 /// `MCP-Protocol-Version` header AND the `_meta` value to AGREE, and rejects a
 /// header-only claim with `-32020 HEADER_MISMATCH`
-/// (`src/server/streamable_http_server.rs:825-836`).
+/// (`classify_v2_request` in `src/server/streamable_http_server.rs`).
 ///
 /// The drift risk this creates is closed by a TRIPWIRE, not by hope:
 /// `crates/mcp-tester/tests/dual_run.rs` captures the bytes a real, SDK-built
@@ -3597,7 +3620,8 @@ impl ServerTester {
     /// MEASURED: a STATEFUL v1 server rejects every non-initialization request
     /// that arrives without a session id — `400` with
     /// `"Session ID required for non-initialization requests"`
-    /// (`src/server/streamable_http_server.rs:1666-1673`). A v1 probe that
+    /// (`validate_non_init_session` in
+    /// `src/server/streamable_http_server/v1_session.rs`). A v1 probe that
     /// carried no session would therefore be refused for a SESSION reason while
     /// looking exactly like a refusal for the reason the probe is about, and
     /// would mis-observe `header.mcp_method_and_name`,
@@ -3852,8 +3876,8 @@ const REACHABILITY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// drifting apart.
 ///
 /// The reason the contract exists is measured in that block and is not repeated
-/// here: `src/shared/streamable_http.rs:1096` (connect failure) and `:1175` /
-/// `:1183` (non-2xx status) produce the SAME
+/// here: the connect-failure site and the non-2xx-status sites in
+/// `src/shared/streamable_http.rs` all produce the SAME
 /// `Error::Transport(TransportError::Request(String))`, so neither the error
 /// variant nor its prose can tell "the server answered" from "the server is
 /// unreachable". Its two known imprecisions (a TLS handshake failure passes the
@@ -3902,7 +3926,8 @@ async fn endpoint_is_reachable(url: &Url) -> bool {
 /// # Hazard (b) — the v1 attempt MINTS a session, so it is torn down
 ///
 /// Both attempts open REAL connections. Against a stateful v1 server the
-/// `initialize` attempt causes `src/server/streamable_http_server.rs:1636-1645`
+/// `initialize` attempt causes `process_init_session` (in
+/// `src/server/streamable_http_server/v1_session.rs`)
 /// to mint and store a session id, and a detector that simply dropped its
 /// client would leak one session PER INVOCATION — an unbounded resource leak on
 /// the server under repeated CI runs. The mitigation implemented here is
@@ -3917,7 +3942,7 @@ async fn endpoint_is_reachable(url: &Url) -> bool {
 /// The two attempts are era-PINNED HOST-level choices, mirroring
 /// `crates/pmcp-agent/src/invoker/factory.rs`. Nothing is added to
 /// `pmcp::Client`: A-D08 and the "do not restore the latter" lock on
-/// `Client::server_discover` (`src/client/mod.rs:871-878`) forbid an SDK-level
+/// `Client::server_discover` (see its rustdoc in `src/client/mod.rs`) forbid an SDK-level
 /// era probe, and this function is the host layer that is allowed to choose.
 ///
 /// # Classification
@@ -4047,15 +4072,7 @@ async fn probe_v1(url: &str, timeout: Duration, auth: &EraProbeAuth) -> bool {
     let extra_headers = auth.api_key.as_ref().map_or_else(Vec::new, |key| {
         vec![("Authorization".to_string(), format!("Bearer {key}"))]
     });
-    let config = StreamableHttpTransportConfig {
-        url: parsed,
-        extra_headers,
-        auth_provider: None,
-        session_id: None,
-        enable_json_response: true,
-        on_resumption_token: None,
-        http_middleware_chain: auth.oauth_middleware.clone(),
-    };
+    let config = json_transport_config(parsed, extra_headers, auth.oauth_middleware.clone());
     let mut probe_handle = StreamableHttpTransport::new(config);
     let mut client = pmcp::Client::new(probe_handle.clone());
     let ok = tokio::time::timeout(timeout, client.initialize(ClientCapabilities::full()))

@@ -354,6 +354,7 @@ pub struct StreamableHttpServerConfig {
     ///
     /// v1-ONLY: there is no session to close, and `DELETE /` answers `405`.
     #[cfg(feature = "v1-compat")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
     pub on_session_closed: Option<SessionCallback>,
     /// HTTP middleware chain for request/response processing
     pub http_middleware: Option<Arc<ServerHttpMiddlewareChain>>,
@@ -438,18 +439,26 @@ impl StreamableHttpServerConfig {
     /// For servers directly exposed to the internet, use `Default::default()`
     /// instead (which defaults to `AllowedOrigins::localhost()`).
     pub fn stateless() -> Self {
-        // Only the fields that DIFFER from `Default` are named. The two session
-        // callbacks, `http_middleware` and `max_request_bytes` are already
-        // `None`/default there, so spelling them again added two `#[cfg]`s to a
-        // count this phase is measured by, for no change in value.
+        // Every field is named EXHAUSTIVELY — deliberately, not by oversight.
+        // `..Default::default()` would be two `#[cfg]`s shorter, but functional
+        // update syntax evaluates the base struct in full before moving the
+        // non-overridden fields, so it would heap-allocate an
+        // `Arc<InMemoryEventStore>` and a boxed UUID closure on every call and
+        // immediately drop both. This is the serverless/Lambda constructor; a
+        // cosmetic attribute count is not worth pure allocation waste on it.
         Self {
             #[cfg(feature = "v1-compat")]
             session_id_generator: None,
             enable_json_response: true,
             #[cfg(feature = "v1-compat")]
             event_store: None,
+            #[cfg(feature = "v1-compat")]
+            on_session_initialized: None,
+            #[cfg(feature = "v1-compat")]
+            on_session_closed: None,
+            http_middleware: None,
             allowed_origins: Some(AllowedOrigins::any()),
-            ..Default::default()
+            max_request_bytes: crate::server::limits::DEFAULT_MAX_REQUEST_BYTES,
         }
     }
 }

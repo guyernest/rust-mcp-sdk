@@ -191,10 +191,14 @@ mod url_impl {
     /// MEASURED, and it is why neither the error VARIANT nor the message can do
     /// this job:
     ///
-    /// - `src/shared/streamable_http.rs:1096` turns a connect/send failure into
+    /// - `src/shared/streamable_http.rs` turns a connect/send failure into
     ///   `Error::Transport(TransportError::Request(String))`.
-    /// - `src/shared/streamable_http.rs:1175` and `:1183` turn a NON-2xx HTTP
-    ///   status into the SAME `Error::Transport(TransportError::Request(String))`.
+    /// - the same file turns a NON-2xx HTTP status into the SAME
+    ///   `Error::Transport(TransportError::Request(String))`.
+    ///
+    /// (Cited by SYMBOL, not by line: the two sites move whenever that file is
+    /// edited, and a stale line number is worse than none — it sends a reader to
+    /// unrelated code and quietly discredits the whole contract.)
     ///
     /// A third-party v1 server answering a plain `404` and a refused TCP
     /// connection are therefore one variant carrying different prose.

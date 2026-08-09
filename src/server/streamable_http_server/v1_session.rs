@@ -817,8 +817,20 @@ fn sse_event_for_message(
 /// The v1 half of `super::extract_session_and_protocol_headers`, which is MIXED:
 /// it also reads `MCP-Protocol-Version`, which 2026-07-28 REQUIRES (VERS-05), so
 /// the function itself cannot move here. Only this read can, and it does — the
-/// twin answers `None` without naming a header, so a `full-v2` build never parses
-/// an inbound session id on the POST path at all.
+/// twin answers `None` without naming a header, so a `full-v2` build resolves no
+/// inbound session id through the POST PIPELINE at all.
+///
+/// # One remaining ungated reader, named rather than hidden
+///
+/// `super::build_middleware_context` also reads `Mcp-Session-Id` — off the
+/// middleware-adapted request, into `ServerHttpContext::session_id` — and it is
+/// NOT gated, so on a `full-v2` build a POST that goes through the middleware
+/// path still surfaces an inbound session id to user middleware. That is the same
+/// measured exception `crate::shared::http_constants::MCP_SESSION_ID`'s own doc
+/// records for why the CONSTANT stays ungated: `http_middleware` is a SHARED,
+/// era-neutral config field, so the context it builds cannot move into this pair.
+/// Nothing in the transport's own session pipeline consumes that value on a
+/// severed build; it is observability handed to middleware, not state.
 ///
 /// Returns the raw header value with no validation beyond UTF-8; every session
 /// DECISION is made by `process_init_session` / `validate_non_init_session`
@@ -869,10 +881,7 @@ pub(crate) async fn handle_get_sse_body(state: &ServerState, headers: &HeaderMap
         return error_response;
     }
 
-    let incoming_session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
+    let incoming_session_id = incoming_session_header(headers);
 
     let session_id = match resolve_sse_session(state, incoming_session_id) {
         Ok(sid) => sid,
@@ -931,10 +940,7 @@ pub(crate) async fn handle_get_sse_body(state: &ServerState, headers: &HeaderMap
 /// 117-13's gating of that field needed no `#[cfg]` at a call site.
 pub(crate) fn handle_delete_body(state: &ServerState, headers: &HeaderMap) -> Response {
     // Extract session ID
-    let session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+    let session_id = incoming_session_header(headers);
 
     if let Some(sid) = session_id {
         // Check if session exists

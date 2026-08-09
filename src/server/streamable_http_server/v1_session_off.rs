@@ -202,6 +202,13 @@ pub(crate) const fn resumability_active(_state: &ServerState, era: Option<Era>) 
 /// (VERS-05). That is why the function stays in the transport and only this read
 /// is paired.
 ///
+/// This makes the POST PIPELINE session-id-free on this build. It does NOT make
+/// the whole build header-blind: `super::build_middleware_context` is ungated and
+/// still reads `Mcp-Session-Id` into `ServerHttpContext::session_id` on the
+/// middleware POST path, because `http_middleware` is a shared, era-neutral
+/// config field. See the real half's counterpart doc — the exception is named
+/// there rather than papered over here.
+///
 /// `headers` is taken so the signature matches its real counterpart and is never
 /// touched. Do not "improve" this by reading the header to log or reject an
 /// unexpected session id: `tests/v1_severability_tripwire.rs` fails on the
