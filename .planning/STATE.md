@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
+status: completed
 stopped_at: Completed 117-13-PLAN.md (final plan of phase 117)
-last_updated: "2026-08-08T21:25:41.645Z"
-last_activity: 2026-08-08
+last_updated: "2026-08-09T00:48:35.269Z"
+last_activity: 2026-08-09
 progress:
   total_phases: 72
   completed_phases: 63
@@ -25,35 +25,42 @@ See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 mil
 
 ## Current Position
 
-Phase: 117 (agents-tester-v1-severability) — ALL PLANS COMPLETE
-Plan: 14 of 14
+Phase: 999.1
+Plan: Not started
 Plans complete: **14 of 14** (117-01..117-14)
 Remaining: none — ready for phase verification
 Status: Complete
 
 **117-13 HAS LANDED — THE D-03 CUT IS CLOSED, AND SMPL-01/SMPL-02 ARE DONE.** Commits `1a473e6d`
 (the verb split) + `50f039ab` (the severed-build 405 proof) + `ea301460` (config gating + the policy)
+
 + `5e7ea91a`/`b2eecfe2` (summary), +1041/−269 across 5 files.
 
 - `handle_get_sse` and `handle_delete_session` are **SPLIT, not moved**: the `v2_verb_rejection` head
   stays always-compiled, only the v1 body went into the pair, and `build_mcp_router` is byte-for-byte
   unchanged. So `full-v2` answers **405 (routed and refused)**, never 404 (unrouted) — a distinction
   `tests/v2_verbs_405_on_severed_build.rs` asserts explicitly.
+
 - That test **RAN on the severed build: 5 passed, non-zero count**, with a v2 POST control against a
   dead server and an executed-then-reverted negative control (both GET tests failed naming 404 vs
   405). `tests/common/v2.rs` was MEASURED to compile under `full-v2` and reused UNCHANGED.
+
 - **The config-field gating was taken IN FULL — the documented fallback was NOT needed.** All four
   v1-only `StreamableHttpServerConfig` fields are gated, plus the `SessionCallback` alias 117-12
   deferred here. Zero test/example files edited (`[[bin]]` count is 0, so the severance build is
   lib-only).
+
 - Plan 117-12's two deferred functions are both answered by name: `extract_session_and_protocol_headers`
   split internally through the new `v1::incoming_session_header` pair;
   `compute_outbound_protocol_version` needed nothing (117-12 had already routed it).
+
 - The compiler named **ten** newly-dead twins, not the four the plan predicted — all deleted, plus six
   imports, with zero `allow(dead_code)`. `EventStoreHandle` moved into the real half.
+
 - `docs/v1-sunset-policy.md` now enumerates the post-cut reality on BOTH sides of the wire and carries
   a table of the **seven items deliberately NOT severed**, `Client::initialize` first. Cross-read
   against the code in both directions: 26/26 claims verified, every gated file named.
+
 - Evidence: severed build exit 0 with **0 warnings**; 1880/1880 lib tests EXACT; 2963 integration
   tests pass; goldens 9/9; tripwire 15/15; doctests 449; `make doc-check` and `make quality-gate`
   exit 0. PMAT: `handle_get_sse` cog 12 → 3, `handle_delete_session` cog 13 → 3, 0 `./src/`
@@ -807,7 +814,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-08
+Last activity: 2026-08-09
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 

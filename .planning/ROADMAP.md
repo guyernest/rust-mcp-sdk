@@ -2758,7 +2758,7 @@ Plans:
 | 114. Tasks Extension Migration | 20/20 | Plans shipped — awaiting sign-off | 2026-08-01 |
 | 115. JSON Schema 2020-12 + Caching Hints | 19/19 | Complete    | 2026-08-02 |
 | 116. Auth Hardening SEPs | 16/16 | Complete   | 2026-08-07 |
-| 117. Agents, Tester & v1 Severability | 14/14 | Complete   | 2026-08-08 |
+| 117. Agents, Tester & v1 Severability | 14/14 | Complete    | 2026-08-09 |
 | 118. Conformance Against the Official Suite | 0/TBD | Not started | - |
 | 119. Documentation — Three Shapes + v2 Migration | 0/TBD | Not started | - |
 
