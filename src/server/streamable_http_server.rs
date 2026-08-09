@@ -153,7 +153,7 @@ type EventsMap = HashMap<String, EventList>;
 /// ```
 #[cfg_attr(
     feature = "v1-compat",
-    doc = r#"
+    doc = r"
 The `v1-compat` half pins the CONFIG WIRING, which is gated — this example does
 not compile on `--no-default-features --features full-v2`, and that is the
 severance being asserted rather than a bug:
@@ -169,7 +169,7 @@ let config = StreamableHttpServerConfig {
 };
 assert!(config.event_store.is_some());
 ```
-"#
+"
 )]
 #[derive(Debug, Default)]
 pub struct InMemoryEventStore {
