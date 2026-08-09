@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Deploy-anywhere agent decision loop for the PMCP SDK (experimental)"
 license = "MIT"
@@ -38,6 +38,13 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # field is a `url::Url`) in the `url-connector` factory (108-05). Already in the
 # workspace tree via pmcp; gated so the default/wasm build never pulls it.
 url = { version = "2.5", optional = true }
+# The `url-connector` era probe needs an ASYNC, bounded TCP connect
+# (`endpoint_is_reachable` in `invoker/factory.rs`). tokio is ALREADY in this
+# feature's dependency graph via `pmcp/streamable-http`, so this adds no new
+# package to the supply chain (117 T-117-SC) — it only makes the package that
+# is already there nameable from this crate. Gated so the default/wasm32 build
+# never pulls it.
+tokio = { version = "1", features = ["net", "time"], optional = true }
 
 [features]
 # All optional features stay OUT of `default` so the default + wasm32 builds
@@ -47,7 +54,7 @@ anthropic = ["dep:reqwest"]
 # The concrete URL connector-client impl (108-05) needs pmcp's native-only
 # `StreamableHttpTransport` (`#[cfg(not(target_arch = "wasm32"))]`). Gating it
 # behind a non-default feature keeps the default/wasm32 build clean (BLOCKER-2).
-url-connector = ["pmcp/streamable-http", "dep:url"]
+url-connector = ["pmcp/streamable-http", "dep:url", "dep:tokio"]
 
 [dev-dependencies]
 pmcp = { version = "2.17.0", path = "../..", features = ["full"] }

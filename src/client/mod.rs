@@ -542,6 +542,36 @@ impl<T: Transport> Client<T> {
     /// # }
     /// ```
     ///
+    /// # Severability: this method is NOT gated, and that is measured
+    ///
+    /// SMPL-01 names "initialize/session lifecycle" as v1-only machinery that a
+    /// `full-v2` build must not carry. Plan 117-14 MEASURED whether
+    /// `#[cfg(feature = "v1-compat")]` could be applied here and took a
+    /// documented fallback for two reasons, both recorded in
+    /// `.planning/phases/117-agents-tester-v1-severability/117-14-SUMMARY.md`:
+    ///
+    /// 1. It is DUAL-era, not v1-only. The `is_v2()` branch below is a
+    ///    deliberate Phase-113 compatibility affordance — it sends nothing and
+    ///    exists so v1-shaped application code keeps compiling after opting
+    ///    into v2. Gating this method would delete v2 behaviour, not just v1
+    ///    behaviour.
+    /// 2. `src/composition/mcp_client.rs` calls it, and `composition` is in the
+    ///    `full-v2` feature list. Propagating the gate there would mean a
+    ///    composition connection that reports itself initialized without ever
+    ///    having handshaken — a semantic change to a subsystem this plan has no
+    ///    mandate over.
+    ///
+    /// SMPL-01's "initialize" clause is therefore met on the SERVER side only,
+    /// and even there it is the session BOOKKEEPING that is severed, not the
+    /// handshake: plan 117-12 moved `process_init_session`,
+    /// `update_session_after_init` and the rest of the session-lifecycle
+    /// functions into `v1_session.rs`, while a `full-v2` server still answers an
+    /// `initialize` POST statelessly (only GET and DELETE are refused `405`).
+    /// The pure classifiers `is_initialize_request` /
+    /// `extract_negotiated_version` therefore stay ungated in
+    /// `streamable_http_server.rs`. `docs/v1-sunset-policy.md` MUST name this as
+    /// a known limitation.
+    ///
     /// # Errors
     ///
     /// Returns an error if:

@@ -25,7 +25,9 @@
 
 #![cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 
-use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use pmcp::shared::streamable_http::{
+    StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+};
 use pmcp::types::capabilities::TASKS_EXTENSION_KEY;
 use pmcp::types::protocol::{ProtocolVersion, PROTOCOL_VERSION_2026_07_28};
 use pmcp::types::ServerCapabilities;
@@ -194,15 +196,15 @@ fn content_length_of(head: &[u8]) -> usize {
 
 /// A real v2 `StreamableHttpTransport` pointed at `addr`.
 fn v2_transport(addr: SocketAddr) -> StreamableHttpTransport {
-    StreamableHttpTransport::new(StreamableHttpTransportConfig {
-        url: Url::parse(&format!("http://{addr}")).expect("a loopback URL"),
-        extra_headers: vec![],
-        auth_provider: None,
-        session_id: None,
-        enable_json_response: true,
-        on_resumption_token: None,
-        http_middleware_chain: None,
-    })
+    // Builder, not a struct literal: `session_id` / `on_resumption_token` are
+    // `v1-compat`-only, so a literal naming them breaks the `full-v2` build.
+    StreamableHttpTransport::new(
+        StreamableHttpTransportConfigBuilder::new(
+            Url::parse(&format!("http://{addr}")).expect("a loopback URL"),
+        )
+        .enable_json_response()
+        .build(),
+    )
 }
 
 fn v2_client(addr: SocketAddr, declare_tasks: bool) -> Client<StreamableHttpTransport> {

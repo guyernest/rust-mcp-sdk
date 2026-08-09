@@ -3,6 +3,24 @@
 // `rust,no_run` code block inside CRATE-README.md is compiled as a doctest
 // under `cargo test --doc`, which catches API drift automatically.
 #![doc = include_str!("../CRATE-README.md")]
+//!
+//! ## The `v1-compat` feature
+//!
+//! `v1-compat` is **default-on** and gates the MCP 2025-11-25 compatibility
+//! layer: the `initialize`/session lifecycle and SSE resumability
+//! (`Last-Event-ID` plus its event store). SSE framing and parsing themselves
+//! are shared with the 2026-07-28 (v2) path and are deliberately *not* gated.
+//!
+//! Because it is in `default`, consumers need to do nothing. Building
+//! **without** it —
+//! `cargo build -p pmcp --no-default-features --features full-v2` — is the
+//! severability proof: `full-v2` is the `full` feature list minus exactly
+//! `v1-compat`, so the crate still compiles the real transport while the v1
+//! layer is absent.
+//!
+//! Removal is condition-gated on public client adoption of v2 and carries no
+//! date; the normative policy lives at `docs/v1-sunset-policy.md`
+//! ([online copy](https://github.com/paiml/rust-mcp-sdk/blob/main/docs/v1-sunset-policy.md)).
 #![warn(
     missing_docs,
     missing_debug_implementations,

@@ -369,13 +369,23 @@ fn task_store_v2_core() -> pmcp::server::core::ServerCore {
         .expect("core builds")
 }
 
-/// Mint a v1 session on a STATEFUL-config server and return its id.
+/// Mint a v1 session on a STATEFUL-config server, where sessions exist.
 ///
 /// The default `StreamableHttpServerConfig` refuses a non-initialize v1 request
 /// with `-32600 "Session ID required for non-initialization requests"` before
 /// dispatch, so without this the v1 control below would never reach the tasks
 /// route — it would measure the session gate instead of the pending branch.
-async fn v1_session(addr: std::net::SocketAddr) -> String {
+///
+/// Returns `None` on a `--no-default-features --features full-v2` build, where
+/// the session-required gate does not exist either: `validate_non_init_session`
+/// is the null twin, so the control leg reaches the same pending branch WITHOUT
+/// a session id. Returning an `Option` rather than `#[cfg]`-ing the whole probe
+/// away is what keeps the v2 half of this test — the part Finding 11 is actually
+/// about — RUNNING on the severed build, with its non-vacuity control intact.
+async fn v1_session(addr: std::net::SocketAddr) -> Option<String> {
+    if !cfg!(feature = "v1-compat") {
+        return None;
+    }
     let init = post(
         addr,
         &[],
@@ -390,8 +400,10 @@ async fn v1_session(addr: std::net::SocketAddr) -> String {
         ),
     )
     .await;
-    init.mcp_session_id
-        .unwrap_or_else(|| panic!("a v1 initialize mints a session; body was {}", init.raw))
+    Some(
+        init.mcp_session_id
+            .unwrap_or_else(|| panic!("a v1 initialize mints a session; body was {}", init.raw)),
+    )
 }
 
 /// A `tasks/result` request through the TYPED `ClientRequest` enum.
@@ -492,9 +504,13 @@ async fn site_b_v2_http_request_must_not_elicit_a_prohibited_code() {
     // config is STATEFUL, so the v1 leg has to mint a session first — v2 does
     // not, which is HTTP-01 and is why only this leg needs the handshake.
     let session = v1_session(addr).await;
+    let control_headers: Vec<_> = session
+        .as_deref()
+        .map(|sid| vec![header(MCP_SESSION_ID, sid)])
+        .unwrap_or_default();
     let control = post(
         addr,
-        &[header(MCP_SESSION_ID, &session)],
+        &control_headers,
         &v1_body("tasks/result", json!(2), json!({ "taskId": "absent" })),
     )
     .await;

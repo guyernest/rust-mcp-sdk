@@ -134,6 +134,13 @@ async fn declaring_anonymous(
 
 /// Mint a v1 session against the STATEFUL shared harness (D-114-J).
 async fn v1_session(addr: SocketAddr) -> String {
+    // A `--no-default-features --features full-v2` build mints nothing and
+    // validates nothing: the transport spec's "an inbound Mcp-Session-Id is
+    // IGNORED" is structural there. Carrying a placeholder id exercises exactly
+    // that and keeps every v1 leg below RUNNING on the severed build.
+    if !cfg!(feature = "v1-compat") {
+        return "no-session-on-a-severed-build".to_string();
+    }
     let init = post(
         addr,
         &[],

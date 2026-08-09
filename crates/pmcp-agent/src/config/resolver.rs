@@ -328,8 +328,8 @@ pub async fn resolve_agent(
         clamp_u32(pkg.max_iterations),
     );
     config.tools = extract_tool_names(pkg.tool_selection.as_ref());
-    config.input_schema = pkg.input_schema.clone();
-    config.output_schema = pkg.output_schema.clone();
+    config.input_schema.clone_from(&pkg.input_schema);
+    config.output_schema.clone_from(&pkg.output_schema);
     config.endpoints = endpoints;
     Ok(config)
 }

@@ -508,6 +508,16 @@ pub async fn spawn_tasks_server_with_store(
     (addr, handle, store)
 }
 
+/// The `Allow` value RFC 9110 §15.5.6 requires on every `405` this suite provokes.
+///
+/// Single-sourced here because the production side is likewise single-sourced:
+/// `method_not_allowed_for_verb` is THE only 405 constructor, so the expectation
+/// should have exactly one spelling too. `GET` and `DELETE` are deliberately
+/// absent — both stay ROUTED on every feature set (an unrouted verb answers
+/// `404`, a different claim), but `Allow` enumerates SUPPORT, and neither is
+/// supported on `2026-07-28`.
+pub const ALLOW: &str = "POST, OPTIONS";
+
 /// Upper bound on any single stream read or poll in the subscription suites.
 ///
 /// A hung stream must FAIL the test, not hang it.
@@ -727,6 +737,9 @@ pub struct Resp {
     pub mcp_session_id: Option<String>,
     /// The response `Content-Type` — `text/event-stream` for an SSE reply.
     pub content_type: Option<String>,
+    /// The `Allow` header. RFC 9110 §15.5.6 makes it a MUST on every `405`, so a
+    /// `None` here on a refused verb is a spec violation, not a detail.
+    pub allow: Option<String>,
     /// The parsed JSON body. An SSE reply is unwrapped from its first `data:`
     /// frame, so callers assert the same way in both framings.
     pub body: Value,
@@ -780,6 +793,7 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
     let mcp_version = hget(MCP_PROTOCOL_VERSION);
     let mcp_session_id = hget(MCP_SESSION_ID);
     let content_type = hget("content-type");
+    let allow = hget("allow");
     let raw = response.text().await.unwrap_or_default();
     let body = parse_body(&raw, content_type.as_deref());
     Resp {
@@ -789,6 +803,7 @@ async fn send(request: reqwest::RequestBuilder, extra: &[(String, String)]) -> R
         mcp_version,
         mcp_session_id,
         content_type,
+        allow,
         body,
         raw,
     }

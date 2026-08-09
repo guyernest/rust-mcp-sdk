@@ -281,8 +281,10 @@ async fn run_agent_tool(
         .get("run_id")
         .or_else(|| args.get("conversation_id"))
         .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("run-{}", uuid::Uuid::new_v4()));
+        .map_or_else(
+            || format!("run-{}", uuid::Uuid::new_v4()),
+            ToString::to_string,
+        );
 
     // Seed the run: load prior history (resume) or start fresh, append the new
     // user turn, and reset the phase so the engine begins a fresh completion.
@@ -372,8 +374,8 @@ fn error_result(run_id: &str, message: &str) -> CallToolResult {
     result
 }
 
-/// Concatenate the text blocks of a turn into a single string (tool_use/other
-/// blocks are non-textual and skipped).
+/// Concatenate the text blocks of a turn into a single string (`tool_use` and
+/// other non-textual blocks are skipped).
 fn render_turn_text(turn: &crate::iteration::TurnMessage) -> String {
     let mut parts = Vec::new();
     for block in &turn.content {

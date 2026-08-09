@@ -1729,6 +1729,13 @@ async fn v2_resources_subscribe_gone() {
 }
 
 /// The v1 `resources/subscribe` flow still works on the SAME server.
+///
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117). It mints a session id to
+/// prove the v2 retirement above is additive rather than a blanket removal; on a
+/// `--no-default-features --features full-v2` build there are no sessions to
+/// mint, which is the severance itself. Gated per-TEST so the 18 v2
+/// subscription tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_subscribe_unchanged() {
     use common::v2::v1_body;

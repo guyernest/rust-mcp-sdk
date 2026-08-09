@@ -997,11 +997,32 @@ async fn an_issuer_change_with_dcr_credentials_warns_naming_both_issuers_and_pro
     assert_eq!(result.client_id, "dcr-issued-id");
 
     // The warning names both issuers and the server.
+    //
+    // The failure message below carries the whole decision context on purpose.
+    // This assertion has failed in CI while passing everywhere locally, and its
+    // old message — `exactly one substitution warning, got []` — could not
+    // distinguish the two candidate causes: the warn never FIRED (some early
+    // return inside `announce_authorization_server_change`), or it fired and the
+    // CAPTURE missed it. Those need opposite fixes. Reading `last_issuer` here is
+    // a side-effect-free read, and the unfiltered message list separates "no
+    // warnings at all" from "warnings, but none matched the filter".
     let warnings = substitution_warnings(&messages);
+    let all_messages = messages.lock().expect("captured warnings").clone();
+    let recorded_issuer = store.last_issuer(&server_key).await;
     assert_eq!(
         warnings.len(),
         1,
-        "exactly one substitution warning, got {warnings:?}"
+        "exactly one substitution warning, got {warnings:?}\n\
+         \x20 all captured WARN messages : {all_messages:?}\n\
+         \x20 server_key (test-computed) : {server_key:?}\n\
+         \x20 base (mock AS issuer)      : {base:?}\n\
+         \x20 seeded previous issuer     : \"https://previous-as.example\"\n\
+         \x20 last_issuer AFTER the flow : {recorded_issuer:?}\n\
+         Reading this: an EMPTY capture with last_issuer == Some(base) means the \
+         warn never fired and the store was re-recorded, i.e. an early return in \
+         announce_authorization_server_change (most likely last_issuer having \
+         returned None when it was consulted). A NON-empty capture means the warn \
+         fired and only the `authorization server` filter missed it."
     );
     let warning = &warnings[0];
     assert!(

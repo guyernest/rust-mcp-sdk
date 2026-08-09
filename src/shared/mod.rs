@@ -30,6 +30,34 @@ pub mod credential_file;
 /// `#[cfg(not(target_arch = "wasm32"))]` peer/stdio entries elsewhere in this
 /// file; `oauth_validation` and `pkce` below carry the same rationale.)
 pub mod credential_store;
+// SMPL-02: the single largest severance win in `src/shared/`.
+//
+// `event_store.rs` is 421 lines of MCP 2025-11-25 SSE-resumability machinery —
+// the `Last-Event-ID` replay store, its resumption tokens and its retention
+// window. The 2026-07-28 transport states that resumable SSE streams via
+// `Last-Event-ID` are not supported, so on a `full-v2` build not one line of it
+// has a caller. Re-measured before this gate landed: ZERO consumers anywhere in
+// `src/`, `crates/`, `tests/`, `examples/`, `cargo-pmcp/` or `fuzz/` outside the
+// file itself and the re-export below. (The `EventStore`/`InMemoryEventStore`
+// that the integration tests DO use is a different, 3-method trait that lives in
+// `src/server/streamable_http_server.rs`.)
+//
+// GATED, NOT DELETED. Both items are PUBLIC API; removing them is a semver-major
+// change and belongs to SMPL-F1 / pmcp 3.0 — see `docs/v1-sunset-policy.md`. The
+// `#[cfg]` must stay on BOTH this declaration and the `pub use event_store::{…}`
+// re-export further down; gating only one of the two is a compile break.
+//
+// DO NOT "FINISH THE JOB" BY GATING THE SSE FILES (correction A-D03). Neither
+// `src/shared/sse_parser.rs` nor `src/shared/sse_optimized.rs` is v1-only: v2's
+// `subscriptions/listen` returns a live `text/event-stream`
+// (`src/server/streamable_http_server.rs`, whose subscribe handler REJECTS any
+// non-V2 era), so SSE framing and parsing are SHARED by both eras. Only
+// RESUMABILITY is v1-only. `src/shared/http_constants.rs` is likewise
+// deliberately ungated — per-constant gating is plan 117-13's job — and
+// `src/shared/session.rs` is unmeasured and deliberately left alone.
+#[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
+/// v1-only SSE resumability: the `Last-Event-ID` replay store and its tokens.
 pub mod event_store;
 /// Hardened HTTP plumbing for this crate's OAuth/OIDC surfaces: the streaming
 /// bounded whole-body read every auth response is read through, and the
@@ -125,6 +153,11 @@ pub mod streamable_http;
 // Re-export commonly used types
 pub use batch::{BatchRequest, BatchResponse};
 pub use context::{ClientInfo, ContextPropagator, RequestContext};
+// The other half of the SMPL-02 `event_store` gate. Must carry the SAME `#[cfg]`
+// as the `pub mod event_store;` declaration above — gating one without the other
+// is a compile break, not a warning.
+#[cfg(feature = "v1-compat")]
+#[cfg_attr(docsrs, doc(cfg(feature = "v1-compat")))]
 pub use event_store::{
     EventStore, EventStoreConfig, InMemoryEventStore, MessageDirection, ResumptionManager,
     ResumptionState, ResumptionToken, StoredEvent,

@@ -37,16 +37,23 @@ mod common;
 use async_trait::async_trait;
 use common::v2::{
     build_v2_server, default_client_capabilities, delete, get, header, post, post_raw,
-    spawn_default_config, v1_body, v2_body, v2_headers, META_CLIENT_CAPABILITIES, META_CLIENT_INFO,
+    spawn_default_config, v2_body, v2_headers, ALLOW, META_CLIENT_CAPABILITIES, META_CLIENT_INFO,
     META_PROTOCOL_VERSION, REQUEST_META_KEY, V1, V2,
 };
+// Both are reached only from the `v1-compat`-gated v1 controls below.
+#[cfg(feature = "v1-compat")]
+use common::v2::v1_body;
 use pmcp::types::protocol::error_codes::{
-    HEADER_MISMATCH, METHOD_NOT_FOUND, PARSE_ERROR, UNSUPPORTED_PROTOCOL_VERSION,
+    HEADER_MISMATCH, METHOD_NOT_FOUND, UNSUPPORTED_PROTOCOL_VERSION,
 };
+#[cfg(feature = "v1-compat")]
+use std::net::SocketAddr;
+// `PARSE_ERROR` is asserted only by the `v1-compat`-gated v1 control below.
+#[cfg(feature = "v1-compat")]
+use pmcp::types::protocol::error_codes::PARSE_ERROR;
 use pmcp::types::protocol::ProtocolVersion;
 use pmcp::{RequestHandlerExtra, Server, ToolHandler};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// A v2-SHAPED request body whose reserved `_meta` claims `version` rather than
@@ -83,6 +90,11 @@ fn v2_call_body(id: Value) -> String {
 }
 
 /// A v1 `initialize` body — the only way to mint a session on the v1 path.
+// Reached only from the `v1-compat`-gated v1 control tests below, so it is an
+// unused item on a `--no-default-features --features full-v2` build. Gated with
+// its callers rather than `allow(dead_code)`-ed, so the severed build stays
+// warning-clean under `RUSTFLAGS="-D warnings"`.
+#[cfg(feature = "v1-compat")]
 fn v1_initialize_body() -> String {
     v1_body(
         "initialize",
@@ -169,6 +181,15 @@ async fn v2_ignores_inbound_session_id() {
 
 /// The v1 half of the same server: sessions are minted, echoed and validated
 /// exactly as before (T-113-19 — the era gate must not disable v1 sessions).
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117).
+///
+/// This test's job is to prove the v2 assertions above are not vacuous by
+/// showing the SAME server still behaves as v1 for a v1 request. On a
+/// `--no-default-features --features full-v2` build there is no v1 half to
+/// contrast against — the contrast is the severance itself, proven by
+/// `tests/v2_verbs_405_on_severed_build.rs` instead. Gated per-TEST so the ~18
+/// era-neutral v2 tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_session_unchanged() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;
@@ -239,6 +260,12 @@ async fn v2_get_405() {
         "a v2 GET must be 405 Method Not Allowed; body: {}",
         response.raw
     );
+    assert_eq!(
+        response.allow.as_deref(),
+        Some(ALLOW),
+        "a v2 GET refusal must carry `Allow: {ALLOW}` (RFC 9110 §15.5.6 MUST); got {:?}",
+        response.allow
+    );
 }
 
 #[tokio::test]
@@ -259,12 +286,27 @@ async fn v2_delete_405() {
         "a v2 DELETE must be 405 Method Not Allowed; body: {}",
         response.raw
     );
+    assert_eq!(
+        response.allow.as_deref(),
+        Some(ALLOW),
+        "a v2 DELETE refusal must carry `Allow: {ALLOW}` (RFC 9110 §15.5.6 MUST); got {:?}",
+        response.allow
+    );
 }
 
 /// The SAME requests without the v2 version header keep today's behavior: an
 /// unknown session id on a stateful server is `404 Unknown session ID` for both
 /// verbs. Asserting the concrete observable (404, and NOT 405) is what proves the
 /// era gate is additive rather than a blanket route removal.
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117).
+///
+/// This test's job is to prove the v2 assertions above are not vacuous by
+/// showing the SAME server still behaves as v1 for a v1 request. On a
+/// `--no-default-features --features full-v2` build there is no v1 half to
+/// contrast against — the contrast is the severance itself, proven by
+/// `tests/v2_verbs_405_on_severed_build.rs` instead. Gated per-TEST so the ~18
+/// era-neutral v2 tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_get_delete_unchanged() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;
@@ -345,6 +387,15 @@ async fn v2_unknown_method_404() {
 ///   with `id: null`, exactly as before this plan.
 ///
 /// Neither is 404.
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117).
+///
+/// This test's job is to prove the v2 assertions above are not vacuous by
+/// showing the SAME server still behaves as v1 for a v1 request. On a
+/// `--no-default-features --features full-v2` build there is no v1 half to
+/// contrast against — the contrast is the severance itself, proven by
+/// `tests/v2_verbs_405_on_severed_build.rs` instead. Gated per-TEST so the ~18
+/// era-neutral v2 tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_unknown_method_still_200() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;
@@ -644,6 +695,11 @@ fn build_cached_payload_server() -> Server {
 /// forever. Kept local to this file on purpose: plan 13 owns the general
 /// streaming-client surface, and duplicating a bounded reader here is cheaper
 /// than pre-empting that design.
+// Reached only from the `v1-compat`-gated v1 control tests below, so it is an
+// unused item on a `--no-default-features --features full-v2` build. Gated with
+// its callers rather than `allow(dead_code)`-ed, so the severed build stays
+// warning-clean under `RUSTFLAGS="-D warnings"`.
+#[cfg(feature = "v1-compat")]
 async fn sse_first_data_frame(
     addr: SocketAddr,
     extra: &[(String, String)],
@@ -895,6 +951,15 @@ async fn last_event_id_ignored() {
 
 /// v1 resumability still works: a GET carrying `Last-Event-ID` on a live session
 /// opens an SSE stream and REPLAYS the events already stored for it (T-113-19).
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117).
+///
+/// This test's job is to prove the v2 assertions above are not vacuous by
+/// showing the SAME server still behaves as v1 for a v1 request. On a
+/// `--no-default-features --features full-v2` build there is no v1 half to
+/// contrast against — the contrast is the severance itself, proven by
+/// `tests/v2_verbs_405_on_severed_build.rs` instead. Gated per-TEST so the ~18
+/// era-neutral v2 tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_resumability_unchanged() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;
@@ -931,6 +996,15 @@ async fn v1_resumability_unchanged() {
 /// The companion assertion that keeps [`response_id_always_from_live_request`]
 /// honest instead of vacuous: a REPLAYED historical event retains its ORIGINAL
 /// id. It is not a direct response, and re-stamping it would be the bug.
+/// v1 CONTROL — gated behind `v1-compat` (Phase 117).
+///
+/// This test's job is to prove the v2 assertions above are not vacuous by
+/// showing the SAME server still behaves as v1 for a v1 request. On a
+/// `--no-default-features --features full-v2` build there is no v1 half to
+/// contrast against — the contrast is the severance itself, proven by
+/// `tests/v2_verbs_405_on_severed_build.rs` instead. Gated per-TEST so the ~18
+/// era-neutral v2 tests in this file keep RUNNING on the severed build.
+#[cfg(feature = "v1-compat")]
 #[tokio::test]
 async fn v1_replayed_event_retains_original_id() {
     let (addr, handle) = spawn_default_config(build_v2_server()).await;

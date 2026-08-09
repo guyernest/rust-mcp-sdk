@@ -512,7 +512,9 @@ bindings:
     equation's `walk:` clause defines: the root, plus every node reached by descending into
     every member value EXCEPT a `const` / `enum` / `default` / `examples` payload, plus every
     VALUE of a `properties` / `patternProperties` / `$defs` / `definitions` /
-    `dependentSchemas` / `dependencies` map whatever author-chosen name it is filed under.
+    `dependentSchemas` / `dependencies` map whatever author-chosen name it is filed under,
+    plus every ELEMENT of an array-valued member (`allOf` / `anyOf` / `oneOf` / `prefixItems`)
+    whatever its index — 115-20, `115-REVIEW.md` WR-03.
     Touches no other key, and never a `$schema` that is instance DATA (a `properties` entry
     named `$schema`, or a `const` / `enum` / `default` / `examples` payload). SCHM-01 / D-02.
     115-12 SCOPE CORRECTION: this note previously read "`Cow::Borrowed` when the ROOT `$schema`
@@ -561,7 +563,9 @@ bindings:
     clause defines, searched root-first — that is not already `DRAFT_2020_12`, or `None`. A
     `$schema` inside a `const` / `enum` / `default` / `examples` payload is instance DATA and
     is deliberately NOT reported; the VALUES of the six subschema-map keywords ARE reported,
-    whatever author-chosen name they are filed under. It is what makes
+    whatever author-chosen name they are filed under, and so is every ELEMENT of an
+    array-valued member, whatever its index (115-20 — an array element has no key, so the
+    data-only exclusion has nothing to test against there). It is what makes
     `normalize_schema_dialect`'s `Cow::Borrowed`
     zero-allocation path decidable over the whole document rather than just the root, and it is
     also the source of the `declared` value `compile_2020_12` names in its warning — reading the
@@ -601,7 +605,8 @@ bindings:
     `normalize_schema_dialect` already had to make — SCHEMA POSITION being the scope the
     equation's `walk:` clause defines, so a `$schema` inside a `const` / `enum` / `default` /
     `examples` payload is left alone as instance DATA while the VALUES of the six
-    subschema-map keywords are rewritten whatever name they are filed under. It implements the
+    subschema-map keywords are rewritten whatever name they are filed under, as is every
+    ELEMENT of an array-valued member whatever its index (115-20). It implements the
     SAME traversal rule as
     `first_legacy_dialect` — a string-valued `$schema` is a declaration, `const` / `enum` /
     `default` / `examples` payloads are instance data and are never descended into — and a

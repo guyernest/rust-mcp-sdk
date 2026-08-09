@@ -1488,6 +1488,29 @@ Re-verified both directions: absent from `cargo package --list`, and still 2/2 l
 
 ### (2) WR-03 — array descent: unfenced and outside the contract's stated scope. THE LIVE RESIDUAL.
 
+> **STATUS CHANGE 2026-08-08 — CLOSED by `115-20`. The owner re-dispositioned WR-03 from
+> defer-and-book to FIX.** The original booking below is preserved verbatim, per this phase's
+> rule that retracted dispositions are kept as labelled quotation rather than deleted. What
+> follows the quotation was TRUE when written on 2026-08-02 and is now false in exactly one
+> respect: the residual is owned and discharged. See `115-20-PLAN.md` / `115-20-SUMMARY.md`.
+>
+> The measurement that made this a residual — *"deleting both `Value::Array` arms passes the
+> entire suite"* — has been INVERTED and re-measured. With both arms deleted the tree now fails
+> at three layers: the unit grid fence (`8 of 8` array positions, naming each), the
+> `normalization_cases()` structural fence (borrow/own wrong on the `allOf` row), and corpus
+> seed `16_all_of_embedded_legacy` in true isolation (invariant 5, **exit 77**, the seed
+> reproduced verbatim in the panic's `Input was:` line). The contract's `walk:` clause,
+> POSTCONDITION and embedded-resource invariant now state the array position, as do all three
+> `contracts/binding.yaml` note heads.
+>
+> One correction to the text below, from executing it: *"exercised by no test, no property draw
+> and no corpus seed"* was true of the COMMITTED 15-seed set, which is all a fresh clone or CI
+> has — but the ACCUMULATED corpus (11,773 files at execution time) already contained
+> array-position documents that trip invariant 5. The blindness was in the committed seeds, not
+> in the target. `115-20-SUMMARY.md` records how that distinction was measured, and the
+> `cargo fuzz run` isolation trap that hid it on the first attempt.
+
+
 `allOf`/`anyOf`/`oneOf`/`prefixItems` is the commonest carrier of an embedded schema resource. The
 descent IS implemented — `src/server/output_validation.rs:265` (detector) and `:325` (rewriter) —
 and the module rustdoc already states it as rule 4. What is missing is every layer around it:
@@ -1558,8 +1581,9 @@ behavioural defect. See `115-REVIEW.md` at `67b2e8f1` for the full text. **Resid
 
 ---
 
-**Owner:** none of (2)-(6) — all residual and unowned by design, on the owner's `approved`
-disposition. (1) is closed.
+**Owner:** (3)-(6) remain residual and unowned by design, on the owner's `approved`
+disposition. (1) is closed. **(2) WR-03 is CLOSED by `115-20` (2026-08-08)** — the owner
+re-dispositioned it to FIX; it is no longer a residual of this entry.
 
 **Standing rule this round adds, from `D-115-AI(4)`/`115-17`'s near-miss:** *a fence's REACHABILITY
 must not be derived from the same artifact as the rule it checks, even when that artifact is gated.

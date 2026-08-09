@@ -5,6 +5,20 @@ use std::time::Duration;
 
 mod app_validator;
 mod diagnostics;
+// The dual-run pair (Phase 117): `conformance::ConformanceRunner::run_dual`
+// needs both, so the binary must declare them alongside the library barrel.
+//
+// Why the allow: a Rust binary and its sibling library are SEPARATE crates, so
+// this module is compiled twice and dead-code analysis runs independently on
+// each. The library exports the whole surface (`load_baseline`,
+// `default_baseline_path`, the `EraBaseline` accessors); the binary reaches
+// only the `--dual-run` path through it. Without the allow the binary reports
+// every library-only item as dead — which is not a defect, it is the other
+// crate's entry point. Scoped to these two modules, never crate-wide.
+#[allow(dead_code)]
+mod era_diff;
+#[allow(dead_code)]
+mod era_observations;
 mod report;
 mod scenario;
 mod scenario_executor;
@@ -133,6 +147,21 @@ enum Commands {
         /// Run only specific domains (comma-separated: core,tools,resources,prompts,tasks)
         #[arg(long, value_delimiter = ',')]
         domain: Option<Vec<String>>,
+
+        /// Detect whether the server serves BOTH MCP eras and, if so, run the
+        /// suite twice and print a v1-vs-v2 comparison.
+        ///
+        /// OFF by default. With the flag absent, nothing about the output
+        /// changes — single-run output stays byte-identical to 0.7.0, which is
+        /// the additivity contract `tests/report_compat.rs` pins.
+        ///
+        /// Differences are classified against the checked-in expected-difference
+        /// baseline (`baselines/era-deltas.yaml`): a listed delta is correct by
+        /// design, an unlisted one is a finding, and a listed one that no longer
+        /// reproduces is also a finding. Against a server that serves only one
+        /// era this degrades to a single run and says so.
+        #[arg(long)]
+        dual_run: bool,
     },
 
     /// List and test available tools
@@ -325,19 +354,10 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             url,
             strict,
             domain,
+            dual_run,
         } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
-            run_conformance_test(
-                url,
-                *strict,
-                domain.clone(),
-                cli.timeout,
-                cli.insecure,
-                cli.api_key.as_deref(),
-                cli.transport.as_deref(),
-                oauth,
-            )
-            .await
+            run_conformance_command(cli, url, *strict, domain.clone(), *dual_run, oauth).await
         },
         Commands::Tools { url, test_all } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
@@ -470,6 +490,51 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             )
             .await
         },
+    }
+}
+
+/// Run the `Conformance` subcommand, choosing the single-era or the 117-11
+/// `--dual-run` orchestrator.
+///
+/// Extracted from [`dispatch_command`] for the reason `run_diagnose_command`
+/// already was: the era branch is the one arm with its own control flow, and
+/// inline it put the dispatcher at cognitive **25** against CI's PR-blocking
+/// `pmat quality-gate --checks complexity` threshold of 23 (pmat 3.15.0). Note
+/// `make quality-gate` does NOT run pmat — per Phase 75 D-07 pmat is CI-only to
+/// keep the dev loop fast — so this class of regression is invisible locally and
+/// is caught only on a PR. Do not inline it back.
+async fn run_conformance_command(
+    cli: &Cli,
+    url: &str,
+    strict: bool,
+    domain: Option<Vec<String>>,
+    dual_run: bool,
+    oauth: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+) -> Result<TestReport> {
+    if dual_run {
+        run_dual_conformance_test(
+            url,
+            strict,
+            domain,
+            cli.timeout,
+            cli.insecure,
+            cli.api_key.as_deref(),
+            oauth,
+            cli.format,
+        )
+        .await
+    } else {
+        run_conformance_test(
+            url,
+            strict,
+            domain,
+            cli.timeout,
+            cli.insecure,
+            cli.api_key.as_deref(),
+            cli.transport.as_deref(),
+            oauth,
+        )
+        .await
     }
 }
 
@@ -696,6 +761,146 @@ async fn run_conformance_test(
     )?;
 
     tester.run_conformance_tests(strict, domain).await
+}
+
+/// `conformance --dual-run`: detect the eras, then run the suite once per era
+/// and print the baseline-keyed comparison.
+///
+/// # Degradation is explicit, never silent
+///
+/// A dual run is only possible against a server that serves BOTH eras. Against
+/// a single-era server this returns that era's ordinary `TestReport` and SAYS
+/// SO on stderr, rather than failing — a v1-only server is not
+/// non-conformant, it simply has not opted into `2026-07-28`.
+///
+/// An UNREACHABLE endpoint routes through `TestReport::from_error`, which is the
+/// existing connectivity-failure path and exits non-zero. A REACHABLE endpoint
+/// that speaks no era we know is a different thing — a conformance finding — and
+/// gets its own Core-domain failure instead.
+///
+/// # The comparison is rendered only for HUMAN formats
+///
+/// `format` is threaded in for one reason: `handle_command_result` renders the
+/// returned report to the SAME stdout this function writes the comparison to, so
+/// under `--format json` a prepended text block makes the whole stream
+/// unparseable. Machine formats therefore get the comparison on stderr instead;
+/// nothing is dropped, and stdout stays exactly one document.
+///
+/// # The exit code reports the v1 suite ONLY — a KNOWN limitation
+///
+/// The returned report is the v1 one, so `--dual-run` exits 0 even when the v2
+/// suite failed every test and the comparison reported UNEXPECTED findings. That
+/// is the contract plan 117-11 chose (the flag must not change what the exit code
+/// MEANS) and `the_binary_runs_in_both_modes_against_a_live_server` pins it.
+///
+/// The cost is real and worth stating: an opt-in flag whose findings cannot fail
+/// a CI job cannot gate anything, so `--dual-run` is a reporting tool, not a gate.
+/// Changing that is a deliberate contract change — it needs the pinning test
+/// updated in the same commit, not a silent roll-up.
+#[allow(clippy::too_many_arguments)]
+async fn run_dual_conformance_test(
+    url: &str,
+    strict: bool,
+    domain: Option<Vec<String>>,
+    timeout: u64,
+    insecure: bool,
+    api_key: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+    format: OutputFormat,
+) -> Result<TestReport> {
+    use conformance::{ConformanceDomain, ConformanceRunner};
+    use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
+    use pmcp::types::ProtocolVersion;
+    use tester::{EraProbeAuth, EraSupport};
+
+    let budget = Duration::from_secs(timeout);
+    let parsed_domains = domain.map(|ds| {
+        ds.iter()
+            .filter_map(|s| ConformanceDomain::from_str_loose(s))
+            .collect::<Vec<_>>()
+    });
+    let runner = ConformanceRunner::new(strict, parsed_domains);
+
+    // The dual-run path is Streamable-HTTP only: both era probes and every raw
+    // wire observation are HTTP facts, so the transport is pinned rather than
+    // auto-detected here.
+    let build = |pin_v2: bool| -> Result<ServerTester> {
+        let tester = ServerTester::new(
+            url,
+            budget,
+            insecure,
+            api_key,
+            Some("http"),
+            oauth_middleware.clone(),
+        )?;
+        Ok(if pin_v2 {
+            tester.with_protocol_version(ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()))
+        } else {
+            tester
+        })
+    };
+
+    // The detector opens REAL connections, so it must carry the SAME
+    // credentials and TLS posture the two suite runs will. Detecting with none
+    // of them made `--dual-run --api-key …` (or `--insecure`, or OAuth) report
+    // every authenticated endpoint as unreachable and silently degrade to a
+    // single run.
+    let probe_auth = EraProbeAuth {
+        api_key: api_key.map(str::to_string),
+        insecure,
+        oauth_middleware: oauth_middleware.clone(),
+    };
+    let era_support = tester::detect_eras_with_auth(url, budget, &probe_auth).await;
+    match era_support {
+        EraSupport::Dual => {
+            eprintln!(
+                "{} {url} serves BOTH eras ({}); running the suite twice.",
+                "note:".cyan(),
+                era_support.label()
+            );
+            let mut v1 = build(false)?;
+            let mut v2 = build(true)?;
+            let report = runner.run_dual(&mut v1, &mut v2).await;
+            // Best-effort, exactly as `TestReport::print` is: the CLI entry
+            // point cannot act on a broken pipe at the report layer. Routed to
+            // stderr for machine formats so stdout stays a single parseable
+            // document (see this function's rustdoc).
+            if matches!(format, OutputFormat::Pretty | OutputFormat::Verbose) {
+                let _ = report.print_to_writer(&mut std::io::stdout());
+            } else {
+                let _ = report.print_to_writer(&mut std::io::stderr());
+            }
+            // The v1 report is what the caller receives, so the process exit
+            // code keeps meaning "did the suite pass" and does not silently
+            // change meaning when --dual-run is passed. This contract is PINNED
+            // by `the_binary_runs_in_both_modes_against_a_live_server` in
+            // `tests/dual_run.rs`; see this function's rustdoc for the open
+            // question about whether it should hold.
+            Ok(report.v1_report)
+        },
+        EraSupport::V1Only => {
+            eprintln!(
+                "{} {url} serves only MCP 2025-11-25; --dual-run degraded to a single v1 run.",
+                "note:".yellow()
+            );
+            Ok(runner.run(&mut build(false)?).await)
+        },
+        EraSupport::V2Only => {
+            eprintln!(
+                "{} {url} serves only MCP 2026-07-28; --dual-run degraded to a single v2 run.",
+                "note:".yellow()
+            );
+            Ok(runner.run(&mut build(true)?).await)
+        },
+        // Reachable but speaking no era we know is a CONFORMANCE finding about
+        // whatever answered, so it is a Core-domain failure.
+        EraSupport::NoEraSpoken => Ok(tester::no_era_spoken_report(url)),
+        // Unreachable is an INFRASTRUCTURE fault, so it routes through
+        // `TestReport::from_error` — the existing connectivity-failure path.
+        // The report carries a failure, so `handle_command_result` still exits
+        // non-zero.
+        EraSupport::Unreachable => Ok(tester::unreachable_report(url)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

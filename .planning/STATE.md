@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: verifying
-stopped_at: Completed 116-15-PLAN.md — Phase 116 COMPLETE (16/16)
-last_updated: "2026-08-07T04:59:24.939Z"
-last_activity: 2026-08-06
+status: completed
+stopped_at: Completed 117-13-PLAN.md (final plan of phase 117)
+last_updated: "2026-08-09T00:48:35.269Z"
+last_activity: 2026-08-09
 progress:
   total_phases: 72
-  completed_phases: 62
-  total_plans: 374
-  completed_plans: 374
-  percent: 86
+  completed_phases: 63
+  total_plans: 388
+  completed_plans: 388
+  percent: 88
 ---
 
 # Project State
@@ -21,14 +21,204 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
 **Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
-**Current focus:** Phase 116 — auth-hardening-seps
+**Current focus:** Phase 117 — agents-tester-v1-severability
 
 ## Current Position
 
-Phase: 116 (auth-hardening-seps) — **COMPLETE**
-Plans complete: 16 of 16
-Remaining: none
-Status: Phase complete — ready for `/gsd:verify-phase 116`, then Phase 117
+Phase: 999.1
+Plan: Not started
+Plans complete: **14 of 14** (117-01..117-14)
+Remaining: none — ready for phase verification
+Status: Complete
+
+**117-13 HAS LANDED — THE D-03 CUT IS CLOSED, AND SMPL-01/SMPL-02 ARE DONE.** Commits `1a473e6d`
+(the verb split) + `50f039ab` (the severed-build 405 proof) + `ea301460` (config gating + the policy)
+
++ `5e7ea91a`/`b2eecfe2` (summary), +1041/−269 across 5 files.
+
+- `handle_get_sse` and `handle_delete_session` are **SPLIT, not moved**: the `v2_verb_rejection` head
+  stays always-compiled, only the v1 body went into the pair, and `build_mcp_router` is byte-for-byte
+  unchanged. So `full-v2` answers **405 (routed and refused)**, never 404 (unrouted) — a distinction
+  `tests/v2_verbs_405_on_severed_build.rs` asserts explicitly.
+
+- That test **RAN on the severed build: 5 passed, non-zero count**, with a v2 POST control against a
+  dead server and an executed-then-reverted negative control (both GET tests failed naming 404 vs
+  405). `tests/common/v2.rs` was MEASURED to compile under `full-v2` and reused UNCHANGED.
+
+- **The config-field gating was taken IN FULL — the documented fallback was NOT needed.** All four
+  v1-only `StreamableHttpServerConfig` fields are gated, plus the `SessionCallback` alias 117-12
+  deferred here. Zero test/example files edited (`[[bin]]` count is 0, so the severance build is
+  lib-only).
+
+- Plan 117-12's two deferred functions are both answered by name: `extract_session_and_protocol_headers`
+  split internally through the new `v1::incoming_session_header` pair;
+  `compute_outbound_protocol_version` needed nothing (117-12 had already routed it).
+
+- The compiler named **ten** newly-dead twins, not the four the plan predicted — all deleted, plus six
+  imports, with zero `allow(dead_code)`. `EventStoreHandle` moved into the real half.
+
+- `docs/v1-sunset-policy.md` now enumerates the post-cut reality on BOTH sides of the wire and carries
+  a table of the **seven items deliberately NOT severed**, `Client::initialize` first. Cross-read
+  against the code in both directions: 26/26 claims verified, every gated file named.
+
+- Evidence: severed build exit 0 with **0 warnings**; 1880/1880 lib tests EXACT; 2963 integration
+  tests pass; goldens 9/9; tripwire 15/15; doctests 449; `make doc-check` and `make quality-gate`
+  exit 0. PMAT: `handle_get_sse` cog 12 → 3, `handle_delete_session` cog 13 → 3, 0 `./src/`
+  violations.
+
+**117-14 HAS LANDED — THE CLIENT HALF OF SMPL-01/SMPL-02 IS NOW SEVERED TOO.** Commits `dd62342f`
+(resumability) + `70d92d16` (session lifecycle) + `40eb06b5` (tests) + `b0b878d6` (summary),
++1612/−144 across 7 files. On `full-v2` the client transport stores no session id, echoes none back,
+sends **no DELETE at all** (the twin names neither `Method::DELETE` nor `self.client`), and writes no
+`Last-Event-ID` — with `LAST_EVENT_ID` gated in `http_constants.rs` alongside its last remaining
+reader, so **nothing in `pmcp` names that header on a `full-v2` build, server OR client**. Twelve v1
+reads route through five paired accessors, leaving exactly ONE call-site `#[cfg]` in the whole
+transport. Proven by a derived, self-tested gate-region scanner (tripwire 11 → **15 tests**, with a
+LIVE ungated counter-example) and by a runtime test that actually RAN on the severed build
+(**2 tests, non-zero**), plus three executed negative controls. 1880/1880 lib tests EXACT, goldens
+9/9, `make quality-gate` exit 0.
+
+**⚠ THREE THINGS 117-13 MUST CARRY FROM 117-14** (full detail in `117-14-SUMMARY.md` § HANDOFF):
+
+1. **`docs/v1-sunset-policy.md` MUST name `Client::initialize` as a known limitation.** Gating it was
+   MEASURED and the documented fallback taken, for two independent reasons: it is DUAL-era (its
+   `is_v2()` branch is a deliberate Phase-113 no-op affordance, so gating deletes v2 behaviour), and
+   `src/composition/mcp_client.rs:181` calls it while `composition` is in `full-v2`. **SMPL-01's
+   "initialize" clause is met on the SERVER side only** — the policy must say so rather than claiming
+   full severance. The verbatim compiler output is in the summary.
+
+2. **`MCP_SESSION_ID` stays UNGATED, and that is now MEASURED, not assumed.** Assumption A4 is FALSE:
+   `extract_session_and_protocol_headers` (every POST, fast path AND middleware path — it is the same
+   read that yields `MCP-Protocol-Version`) and `build_middleware_context` are v2-reachable, and the
+   v2 test surface names the constant precisely to assert its ABSENCE. The call-path trace lives in
+   the constant's own rustdoc. `src/server/streamable_http_server.rs` was NOT edited.
+
+3. **A dev-dependency taking a crate's DEFAULT features silently un-severs its own severance TESTS.**
+   `pmcp-code-mode` (a dev-dep of `pmcp`) was unifying `default = ["logging", "v1-compat"]` back on,
+   so `cargo test --test <severed> --no-default-features --features full-v2` reported **`0 tests`,
+   exit 0** — green, and proving nothing. Fixed in `crates/pmcp-code-mode/Cargo.toml`. **117-13's
+   `tests/v2_verbs_405_on_severed_build.rs` would have been equally vacuous**; when you run it,
+   confirm a NON-ZERO test count before believing the pass. Ship a trivial always-true test in the
+   same file so a zero-count run is visibly different from a green one.
+
+~~Also still open for 117-13~~ — **CLOSED by 117-13.**
+`StreamableHttpServerConfig::event_store` is gated (which is what unpinned the concrete
+`InMemoryEventStore`), and `shared::event_store` — including `create/validate_resumption_token` — was
+already gated wholesale by its `pub mod` declaration in `src/shared/mod.rs`, verified in the policy
+cross-read. All three of 117-14's handoff items were carried: the policy names `Client::initialize`
+as a known limitation, records `MCP_SESSION_ID` as measured-UNGATED, and the severed 405 run reported
+a NON-ZERO test count (5).
+
+**117-12 HAS LANDED — SMPL-02'S LARGEST CHUNK IS STRUCTURAL.** Commits `124e132f` + `fc21378b`
+(+744/−444 across 3 files) + `b5f326b8` (summary). Twelve v1-only functions — the seven session
+lifecycle stages and the five SSE-replay / event-write functions — now live in `v1_session.rs` with
+signature-identical constant twins. **The `full-v2` build has NO reader of `Last-Event-ID` anywhere:**
+the replay twin takes a `&HeaderMap` and names no header, so T-113-29/30 stops being an ordering to
+preserve and becomes a property of the compiled crate. `session_id: Option<String>` still threads the
+~10-function POST pipeline (always `None` on `full-v2`) — zero pipeline surgery, zero `#[cfg]` at any
+call site, 1880/1880 lib tests EXACT, goldens 9/9, tripwire 9/9, `make quality-gate` exit 0.
+
+**⚠ HAND-OFF TO 117-13 — ONE PRE-DIAGNOSED FIRST EDIT.** The `EventStore` trait,
+`InMemoryEventStore`, `EventList`/`EventsMap` and `SessionCallback` could NOT move: they are PUBLIC
+API, the PUBLIC field `StreamableHttpServerConfig::event_store` pins the concrete store (so
+`full-v2` cannot compile without it), and `InMemoryEventStore` is in the tripwire's
+`FORBIDDEN_STATE_TYPES` so the twin can never declare it. **Gate the config fields FIRST, then the
+types, in ONE commit.** `LAST_EVENT_ID` is the same shape — its two readers (the pair's replay path
+and `src/shared/streamable_http.rs`) must be gated together. The blocker chain is written into the
+SEVERABILITY note beside `EventStoreHandle` in the transport. `handle_get_sse` /
+`handle_delete_session` remain the untouched MIXED verb-split subject.
+
+**117-11 HAS LANDED — CLNT-04 IS BOOKED `[x]`, AND THE TESTER IMMEDIATELY FOUND A REAL GAP.**
+Commits `1bd44f21` + `5d80fa07` + `2451527a` (+3855/−34 across 8 files) + `14db84f7` / `09aaf4ef`
+(summary). `mcp-tester` gained `--dual-run` (opt-in, default OFF), `ServerTester::with_protocol_version`
+(a builder — `new`'s six positional args are byte-identical, so all five `cargo-pmcp` call sites
+compile unchanged), `detect_eras`, 14 wire probes emitting stable `ObservationId`s, and
+`ConformanceRunner::run_dual`. Live against a real opted-in pmcp server: **9 EXPECTED / 0 UNEXPECTED
+/ 5 MISSING**.
+
+**⚠ THE HEADLINE FINDING — HAND-OFF TO 117-12 / 117-13 / PHASE 118.** The pmcp **SERVER** still
+answers a WELL-FORMED `initialize` on the `2026-07-28` wire (HTTP 200 + a result), and the result is
+a MIXED ENVELOPE: `protocolVersion: "2025-11-25"` alongside the v2 `resultType` and
+`_meta["io.modelcontextprotocol/serverInfo"]`. Baseline ERA-01 records v2 as `absent`, but its
+`source` column cites only CLIENT-side artifacts (`CLNT-01`, `v2_synthetic_initialize_result`) — the
+client's `initialize` is local and synthetic; the SERVER side was never severed.
+**`era-deltas.yaml` was deliberately NOT edited**; ERA-01 reporting MISSING is the tool working.
+Pinned by `tests/dual_run.rs::the_server_still_answers_initialize_on_the_v2_wire`.
+
+**⚠ TWO OF MY OWN PROBES WERE WRONG, AND ONLY A LIVE SOCKET SAID SO.** (1) C-01's v2 probe sent a
+MALFORMED `initialize` (no `clientInfo`/`capabilities`), which is refused `-32601` by the TYPED PARSE
+before dispatch — so C-01 was passing for the wrong reason and would have CERTIFIED a server that
+serves `initialize`. (2) The raw v1 probes carried no `Mcp-Session-Id`, and a stateful v1 server
+refuses every non-init request without one, contaminating FOUR observations at once. Fixing (2)
+moved the live comparison from **6 EXPECTED / 3 UNEXPECTED** to **9 EXPECTED / 0 UNEXPECTED** — the
+`method.server_discover` "`-32600` server defect" an earlier draft would have reported was MY BUG,
+not the server's. A unit-test-only plan would have shipped both.
+
+**⚠ `make quality-gate` RUNS ZERO `mcp-tester` TESTS — RE-MEASURED, STILL TRUE.**
+`grep -c 'dual_run'` and `grep -c 'era_baseline'` in the 9268-line gate log are both **0**. Every
+claim here was verified by running the suite directly: `--test dual_run` **12 passed** in 1.41s,
+`--test report_compat` **7 passed** (single-run output still byte-identical to 0.7.0), whole crate
+**328 passed / 12 suites**. `cargo build -p cargo-pmcp` AND `cargo check -p cargo-pmcp --tests` both
+exit 0 (the second reaches the `TestResult` literal in `check.rs:522` that `cargo build` structurally
+cannot). `git diff` is EMPTY for `report.rs`, `src/`, and `crates/mcp-tester/Cargo.toml`.
+
+**⚠ TWO ENVIRONMENT/TOOLING FAULTS FAKED CODE FAILURES.** (1) **Disk exhaustion**: `cargo check -p
+cargo-pmcp --tests` reported a compile error with an EMPTY body; `df -h /` showed **217Mi free,
+100%**. Removing `target/debug/incremental` (48G of an 80G `target/`) freed 89Gi and the command
+passed unchanged — it was never a code defect. (2) **rtk corrupts `make`**: `make quality-gate`
+through the hook wrote a 774-line log ending in a literal `... (7421 lines truncated)` marker with NO
+success banner while still reporting exit 0. Re-run as `/usr/bin/make -C <repo> quality-gate` it
+produced 9268 lines, exit 0, and the real `✅ ALL TOYOTA WAY QUALITY CHECKS PASSED` banner. **Use the
+absolute binary path for the gate.** Also: macOS `sed` BRE has no `\s`, so a `sed -i '' '/^\s*.../d'`
+silently deleted nothing and reported success — caught only by `cargo test`, because
+`cargo build --lib` does not compile `#[cfg(test)]` blocks.
+
+**117-09 HAS LANDED — SMPL-02 IS NOW STRUCTURAL AND IS BOOKED `[x]`.** Commits `9044eb70` +
+`64856c15` (+673/−310 across 3 files) + `2c05d2bd` / `d57d4672` (summary). `ServerState` went
+**6 fields → 4**: `sse_streams`, `sessions` and `event_store` collapsed behind one
+`v1: v1::V1State`, which is a **unit struct on `full-v2`** — so the v2 transport provably
+allocates no session map, registers no SSE stream and can never hand out an event store, as a
+property of the TYPE rather than of a runtime branch. All seven era chokepoints moved into the
+pair with **parameter types, arity and return types identical 7/7**, `era` included.
+`grep -c '#[cfg(feature = "v1-compat")]'` in the 6,400-line transport is **0** — the paired
+module did exactly what D-03 rejected in-place `#[cfg]` blocks for.
+
+**⚠ TWO OF THE PLAN'S OWN INSTRUCTIONS WERE UNSATISFIABLE AS WRITTEN, AND THE BUILD SAID SO
+RATHER THAN A REVIEWER.** (1) The plan's `state: &ServerState` first parameter for the state
+operations makes every null twin ignore its argument, so nothing reads `ServerState::v1` on
+`full-v2` and the severance build fails `-D warnings` with `` field `v1` is never read ``. That
+was MEASURED — it was the first severance build after the collapse. The operations now take
+`&V1State` (call sites pass `&state.v1`); the seven chokepoints keep `&ServerState`. The
+alternative was a dead-code allow on the seam field, i.e. blunting the exact lint 117-05's CI job
+is built around. (2) The plan says to move `EventStoreHandle` into the pair; doing so forces the
+NULL TWIN to declare `Arc<dyn EventStore>`, a literal in the tripwire's `FORBIDDEN_STATE_TYPES`.
+**The tripwire is right and was NOT modified** — the alias stays in the transport and both halves
+carry it in SIGNATURES via `use super::EventStoreHandle`, which is what that test's own comments
+prescribe.
+
+**⚠ THE PLAN'S THREE-BUCKET PREDICTION FOR THE `sessions` READS WAS WRONG FOR THIS COMMIT.** It
+said the nine remaining reads "need NO accessor at all — they follow their function" into
+117-12/13. Their functions are still in the transport at this commit and `full-v2` must compile,
+so **all ten** got behavioural `v1::` operations now; they fold into the moved bodies later.
+Re-derived access counts vs the research's measured 5/10/1: **4** `sse_streams` CODE sites (the
+5th was prose), **10** `sessions` sites (matches), and **2** production `event_store` readers
+(`resumability_active` reads it too, one line above `resumability_store`) plus **1** test writer
+the research did not list.
+
+**The 113-08 SEVERABILITY comment says what is TRUE, not what the plan drafted.** The plan's text
+would have claimed the trait, store, `LAST_EVENT_ID` and replay path are already gated; measured
+at HEAD, the only `#[cfg(feature = "v1-compat")]` gates in `src/` remain 117-06's two in
+`src/shared/mod.rs`. Those four items are 117-12's and 117-13's subject.
+
+**Gate results, all run directly rather than inferred:** severance build exit **0** with
+`grep -c 'warning:'` = **0**; `cargo test --lib --features full` **1880 = 1880** EXACTLY before
+and after (a drop would mean a silently removed test); `v1_byte_identity_after_cut --features
+full` **9/9** (without the feature flag it reports `0 passed` and proves nothing);
+`v1_severability_tripwire` **9/9**; `make lint`, `make doc-check`, `make quality-gate` all exit
+**0**; PMAT `--max-cognitive 25` **0 violations** repo-wide, unchanged. Two more instances of the
+carry-forward hazards: `cargo fmt` reflowed a field-path chain that a single-line rewrite missed
+(the build caught it), and the `allow(dead_code)` acceptance grep briefly matched my own doc
+comment explaining why the seam field does not carry one.
 
 **116-15 HAS LANDED — PHASE 116 IS COMPLETE AND AUTH-01/02/03 ARE BOOKED `[x]`.** Commits
 `a334d104` (fix) + `37638653` + `1afd7f80` + `ac9de6d2` + `b0b92cfd` + `0e820dfb`
@@ -624,7 +814,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-06
+Last activity: 2026-08-09
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -994,6 +1184,48 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase ?]: 116-15: doc-check accepted as Class-B BASELINE DELTA on 116-BASELINES.md's criterion; B2's literal wording cannot pass at any HEAD, so both readings are recorded and non-attribution is PROVEN at b2bf9157:src/error/mod.rs:573
 - [Phase ?]: 116-15: PHASE_116_EQUATIONS retained after the binding flip (the hand-off's sanctioned branch) — deleting it would delete the phase_116_records >= 8 anti-vacuity floor; Phase 115 set the same precedent in the same file
 - [Phase ?]: 116-15: D-116-LINT-OAUTH reassigned off 116-15 to UNASSIGNED — the booking plan touches no Makefile; measured at HEAD as 17 clippy diagnostics and 143 tests outside make quality-gate
+- [Phase ?]: 117-01: v1-compat is a default-on additive cargo marker feature; the inverted v2-only feature stays REJECTED because cargo features cannot be subtracted
+- [Phase ?]: 117-01: A-A1 is measured by a compile_error! probe against the real severance build, not by cargo tree — cargo tree includes dev-deps and reports a v1-compat node the lib-only build never activates (use --edges features,no-dev)
+- [Phase ?]: 117-01: docs.rs metadata deliberately not edited — v1-compat gates zero modules today; logged as forward hazard D-117-01-A for 117-02/117-06
+- [Phase ?]: 117-02: v1 wire goldens captured pre-cut at anchor 624e89b7; header identity asserted separately from body identity, proven independent by a source-mutation negative control
+- [Phase ?]: 117-02: v1 SSE fixtures use a bounded LOCAL frame-counting reader (N=2 success bound, 5s timeout failure bound) because common::v2::get reads to EOF and cannot read a long-lived text/event-stream
+- [Phase ?]: serde Duration needs no width-preserving dynamic at from_secs(0) — proven by an executed test, not prose
+- [Phase ?]: 117-11 must run BOTH cargo build -p cargo-pmcp AND cargo check -p cargo-pmcp --tests: the second TestResult literal (check.rs:522) is #[cfg(test)] and invisible to cargo build
+- [Phase ?]: 117-04: spawn_v2 accepts BOTH eras (dual server) — the discriminating fixture; only a server-side wire assertion catches a silent v1 preference
+- [Phase ?]: 117-04: era claims are read from a SERVER-side request log, not a new ConnectorClient accessor — the Q4.3 reachability rule needs no new API
+- [Phase ?]: 117-04 MEASURED BLOCKER for 117-07: an era rejection (HTTP 400) and an unreachable host (connect failure) are the SAME Error::Transport(TransportError::Request(String)) variant — classification must be behavioural (try v2, then v1, then propagate), never textual
+- [Phase ?]: 117-06: the v1 severance seam is a PAIRED MODULE — one 'mod v1;' with two cfg_attr path attributes selects v1_session.rs (v1-compat) or the zero-sized v1_session_off.rs (full-v2). Repo's first conditional #[path]; proven on a ~30-line payload before the 6,408-line transport depends on it.
+- [Phase ?]: 117-06: SMPL-02 is asserted SEMANTICALLY (unit-struct V1State, no state-bearing type, no state/header operation, no declaration absent from the real half), never by substring blacklist — four of the eight naive tokens are required verbatim by 117-09/12/13.
+- [Phase ?]: 117-06: src/shared/event_store.rs (421 lines, 6-method trait) is gated behind v1-compat at BOTH its mod decl and its 8-symbol re-export; sse_parser.rs and sse_optimized.rs are deliberately NOT gated (A-D03: v2 subscriptions/listen returns a live text/event-stream).
+- [Phase ?]: 117-07: era probe lives in pmcp-agent client_for ONLY — pmcp::Client untouched (A-D08); fallback classified by a typed ProbeOutcome built from a host-layer TCP reachability probe, never by error text
+- [Phase ?]: 117-07: EffectTrace records the negotiated VERSION STRING, not an Era (zero core API change); ReplayInvoker fails deterministically on an era mismatch, with the undeclared-live-era and legacy-trace policies documented in code and each covered by a named test
+- [Phase ?]: 117-08: era-delta baseline is YAML not TOML — serde_yaml is already an mcp-tester dependency and already loads checked-in data; adding `toml` would be a NEW dependency on a published 0.7.0 crate for zero gain (D-117-08-FORMAT)
+- [Phase ?]: 117-08: non-empty unique id/observation_id are enforced INSIDE parse_baseline, not only in a test, so the fuzz target's Ok-path assertions are exactly the parser's documented rejections (D-117-08-CONTRACT)
+- [Phase ?]: 117-08: an EMPTY deltas list is deliberately NOT a parser rejection — the non-vacuity floor lives in tests/era_baseline.rs (MINIMUM_DELTAS=14) where the failure message explains the remedy (T-117-26 / D-117-08-VACUITY)
+- [Phase ?]: 117-08: make quality-gate does NOT compile or run ANY mcp-tester test (era_baseline/era_diff appear 0x in the 9239-line transcript; test-unit still 1880) — LIM-116-10's gate-scope hole extends to the whole crate; all checks were run directly, not inferred from a green gate
+- [Phase 117]: 117-05: Option A (dedicated v1-severance CI job) over folding the severance build into quality-gate — isolated cache key and a failure message that names the exact cause
+- [Phase 117]: 117-05: serde_yaml (declared root dev-dependency) over an interpreter-based YAML parser — a BLOCKING gate must not rest on undeclared PyYAML that merely happens to exist on a runner (T-117-SC2)
+- [Phase 117]: 117-05: adversarial gate-blocking check DEFERRED as D-117-05-A (owner Guy Ernest) — no PR was open, so runtime blocking semantics stay unobserved; phrasing is 'wired to block', never 'blocks merge'
+- [Phase 117]: 117-09: v1 state operations take `&V1State`, NOT `&ServerState` — with `&ServerState` every null twin ignores its argument, nothing reads `ServerState::v1` on `full-v2`, and the severance build fails `-D warnings` with `field \`v1\` is never read`. The only alternative was a dead-code allow on the seam field, which would blunt the exact lint 117-05's CI severance job is built around. The seven era chokepoints keep `&ServerState` unchanged (D-11 / Pitfall 2).
+- [Phase 117]: 117-09: `EventStoreHandle` stays in the transport rather than moving into the v1 pair — the null twin declaring it would put the literal `Arc<dyn EventStore` into `v1_session_off.rs`, which the tripwire's FORBIDDEN_STATE_TYPES rejects BY DESIGN. Both halves carry it in SIGNATURES via `use super::EventStoreHandle`; neither declares it. The tripwire is right and was not modified.
+- [Phase 117]: 117-09: the 113-08 SEVERABILITY comment records what is TRUE at this commit — era decisions and ALL v1 session/SSE/resumability STATE are gated structurally via a zero-sized twin, while the EventStore trait, InMemoryEventStore, LAST_EVENT_ID and the replay path are still compiled on both feature sets and are 117-12/117-13's subject. The plan's proposed text would have claimed gating this plan does not perform.
+- [Phase 117]: 117-09: every remaining `sessions`/`sse_streams` read got a behavioural `v1::` operation NOW rather than following its function in 117-12/13 — those functions are still in the transport at this commit and the `full-v2` build must compile. Re-derived counts: 4 sse_streams code sites (research said 5, one was prose), 10 sessions sites (matches), 2 event_store production readers + 1 test writer (research said 1).
+- [Phase 117]: 117-10: paired the CLNT-03 agent example with s47_v2_stateless_mrtr, not s50_v2_tasks_server — s50's task is already paused on input_required and needs tasks/update, which is deliberately not on the ConnectorClient seam (D-09)
+- [Phase 117]: 117-10: the root pmcp-agent dev-dependency is PATH-ONLY (no version key) — crates/pmcp-agent is at 0.2.0, 0.2.0 is not on crates.io, and release.yml publishes pmcp (line 198) long before pmcp-agent (line 489), so a version key would make every cargo publish -p pmcp fail on an unresolvable dev-dependency. Cargo strips path-only dev-deps at publish and the example's required-features keep the publish VERIFY build from reaching it.
+- [Phase 117]: 117-10: a root PATH dev-dependency drags its crate into make lint's unit graph — cargo does NOT apply --cap-lints allow to path deps, so wiring pmcp-agent surfaced seven pre-existing clippy errors as gate-blocking. All seven were FIXED, not #[allow]-ed; pmcp-agent is now covered by the root lint gate.
+- [Phase 117]: 117-10: the plan's 'v1-compat tree count must be 0' criterion measures the wrong graph — cargo tree includes DEV edges by default and the single v1-compat node hangs off the pre-existing pmcp-code-mode dev-dep (baseline measured at 1 with the new dep removed). The correct spelling is -e features,no-dev, which yields 0; the lib-only severance BUILD is what actually proves A-A1.
+- [Phase 117]: 117-10: demo_task_polling DROPPED rather than faked — no in-repo v2 server example settles a related task without a tasks/update round trip. The example header cites agent_drives_task_polling_to_terminal_on_v2 (117-04) as where the CLNT-03 proof lives, so the evidence stays discoverable from the example.
+- [Phase ?]: 117-11: session-leak mitigation is DELETE (Transport::close on a retained transport handle), not client reuse — asserted by 3 mints / 3 DELETEs over 3 detections
+- [Phase ?]: 117-11: era-deltas.yaml NOT edited to silence the comparison — ERA-01 reporting MISSING is the tool correctly finding that the pmcp SERVER still serves initialize on the v2 wire
+- [Phase ?]: 117-12: EventStore trait / InMemoryEventStore / EventList / EventsMap could NOT move into the v1 pair — public API + a public config field pinning the concrete type + the tripwire's FORBIDDEN_STATE_TYPES. Trait, store and config field are ONE edit and belong to 117-13.
+- [Phase ?]: 117-12: active_session_generator and insert_session are now PRIVATE to v1_session.rs and absent from the null twin — every caller moved onto the real half, so neither is a seam any more.
+- [Phase ?]: 117-12: the full-v2 build has NO reader of Last-Event-ID at all — the replay twin names no header, so T-113-29/30 is structural rather than an ordering to preserve.
+- [Phase ?]: 117-14: assumption A4 measured FALSE — MCP_SESSION_ID stays UNGATED because extract_session_and_protocol_headers and build_middleware_context read it on the shared v2 POST path, and the v2 test surface names it to assert ABSENCE
+- [Phase ?]: 117-14: Client::initialize NOT gated — documented fallback. It is dual-era (its is_v2() branch is a Phase-113 no-op affordance) and src/composition/mcp_client.rs calls it while composition is in full-v2. SMPL-01's initialize clause is met on the SERVER side only; docs/v1-sunset-policy.md must name it
+- [Phase ?]: 117-14: a dev-dependency taking a crate's DEFAULT features silently un-severs that crate's own severance TESTS — pmcp-code-mode forced v1-compat back on, so the severed test target reported '0 tests, exit 0'. cargo build -p pmcp never sees dev-deps; cargo test does
+- [Phase 117]: 117-13: config-field gating taken IN FULL — the fallback was not needed; the four StreamableHttpServerConfig v1-only fields plus the SessionCallback alias are gated, semver-safe only while full-v2 stays out of every published default set (A7)
+- [Phase 117]: 117-13: GET/DELETE are SPLIT not moved — the v2 405 head stays always-compiled and build_mcp_router is unchanged, so the severed build answers 405 (refused) rather than 404 (unrouted)
+- [Phase 117]: 117-13: EventStoreHandle moved into v1_session.rs, reversing 117-12's note — its last uses on both sides went with the SSE twins; the alternatives were the transport's first feature attribute or a blanket allow(dead_code)
 
 ### Pending Todos
 
@@ -1021,6 +1253,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - D-116-TRIPWIRE: v2_bounded_reads_tripwire::every_peer_byte_accumulation_is_reviewed has been RED since 116-05 (ec80e5b1) because of src/shared/credential_store.rs:742. make quality-gate runs test-integration, so this would fail CI. Fix is ONE reviewed ALLOWLIST entry naming the bound (port is a u16 = at most 6 bytes appended once), not a code change. Owner: 116-15 or a 116-05 follow-up
 - D-116-FUZZGATE: make test-fuzz runs ZERO fuzzing iterations and reports success on a stable default toolchain (21/21 targets died on the nightly-only -Z flag; gate exit 0). Do not close the ALWAYS-FUZZ row on make quality-gate's exit code. Owner: 116-15.
 - D-116-LINT-OAUTH test-side twin: make quality-gate runs 0 of 116-09's 25 oauth-gated security tests (25 run under full,oauth). Fix is PAIRED — clear the 24 pre-existing src/client/oauth.rs clippy errors, THEN enable oauth in make lint and the gate test stage. Owner 116-15.
+- 117-11 FINDING (hand-off to 117-12/117-13/Phase 118): the pmcp SERVER still answers a well-formed initialize on the 2026-07-28 wire, returning a mixed envelope (v1 protocolVersion 2025-11-25 + v2 resultType and _meta.serverInfo). Baseline ERA-01 records v2 as absent; its source cites only client-side artifacts, so the server side was never severed. Pinned by tests/dual_run.rs::the_server_still_answers_initialize_on_the_v2_wire.
 
 ## Deferred Items
 
@@ -1048,8 +1281,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-07T04:58:32.288Z
-Stopped at: Completed 116-15-PLAN.md — Phase 116 COMPLETE (16/16)
+Last session: 2026-08-08T21:25:35.567Z
+Stopped at: Completed 117-13-PLAN.md (final plan of phase 117)
 Resume file: None
 Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -1168,3 +1401,17 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 116 P13 | 2 sessions | 2 tasks | 13 files |
 | Phase 116 P14 | 4h | 1 tasks | 1 files |
 | Phase 116 P15 | 2h05m | 4 tasks | 5 files |
+| Phase 117 P01 | 35min | 3 tasks | 6 files |
+| Phase 117 P02 | 45min | 2 tasks | 1 files |
+| Phase 117 P03 | 48min | 2 tasks | 1 files |
+| Phase 117 P04 | 47min | 2 tasks | 2 files |
+| Phase 117 P06 | 82min | 3 tasks | 6 files |
+| Phase 117 P07 | 95min | 3 tasks | 7 files |
+| Phase 117 P08 | 82 | 3 tasks | 6 files |
+| Phase 117 P05 | 95min | 3 tasks | 4 files |
+| Phase 117 P09 | 74 | 2 tasks | 3 files |
+| Phase 117 P10 | 78 | 2 tasks | 7 files |
+| Phase 117 P11 | 48 | 3 tasks | 8 files |
+| Phase 117 P12 | 95min | 2 tasks | 3 files |
+| Phase 117 P14 | 130min | 3 tasks | 7 files |
+| Phase 117 P13 | 45min | 3 tasks | 5 files |

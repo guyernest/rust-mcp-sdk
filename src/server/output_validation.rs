@@ -1103,6 +1103,42 @@ mod tests {
         })
     }
 
+    /// The ARRAY-POSITION analog: an `$id`-bearing embedded schema resource
+    /// carrying a legacy `$schema`, filed at `container[index]` — the shape
+    /// `allOf` / `anyOf` / `oneOf` / `prefixItems` carry.
+    ///
+    /// `115-REVIEW.md` **WR-03**. The descent is implemented (rule 4 of the
+    /// module rustdoc; the `Value::Array` arms of [`first_legacy_dialect`] and
+    /// [`pin_dialect_in_place`]) and was reachable by NO test, property draw or
+    /// corpus seed — deleting both arms passed the entire suite, measured twice
+    /// independently. This fixture is what makes the position reachable.
+    ///
+    /// # Why this needs no NAME parameter, unlike its map twin
+    ///
+    /// An array element has no key. There is therefore no author-chosen name for
+    /// a [`DATA_ONLY_KEYWORDS`] entry to collide with, which is the exact shape
+    /// that reopened SCHM-01 in rounds 1, 2 and CR-01 — it structurally cannot
+    /// occur here. The variable this fixture parameterises is the INDEX instead:
+    /// a walk that visits only element 0 is a real and distinct defect.
+    ///
+    /// The `index` inert `{}` fillers ahead of the resource are what make a
+    /// non-zero index addressable. They carry no `$schema`, so they are
+    /// invisible to both halves and cannot themselves satisfy the assertion.
+    ///
+    /// Same `example.test` non-resolvable `$id` and same deliberate absence of a
+    /// `$ref` as [`embedded_legacy_resource_in_container`]: the fences that use
+    /// this assert the NORMALIZATION, not a verdict, and an `$id` alone
+    /// establishes a base URI without any fetch (SEP-2106).
+    fn embedded_legacy_resource_in_array(container: &str, index: usize) -> Value {
+        let mut branches: Vec<Value> = (0..index).map(|_| json!({})).collect();
+        branches.push(json!({
+            "$id": "https://example.test/inner",
+            "$schema": DRAFT_07,
+            "type": "integer"
+        }));
+        json!({ "type": "object", container: branches })
+    }
+
     /// The same collision one keyword over: an `$id`-bearing embedded resource
     /// carrying a legacy `$schema`, filed under a `properties` entry the CALLER
     /// names rather than under a `$defs` entry.
@@ -1453,6 +1489,89 @@ mod tests {
              `jsonschema` 0.49.2 still honours it under the 2020-12 pin (D-115-03-C, measured by \
              this module's own fuzz_support_tests), which is what makes its VALUES live schema \
              positions."
+        );
+    }
+
+    /// The ARRAY-position twin of
+    /// [`v2_pin_rewrites_an_embedded_resource_in_every_spec_defined_subschema_map`]:
+    /// an embedded schema resource carrying a legacy `$schema` is rewritten at
+    /// EVERY spec-defined array position, at index 0 and beyond.
+    ///
+    /// `115-REVIEW.md` **WR-03**, the round-4 residual. Before this fence,
+    /// deleting BOTH `Value::Array` arms — the detector's at
+    /// [`first_legacy_dialect`] and the rewriter's at [`pin_dialect_in_place`] —
+    /// passed the entire suite: 25/25 here, 21/21 property draws and a clean
+    /// fuzz `cargo check`, measured independently by the round-4 reviewer and
+    /// again by the round-4 verifier. The descent was correct and unfenced.
+    ///
+    /// # Why the literal below is this test's OWN, and why there is no shipped mirror
+    ///
+    /// Array descent consults NO list — it is unconditional on `Value::Array`,
+    /// which is precisely why the position is safe from the list-incompleteness
+    /// defect class (CR-01, WR-02) that a `SUBSCHEMA_ARRAY_KEYWORDS` constant
+    /// would import. A shipped constant here would be a fourth mirror to keep in
+    /// lockstep for zero implementation benefit. The literal stays local for the
+    /// standing `D-115-AI(4)` reason: a fence's reachability must not be derived
+    /// from the artifact it checks.
+    ///
+    /// # The anti-vacuity assertion is a HARD-CODED count, deliberately
+    ///
+    /// `115-REVIEW.md` WR-01 showed that an expectation spelled as the PRODUCT
+    /// OF THE TWO LITERALS' OWN LENGTHS recomputes the loop bound from the loop
+    /// bound and can never fail — it does not notice a SHORTENED literal, which
+    /// is the drift it is credited with catching. `8` is written out so that
+    /// deleting a keyword or an index from the sweep fails this test.
+    #[test]
+    fn v2_pin_rewrites_an_embedded_resource_at_every_spec_defined_array_position() {
+        use std::borrow::Cow;
+
+        // This test's OWN literal — there is no shipped list. See the rustdoc.
+        let containers = ["allOf", "anyOf", "oneOf", "prefixItems"];
+        // 0 catches "descends into arrays at all"; 2 catches "visits only the
+        // first element", which is a distinct and real walk defect.
+        let indices = [0usize, 2];
+
+        let mut examined = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+
+        for container in containers {
+            for index in indices {
+                examined += 1;
+                let schema = embedded_legacy_resource_in_array(container, index);
+                let normalized = normalize_schema_dialect(&schema);
+                let rewritten = matches!(normalized, Cow::Owned(_));
+                let declared = normalized
+                    .pointer(&format!("/{container}/{index}/$schema"))
+                    .and_then(Value::as_str);
+                if !rewritten || declared != Some(DRAFT_2020_12) {
+                    violations.push(format!(
+                        "{container}[{index}]: rewritten={rewritten}, \
+                         /{container}/{index}/$schema={declared:?}"
+                    ));
+                }
+            }
+        }
+
+        // Anti-vacuity, NOT recomputed from the loop bounds (WR-01's defect):
+        // 4 array-position keywords x 2 indices.
+        assert_eq!(
+            examined, 8,
+            "the fence must examine all 8 (array keyword, index) positions — a shortened \
+             `containers` or `indices` literal is exactly the drift this hard-coded count \
+             exists to catch, and a length-derived expectation cannot see it"
+        );
+
+        // Collected, never asserted in-loop, for the reason the map twin states.
+        assert!(
+            violations.is_empty(),
+            "an $id-bearing embedded schema resource carrying a legacy $schema was NOT rewritten \
+             in {} of {examined} ARRAY positions:\n{violations:#?}\nEach keyword above holds its \
+             subschemas in a JSON array, so both halves reach them through their `Value::Array` \
+             arm — deleting those arms is what this fence exists to catch (115-REVIEW.md WR-03). \
+             An array ELEMENT has no key, so DATA_ONLY_KEYWORDS can never apply here and no \
+             name-collision shape is possible; the observable is the borrow/own decision, which \
+             is also what gates compile_2020_12's tracing::warn!.",
+            violations.len()
         );
     }
 
@@ -1807,6 +1926,15 @@ mod tests {
                 embedded_legacy_resource_in_container("definitions", "default"),
                 true,
             ),
+            // (l) ARRAY POSITION — `115-REVIEW.md` WR-03. `allOf`/`anyOf`/
+            // `oneOf`/`prefixItems` hold their subschemas in an ARRAY, a
+            // position no test, property draw or corpus seed reached: deleting
+            // both `Value::Array` arms passed the entire suite, measured twice
+            // independently. Index **1**, not 0, so a walk that visits only the
+            // first element fails this row. It lives here rather than in a
+            // standalone test for the reason row (e) states — it then flows
+            // through BOTH the structural fence and the idempotence fence.
+            (embedded_legacy_resource_in_array("allOf", 1), true),
         ]
     }
 

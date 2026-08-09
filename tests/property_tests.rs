@@ -1252,6 +1252,34 @@ mod schema_dialect_normalization_properties {
         "dependencies",
     ];
 
+    /// The spec-defined keywords whose value is an ARRAY of subschemas
+    /// (`115-REVIEW.md` WR-03).
+    ///
+    /// # Why there is no shipped list for this to mirror
+    ///
+    /// Array descent in `src/server/output_validation.rs` is UNCONDITIONAL on
+    /// `Value::Array` and consults no keyword list, so — unlike
+    /// [`SUBSCHEMA_MAP_KEYWORDS`] — there is nothing here to drift from and
+    /// nothing for [`keyword_lists_mirror_the_shipped_ones`] to guard. That is
+    /// also why the position is immune to the list-incompleteness defect class
+    /// (CR-01, WR-02): an array ELEMENT has no key, so there is no
+    /// author-chosen name for a `DATA_ONLY_KEYWORDS` entry to collide with, and
+    /// no list whose omission could hide one.
+    ///
+    /// What the position IS vulnerable to is the walk losing its `Value::Array`
+    /// arms altogether — which passed the entire suite until 115-20, measured
+    /// twice independently. This draw is what makes the generated space able to
+    /// contain that defect.
+    ///
+    /// # Why the rename-invariance property does NOT draw from this
+    ///
+    /// [`arb_embedded_schema_document`] exists to prove a document's meaning is
+    /// invariant under a change of AUTHOR-CHOSEN NAME. An array position has no
+    /// name, so a "renamed" pair built at one would be byte-identical — a
+    /// vacuous pass that inflates the sample count while proving nothing. Only
+    /// [`arb_schema_document`] widens; that asymmetry is deliberate.
+    const ARRAY_CONTAINER_DRAW: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+
     /// The subschema-map keyword the generated resource is filed under: all six
     /// of [`CONTAINER_DRAW`].
     ///
@@ -1295,6 +1323,26 @@ mod schema_dialect_normalization_properties {
         proptest::sample::select(CONTAINER_DRAW)
     }
 
+    /// Either position class: the six MAP containers of [`CONTAINER_DRAW`] plus
+    /// the four ARRAY containers of [`ARRAY_CONTAINER_DRAW`].
+    ///
+    /// Used by [`arb_schema_document`] only. [`arb_embedded_schema_document`]
+    /// keeps the map-only [`arb_container`] — see [`ARRAY_CONTAINER_DRAW`] for
+    /// why widening the rename-invariance draw would generate vacuous pairs.
+    ///
+    /// A `Vec` built once per draw rather than a `const` concatenation: slice
+    /// concatenation is not `const` on stable, and `proptest::sample::select`
+    /// takes anything `AsRef<[T]>`. The two source literals stay separate so
+    /// each keeps its own rustdoc and its own drift story.
+    fn arb_any_position_container() -> impl Strategy<Value = &'static str> {
+        let all: Vec<&'static str> = CONTAINER_DRAW
+            .iter()
+            .chain(ARRAY_CONTAINER_DRAW.iter())
+            .copied()
+            .collect();
+        proptest::sample::select(all)
+    }
+
     /// Where a generated document filed its embedded schema resource.
     #[derive(Debug, Clone)]
     struct EmbeddedPointer {
@@ -1331,6 +1379,12 @@ mod schema_dialect_normalization_properties {
     /// When `container` IS `properties` the resource and the `$ref` holder share
     /// one map — the resource goes under `name` and the `$ref` under `n`; the
     /// caller guarantees `name != "n"` so the two never collide.
+    ///
+    /// When `container` is one of [`ARRAY_CONTAINER_DRAW`] the resource is filed
+    /// at element **0** of an array and `name` is IGNORED — an array element has
+    /// no key. The caller records `"0"` as the pointer segment, which is what
+    /// keeps [`EmbeddedPointer`] usable unchanged at both position classes:
+    /// `/allOf/0/$schema` is a well-formed RFC 6901 pointer.
     fn embed_resource(
         object: &mut serde_json::Map<String, serde_json::Value>,
         container: &'static str,
@@ -1353,11 +1407,20 @@ mod schema_dialect_normalization_properties {
             serde_json::Value::String("integer".to_string()),
         );
 
+        // ARRAY POSITION: the segment is the INDEX, not the drawn name.
+        let is_array_position = ARRAY_CONTAINER_DRAW.contains(&container);
+        let segment = if is_array_position { "0" } else { name };
+
         // A LOCAL JSON pointer, never a scheme'd URI (SEP-2106).
-        let reference = serde_json::json!({ "$ref": format!("#/{container}/{name}") });
+        let reference = serde_json::json!({ "$ref": format!("#/{container}/{segment}") });
 
         let mut properties = serde_json::Map::new();
-        if container == "properties" {
+        if is_array_position {
+            object.insert(
+                container.to_string(),
+                serde_json::Value::Array(vec![serde_json::Value::Object(inner)]),
+            );
+        } else if container == "properties" {
             properties.insert(name.to_string(), serde_json::Value::Object(inner));
         } else {
             let mut named = serde_json::Map::new();
@@ -1411,7 +1474,7 @@ mod schema_dialect_normalization_properties {
             arb_dialect(),
             any::<bool>(),
             arb_definition_name(),
-            arb_container(),
+            arb_any_position_container(),
         )
             .prop_map(
                 |(body, dialect, nested_dialect, embed, drawn_name, container)| {
@@ -1428,7 +1491,20 @@ mod schema_dialect_normalization_properties {
                     let embedded = if embed {
                         let name = disambiguate(drawn_name);
                         embed_resource(&mut object, container, &name, nested_dialect.as_deref());
-                        Some(EmbeddedPointer { container, name })
+                        // At an ARRAY position the pointer segment is the INDEX
+                        // `embed_resource` filed the resource at, not the drawn
+                        // name — an array element has no key. `/allOf/0/$schema`
+                        // is a valid RFC 6901 pointer, so EmbeddedPointer serves
+                        // both position classes unchanged (115-20 D-115-20-B).
+                        let segment = if ARRAY_CONTAINER_DRAW.contains(&container) {
+                            "0".to_string()
+                        } else {
+                            name
+                        };
+                        Some(EmbeddedPointer {
+                            container,
+                            name: segment,
+                        })
                     } else {
                         None
                     };
