@@ -357,31 +357,7 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             dual_run,
         } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
-            if *dual_run {
-                run_dual_conformance_test(
-                    url,
-                    *strict,
-                    domain.clone(),
-                    cli.timeout,
-                    cli.insecure,
-                    cli.api_key.as_deref(),
-                    oauth,
-                    cli.format,
-                )
-                .await
-            } else {
-                run_conformance_test(
-                    url,
-                    *strict,
-                    domain.clone(),
-                    cli.timeout,
-                    cli.insecure,
-                    cli.api_key.as_deref(),
-                    cli.transport.as_deref(),
-                    oauth,
-                )
-                .await
-            }
+            run_conformance_command(cli, url, *strict, domain.clone(), *dual_run, oauth).await
         },
         Commands::Tools { url, test_all } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
@@ -514,6 +490,51 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             )
             .await
         },
+    }
+}
+
+/// Run the `Conformance` subcommand, choosing the single-era or the 117-11
+/// `--dual-run` orchestrator.
+///
+/// Extracted from [`dispatch_command`] for the reason `run_diagnose_command`
+/// already was: the era branch is the one arm with its own control flow, and
+/// inline it put the dispatcher at cognitive **25** against CI's PR-blocking
+/// `pmat quality-gate --checks complexity` threshold of 23 (pmat 3.15.0). Note
+/// `make quality-gate` does NOT run pmat — per Phase 75 D-07 pmat is CI-only to
+/// keep the dev loop fast — so this class of regression is invisible locally and
+/// is caught only on a PR. Do not inline it back.
+async fn run_conformance_command(
+    cli: &Cli,
+    url: &str,
+    strict: bool,
+    domain: Option<Vec<String>>,
+    dual_run: bool,
+    oauth: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+) -> Result<TestReport> {
+    if dual_run {
+        run_dual_conformance_test(
+            url,
+            strict,
+            domain,
+            cli.timeout,
+            cli.insecure,
+            cli.api_key.as_deref(),
+            oauth,
+            cli.format,
+        )
+        .await
+    } else {
+        run_conformance_test(
+            url,
+            strict,
+            domain,
+            cli.timeout,
+            cli.insecure,
+            cli.api_key.as_deref(),
+            cli.transport.as_deref(),
+            oauth,
+        )
+        .await
     }
 }
 
