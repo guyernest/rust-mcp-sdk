@@ -258,7 +258,14 @@ equations:
               dependentSchemas / dependencies are maps from author-chosen names to
               subschemas, so every one of those values is descended into unconditionally
               and the data-only exclusion is NEVER applied to those maps' own keys — those
-              keys are names, not keywords
+              keys are names, not keywords;
+              and descend into every ELEMENT of an array-valued member, because a keyword whose
+              value is an array of subschemas (allOf / anyOf / oneOf / prefixItems) holds live
+              schema positions at every index — an array element has NO key, so the data-only
+              exclusion has nothing to test against and is never applied there
+              (115-20: stated as the general rule the code implements — descend into every array
+               element — rather than as an enumeration of the four keywords, because an
+               enumeration is a list that can drift and the shipped descent consults none)
               (115-14: this clause previously specified the position-BLIND walk, under which
               a $defs entry an author named `default` was visited by neither half.
                115-16: the enumeration stood at FIVE keywords and omitted `dependencies`;
@@ -304,7 +311,18 @@ equations:
       control was the NAME of its `$defs` entry — `$defs.default` instead of `$defs.Inner` —
       measured `(v1, v2) = (Conforms, Conforms)` with nothing rewritten, against the control's
       `(Conforms, Violates)` with `rewritten=true`. The name-position clause of this invariant
-      is what that measurement forced
+      is what that measurement forced.
+      115-20 ARRAY-POSITION COMPLETION (`115-REVIEW.md` WR-03): such a resource is equally
+      reached at any INDEX of an array-valued `allOf` / `anyOf` / `oneOf` / `prefixItems`
+      member. This half needs no name clause and admits no collision shape — an array element
+      has no key for a `const` / `enum` / `default` / `examples` entry to collide with — which
+      is why, unlike the name-position clause above, it was NOT forced by a behavioural failure.
+      The shipped descent was already correct and unconditional; what was absent was every
+      fence around it. Deleting both `Value::Array` arms passed the ENTIRE suite, measured
+      twice independently, until 115-20 added
+      `v2_pin_rewrites_an_embedded_resource_at_every_spec_defined_array_position`, the
+      `normalization_cases()` array row, the widened property draw and corpus seed
+      `16_all_of_embedded_legacy`
     - >-
       On Era::V1 the verdict for any (schema, instance) pair is byte-identical to the
       pre-Phase-115 verdict
@@ -326,7 +344,8 @@ equations:
       reachable by descending into every member value EXCEPT a `const` / `enum` / `default` /
       `examples` payload — and the VALUES of a `properties` / `patternProperties` / `$defs` /
       `definitions` / `dependentSchemas` / `dependencies` map are always schema positions,
-      regardless of the author-chosen name they appear under. This is the checkable form of
+      regardless of the author-chosen name they appear under, and so is every ELEMENT of an
+      array-valued member (`allOf` / `anyOf` / `oneOf` / `prefixItems`), regardless of index. This is the checkable form of
       "on v2 the pin wins unconditionally"; the prose form was untestable, and the root-only
       normalizer satisfied the prose while measurably failing this. 115-14 SCOPE CORRECTION —
       the invariant previously stated an UNSCOPED total over every `$schema` string in the

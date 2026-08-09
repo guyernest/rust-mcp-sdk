@@ -1,10 +1,58 @@
 ---
 phase: 115-json-schema-2020-12-structured-output-caching-hints
 verified: 2026-08-02T19:10:00Z
-status: human_needed
+status: passed
 score: 4/4 must-haves verified
 overrides_applied: 0
-re_verification:
+re_verification_round_5:
+  re_verified: 2026-08-08
+  previous_status: human_needed
+  summary: >-
+    Round 4's `human_needed` rested on TWO claims. Both are now false, one of them because it
+    was already false when written.
+  human_verification_items_resolved:
+    - item: "Triage the round-4 review findings into `deferred-items.md`"
+      resolution: ALREADY_DONE_WHEN_WRITTEN
+      evidence: >-
+        `D-115-AM` exists at `deferred-items.md:1464` — "the round-4 `115-REVIEW.md` findings,
+        triaged on the owner's approval" — booked 2026-08-02 by the `/gsd:execute-phase 115`
+        orchestrator at phase close-out on the owner's `approved` answer to items 3 and 4 of
+        `115-HUMAN-UAT.md`. It covers all 11 findings: CR-01 recorded as CLOSED in `71a44f40`,
+        WR-03/WR-01/WR-05/WR-04 each restated individually, and WR-02/WR-06/IN-01..IN-04 booked
+        as read. This verification's claim that "no `D-115-AM` exists" was true at the moment
+        the ledger was last read and false by the time the report was committed — the booking
+        landed after it. A record-ordering artifact, not a missing decision.
+    - item: "Decide the disposition of WR-03 (array-position schema descent)"
+      resolution: DECIDED_AND_EXECUTED
+      evidence: >-
+        The owner's 2026-08-02 `approved` selected defer-and-book, recorded as `D-115-AM (2)`.
+        On **2026-08-08 the owner re-dispositioned WR-03 to FIX**, which `115-20` executed —
+        option (a) of the two this report offered, the gap-closure plan. `D-115-AM (2)` now
+        carries a labelled STATUS CHANGE banner; its original text is preserved verbatim per
+        this phase's rule on retracted dispositions.
+  gap_closed_by_115_20: >-
+    The measurement that defined the gap has been INVERTED and re-measured. This report
+    recorded that deleting both `Value::Array` arms left `output_validation` 25/25, property
+    21/21 and a clean fuzz `cargo check` — the array position was unfenced. With `115-20`
+    landed, the same deletion FAILS at three layers: the unit grid fence (`8 of 8` array
+    positions, each named), the `normalization_cases()` structural fence (borrow/own wrong on
+    the `allOf` row), and corpus seed `16_all_of_embedded_legacy` run in TRUE isolation
+    (invariant 5, exit 77, the seed reproduced verbatim in the panic's `Input was:` line). The
+    contract's `walk:` clause, POSTCONDITION and embedded-resource invariant now state the
+    array position, as do all three `contracts/binding.yaml` note heads. Verbatim failure text
+    in `115-20-SUMMARY.md`.
+  file_hash_superseded: >-
+    `a97f5cb2…3192c`, the `src/server/output_validation.rs` hash rounds 1-4 recorded and
+    re-confirmed, NO LONGER MATCHES — `115-20` added a fixture, a case row and a fence to that
+    file. The post-115-20 value is
+    `1f335399fa05af7bb6ddd31590ebc857e3a2aece458ab6e60d3ffe1f4c6ab6dc`, confirmed identical
+    before and after that plan's negative control.
+  still_residual: >-
+    `D-115-AM` (3) WR-01, (4) WR-05, (5) WR-04 and (6) remain residual and unowned on the
+    owner's original `approved` disposition. Only WR-03 was re-dispositioned. This phase is
+    `passed` with those bookings standing, not with them closed.
+  regressions: []
+superseded_re_verification:
   previous_status: human_needed
   previous_score: 4/4
   gaps_closed:
