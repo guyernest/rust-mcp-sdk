@@ -38,7 +38,9 @@ use std::sync::Arc;
 use pmcp::server::streamable_http_server::StreamableHttpServer;
 use pmcp::server::task_store::{InMemoryTaskStore, TaskStore};
 use pmcp::server::typed_tool::TypedTool;
-use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use pmcp::shared::streamable_http::{
+    StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+};
 use pmcp::types::{ClientCapabilities, TaskSupport, ToolExecution};
 use pmcp::{Client, ErrorCode, Server, ToolCallResponse};
 use tokio::sync::Mutex;
@@ -140,26 +142,16 @@ fn http_client(
     bound: SocketAddr,
     owner: Option<&str>,
 ) -> pmcp::Result<Client<StreamableHttpTransport>> {
-    let extra_headers = owner
-        .map(|id| vec![("x-pmcp-user-id".to_string(), id.to_string())])
-        .unwrap_or_default();
-    let config = StreamableHttpTransportConfig {
-        url: Url::parse(&format!("http://{bound}"))
-            .map_err(|e| pmcp::Error::Internal(e.to_string()))?,
-        extra_headers,
-        auth_provider: None,
-        // `StreamableHttpTransportConfig::{session_id, on_resumption_token}` are v1-only
-        // and gated behind `v1-compat` (Phase 117). This file is era-NEUTRAL, so the
-        // fields are gated per-field rather than the file being gated as a whole — that
-        // keeps these tests RUNNING on `cargo test -p pmcp --no-default-features
-        // --features full-v2`, which is where the severed build gets its coverage.
-        #[cfg(feature = "v1-compat")]
-        session_id: None,
-        enable_json_response: true,
-        #[cfg(feature = "v1-compat")]
-        on_resumption_token: None,
-        http_middleware_chain: None,
-    };
+    // Builder, not a struct literal: `session_id` / `on_resumption_token` are
+    // `v1-compat`-only, so a literal naming them breaks the `full-v2` build.
+    let mut builder = StreamableHttpTransportConfigBuilder::new(
+        Url::parse(&format!("http://{bound}")).map_err(|e| pmcp::Error::Internal(e.to_string()))?,
+    )
+    .enable_json_response();
+    if let Some(id) = owner {
+        builder = builder.with_header("x-pmcp-user-id", id);
+    }
+    let config = builder.build();
     Ok(Client::new(StreamableHttpTransport::new(config)))
 }
 

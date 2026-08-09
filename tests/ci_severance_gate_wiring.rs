@@ -357,12 +357,11 @@ fn severance_job_exists() {
     // All FOUR fences the message below enumerates. Keeping one of them in a
     // separate hand-written assertion made the list labelled "four fences"
     // check three, and gave a fifth fence two plausible homes.
-    for required in [
-        "--features full-v2",
-        "--no-default-features",
-        "-p pmcp",
-        r#"RUSTFLAGS="-D warnings""#,
-    ] {
+    for required in SEVERED_FENCES
+        .iter()
+        .copied()
+        .chain([r#"RUSTFLAGS="-D warnings""#])
+    {
         assert!(
             script.contains(required),
             "FAILURE MODE: the `{SEVERANCE_JOB}` build command in {WORKFLOW_REL} is missing \
@@ -377,7 +376,7 @@ fn severance_job_exists() {
         );
     }
 
-    for forbidden in ["--all-features", "--all-targets"] {
+    for forbidden in SEVERANCE_FORBIDDEN_FLAGS.iter().copied() {
         assert!(
             !script.contains(forbidden),
             "FAILURE MODE: the `{SEVERANCE_JOB}` build command in {WORKFLOW_REL} contains \
@@ -405,16 +404,11 @@ fn severance_job_exists() {
 /// until Phase 117's fix pass nothing executed it.
 #[test]
 fn the_runtime_severance_proofs_are_executed_by_ci() {
-    let invocation = step_script_containing(SEVERANCE_JOB, PROOF_SCRIPT_REL);
-    assert!(
-        invocation.contains(PROOF_SCRIPT_REL),
-        "FAILURE MODE: no `run:` step in `{SEVERANCE_JOB}` invokes `{PROOF_SCRIPT_REL}`.\n\
-         CONSEQUENCE: the runtime severance proofs run only when a human types the command out of \
-         `docs/v1-sunset-policy.md`, which is not enforcement.\n\
-         WHAT TO DO: restore the step. It must stay in `{SEVERANCE_JOB}`, which is in \
-         `{GATE_JOB}.needs`.\n\
-         step read: {invocation}"
-    );
+    // `step_script_containing` already asserts EXACTLY ONE `run:` step in the job
+    // contains this needle, with the "no step invokes the script" diagnosis in its
+    // own message — so a `contains` re-check on its return value here could never
+    // fail. The call IS the assertion.
+    step_script_containing(SEVERANCE_JOB, PROOF_SCRIPT_REL);
 
     let source = proof_script_source();
     for proof in RUNTIME_SEVERANCE_PROOFS {
@@ -636,23 +630,13 @@ fn the_feature_flags_job_is_still_not_in_gate_needs() {
 
 #[test]
 fn the_workflow_parse_is_not_vacuous() {
-    let all_jobs = jobs();
-    assert!(
-        all_jobs.len() >= MINIMUM_JOBS,
-        "FAILURE MODE: {WORKFLOW_REL} parsed to {} job(s), below the {MINIMUM_JOBS} floor.\n\
-         WHAT TO DO: fix the reader; never lower the floor.",
-        all_jobs.len()
-    );
-
+    // The MINIMUM_JOBS and MINIMUM_GATE_NEEDS floors are NOT re-asserted here.
+    // `jobs()` and `gate_needs()` each panic on their own floor before returning,
+    // so a copy of those assertions in this test can never be reached by a
+    // failing case — it reads as coverage while catching nothing. Calling the two
+    // readers is what exercises the floors; what follows is the check only this
+    // test makes.
     let needs = gate_needs();
-    assert!(
-        needs.len() >= MINIMUM_GATE_NEEDS,
-        "FAILURE MODE: `{GATE_JOB}.needs` parsed to {} entr(ies), below the \
-         {MINIMUM_GATE_NEEDS} floor.\n\
-         WHAT TO DO: fix the reader; never lower the floor.",
-        needs.len()
-    );
-
     let (env, run) = gate_eval_step();
     // Measured against the ACTUAL `needs` length, not the floor constant: this is
     // the general form of the wiring invariant (every awaited job is also bound),

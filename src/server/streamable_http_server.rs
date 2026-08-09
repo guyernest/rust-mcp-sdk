@@ -438,19 +438,18 @@ impl StreamableHttpServerConfig {
     /// For servers directly exposed to the internet, use `Default::default()`
     /// instead (which defaults to `AllowedOrigins::localhost()`).
     pub fn stateless() -> Self {
+        // Only the fields that DIFFER from `Default` are named. The two session
+        // callbacks, `http_middleware` and `max_request_bytes` are already
+        // `None`/default there, so spelling them again added two `#[cfg]`s to a
+        // count this phase is measured by, for no change in value.
         Self {
             #[cfg(feature = "v1-compat")]
             session_id_generator: None,
             enable_json_response: true,
             #[cfg(feature = "v1-compat")]
             event_store: None,
-            #[cfg(feature = "v1-compat")]
-            on_session_initialized: None,
-            #[cfg(feature = "v1-compat")]
-            on_session_closed: None,
-            http_middleware: None,
             allowed_origins: Some(AllowedOrigins::any()),
-            max_request_bytes: crate::server::limits::DEFAULT_MAX_REQUEST_BYTES,
+            ..Default::default()
         }
     }
 }
@@ -583,55 +582,21 @@ use crate::types::mrtr::MAX_HEADER_VALUE_LEN as MAX_V2_HEADER_VALUE_LEN;
 // callers into the pair, so it is now private to `v1_session.rs` and this file
 // never names it.)
 //
-// The `EventStoreHandle` alias that used to be declared HERE moved into
-// `v1_session.rs` in plan 117-13 — a seam collapse, not a preference. Plan
-// 117-12's note said it had to stay because BOTH halves carried it in their
-// signatures; 117-13 split the GET body into the pair, which deleted the twin's
-// last three uses of it (`resumability_store`, `replay_sse_events_from_header`,
-// `sse_event_for_message`), and the transport's own last use went with them. On
-// a `full-v2` build the alias was then dead, and `RUSTFLAGS="-D warnings"` says
-// so. The two ways to keep it here were a `v1-compat` `#[cfg]` attribute on the
-// alias — which would be the first feature attribute in this 6,000-line file,
-// the very thing the paired-module design exists to avoid, and would break the
-// `grep -c` this file's severance is measured by — or a blanket `allow(dead_code)`
-// that
-// blunts the exact lint plan 117-05 wired the CI gate around. Declaring it in
-// the real half, where its only remaining users live, is neither.
+// `EventStoreHandle` is declared in `v1_session.rs`, not here: its only
+// remaining users are in the real half, and on a `full-v2` build an alias
+// declared here would be dead under `RUSTFLAGS="-D warnings"`. Its own rustdoc
+// on the alias explains why, so it is not restated here.
 //
-// The null twin still declares nothing of the sort: it is forbidden from naming
-// `Arc<dyn EventStore>` at all (`tests/v1_severability_tripwire.rs` reads that as
-// the twin holding v1 state), and after 117-13 it does not name the alias in a
-// signature either.
+// The [`EventStore`] trait, [`InMemoryEventStore`] and the `LAST_EVENT_ID`
+// constant in `crate::shared::http_constants` are still compiled on BOTH feature
+// sets and gated at their own declaration sites. They cannot live in the pair:
+// the first two are public API whose path the `pub(crate)` pair would change, the
+// public `StreamableHttpServerConfig::event_store` field pins the concrete store,
+// and `InMemoryEventStore` is in the tripwire's `FORBIDDEN_STATE_TYPES` so the
+// null twin may never declare it.
 //
-// SEVERABILITY — handed forward by plan 113-08, PICKED UP by Phase 117 / SMPL-01.
-// What that comment asked for is now DONE for the era decisions, for all v1
-// session, SSE and resumability STATE, for the v1 session LIFECYCLE, and for the
-// SSE REPLAY PATH: they live in `v1_session.rs`, and a `full-v2` build compiles
-// the null twin instead, so it allocates no session map, registers no SSE stream,
-// can never hand out an event store, and — since plan 117-12 — contains no reader
-// of `Last-Event-ID` at all. The gating is structural — the twin is zero-sized,
-// and the replay twin has no header access to order — not a runtime branch.
-//
-// Still compiled on BOTH feature sets, and gated behind the same seam by plan
-// 117-13: the [`EventStore`] trait, [`InMemoryEventStore`] and the
-// `LAST_EVENT_ID` constant in `crate::shared::http_constants`.
-//
-// Those three could NOT move in 117-12, and the reason is worth recording so the
-// next attempt does not rediscover it. The trait and the store are PUBLIC API
-// (`pmcp::server::streamable_http_server::{EventStore, InMemoryEventStore}`), and
-// the public `StreamableHttpServerConfig::event_store` field pins the concrete
-// `InMemoryEventStore`. Moving them into the `pub(crate)` pair would either
-// change that public path or require a `#[cfg]` on the config field — which is
-// precisely plan 117-13's subject. The store is ALSO in the tripwire's
-// `FORBIDDEN_STATE_TYPES`, so the null twin can never declare it, which rules out
-// re-exporting the pair's copy. Trait, store and config field are ONE edit, and
-// that edit belongs to 117-13. `LAST_EVENT_ID` is the same shape: its two readers
-// (this transport's replay path, now in the pair, and the client at
-// `src/shared/streamable_http.rs`) must be gated together.
-//
-// Nothing is DELETED anywhere in Phase 117. Gating is reversible and semver-safe;
-// removing the pair is a MAJOR version change, tracked as SMPL-F1 for pmcp 3.0
-// and governed by the (deliberately date-free) `docs/v1-sunset-policy.md`.
+// Removal — as opposed to gating — is SMPL-F1 (pmcp 3.0), governed by
+// `docs/v1-sunset-policy.md`.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -3109,8 +3074,9 @@ fn listen_sse_event(frame: crate::server::subscriptions::ListenFrame) -> Event {
 /// `X-Accel-Buffering: no`, and no-transform caching.
 ///
 /// The `Mcp-Session-Id` header is NEVER attached: there are no sessions on v2
-/// (HTTP-01), so [`v1::attach_sse_response_headers`] — which requires one — is
-/// deliberately not reused here.
+/// (HTTP-01), so `v1::attach_sse_response_headers` — which requires one — is
+/// deliberately not reused here. (Plain code span, not an intra-doc link: that
+/// helper is private to the v1 half, so a link would not resolve from here.)
 fn attach_listen_response_headers(response: &mut Response, v2_outbound: Option<&(String, String)>) {
     let headers = response.headers_mut();
     headers.insert(

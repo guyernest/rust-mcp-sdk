@@ -118,14 +118,14 @@ pub(crate) type EventStoreHandle = Arc<dyn EventStore>;
 ///
 /// Named so the field type below reads at a glance and so the twin can be
 /// compared against a short, stable signature rather than a nested generic.
-pub(crate) type SseStreamMap = HashMap<String, mpsc::UnboundedSender<TransportMessage>>;
+type SseStreamMap = HashMap<String, mpsc::UnboundedSender<TransportMessage>>;
 
 /// What the transport remembers about one MCP 2025-11-25 session.
 ///
 /// Both fields are private to this module: every read and write goes through an
 /// operation below, so the twin never has to model a shape it does not hold.
 #[derive(Debug, Clone)]
-pub(crate) struct SessionInfo {
+struct SessionInfo {
     initialized: bool,
     protocol_version: Option<String>,
 }
@@ -145,9 +145,9 @@ pub(crate) struct SessionInfo {
 #[derive(Clone, Default)]
 pub(crate) struct V1State {
     /// Active v1 SSE streams, keyed by session id.
-    pub(crate) sse_streams: Arc<RwLock<SseStreamMap>>,
+    sse_streams: Arc<RwLock<SseStreamMap>>,
     /// v1 session tracking: session id -> session info.
-    pub(crate) sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+    sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     /// The v1 resumability event store, type-erased from `config.event_store`.
     ///
     /// Always derived from the config in production ([`V1State::new`] is the
@@ -207,7 +207,7 @@ impl V1State {
 // ---------------------------------------------------------------------------
 
 /// Is a v1 session with this id being tracked?
-pub(crate) fn session_exists(state: &V1State, session_id: &str) -> bool {
+fn session_exists(state: &V1State, session_id: &str) -> bool {
     state.sessions.read().contains_key(session_id)
 }
 
@@ -249,7 +249,7 @@ pub(crate) fn session_protocol_version(state: &V1State, session_id: &str) -> Opt
 }
 
 /// Stop tracking a v1 session.
-pub(crate) fn remove_session(state: &V1State, session_id: &str) {
+fn remove_session(state: &V1State, session_id: &str) {
     state.sessions.write().remove(session_id);
 }
 
@@ -258,12 +258,12 @@ pub(crate) fn remove_session(state: &V1State, session_id: &str) {
 // ---------------------------------------------------------------------------
 
 /// Is an SSE stream already open for this session?
-pub(crate) fn sse_stream_exists(state: &V1State, session_id: &str) -> bool {
+fn sse_stream_exists(state: &V1State, session_id: &str) -> bool {
     state.sse_streams.read().contains_key(session_id)
 }
 
 /// Register the sending half of a newly opened v1 SSE stream.
-pub(crate) fn register_sse_stream(
+fn register_sse_stream(
     state: &V1State,
     session_id: String,
     sender: mpsc::UnboundedSender<TransportMessage>,
@@ -272,7 +272,7 @@ pub(crate) fn register_sse_stream(
 }
 
 /// Close the SSE stream for a session, if one is open.
-pub(crate) fn remove_sse_stream(state: &V1State, session_id: &str) {
+fn remove_sse_stream(state: &V1State, session_id: &str) {
     state.sse_streams.write().remove(session_id);
 }
 
@@ -719,7 +719,7 @@ pub(crate) async fn store_response_event(
 /// therefore evaluated at `era = None`, which [`sessions_active`] resolves to
 /// exactly the pre-113 config-only behavior for the v1 / non-opted-in traffic
 /// that can reach here.
-pub(crate) fn resolve_sse_session(
+fn resolve_sse_session(
     state: &ServerState,
     incoming_session_id: Option<String>,
 ) -> std::result::Result<String, Response> {
@@ -759,7 +759,7 @@ pub(crate) fn resolve_sse_session(
 /// reads that header (T-113-29). On a `full-v2` build the guarantee is stronger
 /// still: this function does not exist, and the twin that replaces it names no
 /// header at all.
-pub(crate) async fn replay_sse_events_from_header(
+async fn replay_sse_events_from_header(
     headers: &HeaderMap,
     tx: &mpsc::UnboundedSender<TransportMessage>,
     event_store: Option<&EventStoreHandle>,
@@ -791,7 +791,7 @@ pub(crate) async fn replay_sse_events_from_header(
 /// store write in parallel.
 ///
 /// `event_store` comes from [`resumability_store`], so a v2 stream writes nothing.
-pub(crate) fn sse_event_for_message(
+fn sse_event_for_message(
     msg: &TransportMessage,
     session_id: &str,
     event_store: Option<&EventStoreHandle>,
@@ -832,7 +832,7 @@ pub(crate) fn incoming_session_header(headers: &HeaderMap) -> Option<String> {
 
 /// Attach SSE-specific hardening headers (session, cache-control, connection)
 /// to the given axum response.
-pub(crate) fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
+fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
     response
         .headers_mut()
         .insert(MCP_SESSION_ID, session_id.parse().unwrap());
@@ -900,7 +900,6 @@ pub(crate) async fn handle_get_sse_body(state: &ServerState, headers: &HeaderMap
     replay_sse_events_from_header(headers, &tx, resumability.as_ref()).await;
 
     let stream = UnboundedReceiverStream::new(rx);
-    let session_id_for_header = session_id.clone();
     let session_id_for_stream = session_id.clone();
     let event_store = resumability;
 
@@ -913,7 +912,7 @@ pub(crate) async fn handle_get_sse_body(state: &ServerState, headers: &HeaderMap
     }));
 
     let mut response = sse.into_response();
-    attach_sse_response_headers(&mut response, &session_id_for_header);
+    attach_sse_response_headers(&mut response, &session_id);
     response
 }
 

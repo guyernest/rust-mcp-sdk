@@ -819,6 +819,15 @@ impl StreamableHttpTransport {
         }
         if let Some(value) = headers.get(MCP_SESSION_ID) {
             if let Ok(text) = value.to_str() {
+                // Compare under the READ lock first. After the first response of
+                // a session the value is identical every time, and this is the
+                // same lock `build_request_with_middleware` read-holds for every
+                // outgoing request — so an unconditional write makes a writer
+                // contend with the request path once per response, to store a
+                // value that is already there.
+                if self.config.read().session_id.as_deref() == Some(text) {
+                    return;
+                }
                 self.config.write().session_id = Some(text.to_string());
             }
         }
@@ -840,10 +849,18 @@ impl StreamableHttpTransport {
     /// and clear it.
     #[cfg(feature = "v1-compat")]
     async fn terminate_session(&self) -> Result<()> {
-        if self.session_id().is_none() {
+        // ONE read guard yields both facts. Two separate acquisitions (a
+        // presence check, then a `url` read) let a concurrent `set_session_id`
+        // land between them and build the DELETE from two config states — the
+        // torn-snapshot shape WR-15 declared unrepresentable for
+        // `build_request_with_middleware`. Testing `is_some()` in place also
+        // drops the `String` clone `session_id()` would allocate and discard.
+        let Some(url) = ({
+            let config = self.config.read();
+            config.session_id.is_some().then(|| config.url.clone())
+        }) else {
             return Ok(());
-        }
-        let url = self.config.read().url.clone();
+        };
         let request = self
             .build_request_with_middleware(Method::DELETE, url.as_str(), vec![])
             .await?;

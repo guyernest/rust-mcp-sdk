@@ -2,7 +2,9 @@
 
 use pmcp::server::streamable_http_server::StreamableHttpServer;
 use pmcp::server::Server;
-use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use pmcp::shared::streamable_http::{
+    StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+};
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::{ClientCapabilities, ClientRequest, Implementation, InitializeRequest, Request};
 // Use boxed error for tests to satisfy clippy
@@ -32,25 +34,17 @@ async fn test_streamable_http_transport_send_receive() -> Result<()> {
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
     // Setup the client transport
-    let client_config = StreamableHttpTransportConfig {
-        url: Url::parse(&format!("http://{}", server_addr)).map_err(|e| {
+    // Built through the builder, not a struct literal: `session_id` and
+    // `on_resumption_token` are `v1-compat`-only fields, so a literal naming them
+    // does not compile on `full-v2` while the builder compiles on both. This is the
+    // rule `StreamableHttpTransportConfig`'s own rustdoc states.
+    let client_config = StreamableHttpTransportConfigBuilder::new(
+        Url::parse(&format!("http://{}", server_addr)).map_err(|e| {
             Box::new(pmcp::Error::Internal(e.to_string()))
                 as Box<dyn std::error::Error + Send + Sync>
         })?,
-        extra_headers: vec![],
-        auth_provider: None,
-        // `StreamableHttpTransportConfig::{session_id, on_resumption_token}` are v1-only
-        // and gated behind `v1-compat` (Phase 117). This file is era-NEUTRAL, so the
-        // fields are gated per-field rather than the file being gated as a whole — that
-        // keeps these tests RUNNING on `cargo test -p pmcp --no-default-features
-        // --features full-v2`, which is where the severed build gets its coverage.
-        #[cfg(feature = "v1-compat")]
-        session_id: None,
-        enable_json_response: false,
-        #[cfg(feature = "v1-compat")]
-        on_resumption_token: None,
-        http_middleware_chain: None,
-    };
+    )
+    .build();
     let mut client_transport = StreamableHttpTransport::new(client_config);
 
     // Create an Initialize request first (to get session ID)

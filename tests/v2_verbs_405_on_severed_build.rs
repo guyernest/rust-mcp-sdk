@@ -62,7 +62,7 @@ use std::time::Duration;
 
 use common::v2::{
     build_v2_server, delete, get, header, post, spawn_with, teardown, v2_body, v2_headers, Resp,
-    V1, V2,
+    ALLOW, V1, V2,
 };
 use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
 use pmcp::shared::http_constants::{MCP_PROTOCOL_VERSION, MCP_SESSION_ID};
@@ -79,14 +79,6 @@ const VERB_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The `405` every assertion in this file expects.
 const METHOD_NOT_ALLOWED: u16 = 405;
-
-/// The `Allow` value RFC 9110 §15.5.6 requires on every `405` this file provokes.
-///
-/// `GET` and `DELETE` are deliberately absent: they are ROUTED on both feature
-/// sets (an unrouted verb answers `404`, a different claim — see
-/// [`assert_refused_not_unrouted`]) but they are not SUPPORTED on `2026-07-28`,
-/// and `Allow` enumerates support rather than routing.
-const ALLOW: &str = "POST, OPTIONS";
 
 /// The `404` every assertion in this file explicitly REJECTS.
 ///

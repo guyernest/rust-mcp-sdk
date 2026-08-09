@@ -508,6 +508,16 @@ pub async fn spawn_tasks_server_with_store(
     (addr, handle, store)
 }
 
+/// The `Allow` value RFC 9110 §15.5.6 requires on every `405` this suite provokes.
+///
+/// Single-sourced here because the production side is likewise single-sourced:
+/// `method_not_allowed_for_verb` is THE only 405 constructor, so the expectation
+/// should have exactly one spelling too. `GET` and `DELETE` are deliberately
+/// absent — both stay ROUTED on every feature set (an unrouted verb answers
+/// `404`, a different claim), but `Allow` enumerates SUPPORT, and neither is
+/// supported on `2026-07-28`.
+pub const ALLOW: &str = "POST, OPTIONS";
+
 /// Upper bound on any single stream read or poll in the subscription suites.
 ///
 /// A hung stream must FAIL the test, not hang it.

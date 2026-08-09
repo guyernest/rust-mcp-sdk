@@ -70,6 +70,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use pmcp::shared::http_constants::MCP_SESSION_ID;
 use pmcp::shared::streamable_http::{
     StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
 };
@@ -303,7 +304,7 @@ async fn the_severed_client_stores_no_session_and_sends_no_delete() {
 
     let echoed: Vec<&SeenRequest> = seen
         .iter()
-        .filter(|request| request.headers.contains_key("mcp-session-id"))
+        .filter(|request| request.headers.contains_key(MCP_SESSION_ID))
         .collect();
     let echoed_count = echoed.len();
     assert!(

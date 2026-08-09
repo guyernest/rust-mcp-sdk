@@ -37,7 +37,7 @@ mod common;
 use async_trait::async_trait;
 use common::v2::{
     build_v2_server, default_client_capabilities, delete, get, header, post, post_raw,
-    spawn_default_config, v2_body, v2_headers, META_CLIENT_CAPABILITIES, META_CLIENT_INFO,
+    spawn_default_config, v2_body, v2_headers, ALLOW, META_CLIENT_CAPABILITIES, META_CLIENT_INFO,
     META_PROTOCOL_VERSION, REQUEST_META_KEY, V1, V2,
 };
 // Both are reached only from the `v1-compat`-gated v1 controls below.
@@ -236,18 +236,6 @@ async fn v1_session_unchanged() {
 // ===========================================================================
 // HTTP-01: GET / DELETE are 405 on v2, unchanged on v1.
 // ===========================================================================
-
-/// The `Allow` value RFC 9110 §15.5.6 makes a MUST on every `405`.
-///
-/// Asserted on BOTH verbs and BOTH feature sets: here for the CONDITIONAL v2
-/// rejection (this file runs under `v1-compat`), and in
-/// `tests/v2_verbs_405_on_severed_build.rs` for the twin's unconditional answer.
-/// One constructor — `method_not_allowed_for_verb` — produces both, so a
-/// regression in either is a regression in it.
-///
-/// `GET` and `DELETE` are deliberately absent from the list: both stay ROUTED,
-/// but `Allow` enumerates SUPPORT, and neither is supported on `2026-07-28`.
-const ALLOW: &str = "POST, OPTIONS";
 
 /// Spec: "HTTP GET or DELETE to the MCP endpoint: respond with 405 Method Not
 /// Allowed." The bogus session id proves the guard runs BEFORE session
