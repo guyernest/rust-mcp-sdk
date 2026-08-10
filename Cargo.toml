@@ -52,6 +52,31 @@ exclude = [
     # restated copy of SUBSCHEMA_MAP_KEYWORDS, and `fuzz/` is excluded above.
     # Shipping it would make `cargo test` panic on the published crate.
     "tests/keyword_list_mirrors.rs",
+    # The pinned @modelcontextprotocol/conformance suite (Node manifest, lockfile
+    # and .npmrc) is CI tooling, never crate content — measured: without this entry
+    # `cargo package --list` shipped all three files. 115-REVIEW.md CR-01 is the
+    # precedent for what a stray CI-only artifact costs downstream.
+    # tests/ci_conformance_gate_wiring.rs reads all three of
+    # conformance/package.json, conformance/package-lock.json and
+    # conformance/README.md at runtime — the first two to reconcile the suite
+    # version pin across the manifest and the lockfile `npm ci` installs from, the
+    # third for that pin's prose and the two-pin reconciliation. Shipping the
+    # reader while excluding the paths it reads would make `cargo test` panic on
+    # the published crate — the same disposition as
+    # tests/team_contracts_conformance.rs above. The two entries must never be
+    # split: ship both or exclude both.
+    # The other two in-tree dispositions were rejected here on purpose.
+    # tests/ci_severance_gate_wiring.rs SHIPS because everything it reads
+    # (.github/workflows/ci.yml, scripts/run-severance-proofs.sh) also ships, so
+    # consistency — not exclusion — is what keeps it honest; that option is closed
+    # here because conformance/ cannot ship. tests/v2_conformance_pin.rs SHIPS while
+    # reading the EXCLUDED .planning/ tree because it returns early on a missing
+    # path, and that tolerance is deliberate there (the pin degrades to a no-op
+    # downstream) but WRONG for the conformance reader, whose whole job is to fail
+    # when the wiring is absent — a reader that silently skips is exactly the
+    # vacuous gate Phase 118 exists to prevent.
+    "conformance/",
+    "tests/ci_conformance_gate_wiring.rs",
     # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",
@@ -721,6 +746,31 @@ required-features = ["streamable-http", "http-client", "testing"]
 name = "s53_v2_agent_client"
 path = "examples/s53_v2_agent_client.rs"
 required-features = ["streamable-http", "http-client"]
+
+# Phase 118 (CONF-01): the dual-version conformance TARGET. The official
+# `@modelcontextprotocol/conformance` suite (pinned in `conformance/`) is run
+# against ONE instance of this server twice — once with `--requirements
+# 2025-11-25` and once with `--requirements 2026-07-28` — which is what makes
+# "one pmcp binary serves both eras" a measured claim rather than an assertion.
+# Phase 119's DOCS-06 cites this example as the runnable v2 server.
+#
+# Its tool / resource / prompt names are DICTATED by that suite, not chosen:
+# renaming one silently breaks the scenario that consumes it.
+#
+# NUMBERING: `s54` is the next free slot — `s47`/`s48`/`s49` are each occupied
+# twice and `s50`/`s51`/`s52`/`s53` all exist. See the bijection note above the
+# `s47_v2_stateless_mrtr` block.
+#
+# `testing` joins `streamable-http` for the same reason `s52` needs it: the
+# example reads the reserved `_meta` key spellings from `pmcp::testing`
+# (`META_PROTOCOL_VERSION`) rather than hand-copying wire strings that could
+# drift. Both are folded into `full`, which is what the documented run command
+# uses. Without this entry the example would carry no required-feature guard and
+# a default-feature `cargo run --example` would fail to compile.
+[[example]]
+name = "s54_v2_dual_conformance"
+path = "examples/s54_v2_dual_conformance.rs"
+required-features = ["streamable-http", "testing"]
 
 [[bench]]
 name = "comprehensive_benchmarks"
