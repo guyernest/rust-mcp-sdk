@@ -122,12 +122,30 @@ type SseStreamMap = HashMap<String, mpsc::UnboundedSender<TransportMessage>>;
 
 /// What the transport remembers about one MCP 2025-11-25 session.
 ///
-/// Both fields are private to this module: every read and write goes through an
-/// operation below, so the twin never has to model a shape it does not hold.
+/// All three fields are private to this module: every read and write goes
+/// through an operation below, so the twin never has to model a shape it does
+/// not hold.
 #[derive(Debug, Clone)]
 struct SessionInfo {
     initialized: bool,
     protocol_version: Option<String>,
+    /// The level this session's `logging/setLevel` last asked for, if it ever
+    /// asked (phase 118.2 plan 07, D-11).
+    ///
+    /// `None` means "this session never called `logging/setLevel`". The D-12
+    /// default (`info`) is applied at RESOLUTION time, not stored here, so the
+    /// two facts — "asked for nothing" and "asked for info" — stay
+    /// distinguishable in the one place that can act on the difference.
+    ///
+    /// # Why the level lives on the SESSION and not on the server
+    ///
+    /// `ServerState::server` is one `Arc<tokio::sync::Mutex<Server>>` shared by
+    /// every session. A level stored there would let client B's `setLevel`
+    /// change client A's filtering — a cross-session information-disclosure
+    /// defect (T-118.2-07-01). The per-session home is also the correct LIFETIME:
+    /// `logging/setLevel` is retired in MCP 2026-07-28, which carries the level
+    /// per request in `_meta` instead, so a v2 build allocates none of this.
+    log_level: Option<crate::types::LoggingLevel>,
 }
 
 /// All state that exists ONLY for MCP 2025-11-25.
@@ -229,6 +247,9 @@ fn insert_session(
         SessionInfo {
             initialized,
             protocol_version,
+            // A freshly tracked session has asked for no level; `info` applies
+            // by default until it does (D-12).
+            log_level: None,
         },
     );
 }
@@ -246,6 +267,60 @@ pub(crate) fn session_protocol_version(state: &V1State, session_id: &str) -> Opt
         .read()
         .get(session_id)
         .and_then(|info| info.protocol_version.clone())
+}
+
+/// The log level a session's `logging/setLevel` last asked for, if it asked.
+///
+/// Deliberately collapses "no such session" and "session with no recorded
+/// level" into the same `None`, for exactly the reason
+/// [`session_protocol_version`] does: both cases mean "nothing overrides the
+/// default", every caller treats them identically, and the collapse removes a
+/// distinction the zero-sized twin could not represent. The D-12 default
+/// (`info`) is applied by the RESOLVER at the HTTP ingress, not here.
+///
+/// Returns an OWNED answer — [`crate::types::LoggingLevel`] is `Copy` — so the
+/// twin can produce one without a map to borrow out of.
+///
+/// Its ONE caller is `super::resolve_request_log_level`, the named rule at the
+/// HTTP ingress.
+pub(crate) fn session_log_level(
+    state: &V1State,
+    session_id: &str,
+) -> Option<crate::types::LoggingLevel> {
+    state
+        .sessions
+        .read()
+        .get(session_id)
+        .and_then(|info| info.log_level)
+}
+
+/// Record the level a `logging/setLevel` request asked for, against ITS session.
+///
+/// THE single write path for [`SessionInfo::log_level`].
+///
+/// # A write for an unknown session id is a NO-OP, not an insert
+///
+/// That is a denial-of-service control (T-118.2-07-02), not a style choice.
+/// Minting a session row from a `logging/setLevel` would let a caller grow the
+/// session map without limit by guessing — or simply inventing — session ids,
+/// on a request that the session pipeline has not authorised. `get_mut` rather
+/// than `entry(..).or_insert(..)` is what makes that structural: there is no
+/// insertion path in this function to reach.
+///
+/// In production the transport reaches this only with the session id that
+/// `validate_non_init_session` already accepted, so the no-op arm is defence in
+/// depth rather than the common case — but it is the arm that stays correct if a
+/// future call site forgets the validation.
+///
+/// Its ONE caller is `super::capture_v1_set_level`, at the HTTP ingress.
+pub(crate) fn set_session_log_level(
+    state: &V1State,
+    session_id: &str,
+    level: crate::types::LoggingLevel,
+) {
+    if let Some(info) = state.sessions.write().get_mut(session_id) {
+        info.log_level = Some(level);
+    }
 }
 
 /// Stop tracking a v1 session.
@@ -791,6 +866,34 @@ async fn replay_sse_events_from_header(
 /// store write in parallel.
 ///
 /// `event_store` comes from [`resumability_store`], so a v2 stream writes nothing.
+///
+/// # The payload is [`serialize_message`], NOT `serde_json::to_string`
+///
+/// [`TransportMessage`] is `#[serde(untagged)]`, so serializing it directly emits
+/// the STRUCT, not a JSON-RPC frame. `serialize_message`'s own rustdoc records
+/// this and it is not a style preference — the two encodings differ for two of
+/// the three variants:
+///
+/// | variant | raw `serde_json` | [`serialize_message`] |
+/// | ------- | ---------------- | --------------------- |
+/// | `Response` | `{"jsonrpc":"2.0","id":…,"result":…}` | identical |
+/// | `Request` | `{"id":…,"request":{"method":…}}` — unparseable | `{"jsonrpc":"2.0","id":…,"method":…,"params":…}` |
+/// | `Notification` | the params object ALONE, with no `method` and no `jsonrpc` | `{"jsonrpc":"2.0","method":…,"params":…}` |
+///
+/// Until phase 118.1 only `Response` ever reached a v1 SSE stream, where the two
+/// agree byte for byte — which is why the defect stayed latent. Plan 10 gave the
+/// transport a server-to-client REQUEST path and plan 11 a progress-NOTIFICATION
+/// path, and both are unparseable under the raw encoding: a client receiving
+/// `{"id":…,"request":…}` cannot dispatch it, and `parse_message` rejects it with
+/// "Unknown message type". Routing through the shared encoder means this stream
+/// speaks the same wire language as stdio, WebSocket and the WASM fetch
+/// transport, from ONE definition.
+///
+/// A serialization failure yields an EMPTY data payload rather than a panic. It
+/// is unreachable in practice — the only serde failure modes for these types are
+/// non-finite floats, and `ServerProgressReporter::validate_values` rejects those
+/// before a notification is ever constructed — but a formatter on the response
+/// path must not be able to abort the stream.
 fn sse_event_for_message(
     msg: &TransportMessage,
     session_id: &str,
@@ -806,10 +909,11 @@ fn sse_event_for_message(
             let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
         });
     }
-    Event::default()
-        .id(event_id)
-        .event("message")
-        .data(serde_json::to_string(msg).unwrap())
+    let data = crate::shared::transport::serialize_message(msg)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_default();
+    Event::default().id(event_id).event("message").data(data)
 }
 
 /// Read the inbound `Mcp-Session-Id` request header.

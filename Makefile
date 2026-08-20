@@ -157,6 +157,15 @@ fmt-check:
 .PHONY: lint
 lint:
 	@echo "$(BLUE)Running clippy...$(NC)"
+	# Note on `-A clippy::unused_async_trait_impl` at the end of this list: Rust
+	# 1.98 split part of `unused_async` — already allowed here, deliberately —
+	# into a sibling lint the old allow does not cover, and it fires on 9
+	# pre-existing sites. THREE of them are `pub async fn` on the public API
+	# (`CognitoProvider::new`, `NotificationDebouncer::start`,
+	# `SessionMiddleware::process`), so de-asyncing them is a SEMVER BREAK for a
+	# cosmetic lint; a fourth (`ProxyProvider::introspect_token`) is async by
+	# design — its body says "this would make an HTTP request". Allowing it
+	# restores the policy this list already encodes rather than weakening it.
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) clippy --features "full" --lib --tests -- \
 		-D clippy::all \
 		-W clippy::pedantic \
@@ -189,7 +198,8 @@ lint:
 		-A clippy::default_trait_access \
 		-A clippy::format_push_string \
 		-A clippy::too_many_lines \
-		-A clippy::cargo_common_metadata
+		-A clippy::cargo_common_metadata \
+		-A clippy::unused_async_trait_impl
 	@echo "$(BLUE)Checking examples...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) check --features "full" --examples
 	@echo "$(GREEN)✓ No lint issues$(NC)"
@@ -226,6 +236,64 @@ test-unit:
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --lib --features "full"
 	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
+# The GATE's reach beyond the root `pmcp` package.
+#
+# Every other target in `test-all` runs against the root package only — `--lib`,
+# `--doc`, `--test '*'` all resolve to `pmcp` because the workspace root IS a
+# package. `crates/mcp-tester` therefore had 338 tests across 12 binaries that
+# `make quality-gate` never executed, and `.github/workflows/ci.yml` records the
+# same hole from the CI side: `org-gate-checks.yml`'s `workspace-test` runs
+# `--lib --bins` (excluding `tests/`) and is absent from `gate.needs`.
+#
+# A pre-existing `dual_run` failure survived a full phase inside that hole. This
+# target closes it for the crate that demonstrated the cost, and because CI's
+# `quality-gate` job runs `make quality-gate` and IS in `gate.needs`, adding it
+# here makes it merge-blocking without promoting `workspace-test` — which
+# `ci.yml` D-15 deliberately keeps deferred, since that job carries unrelated
+# unreviewed scope.
+#
+# `mcp-tester` declares no `[features]`, so a bare `-p` run reaches every test;
+# there is no silent feature-gated subset like the one `scripts/run-era-matrix.sh`
+# documents for `pmcp-team-servers`.
+#
+# The count assertion is not ceremony. The failure this target exists to prevent
+# is "the gate does not reach this crate", and a run that selects zero tests
+# EXITS 0 — reproducing exactly that hole while looking green.
+.PHONY: test-tester
+test-tester:
+	@echo "$(BLUE)Running mcp-tester's own tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p mcp-tester 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ mcp-tester reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ mcp-tester tests passed ($$ran tests)$(NC)"
+
+# Why this exists, mirroring test-tester: `test-unit` runs `cargo test --lib
+# --features full` with no `-p`, so it reaches the ROOT crate only. cargo-pmcp's
+# tests were therefore covered by nothing in this gate — and cargo-pmcp is where
+# the SCAFFOLD-PIN TRIPWIRES live (templates/workbook_server.rs PMCP_VERSION,
+# templates/agent.rs PMCP_AGENT_VERSION), the tests whose whole job is to fire on
+# a version bump. A `chore: bump` commit passed this gate green and then failed
+# CI on exactly that tripwire; this target closes that hole.
+.PHONY: test-cargo-pmcp
+test-cargo-pmcp:
+	@echo "$(BLUE)Running cargo-pmcp's own tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --lib 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ cargo-pmcp reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
+
 .PHONY: test-doc
 test-doc:
 	@echo "$(BLUE)Running doctests...$(NC)"
@@ -251,21 +319,31 @@ test-fuzz:
 	fi
 	@echo "$(GREEN)✓ Fuzz testing completed$(NC)"
 
+# Phase 119 (D-13/D-14) — BUILD every example, and FAIL when one does not
+# compile.
+#
+# This target IS chained into `quality-gate`, through `test-all`, and must stay
+# chained: `test-all` runs `test-examples` immediately before `test-integration`,
+# and that ordering is how the run tests (`tests/docs04_examples_run.rs`,
+# `tests/docs06_v2_examples_run.rs`, `tests/v2_sse_progress.rs` and the other
+# `spawn_example` legs) get example binaries that are not stale. Unchaining it
+# would leave those tests asserting against whatever happened to be in
+# `target/debug/examples` from an earlier session — the exact staleness defect
+# recorded at the Phase 118.1 Wave 10 merge.
+#
+# The recipe was previously NON-BLOCKING and the change to strict is deliberate.
+# The full rationale — the three defects in the old inline loop, the measured
+# pre-change baseline, and the list of example trees deliberately left outside
+# the gate — lives ONCE, in the header of `scripts/run-example-builds.sh`.
+# Do not restate it here; two copies in two languages drift.
+#
+# NOTE: examples are BUILT here, not run. They used to be un-run entirely; that
+# is no longer the whole truth — `tests/docs04_examples_run.rs` and
+# `tests/docs06_v2_examples_run.rs` do run several of them, under
+# `test-integration`, against the binaries this target produces.
 .PHONY: test-examples
 test-examples:
-	@echo "$(BLUE)Running example tests (ALWAYS required for new features)...$(NC)"
-	@echo "$(YELLOW)Note: Examples are built but not run to avoid blocking on I/O$(NC)"
-	@for example in $$(ls examples/*.rs 2>/dev/null | sed 's/examples\///g' | sed 's/\.rs$$//g'); do \
-		echo "$(BLUE)Building example: $$example$(NC)"; \
-		if $(CARGO) build --example $$example --all-features 2>/dev/null; then \
-			echo "$(GREEN)✓ Example $$example built successfully$(NC)"; \
-		elif $(CARGO) build --example $$example --features "full" 2>/dev/null; then \
-			echo "$(GREEN)✓ Example $$example built successfully$(NC)"; \
-		else \
-			echo "$(YELLOW)⚠ Example $$example requires specific features (skipped)$(NC)"; \
-		fi; \
-	done
-	@echo "$(GREEN)✓ All examples processed successfully$(NC)"
+	./scripts/run-example-builds.sh
 
 # MCP Tester Integration
 .PHONY: build-tester
@@ -487,7 +565,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)
@@ -808,6 +886,11 @@ quality-gate:
 	@$(MAKE) lint-plans
 	@$(MAKE) fmt-check
 	@$(MAKE) lint
+	# doc-check runs HERE because CI runs it and this gate did not: a branch
+	# carrying 24 rustdoc errors passed `make quality-gate` green and then failed
+	# CI at `Documenting pmcp`. Same shape as the test-cargo-pmcp leg -- the gate
+	# is green on what it reaches, and the failures live in what it does not.
+	@$(MAKE) doc-check
 	@$(MAKE) build
 	@$(MAKE) test-all
 	@$(MAKE) pmcp-package-gate

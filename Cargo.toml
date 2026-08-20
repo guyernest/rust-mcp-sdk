@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.18.0"
+version = "2.19.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -81,6 +81,36 @@ exclude = [
     # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
     ".planning/",
     "presentations/",
+    # Why: the D-03 disclosure tripwire reads BOTH .planning/WINDOWS.md and
+    # pmcp-book/src/ch12-17-migrating-to-mcp-2026-07-28.md at runtime, and both
+    # trees are excluded above. THIS ENTRY IS LOAD-BEARING, and the reason is
+    # precise: the test keeps the tolerant absent-tree guard (it returns early
+    # rather than panicking, so a sparse checkout is not a false red). Downstream,
+    # BOTH trees are absent, so a shipped copy would take that early return and
+    # PASS SILENTLY — the vacuous green this gate exists to prevent. Excluding it
+    # is what removes that path; the in-file guard does not, and cannot.
+    #
+    # (Contrast, stated accurately because an earlier version of this note got it
+    # backwards: tests/ci_conformance_gate_wiring.rs panics on a missing input, so
+    # shipped it would fail LOUDLY, and its exclusion prevents a downstream red
+    # rather than a downstream false green. tests/v2_conformance_pin.rs takes the
+    # tolerant shape deliberately, since a pin degrading to a no-op downstream is
+    # acceptable. This file takes the tolerant shape but is NOT tolerant of a
+    # vacuous pass — hence exclusion, not a shape change.)
+    #
+    # This entry and the two paths it reads must never be split: exclude all three
+    # or ship all three. That invariant is prose only — nothing enforces it.
+    "tests/windows_disclosure_tripwire.rs",
+    # Same disposition as the four readers above, for a different missing input:
+    # two of this file's three legs run example binaries owned by
+    # `crates/pmcp-agent` and `crates/pmcp-team-servers`, and those directories
+    # carry their own Cargo.toml so cargo never packages them into `pmcp`. The
+    # leg FAILS rather than skips when a binary is absent — deliberately — so a
+    # shipped copy would panic under a downstream `cargo test` on the published
+    # crate with a binary it has no way to build. Its sibling
+    # tests/docs06_v2_examples_run.rs SHIPS, because every example it runs is a
+    # ROOT `examples/` target that does ship and that `cargo test` builds.
+    "tests/docs04_examples_run.rs",
 ]
 
 [dependencies]
@@ -771,6 +801,23 @@ required-features = ["streamable-http", "http-client"]
 name = "s54_v2_dual_conformance"
 path = "examples/s54_v2_dual_conformance.rs"
 required-features = ["streamable-http", "testing"]
+
+# The `extra.log(..)` ALWAYS-requirement example (Phase 118.2, CONF-10).
+#
+# NO `required-features`, and that is the point rather than an omission:
+# `RequestHandlerExtra::log` / `log_with_data` / `with_log_sink` /
+# `with_log_level` are all on the DEFAULT surface, so `cargo run --example
+# s55_handler_logging` with no flags must work. Adding a guard here would hide
+# a future regression that pushed the emitter behind a feature. `s43` (the
+# handler-scoped example this one is modelled on) carries none for the same
+# reason.
+#
+# It is declared explicitly even though `autoexamples` would discover it, so
+# that the manifest — not the directory listing — is the record of which
+# examples exist and what each one needs.
+[[example]]
+name = "s55_handler_logging"
+path = "examples/s55_handler_logging.rs"
 
 [[bench]]
 name = "comprehensive_benchmarks"

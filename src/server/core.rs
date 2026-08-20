@@ -202,6 +202,246 @@ pub(crate) fn build_uri_to_tool_meta(
     map
 }
 
+// ===========================================================================
+// `completion/complete` (Phase 118.1-04, CONF-05 / G-4).
+//
+// ONE shared unit, called from BOTH native dispatch sites — `ServerCore` below
+// and the high-level `Server` in `server/mod.rs`. That is the Phase-109/112
+// twin-site parity rule this file already states for the MRTR unit further
+// down: `mod.rs` CALLS this helper, it never defines its own.
+//
+// Before this unit existed the two dispatchers DISAGREED on the method:
+// `Server` answered `json!({})` from a five-method catch-all and `ServerCore`
+// answered `-32601` from its `_ =>` arm. Only `Server` is on the HTTP path, so
+// the official conformance suite could only ever measure half the defect.
+// ===========================================================================
+
+/// The spec's `@maxItems 100` bound on `CompleteResult.completion.values`.
+///
+/// Source: `schema/vendored/core-2026-07-28/schema.ts:2644-2663`, which
+/// annotates `values: string[]` with `@maxItems 100` in prose that no generated
+/// Rust type carries. A completion provider is driven by peer-chosen input
+/// (`ref` + a partial `argument.value`), so an unbounded array copied straight
+/// out of the provider is a denial-of-service surface as well as a conformance
+/// violation (T-118.1-04-01).
+const MAX_COMPLETION_VALUES: usize = 100;
+
+/// Shape a `completion/complete` answer from an optional registered provider.
+///
+/// # The no-provider contract
+///
+/// A server with no completion provider registered answers a SUCCESS carrying
+/// an EMPTY array — never an error, never a bare `{}`. The pinned conformance
+/// suite's own comment sanctions exactly this ("completion support can be
+/// minimal or return empty arrays"), and it is the shape the overwhelming
+/// majority of servers will emit, so it is the default rather than a special
+/// case.
+///
+/// # The `@maxItems 100` bound
+///
+/// `values` is TRUNCATED to [`MAX_COMPLETION_VALUES`] rather than rejected: a
+/// provider returning 150 candidates is not malformed, it is simply more
+/// specific than the wire allows, and refusing the whole answer would turn a
+/// working completion into an error. Truncation is reported honestly:
+///
+/// - `has_more` is set when the provider itself reported more OR when this
+///   function dropped elements, so a client never reads a truncated list as
+///   exhaustive.
+/// - `total` is `Some(n)` ONLY when the provider returned everything it had
+///   (`has_more == false` on its side), in which case `n` is the true total.
+///   When the provider itself claims more exist, the true total is unknown and
+///   `total` stays `None` — inventing one would be worse than omitting an
+///   optional field.
+///
+/// # The ref
+///
+/// [`CompletionRequest`](crate::types::completable::CompletionRequest) carries
+/// no dedicated ref slot, so the reference is threaded through its `context`
+/// map under the spec's own discriminator spelling — `ref/prompt` or
+/// `ref/resource` (`CompletionReference`'s serde renames). A provider that
+/// needs to know WHICH prompt or resource is being completed reads it there;
+/// one that does not can ignore it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn complete_completion(
+    provider: Option<&Arc<dyn crate::types::completable::CompletionProviderTrait>>,
+    request: &crate::types::protocol::CompleteRequest,
+) -> Result<crate::types::protocol::CompleteResult> {
+    use crate::types::protocol::{CompleteResult, CompletionResult};
+
+    let Some(provider) = provider else {
+        return Ok(CompleteResult {
+            completion: CompletionResult::new(Vec::new()),
+        });
+    };
+
+    let response = provider.complete(completion_request_for(request)).await?;
+    Ok(CompleteResult {
+        completion: bound_completion_values(response),
+    })
+}
+
+/// Project a wire [`CompleteRequest`](crate::types::protocol::CompleteRequest)
+/// onto the SDK's provider-facing
+/// [`CompletionRequest`](crate::types::completable::CompletionRequest).
+#[cfg(not(target_arch = "wasm32"))]
+fn completion_request_for(
+    request: &crate::types::protocol::CompleteRequest,
+) -> crate::types::completable::CompletionRequest {
+    use crate::types::protocol::CompletionReference;
+
+    let mut context = HashMap::new();
+    match &request.r#ref {
+        CompletionReference::Prompt { name } => {
+            context.insert(COMPLETION_REF_PROMPT_KEY.to_string(), name.clone());
+        },
+        CompletionReference::Resource { uri } => {
+            context.insert(COMPLETION_REF_RESOURCE_KEY.to_string(), uri.clone());
+        },
+    }
+    crate::types::completable::CompletionRequest {
+        argument: request.argument.name.clone(),
+        partial: request.argument.value.clone(),
+        context,
+    }
+}
+
+/// The `context` key carrying a `ref/prompt` reference's prompt name.
+///
+/// Spelled exactly as the wire discriminator (`CompletionReference`'s serde
+/// rename), so a provider matching on it is matching on the protocol's own
+/// vocabulary rather than on an SDK-invented alias.
+const COMPLETION_REF_PROMPT_KEY: &str = "ref/prompt";
+
+/// The `context` key carrying a `ref/resource` reference's URI.
+const COMPLETION_REF_RESOURCE_KEY: &str = "ref/resource";
+
+/// Apply the spec's `@maxItems 100` bound to a provider's answer.
+///
+/// Split out of [`complete_completion`] so the bound has a unit-testable seam
+/// that does not require constructing a provider — the truncation arithmetic is
+/// the part a regression would silently break.
+#[cfg(not(target_arch = "wasm32"))]
+fn bound_completion_values(
+    response: crate::types::completable::CompletionResponse,
+) -> crate::types::protocol::CompletionResult {
+    use crate::types::protocol::CompletionResult;
+
+    let available = response.completions.len();
+    let truncated = available > MAX_COMPLETION_VALUES;
+    let values: Vec<String> = response
+        .completions
+        .into_iter()
+        .take(MAX_COMPLETION_VALUES)
+        .map(|item| item.value)
+        .collect();
+
+    let mut result = CompletionResult::new(values).with_has_more(response.has_more || truncated);
+    if !response.has_more {
+        // The provider returned everything it had, so `available` IS the total —
+        // including the elements this function just dropped.
+        result = result.with_total(available);
+    }
+    result
+}
+
+/// The message this file's dispatch root answers a method it does not serve.
+///
+/// ONE literal, read by the `_ =>` catch-all in
+/// [`ServerCore::handle_request_internal`] AND by
+/// [`set_logging_level_response`]'s v2 retirement, so `logging/setLevel` is
+/// refused in exactly the same words as its three residual siblings (`ping`,
+/// `resources/subscribe`, `resources/unsubscribe`) on this same root rather
+/// than acquiring a message of its own.
+///
+/// # Why this does NOT reuse the HTTP layer's wording
+///
+/// The HTTP ingress builds a richer string from `V2_RETIRED_METHODS`
+/// (`"Method not found: logging/setLevel (retired in MCP 2026-07-28; use
+/// io.modelcontextprotocol/logLevel)"`). That table lives in
+/// `crate::server::streamable_http_server`, which is gated behind
+/// `feature = "streamable-http"` and so cannot be referenced from this module
+/// at all. What the two layers DO share is the thing that matters on the wire:
+/// the same decision and the same code,
+/// [`error_codes::METHOD_NOT_FOUND`](crate::types::protocol::error_codes::METHOD_NOT_FOUND).
+/// Only the human-readable text differs — exactly the split
+/// `map_unparsed_body_for_v2`'s rustdoc already records for the two
+/// pre-existing v2 rejection routes ("Both routes emit the same code and the
+/// same status … only the message text differs").
+pub(crate) const METHOD_NOT_SUPPORTED_MESSAGE: &str = "Method not supported";
+
+/// Whether `logging/setLevel` is RETIRED for this era.
+///
+/// `None` — no era resolved, i.e. a server that never opted in to protocol
+/// negotiation — is treated as v1, which is the era such a server has always
+/// been on. Retiring a method for a caller whose era was never determined would
+/// break every non-opted-in server on the SDK's own default path.
+pub(crate) const fn set_logging_level_is_retired(era: Option<crate::types::protocol::Era>) -> bool {
+    matches!(era, Some(crate::types::protocol::Era::V2))
+}
+
+/// The v1 answer to `logging/setLevel`: a **literal empty object**.
+///
+/// # Pitfall 8 — this is a MEASURED constraint, not a style choice
+///
+/// The pinned official conformance suite's `2025-11-25:logging-set-level`
+/// scenario does
+///
+/// ```text
+/// const r = await n.request('logging/setLevel', { level: 'info' });
+/// r && Object.keys(r).length > 0 && i.push('Expected empty object {} response')
+/// ```
+///
+/// so ANY non-empty object is a FAILURE — including an acknowledgement object
+/// and including an echo of the level that was just set. That scenario is
+/// currently GREEN and is one of the entries in `BLOCKING_GREEN_SCENARIOS`;
+/// returning anything richer here would shrink the blocking surface the
+/// conformance gate claims, i.e. a regression dressed as an improvement.
+///
+/// Echoing the stored level would additionally hand a caller a READ of session
+/// state through a WRITE endpoint (T-118.2-08-02).
+///
+/// The level itself is already stored, per session, by the HTTP ingress
+/// (`streamable_http_server::capture_v1_set_level`, Phase 118.2-07). This
+/// dispatch path's only job is to ANSWER.
+pub(crate) fn set_logging_level_v1_result() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+/// The ONE answer both native dispatch roots give `logging/setLevel` (D-13).
+///
+/// Before Phase 118.2-08 the two roots disagreed about a method the official
+/// conformance suite measures: [`ServerCore`]'s `_ =>` catch-all answered
+/// `-32601 Method not supported` on BOTH eras, while
+/// `Server::process_client_request` answered `json!({})` on both. Phase 118.1
+/// spent real effort collapsing exactly this class of divergence for
+/// `completion/complete`; this function is the same fix for the same shape of
+/// defect.
+///
+/// | Era | Answer |
+/// |-----|--------|
+/// | `V2` | JSON-RPC error [`METHOD_NOT_FOUND`](crate::types::protocol::error_codes::METHOD_NOT_FOUND) — the RPC is retired, and `io.modelcontextprotocol/logLevel` in `params._meta` replaces it |
+/// | `V1` / no era resolved | success carrying [`set_logging_level_v1_result`] — a literal `{}` |
+///
+/// # Why the roots CALL this rather than each writing the branch
+///
+/// `src/server/mod.rs` calls the units defined here; it never defines its own.
+/// Two copies of an era branch are two chances to disagree, and the disagreement
+/// would be silent — which is precisely the state this function replaces.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn set_logging_level_response(
+    id: RequestId,
+    era: Option<crate::types::protocol::Era>,
+) -> JSONRPCResponse {
+    if set_logging_level_is_retired(era) {
+        return crate::server::task_dispatch::error_response(
+            id,
+            crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+            METHOD_NOT_SUPPORTED_MESSAGE.to_string(),
+        );
+    }
+    crate::server::task_dispatch::success_response(id, set_logging_level_v1_result())
+}
+
 /// Core server implementation without transport dependencies.
 ///
 /// This struct contains all the business logic for an MCP server without
@@ -237,6 +477,23 @@ pub struct ServerCore {
 
     /// Sampling handler (optional)
     sampling: Option<Arc<dyn SamplingHandler>>,
+
+    /// Completion provider backing `completion/complete` (optional, Phase
+    /// 118.1-04 / CONF-05).
+    ///
+    /// A SINGLE, non-keyed slot in the shape of `resources` above, not the
+    /// name-keyed `prompts` map: the spec routes every `completion/complete` to
+    /// one server-wide provider and passes the `ref` as data, so a per-name
+    /// registry would be inventing a dispatch dimension the protocol does not
+    /// have. Threaded from
+    /// [`ServerCoreBuilder::completions`](crate::server::builder::ServerCoreBuilder::completions)
+    /// via [`ServerCore::with_completions`]; the high-level `Server` carries an
+    /// IDENTICALLY-shaped field so both dispatchers consult the same seam.
+    ///
+    /// `None` still answers the spec shape — an empty `values` array — rather
+    /// than an error. See [`complete_completion`].
+    #[cfg(not(target_arch = "wasm32"))]
+    completions: Option<Arc<dyn crate::types::completable::CompletionProviderTrait>>,
 
     /// Client capabilities (set during initialization)
     client_capabilities: Arc<RwLock<Option<ClientCapabilities>>>,
@@ -386,6 +643,8 @@ impl ServerCore {
             prompt_infos,
             resources,
             sampling,
+            #[cfg(not(target_arch = "wasm32"))]
+            completions: None,
             client_capabilities: Arc::new(RwLock::new(None)),
             initialized: Arc::new(RwLock::new(false)),
             cancellation_manager: CancellationManager::new(),
@@ -449,6 +708,25 @@ impl ServerCore {
     #[must_use]
     pub fn with_suppress_double_wrap(mut self, suppress: HashSet<String>) -> Self {
         self.suppress_double_wrap = suppress;
+        self
+    }
+
+    /// Carry the `completion/complete` provider (Phase 118.1-04, CONF-05) from
+    /// the builder into the running `ServerCore`.
+    ///
+    /// Threaded from
+    /// [`ServerCoreBuilder::completions`](crate::server::builder::ServerCoreBuilder::completions)
+    /// rather than added to [`ServerCore::new`]'s already-eighteen-argument
+    /// signature, matching [`Self::with_suppress_double_wrap`] and
+    /// [`Self::with_server_request_dispatcher`]. `None` (the default) still
+    /// answers the spec `CompleteResult` shape with an empty `values` array.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_completions(
+        mut self,
+        provider: Option<Arc<dyn crate::types::completable::CompletionProviderTrait>>,
+    ) -> Self {
+        self.completions = provider;
         self
     }
 
@@ -526,15 +804,70 @@ impl ServerCore {
         resolve_ingress_protocol_context(&self.supported_protocol_versions, request)
     }
 
-    /// Attach the cached peer handle to `extra` when a dispatcher is configured.
-    /// No-op on wasm32 (peer is non-wasm) and when no dispatcher is attached.
+    /// Attach a peer handle to `extra`, preferring the REQUEST-SCOPED one.
+    ///
+    /// No-op on wasm32 (peer is non-wasm), and — when neither source is present
+    /// — when no dispatcher is attached, exactly as before.
+    ///
+    /// # Precedence: the request-scoped transport handle wins (T-118.1-11-04)
+    ///
+    /// Two sources can supply a peer and they are NOT equivalent:
+    ///
+    /// 1. `self.peer_handle` — a SINGLE field on this core, set once by the
+    ///    in-process actor loop. One transport, one client, so one handle says
+    ///    everything there is to say.
+    /// 2. the `TransportBackchannel` riding THIS request's `ProtocolContext`,
+    ///    attached by the `StreamableHTTP` transport at the one site that knows
+    ///    which session the request arrived on.
+    ///
+    /// On a MULTIPLEXED transport (1) cannot express "the session that issued
+    /// this request": a handle set there is shared by every concurrent session,
+    /// so one client's `sampling/createMessage` would be delivered to whichever
+    /// session the global handle happened to be bound to — the T-113-07
+    /// misbinding class. (2) is constructed per request and bound to the
+    /// originating session, so it is always the more specific answer and is
+    /// therefore read FIRST.
+    ///
+    /// The in-process path is untouched: that loop attaches no backchannel, so
+    /// the `self.peer_handle` fallback below is what runs there.
+    ///
+    /// # Ordering
+    ///
+    /// Every dispatch site calls this AFTER its `tool_authorizer` check, so an
+    /// unauthorized caller returns before a handler body ever runs and therefore
+    /// never sees `extra.peer()` — the invariant stated at `src/shared/peer.rs`.
+    ///
+    /// Delegates to [`attach_request_peer`], the ONE unit `Server::attach_peer`
+    /// also calls: the two dispatch roots must never disagree about which peer a
+    /// handler sees, and sharing the body is what makes that structural rather
+    /// than a claim two comments make about each other.
+    ///
+    /// # It attaches the LOG SINK too (Phase 118.2, CONF-10)
+    ///
+    /// The name is kept for its call-site history, but this is now the single
+    /// post-authorization site where ALL of a request's server-to-client
+    /// capability handles are attached: the peer, the log sink, and the resolved
+    /// log level. They share one site DELIBERATELY. A second method that a future
+    /// dispatch site had to remember to call is precisely the drift this file
+    /// spends its comments preventing — every existing and future `attach_peer`
+    /// caller gets the log sink for free, and cannot get one without the other.
     #[inline]
     fn attach_peer(&self, extra: RequestHandlerExtra) -> RequestHandlerExtra {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(peer) = self.peer_handle.as_ref() {
-            return extra.with_peer(peer.clone());
+        {
+            let extra = attach_request_peer(extra, self.peer_handle.as_ref());
+            // The fallback is a literal `None`, and that asymmetry with `Server`
+            // is real rather than an oversight: `ServerCore` has NO
+            // `notification_tx` of any kind — that field exists only on
+            // `Server` — so a request-scoped `TransportBackchannel` is the ONLY
+            // sink this root can ever supply. Do not "fix" this by inventing a
+            // channel here; the transport owns the back-channel.
+            attach_request_log_sink(extra, || None)
         }
-        extra
+        #[cfg(target_arch = "wasm32")]
+        {
+            extra
+        }
     }
 
     /// Get the configured payload limits.
@@ -699,7 +1032,23 @@ impl ServerCore {
                 // the create-path gate, and the text-wrap / widget-enrichment tail.
                 // REQUEST middleware already fired above for every tool, and a
                 // handler `Err(_)` still routes through the Middleware arm below.
+                //
+                // D-06 (Phase 118.1) RECLASSIFIES exactly one clause of D-04a:
+                // the bypass covers the response PIPELINE, not the handler's own
+                // `extra.set_result_meta(..)`. Those keys are authored by the same
+                // handler that authored this envelope, at the same trust level, so
+                // draining them here merges a handler's two `_meta` sources rather
+                // than reintroducing server-side rewriting. Handler-key-wins
+                // precedence, never a whole-map replace. G-3's elicitation wiring
+                // runs through this arm, which is why the drop was load-bearing.
                 crate::server::task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                    let mut call_result = call_result;
+                    if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+                        crate::server::cancellation::merge_result_meta(
+                            &mut call_result,
+                            handler_meta,
+                        );
+                    }
                     return Ok(ToolCallOutcome::Result(call_result));
                 },
                 crate::server::task_dispatch::DispatchOutput::Middleware(mut result) => {
@@ -852,9 +1201,12 @@ impl ServerCore {
         };
 
         // D-03.3: drain any handler-set result `_meta` onto the Payload envelope
-        // with handler-key-wins precedence (Payload path only; the Verbatim,
-        // create-path, and error arms all returned earlier). Shadow-rebind so the
-        // wasm branch, which never sets the slot, needs no `mut`.
+        // with handler-key-wins precedence. The create-path and error arms
+        // returned earlier and are still `_meta`-free; the Verbatim arm also
+        // returned earlier but now performs this SAME drain against its own
+        // envelope (D-06), so the slot is already empty by the time control could
+        // reach here on that path. Shadow-rebind so the wasm branch, which never
+        // sets the slot, needs no `mut`.
         #[cfg(not(target_arch = "wasm32"))]
         let call_result = {
             let mut call_result = call_result;
@@ -923,6 +1275,11 @@ impl ServerCore {
         &self,
         req: &ListResourcesRequest,
         auth_context: Option<AuthContext>,
+        // THREADED, not resolved here (Phase 118.1-08, G-9): this site had no
+        // `ProtocolContext` at all, so a v1 client's handshake capabilities could
+        // never reach a `resources/list` handler. `ListResourcesRequest` carries
+        // no `_meta`, so the context can only arrive from the caller.
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<ListResourcesResult> {
         let mut result = match &self.resources {
             Some(handler) => {
@@ -934,7 +1291,8 @@ impl ServerCore {
                             .create_token(request_id.clone())
                             .await,
                     )
-                    .with_auth_context(auth_context),
+                    .with_auth_context(auth_context)
+                    .with_protocol_context(protocol_context),
                 );
                 handler.list(req.cursor.clone(), extra).await?
             },
@@ -1256,6 +1614,67 @@ pub(crate) fn project_capabilities_for_v1(capabilities: &ServerCapabilities) -> 
     projected
 }
 
+/// The server-side inputs the `server/discover` projection reads (Phase 118.1,
+/// G-7).
+///
+/// Bundles the two values that must come from the SAME server: the
+/// already-computed capabilities, and the protocol accept-list the version gate
+/// rejects against. They travel together because the conformance suite
+/// correlates them — every element of an unsupported-version rejection's
+/// `error.data.supported` must also appear in the discover result's
+/// `supportedVersions` — so an API that let a caller supply one without the
+/// other would be an API that let the two drift.
+///
+/// Both fields are borrowed, so this is a zero-copy view a caller assembles at
+/// the call site; it owns nothing and stores nothing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DiscoverSource<'a> {
+    /// The server's already-computed capabilities (incl. the `extensions` map).
+    pub(crate) capabilities: &'a ServerCapabilities,
+    /// The server's configured protocol accept-list — the SINGLE source for
+    /// both `supportedVersions` and an `UNSUPPORTED_PROTOCOL_VERSION`
+    /// rejection's `error.data.supported`.
+    pub(crate) supported_versions: &'a [ProtocolVersion],
+}
+
+impl<'a> DiscoverSource<'a> {
+    /// Bundle a server's capabilities with its protocol accept-list.
+    pub(crate) fn new(
+        capabilities: &'a ServerCapabilities,
+        supported_versions: &'a [ProtocolVersion],
+    ) -> Self {
+        Self {
+            capabilities,
+            supported_versions,
+        }
+    }
+}
+
+/// Capabilities-only source for unit tests that inspect nothing but the
+/// PROJECTED CAPABILITIES, advertising an empty accept-list.
+///
+/// # Why this is `#[cfg(test)]`, and why that is the point
+///
+/// Gating the defaulting conversion to test builds is what makes the
+/// single-source rule STRUCTURAL rather than a convention: in a non-test build
+/// this impl does not exist, so the only way to reach
+/// [`build_discover_response`] is to name an accept-list explicitly. A
+/// production caller therefore CANNOT accidentally publish a defaulted or empty
+/// `supportedVersions` — it would not compile.
+///
+/// The empty slice is deliberate over a plausible default. A test that ends up
+/// reading `supportedVersions` through this conversion fails loudly on the empty
+/// array instead of passing against a real-looking list it never asked for.
+#[cfg(test)]
+impl<'a> From<&'a ServerCapabilities> for DiscoverSource<'a> {
+    fn from(capabilities: &'a ServerCapabilities) -> Self {
+        Self {
+            capabilities,
+            supported_versions: &[],
+        }
+    }
+}
+
 /// Isolated conversion fn producing the [`ServerDiscoverResult`] wire shape
 /// (Phase 112, VERS-04; era projection added by plan 114-05, D-02).
 ///
@@ -1291,14 +1710,22 @@ pub(crate) fn project_capabilities_for_v1(capabilities: &ServerCapabilities) -> 
 /// bytes of every existing tasks server on every era, which is exactly the lock
 /// D-02 exists to hold.
 pub(crate) fn discover_result_from_capabilities(
-    capabilities: &ServerCapabilities,
+    source: DiscoverSource<'_>,
     info: &Implementation,
     negotiated_version: String,
 ) -> ServerDiscoverResult {
     ServerDiscoverResult {
         protocol_version: negotiated_version,
-        capabilities: project_capabilities_for_v2(capabilities),
+        capabilities: project_capabilities_for_v2(source.capabilities),
         server_info: info.clone(),
+        // The accept-list is COPIED from the caller's source, never rebuilt
+        // here: `error.data.supported` reads the same slice, and the suite
+        // asserts the two agree (G-7).
+        supported_versions: source
+            .supported_versions
+            .iter()
+            .map(|version| version.as_str().to_string())
+            .collect(),
         ttl_ms: None,
         cache_scope: None,
     }
@@ -1941,9 +2368,18 @@ pub(crate) fn own_reserved_result_fields(
 /// served; a v1 / non-opted-in request receives standard `-32601`
 /// method-not-found (D-10), the same reject the public `parse_request` produces
 /// for `server/discover`.
+///
+/// # `source` carries the accept-list, and production MUST name one (G-7)
+///
+/// [`DiscoverSource`] bundles the capabilities with the server's protocol
+/// accept-list, because `supportedVersions` on the result and
+/// `error.data.supported` on an unsupported-version rejection are required to be
+/// the same list. The `impl Into<_>` seam admits a capabilities-only source, but
+/// that conversion is `#[cfg(test)]`, so a PRODUCTION caller has no way to reach
+/// this fn without naming an accept-list explicitly.
 pub(crate) fn build_discover_response(
     id: RequestId,
-    capabilities: &ServerCapabilities,
+    source: DiscoverSource<'_>,
     info: &Implementation,
     protocol_context: Option<&crate::types::protocol::ProtocolContext>,
 ) -> JSONRPCResponse {
@@ -1965,7 +2401,7 @@ pub(crate) fn build_discover_response(
     );
 
     // Read-only projection of the ALREADY-COMPUTED capabilities — no recompute.
-    let result = discover_result_from_capabilities(capabilities, info, negotiated_version);
+    let result = discover_result_from_capabilities(source, info, negotiated_version);
     let mut response = ServerCore::success_response(id, serde_json::to_value(result).unwrap());
     // Parity: the v2 object result carries resultType + serverInfo via the SAME
     // shared envelope helper every other v2 result uses. `server/discover` mints
@@ -3399,6 +3835,24 @@ impl ProtocolHandler for ServerCore {
         // too — this site never classifies on its own.
         let cacheable = request_is_cacheable(&request);
 
+        // G-9 / CONF-08 (Phase 118.1-08): fold the v1 `initialize` handshake's
+        // advertised capabilities into the context threaded into DISPATCH, so
+        // every downstream `RequestHandlerExtra` construction site sees them
+        // without nine copies of this read. THE ONE lock read per dispatch, and
+        // the fold owns it — including the guard that keeps v2 traffic from
+        // touching the lock at all (T-118.1-08-02) — so `server/mod.rs` shares
+        // the whole unit rather than re-spelling its impure half (twin-site
+        // parity). The read guard is dropped inside the fold, well before
+        // `handle_initialize` below takes the write lock. The EGRESS below
+        // deliberately keeps the UNFOLDED `protocol_context`: the fold is a
+        // handler-visibility concern, not a wire-shape one.
+        let dispatch_context = fold_v1_handshake_capabilities(
+            protocol_context.clone(),
+            &self.client_capabilities,
+            &self.supported_protocol_versions,
+        )
+        .await;
+
         // Execute the actual request handling with auth_context.
         //
         // `dispatch_claim` is the SECOND envelope claimant (Phase 114 plan 11):
@@ -3411,7 +3865,7 @@ impl ProtocolHandler for ServerCore {
                 id.clone(),
                 request,
                 auth_context,
-                protocol_context.clone(),
+                dispatch_context,
                 &mut dispatch_claim,
             )
             .await;
@@ -3839,7 +4293,10 @@ impl ServerCore {
                         }
                     },
                     ClientRequest::ListResources(req) => {
-                        match self.handle_list_resources(req, auth_context.clone()).await {
+                        match self
+                            .handle_list_resources(req, auth_context.clone(), protocol_context)
+                            .await
+                        {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
@@ -3906,10 +4363,55 @@ impl ServerCore {
                         *dispatch_claim = claim;
                         response
                     },
+                    // `completion/complete` (CONF-05, G-4). Placed HERE, ahead
+                    // of the `_ =>` catch-all below, because that catch-all is
+                    // what used to answer `-32601 Method not supported` for
+                    // this method while the high-level `Server` answered
+                    // `json!({})` — two dispatchers, two different wrong
+                    // answers. Both now call the SAME shared unit.
+                    //
+                    // The THREE other methods the twin catch-all in
+                    // `server/mod.rs` still covers — `resources/subscribe`,
+                    // `resources/unsubscribe` and `ping` — are deliberately NOT
+                    // unified here. See the RESIDUAL note on the
+                    // `Subscribe | Unsubscribe | Ping` arm in
+                    // `Server::process_client_request`. `logging/setLevel` was
+                    // the fourth and LEFT that residual in Phase 118.2-08 under
+                    // D-13; its own arm is immediately below.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::Complete(req) => {
+                        match complete_completion(self.completions.as_ref(), req).await {
+                            Ok(result) => Self::success_response(
+                                id,
+                                serde_json::to_value(result)
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                            ),
+                            Err(e) => Self::error_response(
+                                id,
+                                crate::types::protocol::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                            ),
+                        }
+                    },
+                    // `logging/setLevel` (Phase 118.2-08, D-13). Placed HERE,
+                    // ahead of the `_ =>` catch-all, for exactly the reason the
+                    // `completion/complete` arm above is: that catch-all
+                    // answered `-32601` on BOTH eras while the high-level
+                    // `Server` answered `json!({})` on both — two dispatchers,
+                    // two answers, and only the OTHER one is on the HTTP path
+                    // the official conformance suite measures. Both roots now
+                    // call the SAME era-branched shared unit, so a caller
+                    // reaching this root off-HTTP (in-process, or a future
+                    // transport) can no longer get a different answer from the
+                    // one the suite measured (T-118.2-08-01).
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::SetLoggingLevel { .. } => {
+                        set_logging_level_response(id, protocol_context.as_ref().map(|ctx| ctx.era))
+                    },
                     _ => Self::error_response(
                         id,
                         crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                        "Method not supported".to_string(),
+                        METHOD_NOT_SUPPORTED_MESSAGE.to_string(),
                     ),
                 }
             },
@@ -4091,6 +4593,299 @@ pub(crate) fn resolve_ingress_protocol_context(
     }
     let meta = extract_request_meta_value(request);
     crate::types::protocol::context::resolve_protocol_context(accept_list, meta.as_ref())
+}
+
+/// Would the v1 handshake capability fold change anything for this context?
+///
+/// The first thing [`fold_v1_handshake_capabilities`] asks, kept a named
+/// function so the rule reads as a table. It runs BEFORE the fold touches the
+/// server-level `client_capabilities` `RwLock` (T-118.1-08-02: an unconditional
+/// lock read inside a hot dispatch path is a contention cost the fold does not
+/// need to pay on v2 traffic).
+///
+/// | `context` | result | why |
+/// |---|---|---|
+/// | `None` | `true` | a non-opted-in server resolves NO context at all (D-04), which is the shape G-9 leaves broken |
+/// | `Some(era = V1)`, no capabilities | `true` | the v1 fallback context exists but nothing populated the field |
+/// | `Some(era = V1)`, capabilities already set | `false` | already answered; never overwrite |
+/// | `Some(era = V2)` | `false` | the v2 `_meta` path owns this field (T-118.1-08-03) |
+fn v1_capability_fold_applies(context: Option<&crate::types::protocol::ProtocolContext>) -> bool {
+    context.is_none_or(|ctx| {
+        matches!(ctx.era, crate::types::protocol::Era::V1) && ctx.client_capabilities.is_none()
+    })
+}
+
+/// Resolve which peer a handler sees, request-scoped first, then the global one.
+///
+/// The ONE unit both native dispatch roots call — `ServerCore::attach_peer` and
+/// `Server::attach_peer`. It exists for the same reason
+/// [`fold_v1_handshake_capabilities`] takes the lock rather than an already-read
+/// value: the precedence rule is the kind of thing two roots must never disagree
+/// about, and a rule spelled twice is kept in step by a comment instead of by the
+/// compiler. Both roots previously carried this body verbatim.
+///
+/// # Precedence, and why this order
+///
+/// 1. The `TransportBackchannel`'s peer on THIS request's `ProtocolContext` —
+///    session-bound, attached by the transport at the one site that knows which
+///    session the request arrived on. It must win: a global handle cannot know
+///    which session to route a server-to-client request back to.
+/// 2. The server-level `peer_handle`, which is what the in-process path uses —
+///    `Server::run` attaches no backchannel, so the fallback is the live path
+///    there rather than a safety net.
+///
+/// Returning `extra` unchanged when neither exists leaves `extra.peer()` as
+/// `None`, which handlers already treat as "no back-channel on this transport".
+///
+/// # Ordering
+///
+/// Every dispatch site calls this AFTER its `tool_authorizer` check, so an
+/// unauthorized caller returns before a handler body ever runs and therefore
+/// never sees `extra.peer()` — the invariant stated at `src/shared/peer.rs`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn attach_request_peer(
+    extra: crate::server::cancellation::RequestHandlerExtra,
+    global: Option<&Arc<dyn crate::shared::peer::PeerHandle>>,
+) -> crate::server::cancellation::RequestHandlerExtra {
+    // Cloned out of the borrow before `with_peer` consumes `extra`.
+    let request_scoped = extra
+        .protocol_context
+        .as_ref()
+        .and_then(crate::types::protocol::ProtocolContext::transport_backchannel)
+        .and_then(crate::types::protocol::context::TransportBackchannel::peer)
+        .cloned();
+    if let Some(peer) = request_scoped {
+        return extra.with_peer(peer);
+    }
+    if let Some(peer) = global {
+        return extra.with_peer(peer.clone());
+    }
+    extra
+}
+
+/// Resolve which notification sink a handler's `extra.log(..)` emits through,
+/// and apply the log level this request resolved — request-scoped first, then
+/// the root's fallback.
+///
+/// The TWIN of [`attach_request_peer`], and one unit for the same reason: the
+/// precedence rule is the kind of thing two roots must never disagree about, and
+/// a rule spelled twice is kept in step by a comment instead of by the compiler.
+/// Phase 118.1 collapsed exactly this class of divergence for
+/// `completion/complete`, where two dispatchers gave two DIFFERENT wrong answers.
+///
+/// # Precedence, and why this order
+///
+/// 1. The `TransportBackchannel`'s `notification_sink` on THIS request's
+///    `ProtocolContext` — session-bound, attached by the transport at the one
+///    site that knows which session the request arrived on. It must win:
+///    routing a session's log records onto a server-wide channel would publish
+///    one caller's records to whoever is reading that channel
+///    (T-118.2-06-02).
+/// 2. The root's `fallback`, which on `Server` is derived from its single
+///    server-wide `notification_tx` and on [`ServerCore`] is always `None` —
+///    `ServerCore` has no notification channel of any kind.
+///
+/// The fallback is taken as a THUNK, not as a value: arm 1 wins on every
+/// HTTP-served request, so an eagerly-built `Server` fallback allocated one
+/// `Arc<dyn Fn(..)>` per dispatch that this function then dropped unread. Passing
+/// it lazily keeps that allocation off the hot path without moving the
+/// precedence rule back out to the two call sites.
+///
+/// Returning `extra` unchanged when neither exists leaves `extra.log_sink` as
+/// `None`, which the emitter already treats as silence rather than as an error
+/// (Phase 118.2 D-08).
+///
+/// # On v2, an ABSENT level is a prohibition (SEP-2575)
+///
+/// The 2026-07-28 client authorizes logging per request through
+/// `params._meta["io.modelcontextprotocol/logLevel"]`, and the schema is
+/// explicit: *"If absent, the server MUST NOT send any notifications/message"*.
+/// `None` therefore means two different things on the two eras — on v1 it is "the
+/// client did not choose, so the server MAY decide", which is what
+/// [`DEFAULT_LOG_LEVEL`](crate::server::cancellation::DEFAULT_LOG_LEVEL) (`info`,
+/// D-12) implements, and on v2 it is "do not log".
+///
+/// Expressed by withholding the SINK rather than by inventing a third level
+/// value. The emitter already treats a sinkless `extra` as silence (D-08), so
+/// this needs no new state on `RequestHandlerExtra`, no tri-state on
+/// `ProtocolContext::resolved_log_level`, and no change to the emitter — and it
+/// is fail-closed: a handler that logs anyway emits nothing, rather than relying
+/// on every handler to check a flag. `examples/s54_v2_dual_conformance.rs`
+/// carried exactly such a per-handler guard while this gap was open; it is gone.
+///
+/// # Why the LEVEL is applied here too
+///
+/// The sink and the level are two halves of ONE per-request decision. Attaching
+/// them at different sites is how one root ends up filtering differently from
+/// the other, so the same read of `extra.protocol_context` that resolves the
+/// sink also lifts
+/// [`ProtocolContext::resolved_log_level`](crate::types::protocol::ProtocolContext::resolved_log_level)
+/// onto the `extra`. When the context carries no level the `extra` is left
+/// alone, so the emitter's
+/// [`DEFAULT_LOG_LEVEL`](crate::server::cancellation::DEFAULT_LOG_LEVEL) applies.
+///
+/// Doing the lift once, here, also makes the emit-time filter an O(1) read of a
+/// plain `Option<LoggingLevel>` on the `extra`, instead of a lock acquisition per
+/// record.
+///
+/// # Ordering
+///
+/// Every dispatch site calls this AFTER its `tool_authorizer` check, so an
+/// unauthorized caller returns before a handler body ever runs and therefore
+/// never reaches a handler that could emit (ASVS V4, T-118.2-06-01) — the same
+/// invariant [`attach_request_peer`] states for `extra.peer()`.
+///
+/// # The progress token does NOT gate this
+///
+/// `Server::progress_reporter_for` still returns `None` for a request with no
+/// `params._meta.progressToken`, and that gate is deliberate. The LOG sink is
+/// unconditional: a client that never asked for progress still receives
+/// `notifications/message` (Phase 118.2 D-07).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn attach_request_log_sink(
+    extra: crate::server::cancellation::RequestHandlerExtra,
+    fallback: impl FnOnce() -> Option<Arc<dyn Fn(crate::types::Notification) + Send + Sync>>,
+) -> crate::server::cancellation::RequestHandlerExtra {
+    // Both values are cloned out of the borrow before the `with_*` builders
+    // consume `extra` — the same capture-before-move discipline
+    // `attach_request_peer` uses, and the reason this reads the sink back OFF
+    // the already-constructed `extra` rather than capturing it before
+    // `with_protocol_context` moved the context in.
+    let request_scoped = extra
+        .protocol_context
+        .as_ref()
+        .and_then(crate::types::protocol::ProtocolContext::transport_backchannel)
+        .and_then(crate::types::protocol::context::TransportBackchannel::notification_sink)
+        .cloned();
+    let resolved_level = extra
+        .protocol_context
+        .as_ref()
+        .and_then(crate::types::protocol::ProtocolContext::resolved_log_level);
+    // SEP-2575: on v2, absence is a prohibition rather than a non-answer. See
+    // this function's rustdoc for why the sink is withheld instead of a third
+    // level value being invented.
+    let v2_logging_unauthorized = resolved_level.is_none()
+        && extra
+            .protocol_context
+            .as_ref()
+            .is_some_and(|context| context.era == crate::types::protocol::Era::V2);
+
+    let extra = match resolved_level {
+        Some(level) => extra.with_log_level(level),
+        // No resolved level: leave `extra.log_level` alone so `DEFAULT_LOG_LEVEL`
+        // applies at emit time.
+        None => extra,
+    };
+
+    if v2_logging_unauthorized {
+        // No sink at all, so `extra.log(..)` is silent by construction. Returned
+        // BEFORE both precedence arms, so neither the request-scoped sink nor the
+        // root fallback can reintroduce a vehicle the client did not authorize.
+        return extra;
+    }
+    if let Some(sink) = request_scoped {
+        return extra.with_log_sink(sink);
+    }
+    // Only NOW is the root's fallback built — see the precedence note above.
+    if let Some(sink) = fallback() {
+        return extra.with_log_sink(sink);
+    }
+    extra
+}
+
+/// Fold the v1 `initialize` handshake's advertised capabilities into the
+/// `ProtocolContext` threaded into dispatch (Phase 118.1-08, G-9 / CONF-08).
+///
+/// ONE shared unit, called from BOTH native dispatch roots — `ServerCore`'s
+/// `ProtocolHandler::handle_request` and `Server::handle_request_with_context` —
+/// per the twin-site parity rule this file follows everywhere else. Nine copies
+/// of a lock read (one per `RequestHandlerExtra` construction site) is exactly
+/// the drift that rule exists to prevent, so the fold happens ONCE per dispatch
+/// at the root and every downstream site simply receives the already-folded
+/// context.
+///
+/// It takes the `RwLock` rather than an already-read value deliberately: a
+/// signature that took `Option<ClientCapabilities>` would leave the guard-then-
+/// read half — the part that actually encodes T-118.1-08-02 — copy-pasted at
+/// both roots, kept in step by a comment instead of by the compiler. That is
+/// the same shape [`MrtrRound`] was introduced to kill for this very pair of
+/// sites. Both `ServerCore` and `Server` hold this field as
+/// `Arc<RwLock<Option<ClientCapabilities>>>`, so one signature serves both.
+///
+/// # The THIRD native dispatch root, and why it is exempt
+///
+/// `Server::handle_tasks_update` is reached directly from the HTTP transport,
+/// bypassing `handle_request_with_context` and therefore this fold. That is
+/// correct, not an omission: `route_tasks_update` refuses at its first case via
+/// [`is_v1_task_era`](crate::server::task_dispatch::is_v1_task_era), which is
+/// `true` for exactly the `Some(Era::V1)` / `None` inputs
+/// [`v1_capability_fold_applies`] fires on — so a fold there would be dead by
+/// construction. A future v1-serving capability read on the tasks surface would
+/// need one.
+///
+/// # The two endpoints this bridges
+///
+/// The v1 handshake writes `*self.client_capabilities.write().await =
+/// Some(init_req.capabilities.clone())` — a SERVER-LEVEL lock. A handler reads
+/// [`RequestHandlerExtra::client_capabilities`](crate::RequestHandlerExtra::client_capabilities),
+/// which reads only `protocol_context.client_capabilities`, a field
+/// `resolve_protocol_context` populates ONLY from the v2 `_meta` reserved key.
+/// Without this fold the two never meet and a v1 capability gate reads
+/// permanently `None`.
+///
+/// # The fold is ONE-DIRECTIONAL
+///
+/// It fires only when [`v1_capability_fold_applies`] holds — that is, on a v1
+/// era or no context at all, and only when the field is still empty. A fresh
+/// per-request v2 `_meta` declaration therefore always wins over a stale
+/// handshake value (T-118.1-08-03).
+///
+/// # It never fabricates a default
+///
+/// `handshake_capabilities` of `None` returns the context unchanged. A server
+/// that never saw an `initialize` keeps `client_capabilities() == None` — and
+/// keeps `era() == None` too, since no context is synthesised either. Inventing
+/// `ClientCapabilities::default()` where nothing was advertised would make a
+/// capability gate silently permissive, which is worse than the bug
+/// (T-118.1-08-04).
+///
+/// # Why the accessor does NOT read the lock instead
+///
+/// `client_capabilities()` is a SYNC method on a value that has already been
+/// moved into the handler, and the dispatch path holds the lock — that shape
+/// deadlocks. The read happens here, once, at the dispatch root, and the guard
+/// is dropped at the end of the `let` below — before the caller's
+/// `handle_initialize` takes the WRITE lock.
+///
+/// **Security — self-reported, not for authorization:** like
+/// [`client_info`](crate::RequestHandlerExtra::client_info), these capabilities
+/// are client-supplied and informational ONLY. They MUST NOT be used as an
+/// authorization anchor; real identity binds to the OAuth token (Phase 114 /
+/// TASK-05). G-9 widens WHO can read these values — it does not make them
+/// trustworthy.
+pub(crate) async fn fold_v1_handshake_capabilities(
+    context: Option<crate::types::protocol::ProtocolContext>,
+    handshake_lock: &RwLock<Option<crate::types::ClientCapabilities>>,
+    accept_list: &[crate::types::ProtocolVersion],
+) -> Option<crate::types::protocol::ProtocolContext> {
+    if !v1_capability_fold_applies(context.as_ref()) {
+        return context;
+    }
+    let Some(capabilities) = handshake_lock.read().await.clone() else {
+        return context;
+    };
+    match context {
+        Some(ctx) => Some(ctx.with_client_capabilities(capabilities)),
+        // No context resolved (a non-opted-in server, D-04). The handshake DID
+        // happen — the lock holds a value — so the era is known to be v1 and the
+        // context is synthesised rather than left absent. The version comes from
+        // the SHARED absent-signal rule, so it names what the resolver would
+        // have named had the server been opted in.
+        None => crate::types::protocol::context::first_v1_version(accept_list).map(|version| {
+            crate::types::protocol::ProtocolContext::new(crate::types::protocol::Era::V1, version)
+                .with_client_capabilities(capabilities)
+        }),
+    }
 }
 
 /// The pure initialize-gate rule: must THIS request have been preceded by an
@@ -4489,7 +5284,7 @@ mod tests {
         // Projection is produced by the ONE shared free fn the production caller uses.
         let response = build_discover_response(
             RequestId::from(1i64),
-            &server.capabilities,
+            DiscoverSource::from(&server.capabilities),
             &server.info,
             Some(&ctx),
         );
@@ -4518,7 +5313,7 @@ mod tests {
         let ctx = v1_ctx();
         let resp = build_discover_response(
             RequestId::from(2i64),
-            &server.capabilities,
+            DiscoverSource::from(&server.capabilities),
             &server.info,
             Some(&ctx),
         );
@@ -4534,7 +5329,7 @@ mod tests {
         // no resolved context at all → also -32601
         let resp_none = build_discover_response(
             RequestId::from(3i64),
-            &server.capabilities,
+            DiscoverSource::from(&server.capabilities),
             &server.info,
             None,
         );
@@ -4576,7 +5371,7 @@ mod tests {
         let ctx = v2_ctx();
         let _ = build_discover_response(
             RequestId::from(1i64),
-            &server.capabilities,
+            DiscoverSource::from(&server.capabilities),
             &server.info,
             Some(&ctx),
         );
@@ -4591,12 +5386,24 @@ mod tests {
     fn server_discover_wire_shape_golden() {
         let caps = ServerCapabilities::tools_only();
         let info = Implementation::new("golden-server", "1.2.3");
-        let result = discover_result_from_capabilities(&caps, &info, "2026-07-28".to_string());
+        // A REAL two-entry accept-list, so the golden pins that
+        // `supportedVersions` reproduces the caller's list in order rather than
+        // some derived or defaulted value (G-7).
+        let versions = vec![
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+            ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+        ];
+        let result = discover_result_from_capabilities(
+            DiscoverSource::new(&caps, &versions),
+            &info,
+            "2026-07-28".to_string(),
+        );
         let value = serde_json::to_value(&result).unwrap();
         let expected = serde_json::json!({
             "protocolVersion": "2026-07-28",
             "capabilities": { "tools": { "listChanged": true } },
-            "serverInfo": { "name": "golden-server", "version": "1.2.3" }
+            "serverInfo": { "name": "golden-server", "version": "1.2.3" },
+            "supportedVersions": ["2025-11-25", "2026-07-28"]
         });
         assert_eq!(value, expected, "discover wire shape drifted from golden");
     }
@@ -4621,8 +5428,10 @@ mod tests {
     #[test]
     fn server_discover_projects_the_tasks_extension_and_hides_the_v1_tasks_keys() {
         let info = Implementation::new("tasks-server", "1.0.0");
+        // Capabilities-only source: this test reads nothing but the projected
+        // capabilities, which is exactly what that conversion is for.
         let result = discover_result_from_capabilities(
-            &tasks_backed_capabilities(),
+            DiscoverSource::from(&tasks_backed_capabilities()),
             &info,
             "2026-07-28".to_string(),
         );
@@ -4654,8 +5463,10 @@ mod tests {
     #[test]
     fn server_discover_preserves_unrelated_experimental_keys() {
         let info = Implementation::new("tasks-server", "1.0.0");
+        // Capabilities-only source: this test reads nothing but the projected
+        // capabilities, which is exactly what that conversion is for.
         let result = discover_result_from_capabilities(
-            &tasks_backed_capabilities(),
+            DiscoverSource::from(&tasks_backed_capabilities()),
             &info,
             "2026-07-28".to_string(),
         );
@@ -4767,13 +5578,13 @@ mod tests {
         let info = Implementation::new("tasks-server", "1.0.0");
 
         let first = serde_json::to_value(discover_result_from_capabilities(
-            &caps,
+            DiscoverSource::from(&caps),
             &info,
             "2026-07-28".to_string(),
         ))
         .unwrap();
         let second = serde_json::to_value(discover_result_from_capabilities(
-            &caps,
+            DiscoverSource::from(&caps),
             &info,
             "2026-07-28".to_string(),
         ))
@@ -5144,7 +5955,7 @@ mod tests {
             let discover_ctx = v2_ctx();
             let response = build_discover_response(
                 RequestId::from(3i64),
-                &server.capabilities,
+                DiscoverSource::from(&server.capabilities),
                 &server.info,
                 Some(&discover_ctx),
             );
@@ -8575,6 +9386,900 @@ mod tests {
                 ))))
                 .is_none()
             );
+        }
+    }
+
+    // =======================================================================
+    // `completion/complete`, per arm (Phase 118.1-04, CONF-05 / G-4).
+    //
+    // These sit next to the helper rather than in `tests/completion_complete.rs`
+    // because `complete_completion` and `bound_completion_values` are
+    // `pub(crate)` / private: an integration test can only reach them through a
+    // dispatcher, which conflates "the bound is applied" with "the dispatcher
+    // applies the bound". Both facts matter, so both are asserted — the
+    // dispatcher half lives in `tests/completion_complete.rs`.
+    // =======================================================================
+    mod completion {
+        use super::*;
+        use crate::types::completable::{
+            CompletionItem, CompletionProviderTrait, CompletionRequest, CompletionResponse,
+        };
+        use crate::types::protocol::{CompleteRequest, CompletionArgument, CompletionReference};
+
+        /// A provider returning `count` values, reporting `has_more` verbatim.
+        struct Fixed {
+            count: usize,
+            has_more: bool,
+        }
+
+        #[async_trait]
+        impl CompletionProviderTrait for Fixed {
+            async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+                Ok(CompletionResponse {
+                    completions: (0..self.count)
+                        .map(|index| CompletionItem {
+                            value: format!("v{index}"),
+                            label: None,
+                            description: None,
+                            icon: None,
+                            metadata: HashMap::new(),
+                        })
+                        .collect(),
+                    has_more: self.has_more,
+                    continuation_token: None,
+                })
+            }
+        }
+
+        /// A provider that always fails, to pin the error path.
+        struct Failing;
+
+        #[async_trait]
+        impl CompletionProviderTrait for Failing {
+            async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+                Err(Error::internal("provider exploded"))
+            }
+        }
+
+        /// The suite's request shape, for the arms that do not care about it.
+        fn request() -> CompleteRequest {
+            CompleteRequest {
+                r#ref: CompletionReference::Prompt {
+                    name: "test_prompt_with_arguments".to_string(),
+                },
+                argument: CompletionArgument {
+                    name: "arg1".to_string(),
+                    value: String::new(),
+                },
+            }
+        }
+
+        fn provider_arc(
+            provider: impl CompletionProviderTrait + 'static,
+        ) -> Arc<dyn CompletionProviderTrait> {
+            Arc::new(provider)
+        }
+
+        #[tokio::test]
+        async fn no_provider_answers_an_empty_array_not_an_error() {
+            let result = complete_completion(None, &request())
+                .await
+                .expect("the no-provider path is a SUCCESS, never an error");
+            assert!(result.completion.values.is_empty());
+            assert!(!result.completion.has_more);
+            assert_eq!(result.completion.total, None);
+        }
+
+        #[tokio::test]
+        async fn a_provider_under_the_bound_is_passed_through_whole() {
+            let provider = provider_arc(Fixed {
+                count: 7,
+                has_more: false,
+            });
+            let result = complete_completion(Some(&provider), &request())
+                .await
+                .expect("provider succeeds");
+            assert_eq!(result.completion.values.len(), 7);
+            assert!(!result.completion.has_more);
+            assert_eq!(result.completion.total, Some(7));
+        }
+
+        #[tokio::test]
+        async fn exactly_the_bound_is_not_treated_as_truncated() {
+            let provider = provider_arc(Fixed {
+                count: MAX_COMPLETION_VALUES,
+                has_more: false,
+            });
+            let result = complete_completion(Some(&provider), &request())
+                .await
+                .expect("provider succeeds");
+            assert_eq!(result.completion.values.len(), MAX_COMPLETION_VALUES);
+            assert!(
+                !result.completion.has_more,
+                "exactly 100 fits the bound, so nothing was dropped"
+            );
+            assert_eq!(result.completion.total, Some(MAX_COMPLETION_VALUES));
+        }
+
+        #[tokio::test]
+        async fn one_over_the_bound_truncates_and_says_so() {
+            let provider = provider_arc(Fixed {
+                count: MAX_COMPLETION_VALUES + 1,
+                has_more: false,
+            });
+            let result = complete_completion(Some(&provider), &request())
+                .await
+                .expect("provider succeeds");
+            assert_eq!(result.completion.values.len(), MAX_COMPLETION_VALUES);
+            assert!(
+                result.completion.has_more,
+                "an element was dropped, so the list must not read as exhaustive"
+            );
+            assert_eq!(
+                result.completion.total,
+                Some(MAX_COMPLETION_VALUES + 1),
+                "the provider returned everything it had, so `total` is the TRUE total \
+                 including the dropped element"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_provider_claiming_more_suppresses_total() {
+            let provider = provider_arc(Fixed {
+                count: 3,
+                has_more: true,
+            });
+            let result = complete_completion(Some(&provider), &request())
+                .await
+                .expect("provider succeeds");
+            assert_eq!(result.completion.values.len(), 3);
+            assert!(result.completion.has_more);
+            assert_eq!(
+                result.completion.total, None,
+                "the provider says more exist, so the true total is UNKNOWN — inventing \
+                 one would be worse than omitting an optional field"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_failing_provider_surfaces_its_error() {
+            let provider = provider_arc(Failing);
+            let error = complete_completion(Some(&provider), &request())
+                .await
+                .expect_err("a failing provider must not be swallowed into an empty array");
+            assert!(error.to_string().contains("provider exploded"));
+        }
+
+        /// A provider that records the [`CompletionRequest`] it was handed.
+        struct Recording(std::sync::Mutex<Option<CompletionRequest>>);
+
+        #[async_trait]
+        impl CompletionProviderTrait for Recording {
+            async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+                *self.0.lock().expect("uncontended") = Some(request);
+                Ok(CompletionResponse {
+                    completions: Vec::new(),
+                    has_more: false,
+                    continuation_token: None,
+                })
+            }
+        }
+
+        #[tokio::test]
+        async fn the_ref_and_the_argument_reach_the_provider() {
+            let recording = Arc::new(Recording(std::sync::Mutex::new(None)));
+            let provider: Arc<dyn CompletionProviderTrait> = recording.clone();
+
+            let mut wire = request();
+            wire.argument.value = "te".to_string();
+            complete_completion(Some(&provider), &wire)
+                .await
+                .expect("provider succeeds");
+
+            let seen = recording.0.lock().expect("uncontended").clone();
+            let seen = seen.expect("the provider was called");
+            assert_eq!(seen.argument, "arg1");
+            assert_eq!(seen.partial, "te");
+            assert_eq!(
+                seen.context
+                    .get(COMPLETION_REF_PROMPT_KEY)
+                    .map(String::as_str),
+                Some("test_prompt_with_arguments"),
+                "a ref/prompt reference reaches the provider under the spec's own \
+                 discriminator spelling"
+            );
+            assert!(!seen.context.contains_key(COMPLETION_REF_RESOURCE_KEY));
+        }
+
+        #[tokio::test]
+        async fn a_resource_ref_reaches_the_provider_under_its_own_key() {
+            let recording = Arc::new(Recording(std::sync::Mutex::new(None)));
+            let provider: Arc<dyn CompletionProviderTrait> = recording.clone();
+
+            let wire = CompleteRequest {
+                r#ref: CompletionReference::Resource {
+                    uri: "test://static-text".to_string(),
+                },
+                argument: CompletionArgument {
+                    name: "path".to_string(),
+                    value: String::new(),
+                },
+            };
+            complete_completion(Some(&provider), &wire)
+                .await
+                .expect("provider succeeds");
+
+            let seen = recording.0.lock().expect("uncontended").clone();
+            let seen = seen.expect("the provider was called");
+            assert_eq!(
+                seen.context
+                    .get(COMPLETION_REF_RESOURCE_KEY)
+                    .map(String::as_str),
+                Some("test://static-text")
+            );
+            assert!(!seen.context.contains_key(COMPLETION_REF_PROMPT_KEY));
+        }
+    }
+}
+
+// ===========================================================================
+// `ServerCore::attach_peer` precedence — the TWIN of the `Server` suite in
+// `src/server/mod.rs` (`peer_precedence_tests`).
+//
+// Phase 118.1 plan 11. Both dispatch roots read the request-scoped
+// `TransportBackchannel` before the global `peer_handle`, and the two must never
+// disagree about which peer a handler sees. The `Server` side is measured over
+// there; this is the same measurement on this side, so a future edit to one
+// impl cannot silently diverge from the other.
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod core_peer_precedence_tests {
+    use super::*;
+    use crate::shared::peer::PeerHandle;
+    use crate::types::protocol::context::TransportBackchannel;
+    use crate::types::protocol::{Era, ProtocolContext, ProtocolVersion};
+    use crate::types::roots::{ListRootsResult, Root};
+    use crate::types::sampling::{CreateMessageParams, CreateMessageResult};
+    use crate::types::ProgressToken;
+
+    /// A peer that reports WHICH source supplied it.
+    struct NamedPeer(&'static str);
+
+    #[async_trait]
+    impl PeerHandle for NamedPeer {
+        async fn sample(&self, _params: CreateMessageParams) -> Result<CreateMessageResult> {
+            Err(Error::protocol(
+                crate::ErrorCode::METHOD_NOT_FOUND,
+                "not the method under test",
+            ))
+        }
+
+        async fn list_roots(&self) -> Result<ListRootsResult> {
+            Ok(ListRootsResult {
+                roots: vec![Root {
+                    uri: format!("file:///{}", self.0),
+                    name: Some(self.0.to_string()),
+                }],
+            })
+        }
+
+        async fn progress_notify(
+            &self,
+            _token: ProgressToken,
+            _progress: f64,
+            _total: Option<f64>,
+            _message: Option<String>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn attached_peer_name(extra: &RequestHandlerExtra) -> Option<String> {
+        let peer = extra.peer()?;
+        let roots = peer.list_roots().await.expect("the fixture peer answers");
+        roots.roots.first().and_then(|r| r.name.clone())
+    }
+
+    fn context_with_peer(name: &'static str) -> ProtocolContext {
+        let peer: Arc<dyn PeerHandle> = Arc::new(NamedPeer(name));
+        ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+        )
+        .with_transport_backchannel(TransportBackchannel::new().with_peer(peer))
+    }
+
+    fn extra_with_context(context: Option<ProtocolContext>) -> RequestHandlerExtra {
+        RequestHandlerExtra::new(
+            "req-attach-peer".to_string(),
+            RequestHandlerExtra::default().cancellation_token,
+        )
+        .with_protocol_context(context)
+    }
+
+    fn bare_core() -> ServerCore {
+        crate::server::builder::ServerCoreBuilder::new()
+            .name("attach-peer-precedence-core")
+            .version("1.0.0")
+            .build()
+            .expect("core builds")
+    }
+
+    /// THE precedence claim (T-118.1-11-04), measured on this dispatch root.
+    #[tokio::test]
+    async fn the_request_scoped_peer_wins_over_the_global_peer_handle() {
+        let mut core = bare_core();
+        core.peer_handle = Some(Arc::new(NamedPeer("global")));
+
+        let extra = core.attach_peer(extra_with_context(Some(context_with_peer(
+            "request-scoped",
+        ))));
+
+        assert_eq!(
+            attached_peer_name(&extra).await.as_deref(),
+            Some("request-scoped"),
+            "ServerCore must resolve the peer exactly as `Server` does: the request-scoped \
+             transport handle wins over the global one"
+        );
+    }
+
+    /// The in-process fallback is untouched here too.
+    #[tokio::test]
+    async fn the_global_handle_still_applies_when_no_backchannel_rides_the_context() {
+        let mut core = bare_core();
+        core.peer_handle = Some(Arc::new(NamedPeer("global")));
+
+        let extra = core.attach_peer(extra_with_context(None));
+        assert_eq!(
+            attached_peer_name(&extra).await.as_deref(),
+            Some("global"),
+            "with no backchannel the global handle must still apply"
+        );
+    }
+
+    /// Neither source configured: still a no-op.
+    #[tokio::test]
+    async fn attach_peer_is_a_no_op_when_neither_source_is_configured() {
+        let core = bare_core();
+        let extra = core.attach_peer(extra_with_context(None));
+        assert!(
+            extra.peer().is_none(),
+            "with no global handle and no backchannel, `extra.peer()` stays None"
+        );
+    }
+}
+
+// ===========================================================================
+// `attach_request_log_sink` — the log-sink precedence rule, the log-level
+// carrier, and the `ServerCore` root that calls them (Phase 118.2 plan 06,
+// CONF-10 / D-07).
+//
+// These live HERE rather than in `tests/log_emitter.rs` for the same reason the
+// peer suite above does, stated verbatim in `src/server/mod.rs`'s
+// `peer_precedence_tests`: they need crate-internal access. All three of
+// `attach_request_log_sink`, `TransportBackchannel` and
+// `ProtocolContext::with_resolved_log_level` are `pub(crate)`, so an integration
+// test cannot construct the request-scoped half of the precedence rule at all.
+// `tests/log_emitter.rs` carries the STRUCTURAL both-roots fence that guards
+// these from silent deletion.
+//
+// The `Server` twin of this module is `log_sink_precedence_tests` in
+// `src/server/mod.rs` — same claims, other root, so a future edit to one impl
+// cannot silently diverge from the other.
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod core_log_sink_tests {
+    use super::*;
+    use crate::types::protocol::context::TransportBackchannel;
+    use crate::types::protocol::{Era, ProtocolContext, ProtocolVersion};
+    use crate::types::{LoggingLevel, Notification};
+    use std::sync::Mutex;
+
+    /// A sink that records every notification handed to it, so a fence can tell
+    /// WHICH of two sinks a record reached rather than only that one did.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<Notification>>>);
+
+    impl Capture {
+        fn sink(&self) -> Arc<dyn Fn(Notification) + Send + Sync> {
+            let slot = Arc::clone(&self.0);
+            Arc::new(move |notification| {
+                slot.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(notification);
+            })
+        }
+
+        fn len(&self) -> usize {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len()
+        }
+    }
+
+    fn bare_context() -> ProtocolContext {
+        ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+        )
+    }
+
+    fn context_with_sink(capture: &Capture) -> ProtocolContext {
+        bare_context().with_transport_backchannel(
+            TransportBackchannel::new().with_notification_sink(capture.sink()),
+        )
+    }
+
+    /// A 2026-07-28 context carrying a live back-channel — the shape SEP-2575
+    /// governs.
+    fn v2_context_with_sink(capture: &Capture) -> ProtocolContext {
+        ProtocolContext::new(
+            Era::V2,
+            ProtocolVersion(crate::types::protocol::PROTOCOL_VERSION_2026_07_28.to_string()),
+        )
+        .with_transport_backchannel(
+            TransportBackchannel::new().with_notification_sink(capture.sink()),
+        )
+    }
+
+    /// THE SEP-2575 claim: on v2, an ABSENT `_meta` log level is a PROHIBITION.
+    ///
+    /// The vendored schema is explicit — "If absent, the server MUST NOT send any
+    /// notifications/message" — and the conformance scenario
+    /// `sep-2575-server-no-log-without-loglevel` reds the server on a single
+    /// frame. Before this rule, `resolve_request_log_level` answered `None`, the
+    /// emitter fell back to `DEFAULT_LOG_LEVEL` (`info`, D-12) and emitted, so
+    /// every pmcp server violated it; the only thing standing between the suite
+    /// and a red was a hand-written `if extra.log_level.is_some()` guard inside
+    /// one example's handler.
+    #[test]
+    fn a_v2_request_with_no_resolved_level_gets_no_log_sink_at_all() {
+        let capture = Capture::default();
+        let extra = attach_request_log_sink(
+            extra_with_context(Some(v2_context_with_sink(&capture))),
+            || None,
+        );
+
+        assert!(
+            extra.log_sink.is_none(),
+            "a v2 request that carried no `io.modelcontextprotocol/logLevel` must be given NO \
+             vehicle: withholding the sink is what makes the rule hold for every handler rather \
+             than only the ones that remember to check"
+        );
+        extra
+            .log(LoggingLevel::Error, "this must not reach the wire")
+            .expect("a sinkless emit is silence, not an error (D-08)");
+        assert_eq!(
+            capture.len(),
+            0,
+            "not one `notifications/message` frame — the scenario fails the server on the first"
+        );
+    }
+
+    /// The mirror: a v2 request that DID authorize logging still gets its sink,
+    /// so the rule is a gate and not a blanket refusal.
+    #[test]
+    fn a_v2_request_that_authorized_logging_still_gets_its_sink() {
+        let capture = Capture::default();
+        let context = v2_context_with_sink(&capture).with_resolved_log_level(LoggingLevel::Debug);
+        let extra = attach_request_log_sink(extra_with_context(Some(context)), || None);
+
+        assert_eq!(
+            extra.log_level,
+            Some(LoggingLevel::Debug),
+            "the authorized level still reaches the emitter"
+        );
+        extra
+            .log(LoggingLevel::Debug, "authorized")
+            .expect("the emitter always returns Ok");
+        assert_eq!(
+            capture.len(),
+            1,
+            "and the record is delivered — v2 logging is GATED, not disabled"
+        );
+    }
+
+    /// v1 is untouched: there, `None` means "the client did not choose, so the
+    /// server MAY decide", which is exactly what `DEFAULT_LOG_LEVEL` implements.
+    /// Reading the two eras the same way is what the fix would break if it were
+    /// applied unconditionally.
+    #[test]
+    fn a_v1_request_with_no_resolved_level_still_logs_at_the_default() {
+        let capture = Capture::default();
+        let extra = attach_request_log_sink(
+            extra_with_context(Some(context_with_sink(&capture))),
+            || None,
+        );
+
+        assert!(
+            extra.log_sink.is_some(),
+            "v1 absence is a non-answer, not a prohibition"
+        );
+        extra
+            .log(LoggingLevel::Info, "info is at the default bar")
+            .expect("the emitter always returns Ok");
+        assert_eq!(
+            capture.len(),
+            1,
+            "MCP 2025-11-25 says the server MAY decide which messages to send automatically"
+        );
+    }
+
+    fn extra_with_context(
+        context: Option<ProtocolContext>,
+    ) -> crate::server::cancellation::RequestHandlerExtra {
+        crate::server::cancellation::RequestHandlerExtra::new(
+            "req-attach-log-sink".to_string(),
+            crate::server::cancellation::RequestHandlerExtra::default().cancellation_token,
+        )
+        .with_protocol_context(context)
+    }
+
+    fn bare_core() -> ServerCore {
+        crate::server::builder::ServerCoreBuilder::new()
+            .name("attach-log-sink-precedence-core")
+            .version("1.0.0")
+            .build()
+            .expect("core builds")
+    }
+
+    /// THE precedence claim (T-118.2-06-02). Both sources configured at once.
+    ///
+    /// Two DISTINGUISHABLE captures, not one: a fence that only proved "a record
+    /// arrived somewhere" could not tell the correct routing from the inverted
+    /// one, and the inverted one publishes a session's records onto the
+    /// server-wide channel.
+    #[test]
+    fn a_request_scoped_sink_wins_over_the_root_fallback() {
+        let request_scoped = Capture::default();
+        let fallback = Capture::default();
+
+        let extra = attach_request_log_sink(
+            extra_with_context(Some(context_with_sink(&request_scoped))),
+            || Some(fallback.sink()),
+        );
+        extra
+            .log(LoggingLevel::Warning, "which sink received me?")
+            .expect("the emitter always returns Ok");
+
+        assert_eq!(
+            request_scoped.len(),
+            1,
+            "the session-bound transport sink must win: the root fallback is a SINGLE server-wide \
+             channel and cannot express which session issued this request (T-118.2-06-02)"
+        );
+        assert_eq!(
+            fallback.len(),
+            0,
+            "the root fallback must NOT also receive the record — that would publish one \
+             session's log records onto the server-wide channel"
+        );
+    }
+
+    /// The mirror: with no backchannel, the root's fallback is what runs.
+    #[test]
+    fn the_root_fallback_is_used_when_no_request_scoped_sink_exists() {
+        let fallback = Capture::default();
+
+        let extra = attach_request_log_sink(extra_with_context(Some(bare_context())), || {
+            Some(fallback.sink())
+        });
+        extra
+            .log(LoggingLevel::Warning, "no backchannel on this request")
+            .expect("the emitter always returns Ok");
+
+        assert_eq!(
+            fallback.len(),
+            1,
+            "with no request-scoped sink the root fallback must apply — that is the live path on \
+             the in-process `Server::run` transport, not a safety net"
+        );
+    }
+
+    /// Neither source configured: still a no-op, and `extra.log(..)` is silent
+    /// rather than an error (D-08).
+    #[test]
+    fn attach_request_log_sink_is_a_no_op_when_neither_source_exists() {
+        let extra = attach_request_log_sink(extra_with_context(Some(bare_context())), || None);
+        assert!(
+            extra.log_sink.is_none(),
+            "with no fallback and no backchannel, `extra.log_sink` stays None"
+        );
+        assert!(
+            extra.log(LoggingLevel::Error, "into the void").is_ok(),
+            "a sinkless emit is silence, not an error (D-08)"
+        );
+    }
+
+    /// The CARRIER fence: a level resolved onto the `ProtocolContext` reaches
+    /// the emitter, and its absence leaves `DEFAULT_LOG_LEVEL` in force.
+    ///
+    /// This runs BEFORE any writer of `with_resolved_log_level` exists (the HTTP
+    /// ingress lands in plan 07), which is the point: a broken carrier cannot
+    /// hide behind a missing writer.
+    #[test]
+    fn a_resolved_log_level_on_the_context_reaches_the_extra() {
+        let with_level = Capture::default();
+        let context = context_with_sink(&with_level).with_resolved_log_level(LoggingLevel::Debug);
+        let extra = attach_request_log_sink(extra_with_context(Some(context)), || None);
+
+        assert_eq!(
+            extra.log_level,
+            Some(LoggingLevel::Debug),
+            "the resolved level must be lifted off the context by the SAME unit that resolves the \
+             sink — attaching them at different sites is how two roots end up filtering differently"
+        );
+        extra
+            .log(LoggingLevel::Debug, "debug is at the bar now")
+            .expect("the emitter always returns Ok");
+        assert_eq!(
+            with_level.len(),
+            1,
+            "with `debug` resolved, a debug record must pass the filter"
+        );
+
+        // The mirror: no resolved level, so D-12's `info` default applies and the
+        // same debug record is dropped.
+        let defaulted = Capture::default();
+        let extra = attach_request_log_sink(
+            extra_with_context(Some(context_with_sink(&defaulted))),
+            || None,
+        );
+        assert!(
+            extra.log_level.is_none(),
+            "with nothing resolved the unit must leave `log_level` alone so DEFAULT_LOG_LEVEL \
+             applies at emit time"
+        );
+        extra
+            .log(LoggingLevel::Debug, "below the default bar")
+            .expect("the emitter always returns Ok");
+        assert_eq!(
+            defaulted.len(),
+            0,
+            "an unconfigured request filters at `info` (D-12), so a debug record is dropped"
+        );
+    }
+
+    /// The ROOT claim on this side: `ServerCore::attach_peer` — the one
+    /// post-authorization site every `ServerCore` dispatcher calls — wires the
+    /// log sink, not just the peer.
+    #[test]
+    fn the_server_core_root_attaches_the_request_scoped_log_sink() {
+        let capture = Capture::default();
+        let core = bare_core();
+
+        let extra = core.attach_peer(extra_with_context(Some(context_with_sink(&capture))));
+        extra
+            .log(LoggingLevel::Info, "through the ServerCore root")
+            .expect("the emitter always returns Ok");
+
+        assert_eq!(
+            capture.len(),
+            1,
+            "`ServerCore::attach_peer` must attach the log sink too — it is the single site every \
+             dispatcher on this root already calls, AFTER its `tool_authorizer` check"
+        );
+    }
+
+    /// The documented asymmetry, pinned: `ServerCore` has no `notification_tx`
+    /// of any kind, so its fallback is a literal `None` and a request with no
+    /// backchannel gets no sink at all. A future reader who "fixes" the literal
+    /// `None` by inventing a channel here breaks this.
+    #[test]
+    fn the_server_core_root_has_no_fallback_sink_of_its_own() {
+        let core = bare_core();
+        let extra = core.attach_peer(extra_with_context(Some(bare_context())));
+        assert!(
+            extra.log_sink.is_none(),
+            "`ServerCore` owns no notification channel; the request-scoped `TransportBackchannel` \
+             is its ONLY possible sink"
+        );
+    }
+}
+
+// ===========================================================================
+// `logging/setLevel` — ONE era-branched answer, BOTH native dispatch roots
+// (Phase 118.2 plan 08, CONF-10 / D-13).
+//
+// # Why these live HERE and not in `tests/log_emitter.rs`
+//
+// The plan puts all of this phase's fences in the integration file. Two of them
+// CANNOT be written there, for a reason that is itself part of the finding:
+//
+//   * `ClientRequest::SetLoggingLevel` carries no `_meta` — it is one of the
+//     variants `request_meta_value` enumerates as non-`_meta`-bearing — so
+//     `ProtocolHandler::handle_request`, the only PUBLIC dispatch entry, always
+//     resolves `era == None` for it and can exercise the v1 branch ONLY. An
+//     integration test literally cannot present a v2 `logging/setLevel` to a
+//     native root.
+//   * The era-bearing seams are `Server::handle_request_with_context`
+//     (`pub(crate)`) and `ServerCore::handle_request_internal` (private to this
+//     file). This file is the only place that can reach BOTH, which makes it the
+//     only place the D-13 twin-root claim can be stated as a test at all.
+//
+// Same placement, and the same stated reason, as `core_log_sink_tests` above and
+// 118.1's `attach_peer` suite. `tests/log_emitter.rs` carries the WIRE fence for
+// the v1 answer, the source-level scope fence over the untouched residual, and a
+// name-existence guard so these two cannot be deleted silently.
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod set_logging_level_tests {
+    use super::*;
+    use crate::types::protocol::{Era, ProtocolContext, ProtocolVersion};
+
+    /// A comparable projection of a dispatch answer.
+    ///
+    /// `Ok(result)` or `Err((code, message))` — enough to state "the two roots
+    /// gave the SAME answer" as an equality rather than as two separate
+    /// assertions that could both drift in the same direction.
+    fn answer_of(response: JSONRPCResponse) -> std::result::Result<Value, (i32, String)> {
+        match response.payload {
+            ResponsePayload::Result(value) => Ok(value),
+            ResponsePayload::Error(error) => Err((error.code, error.message)),
+        }
+    }
+
+    fn set_level_request() -> Request {
+        Request::Client(Box::new(ClientRequest::SetLoggingLevel {
+            level: crate::types::notifications::LoggingLevel::Info,
+        }))
+    }
+
+    fn context_for(era: Era) -> ProtocolContext {
+        let version = match era {
+            Era::V1 => "2025-11-25",
+            Era::V2 => "2026-07-28",
+        };
+        ProtocolContext::new(era, ProtocolVersion(version.to_string()))
+    }
+
+    /// A core in STATELESS mode.
+    ///
+    /// Not decoration: `v1_initialize_gate_applies` refuses every v1 request on a
+    /// stateful core that has not seen `initialize`, and that `-32002` would be
+    /// answered BEFORE the arm under test. Stateless mode removes the gate so the
+    /// fence measures the dispatch arm rather than the handshake.
+    fn bare_core() -> ServerCore {
+        crate::server::builder::ServerCoreBuilder::new()
+            .name("set-logging-level-core")
+            .version("1.0.0")
+            .stateless_mode(true)
+            .build()
+            .expect("core builds")
+    }
+
+    fn bare_server() -> crate::server::Server {
+        crate::server::Server::builder()
+            .name("set-logging-level-server")
+            .version("1.0.0")
+            .build()
+            .expect("server builds")
+    }
+
+    /// The `ServerCore` root's answer for `era`.
+    async fn core_answer(era: Option<Era>) -> std::result::Result<Value, (i32, String)> {
+        let core = bare_core();
+        answer_of(
+            core.handle_request_internal(
+                RequestId::from(1i64),
+                set_level_request(),
+                None,
+                era.map(context_for),
+                &mut DispatchEnvelopeClaim::default(),
+            )
+            .await,
+        )
+    }
+
+    /// The high-level `Server` root's answer for `era`.
+    async fn server_answer(era: Option<Era>) -> std::result::Result<Value, (i32, String)> {
+        let server = bare_server();
+        answer_of(
+            server
+                .handle_request_with_context(
+                    RequestId::from(1i64),
+                    set_level_request(),
+                    None,
+                    era.map(context_for),
+                )
+                .await,
+        )
+    }
+
+    /// T-118.2-08-01 — the v2 retirement is enforced at the DISPATCH root, not
+    /// only at the HTTP ingress.
+    ///
+    /// # Which route this fence takes, and why
+    ///
+    /// IN-PROCESS, through each root's own era-bearing dispatch entry — NOT over
+    /// HTTP. `retire_v2_method` refuses a v2 `logging/setLevel` at the header
+    /// gate, long before any dispatcher sees it, so a wire fence would prove the
+    /// PRE-EXISTING transport retirement and say nothing at all about the arm
+    /// this plan added. The whole of D-13 is that the dispatch root was the layer
+    /// that had it wrong: before this plan `Server` answered `json!({})` here on
+    /// BOTH eras, so a caller reaching it by any path other than the HTTP ingress
+    /// — in-process, or a future transport — got a success for a method the
+    /// 2026-07-28 schema removed.
+    #[tokio::test]
+    async fn v2_set_logging_level_is_retired_on_the_dispatch_root() {
+        for (root, answer) in [
+            ("Server", server_answer(Some(Era::V2)).await),
+            ("ServerCore", core_answer(Some(Era::V2)).await),
+        ] {
+            let Err((code, message)) = answer else {
+                panic!(
+                    "{root} SERVED a v2 `logging/setLevel` instead of refusing it — the retirement \
+                     is enforced only at the HTTP layer again, which is exactly the defect D-13 \
+                     closed"
+                );
+            };
+            assert_eq!(
+                code,
+                crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                "{root} refused with {code} ({message}), not -32601. The HTTP ingress answers \
+                 `METHOD_NOT_FOUND` for the same method through `V2_RETIRED_METHODS`; a refusal \
+                 that is not a retirement would not be credited by the suite and could be a \
+                 capability or params rejection wearing a retirement's clothes"
+            );
+        }
+    }
+
+    /// The D-13 claim itself, as an equality: both roots, every era, one answer.
+    ///
+    /// The `None` row is load-bearing. A server that never opted in to protocol
+    /// negotiation resolves no era at all, and it has always been on v1; retiring
+    /// the method for it would break every default-configuration server in the
+    /// SDK. `None` must therefore answer exactly as `Some(V1)` does.
+    ///
+    /// The sibling precedent is the paired
+    /// `attach_peer_is_a_no_op_when_neither_source_is_configured`, which exists in
+    /// BOTH `src/server/core.rs` and `src/server/mod.rs`. This phase states the
+    /// pairing as one cross-root equality instead, because "the two answers are
+    /// EQUAL" is the property, and two mirrored tests can drift together while an
+    /// equality cannot.
+    #[tokio::test]
+    async fn both_dispatch_roots_agree_about_set_logging_level() {
+        for era in [None, Some(Era::V1), Some(Era::V2)] {
+            let server = server_answer(era).await;
+            let core = core_answer(era).await;
+            assert_eq!(
+                server, core,
+                "the two native dispatch roots disagree about `logging/setLevel` on era {era:?} — \
+                 `Server` said {server:?}, `ServerCore` said {core:?}. That divergence is the \
+                 whole defect D-13 closed: only one of these roots is on the HTTP path, so only \
+                 one of them is measured by the official conformance suite, and the other one is \
+                 what an in-process or future-transport caller gets"
+            );
+        }
+    }
+
+    /// Pitfall 8, at the dispatch root: the v1 answer is a LITERAL empty object.
+    ///
+    /// The pinned suite's `2025-11-25:logging-set-level` scenario fails on
+    /// `Object.keys(r).length > 0`, so an acknowledgement object — or an echo of
+    /// the level just set, which would additionally be a READ of session state
+    /// through a WRITE endpoint (T-118.2-08-02) — reds a currently-green blocking
+    /// scenario. `tests/log_emitter.rs` pins the same constraint over the wire.
+    #[tokio::test]
+    async fn the_v1_answer_is_an_object_with_zero_keys_on_both_roots() {
+        for era in [None, Some(Era::V1)] {
+            for (root, answer) in [
+                ("Server", server_answer(era).await),
+                ("ServerCore", core_answer(era).await),
+            ] {
+                let Ok(result) = answer else {
+                    panic!("{root} refused a v1 `logging/setLevel` on era {era:?}: {answer:?}");
+                };
+                let object = result.as_object().unwrap_or_else(|| {
+                    panic!("{root}: the v1 answer must be an OBJECT, got {result}")
+                });
+                assert!(
+                    object.is_empty(),
+                    "{root}: the v1 answer must have ZERO keys, got {result} — any non-empty \
+                     object fails the pinned suite's `logging-set-level` scenario"
+                );
+            }
         }
     }
 }

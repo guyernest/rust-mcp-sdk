@@ -921,6 +921,28 @@ const ALLOWLIST: &[Accumulation] = &[
               link. Neither mechanism retains state across calls.",
     },
     Accumulation {
+        path: "src/server/streamable_http_server.rs",
+        needle: "push_str(",
+        count: 2,
+        why: "write_sse_frame appends one SSE frame into the caller's String — the frame's \
+              serialized payload and its terminator — and render_v2_multi_frame_body is its only \
+              caller: it assembles the v2 multi-frame SSE POST response body (CONF-07 / D-16) \
+              with one frame per queued progress notification, then exactly one for the terminal \
+              result. The loop's length is the length of the vector \
+              V2ProgressQueue::drain returned, and THAT is bounded by the queue's own capacity — \
+              V2_PROGRESS_QUEUE_CAPACITY (64), a BOUNDED tokio mpsc whose synchronous producer \
+              uses try_send and drops on a full queue rather than blocking or growing \
+              (T-118.1-12-01). So the bound is the channel's capacity, applied BEFORE these bytes \
+              exist, not a drain downstream of them. The per-frame size is bounded independently: \
+              a progress notification is a ProgressToken plus two f64s and an Option<String>, all \
+              chosen by the SERVER's own handler, never read off a socket — the only \
+              peer-supplied component is the progress token, which arrived inside the request \
+              body under the transport's max_request_bytes cap. The second append runs exactly \
+              once per response and carries the same JSONRPCResponse the JSON path would have \
+              serialized whole, so it adds no byte the unchanged path did not already emit. \
+              Nothing streams into this String and it is built to completion before axum sees it.",
+    },
+    Accumulation {
         path: "src/shared/credential_store.rs",
         needle: "push_str(",
         count: 1,
@@ -1000,9 +1022,67 @@ const ALLOWLIST: &[Accumulation] = &[
               appended exactly once and the buffer is drained at a single exit point, which is \
               also what makes it linear rather than quadratic. The two parser buffers are bounded \
               by feed's UNCONDITIONAL pre-check over retained state plus this chunk (113-17, \
-              T-113-86). feed_complete_body skips that pre-check by design and states the byte \
-              cap as a precondition on the caller, discharged at both call sites by \
-              collect_body_within_cap (113-20, T-113-84).",
+              T-113-86), and feed is now the parser's ONLY entry point: the unbounded \
+              complete-body sibling that used to state its byte cap as a precondition on the \
+              caller was DELETED in 118.2-03. Both of the whole-body collects it served — the GET \
+              session stream (118.2-01) and the POST response (118.2-03) in streamable_http.rs — \
+              are incremental readers under that same pre-check now, so this file carries no \
+              bound-bypassing path at all rather than one discharged by a caller's cap.",
+    },
+    Accumulation {
+        path: "src/shared/streamable_http.rs",
+        needle: "extend_from_slice(",
+        count: 2,
+        why: "TWO sites since 118.2-04, and the SECOND is the fuzz seam for the FIRST. Site one: \
+              the SSE reader appends ONE hyper frame to a byte buffer and then \
+              fully drains it with take_utf8_prefix on the SAME iteration, so the residual is the \
+              incomplete-character tail of at most three bytes. ONE site, TWO consumers since \
+              118.2-03: the GET session stream and the POST response that answers \
+              text/event-stream both go through SseReadState + read_next_sse_frame, so this count \
+              did not move when the second whole-body collect became incremental. What the \
+              decoded text then feeds \
+              is bounded by SseParser::feed's unconditional pre-check over retained state PLUS \
+              this chunk (113-17, T-113-86), under the transport's own max_collected_body_bytes \
+              ceiling — DEFAULT_MAX_COLLECTED_BODY_BYTES, 16 MiB, user-overridable through \
+              with_max_collected_body_bytes. That reuse is Phase 118.2 D-02: the collected-body \
+              cap BECOMES the parser bound rather than a second knob, because a new field on the \
+              externally-constructible StreamableHttpTransportConfig would be a MAJOR semver \
+              event. Overflow ends the stream with a named error; it never keeps parsing. Site \
+              two: decode_sse_chunks_for_fuzz replays that EXACT sequence over a caller-supplied \
+              chunk list, under a caller-supplied bound, on the same SseParser and the same \
+              take_utf8_prefix. It is #[cfg(any(feature = \"fuzzing\", test))] and so absent from \
+              default and full builds, and its whole purpose is that a campaign ASSERTS the bound \
+              this justification claims — fuzz/fuzz_targets/streamable_sse_frames.rs checks \
+              buffered_bytes() <= max_buffer_size and an undecoded tail of at most 3 bytes after \
+              EVERY chunk. A second append that MEASURES the first one's bound is the one kind of \
+              new accumulation site that makes this entry stronger rather than weaker.",
+    },
+    Accumulation {
+        path: "src/shared/streamable_http.rs",
+        needle: ".extend(",
+        count: 2,
+        why: "TWO sites since 118.2-04, and the SECOND is the fuzz seam for the FIRST. Site one \
+              collects the events drain_sse_events has just COMPLETED from one chunk, not \
+              bytes retained across chunks: the reader task pops every pending event and delivers \
+              it before it polls the body again, so the population is bounded by what a single \
+              hyper frame can complete, and each completed event was itself admitted under the \
+              parser's retained-state bound. Same mechanism as the src/client/subscriptions.rs \
+              entry above, on this transport's two SSE streams — the GET session stream and the \
+              POST response — rather than on subscriptions/listen. One drain site, two \
+              consumers. Site two is decode_sse_chunks_for_fuzz collecting the SAME \
+              drain_sse_events output into its outcome vector, bounded per chunk by the same \
+              parser and unreachable outside a fuzzing or test build (its cfg is \
+              any(feature = \"fuzzing\", test), so neither default nor full compiles it).",
+    },
+    Accumulation {
+        path: "src/shared/streamable_http.rs",
+        needle: "push_str(",
+        count: 1,
+        why: "truncate_sse_frame copies at most MAX_ECHOED_SSE_FRAME (200) characters into a \
+              String pre-sized to exactly that boundary. It IS a bound rather than a consumer of \
+              one: it exists so a hostile server cannot push an unbounded frame into a client's \
+              logs through an error Display (ASVS V7), and it is the only writer of that String. \
+              The twin of src/client/subscriptions.rs's truncate entry above.",
     },
     Accumulation {
         path: "src/shared/uri_template.rs",

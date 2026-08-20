@@ -67,6 +67,16 @@ use uuid::Uuid;
 #[cfg_attr(not(feature = "v1-compat"), path = "streamable_http_server/v1_session_off.rs")]
 pub(crate) mod v1;
 
+// ---------------------------------------------------------------------------
+// The server-to-client channel (Phase 118.1 plan 10, CONF-07 / G-3).
+//
+// NOT a pair: inbound response correlation is era-agnostic, and the outbound
+// half reaches the wire through `v1::route_to_session_stream`, whose zero-sized
+// twin already answers "no stream" on a `full-v2` build. One module, both
+// feature sets — see its own doc for the deadlock property it preserves.
+// ---------------------------------------------------------------------------
+pub(crate) mod peer_channel;
+
 /// Event store trait for resumability support.
 ///
 /// # This is NOT `crate::shared::event_store::EventStore`
@@ -482,6 +492,16 @@ pub(crate) struct ServerState {
     /// the event store, and every operation returns an OWNED answer rather than
     /// a borrow the zero-sized twin could not produce.
     v1: v1::V1State,
+    /// The server-to-client channel: the correlation authority, its outbound
+    /// drain, and the per-session peer handles (CONF-07 / G-3).
+    ///
+    /// HERE, on `ServerState`, and deliberately NOT inside `Mutex<Server>`. A
+    /// tool handler parked on a peer call holds that mutex for its whole
+    /// duration, so a dispatcher reachable only through it could not be reached
+    /// by the very response that would release the handler — the same deadlock
+    /// in a different costume (T-118.1-10-01). `peer_channel`'s module doc
+    /// records the property in full.
+    peer_channel: peer_channel::PeerChannel,
 }
 
 /// Build the base MCP Router without any Tower layers applied.
@@ -513,12 +533,19 @@ pub(crate) fn make_server_state(
     // into the `Arc` because the real half type-erases `config.event_store` on
     // the way in.
     let v1 = v1::V1State::new(&config);
-    ServerState {
+    let state = ServerState {
         server,
         config: Arc::new(config),
         allowed_origins,
         v1,
-    }
+        peer_channel: peer_channel::PeerChannel::new(),
+    };
+    // Start the outbound server-to-client drain if we are already inside a Tokio
+    // runtime. `pmcp::axum::router()` reaches this function synchronously and may
+    // not be, in which case this declines and `StreamableHttpServer::start()`
+    // makes the same idempotent call from inside one.
+    peer_channel::ensure_outbound_drain(&state);
+    state
 }
 
 /// A streamable HTTP server for MCP.
@@ -701,14 +728,31 @@ enum HeaderProtocolVersion {
     Other,
 }
 
-/// The classification of an opted-in request over the header/`_meta` matrix.
-enum V2Classification {
-    /// v1 / both signals non-v2 → run the legacy path with zero enforcement.
-    Legacy,
-    /// v2 on BOTH the header and the resolved `_meta` era → enforce headers.
+/// The verdict of the v2 `_meta` gate over the RAW `MCP-Protocol-Version` header
+/// and the RAW `params._meta` object.
+///
+/// # Three-way, deliberately — this replaced a 2x2 era matrix
+///
+/// The predecessor, `classify_era_cell`, was a 2x2 over
+/// `(header_is_v2, meta_is_v2)`. That shape can express only "the two sides
+/// agree" or "the two sides disagree", so an ABSENT required `_meta` key and a
+/// PRESENT-but-disagreeing `protocolVersion` collapsed into the same
+/// `HEADER_MISMATCH` cell. The spec allocates them DIFFERENT codes — `-32602`
+/// for a missing required parameter, `-32020` for a header/body disagreement —
+/// so the distinction has to exist in the type (Phase 118.1, gap G-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum V2MetaVerdict {
+    /// No v2 signal on either side, or a `_meta` carrier only the shared
+    /// resolver can diagnose — defer to `resolve_raw_meta_protocol_context`
+    /// (v1 passthrough, `MalformedMeta`, or the accept list).
+    Defer,
+    /// A REQUIRED reserved `_meta` key is ABSENT → `INVALID_PARAMS`.
+    MissingRequired(&'static str),
+    /// The header and `_meta` disagree about the protocol version →
+    /// `HEADER_MISMATCH`. Evaluated BEFORE the accept list (gap G-8).
+    Disagreement(&'static str),
+    /// Both sides agree on `2026-07-28` → enforce the v2 header contract.
     Enforce,
-    /// A conflict cell (v2-header/non-v2-`_meta` or vice-versa) → fail closed.
-    Reject(i32, &'static str),
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +868,25 @@ fn create_error_response_with_id(
 /// v2 rather than `-32602`/400. Distinguishing the two requires a method-string
 /// table this layer does not own; plan 06 (MRTR param parse errors) adds the
 /// precise per-parameter mapping.
+///
+/// # Its interaction with v2 METHOD RETIREMENT (Phase 118.1 plan 05)
+///
+/// Stated precisely, because the imprecise version is misleading in both
+/// directions. This function runs on the PARSE-FAILURE branch of the ingress, so
+/// it sits EARLIER in the pipeline than [`run_v2_header_gate`], not later — the
+/// five [`V2_RETIRED_METHODS`] do not "short-circuit before" it. What is true is
+/// that a retired method reaches `-32601`/404 on v2 by TWO disjoint routes:
+///
+/// * params that do NOT deserialize — this function, via the limitation above;
+/// * params that DO deserialize — [`retire_v2_method`] at the header gate, which
+///   is the route the variant-keyed predicate it replaced could never take.
+///
+/// Both routes emit the same code and the same status, so for those five methods
+/// the limitation above is no longer observable on the wire; only the message
+/// text differs. That coincidence is exactly why the official suite's
+/// `initialize` and `logging/setLevel` retirement checks passed for the WRONG
+/// reason before plan 05, and why `tests/v2_retired_methods.rs` — which sends
+/// WELL-FORMED params — is the artifact that actually proves the retirement.
 async fn map_unparsed_body_for_v2(
     state: &ServerState,
     raw_body: &[u8],
@@ -849,7 +912,7 @@ async fn map_unparsed_body_for_v2(
     let raw_meta = params_meta_of(Some(&envelope));
     let resolved = {
         let server = state.server.lock().await;
-        server.resolve_raw_meta_protocol_context(raw_meta.as_ref())
+        server.resolve_raw_meta_protocol_context(raw_meta)
     };
     let Ok(Some(context)) = resolved else {
         return v1_response;
@@ -963,27 +1026,163 @@ fn bounded_header_str(headers: &HeaderMap, name: &str) -> Option<String> {
     raw.to_str().ok().map(str::to_string)
 }
 
-/// Classify one cell of the header/`_meta` matrix on an OPTED-IN server.
+// ---------------------------------------------------------------------------
+// The v2 `_meta` required-key + agreement rule (Phase 118.1 plan 06, CONF-06,
+// gaps G-6 and G-8).
+//
+// Every message below is a `&'static str` CONSTANT. None is ever assembled from
+// peer-supplied bytes (T-118.1-06-01): the only client-controlled value that
+// reaches the wire from this rule is `error.data.requested` on the accept-list
+// rejection, which the conformance suite REQUIRES to echo the requested version
+// and which is a plain string field, never interpolated into a message.
+// ---------------------------------------------------------------------------
+
+/// Rejection when a v2 request carries no `params._meta` object at all.
+const ERR_META_ABSENT: &str = "v2 requests must carry a params._meta object with \
+     io.modelcontextprotocol/protocolVersion and io.modelcontextprotocol/clientCapabilities";
+
+/// Rejection when `params._meta` omits the reserved protocol-version key.
+const ERR_META_NO_PROTOCOL_VERSION: &str =
+    "params._meta is missing the required io.modelcontextprotocol/protocolVersion key";
+
+/// Rejection when `params._meta` omits the reserved client-capabilities key.
 ///
-/// `meta_is_v2` is Plan 04's resolved `ProtocolContext.era == Era::V2` — the
-/// authoritative per-request verdict this layer CONSUMES (Pitfall 2 / D-11).
-fn classify_era_cell(header: HeaderProtocolVersion, meta_is_v2: bool) -> V2Classification {
+/// `io.modelcontextprotocol/clientInfo` deliberately has NO counterpart: it is a
+/// SHOULD, and the conformance suite has a dedicated MUST-SERVE check
+/// (`RequestMetaClientInfoOptional`) for a request that omits it. Making the
+/// required-key rule symmetric over all three reserved keys turns that PASSING
+/// check red.
+const ERR_META_NO_CLIENT_CAPABILITIES: &str =
+    "params._meta is missing the required io.modelcontextprotocol/clientCapabilities key";
+
+/// Rejection when the header claims v2 and `_meta` names a different version.
+const ERR_HEADER_CLAIMS_V2: &str =
+    "MCP-Protocol-Version header claims v2 but _meta protocolVersion disagrees";
+
+/// Rejection when `_meta` claims v2 and the header does not.
+const ERR_META_CLAIMS_V2: &str =
+    "_meta claims v2 but MCP-Protocol-Version header is absent or not 2026-07-28";
+
+/// The `io.modelcontextprotocol/protocolVersion` STRING in a RAW `_meta` value.
+///
+/// `None` covers three distinct inputs on purpose, because they are separated by
+/// the two predicates below rather than here: no `_meta` at all, a `_meta` that
+/// is not an object, and a version that is not a string.
+fn raw_meta_protocol_version(meta: Option<&serde_json::Value>) -> Option<&str> {
+    meta?
+        .as_object()?
+        .get(crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY)?
+        .as_str()
+}
+
+/// Whether a RAW `_meta` value is an OBJECT that carries `key` at all.
+///
+/// Presence, not deserializability: an unusable VALUE at a present key is the
+/// shared resolver's `MalformedMeta` (already `INVALID_PARAMS`), while an ABSENT
+/// key is this layer's `MissingRequired`. Conflating them is the collapse G-6 is.
+fn raw_meta_object_has_key(meta: Option<&serde_json::Value>, key: &str) -> bool {
+    meta.and_then(serde_json::Value::as_object)
+        .is_some_and(|object| object.contains_key(key))
+}
+
+/// The THREE-WAY verdict over the header and the RAW `params._meta`.
+///
+/// Pure, total, and non-panicking over adversarial input — it reads only an
+/// already-decoded header classification and an already-parsed JSON value.
+///
+/// # The rule, in evaluation order
+///
+/// 1. **Neither side claims v2** → [`V2MetaVerdict::Defer`]. The v1 path and the
+///    accept-list path are both downstream, and this rule is V2-ONLY: the shared
+///    `resolve_protocol_context` serves BOTH eras and its absent-version arm IS
+///    the v1 fallback, so a required-key rule planted there would reject every v1
+///    request (T-118.1-06-03).
+/// 2. **`params._meta` absent entirely** → `MissingRequired`.
+/// 3. **`_meta` present but the protocol-version key absent** → `MissingRequired`.
+///    A `_meta` that is not an object, or a version that is not a string, is
+///    `Defer`red to the resolver's `MalformedMeta`, which already answers
+///    `INVALID_PARAMS`.
+/// 4. **The two sides name different versions** → `Disagreement`. This runs
+///    BEFORE the accept list, which is the whole of gap G-8: an unsupported
+///    version that DISAGREES with the header is a header/body disagreement
+///    (`-32020`), and only an unsupported version the header AGREES with is an
+///    accept-list rejection (`-32022`).
+/// 5. Otherwise → [`V2MetaVerdict::Enforce`].
+///
+/// `clientCapabilities` is deliberately NOT checked here — see
+/// [`require_v2_client_capabilities`] for where it lands and why.
+fn classify_v2_meta_version(
+    header: HeaderProtocolVersion,
+    raw_meta: Option<&serde_json::Value>,
+) -> V2MetaVerdict {
+    use crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY;
     let header_is_v2 = matches!(header, HeaderProtocolVersion::V2);
-    match (header_is_v2, meta_is_v2) {
-        (true, true) => V2Classification::Enforce,
-        (false, false) => V2Classification::Legacy,
-        // Both conflict cells are a HEADER/BODY DISAGREEMENT, which is exactly
-        // what the spec allocates `HEADER_MISMATCH` (-32020) for. Before Phase
-        // 113 these emitted the generic `INVALID_REQUEST` (-32600) because the
-        // v2 code did not exist yet.
-        (true, false) => V2Classification::Reject(
-            crate::types::protocol::error_codes::HEADER_MISMATCH,
-            "MCP-Protocol-Version header claims v2 but _meta protocolVersion disagrees",
-        ),
-        (false, true) => V2Classification::Reject(
-            crate::types::protocol::error_codes::HEADER_MISMATCH,
-            "_meta claims v2 but MCP-Protocol-Version header is absent or not 2026-07-28",
-        ),
+    let meta_version = raw_meta_protocol_version(raw_meta);
+    let meta_is_v2 = meta_version == Some(crate::types::protocol::PROTOCOL_VERSION_2026_07_28);
+
+    if !header_is_v2 && !meta_is_v2 {
+        return V2MetaVerdict::Defer;
+    }
+    let Some(meta) = raw_meta else {
+        return V2MetaVerdict::MissingRequired(ERR_META_ABSENT);
+    };
+    let Some(version) = meta_version else {
+        // Exactly one shape is a missing-required-key rejection: an OBJECT that
+        // simply lacks the key. The other two — key present but unusable, and a
+        // non-object `_meta` — are both the resolver's MalformedMeta, so they
+        // defer. Binding `meta` above means this no longer re-tests an `Option`
+        // the line before it already proved is `Some`.
+        return match meta.as_object() {
+            Some(object) if !object.contains_key(RESERVED_PROTOCOL_VERSION_KEY) => {
+                V2MetaVerdict::MissingRequired(ERR_META_NO_PROTOCOL_VERSION)
+            },
+            _ => V2MetaVerdict::Defer,
+        };
+    };
+    if !(header_is_v2 && version == crate::types::protocol::PROTOCOL_VERSION_2026_07_28) {
+        return V2MetaVerdict::Disagreement(if header_is_v2 {
+            ERR_HEADER_CLAIMS_V2
+        } else {
+            ERR_META_CLAIMS_V2
+        });
+    }
+    V2MetaVerdict::Enforce
+}
+
+/// Require `io.modelcontextprotocol/clientCapabilities` on an ACCEPTED v2
+/// request.
+///
+/// # Why this is a SEPARATE step, evaluated LATE
+///
+/// The two checks in [`classify_v2_meta_version`] are prerequisites for
+/// resolving the era at all: with no `protocolVersion` there is no era, and
+/// without an era "is this method retired on v2?" is not a well-formed question.
+/// `clientCapabilities` is different — it is a params requirement on a request
+/// whose era is already settled, so it must NOT preempt
+/// [`retire_v2_method`]. A method the 2026-07-28 schema REMOVED has no params
+/// contract to violate; answering `-32602 your params are wrong` for a method
+/// that does not exist would be both misleading and a regression against the
+/// conformance suite's five `HttpServerMethodNotFound404*` checks.
+///
+/// The status is NOT chosen here: `INVALID_PARAMS` reaches the wire through
+/// [`v2_status_for_code`], which maps it to `400`.
+fn require_v2_client_capabilities(
+    outcome: V2GateOutcome,
+    raw_meta: Option<&serde_json::Value>,
+) -> V2GateOutcome {
+    if !matches!(outcome, V2GateOutcome::EnforceOk { .. }) {
+        return outcome;
+    }
+    if raw_meta_object_has_key(
+        raw_meta,
+        crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY,
+    ) {
+        return outcome;
+    }
+    V2GateOutcome::Reject {
+        code: crate::types::protocol::error_codes::INVALID_PARAMS,
+        message: ERR_META_NO_CLIENT_CAPABILITIES.to_string(),
+        data: None,
     }
 }
 
@@ -1147,33 +1346,55 @@ fn cross_check_name(
 
 /// The thin top-level classifier over the full matrix (cog-safe composition).
 ///
-/// Inputs: decoded header signals + Plan-04 resolved `meta_is_v2` + the untrusted
-/// body `method`/`params.name`. Output: accept (with echo headers) | reject(code)
-/// | passthrough. Pure and non-panicking — property-tested.
+/// The ONE construction of a header/body-mismatch rejection.
+///
+/// Two sites answer a `HEADER_MISMATCH`: [`run_v2_header_gate`] short-circuits a
+/// [`V2MetaVerdict::Disagreement`] before the accept list (the G-8 ordering fix),
+/// and [`classify_v2_request`]'s ENFORCE arm rejects a missing required header or
+/// a failed cross-check. They must stay byte-identical on the wire, so they share
+/// this constructor rather than each spelling out the same three fields.
+///
+/// Note the reachability asymmetry this makes visible: because the gate returns at
+/// the disagreement check, [`classify_v2_request`] never sees a `Disagreement` in
+/// production — that arm survives for the unit and property tests that call the
+/// classifier directly over the full matrix.
+fn header_mismatch_reject(message: &str) -> V2GateOutcome {
+    V2GateOutcome::Reject {
+        code: crate::types::protocol::error_codes::HEADER_MISMATCH,
+        message: message.to_string(),
+        data: None,
+    }
+}
+
+/// Inputs: the [`V2MetaVerdict`] already computed from the header and the RAW
+/// `params._meta` + the untrusted body `method`/`params.name`. Output: accept
+/// (with echo headers) | reject(code) | passthrough. Pure and non-panicking —
+/// property-tested.
+///
+/// The era verdict is a PARAMETER rather than something this function re-derives:
+/// [`run_v2_header_gate`] computes it once, before the accept list, and threads
+/// the same value here (D-11 / Pitfall 2 — one resolution per request).
 fn classify_v2_request(
     headers: &HeaderMap,
-    meta_is_v2: bool,
+    verdict: V2MetaVerdict,
     body_method: Option<&str>,
     body_name: Option<&str>,
 ) -> V2GateOutcome {
-    use crate::types::protocol::error_codes::HEADER_MISMATCH;
-    // Every rejection this classifier can produce is a missing-required-header
+    use crate::types::protocol::error_codes::INVALID_PARAMS;
+    // Every rejection the ENFORCE arm can produce is a missing-required-header
     // or a header/body mismatch, so they all carry `HEADER_MISMATCH` and no
-    // structured `data`.
-    let reject = |msg: &str| V2GateOutcome::Reject {
-        code: HEADER_MISMATCH,
-        message: msg.to_string(),
-        data: None,
-    };
-    let header = decode_version_header(headers);
-    match classify_era_cell(header, meta_is_v2) {
-        V2Classification::Legacy => V2GateOutcome::Passthrough,
-        V2Classification::Reject(code, msg) => V2GateOutcome::Reject {
-            code,
+    // structured `data`. The required-`_meta`-key rejections carry
+    // `INVALID_PARAMS` instead — that difference is gap G-6.
+    let reject = header_mismatch_reject;
+    match verdict {
+        V2MetaVerdict::Defer => V2GateOutcome::Passthrough,
+        V2MetaVerdict::MissingRequired(msg) => V2GateOutcome::Reject {
+            code: INVALID_PARAMS,
             message: msg.to_string(),
             data: None,
         },
-        V2Classification::Enforce => {
+        V2MetaVerdict::Disagreement(msg) => reject(msg),
+        V2MetaVerdict::Enforce => {
             let (method, name) = match require_v2_headers(headers) {
                 Ok(pair) => pair,
                 Err(msg) => return reject(msg),
@@ -1186,6 +1407,338 @@ fn classify_v2_request(
             }
             V2GateOutcome::EnforceOk { method, name }
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v2 METHOD RETIREMENT (Phase 118.1 plan 05, CONF-05 / gap G-5).
+//
+// The 2026-07-28 core schema REMOVES five RPCs. Retirement is keyed on the
+// method NAME STRING, not on a parsed `ClientRequest` variant: the variant match
+// this replaced could only ever see requests whose params had already
+// deserialized, which is not the shape a conformance client sends.
+// ---------------------------------------------------------------------------
+
+/// The per-request `_meta` key that REPLACES the `logging/setLevel` RPC.
+///
+/// Spelled here because `src/` owns no constant for it: the key is read by
+/// APPLICATION code off the request metadata, never by a core dispatch arm, so
+/// no production module has claimed it. It exists as a named constant purely so
+/// the retirement table below has one `&'static str` per replacement and the
+/// rejection message can never be assembled from peer-supplied bytes.
+const LOG_LEVEL_REQUEST_META_KEY: &str = "io.modelcontextprotocol/logLevel";
+
+/// The MCP 2025-11-25 RPC whose only purpose is to set a session's log level.
+///
+/// Spelled once and shared by the retirement table below and by the v1 capture
+/// in [`capture_v1_set_level`]. Two literals would be two chances to disagree
+/// about which method this is — and they would disagree SILENTLY, because a
+/// capture keyed on a slightly different string simply never fires.
+///
+/// Matched by EXACT BYTE EQUALITY everywhere: no case folding, no trimming, no
+/// prefix matching, the same rule [`v2_retired_method`] applies and for the same
+/// reason (T-118.1-05-01). The method string arrives from an untrusted peer.
+const LOG_LEVEL_SET_METHOD: &str = "logging/setLevel";
+
+/// THE retirement set: every RPC the MCP `2026-07-28` core schema removes, paired
+/// with the mechanism that replaces it (`None` where the schema offers none).
+///
+/// # One home, deliberately
+///
+/// Both POST entrypoints reach this table through the SINGLE
+/// [`run_v2_header_gate`] call, so the fast path and the middleware path cannot
+/// disagree about which methods are gone. That single-home property is the same
+/// one the dispatch-level `dispatch_request_or_retire` seam used to provide; the
+/// predicate simply moved earlier, to where the method STRING is available.
+///
+/// # Why exactly these five
+///
+/// Corroborated two independent ways:
+///
+/// 1. The vendored `schema/vendored/core-2026-07-28/schema.ts` method inventory
+///    lists 21 methods, and all five below are ABSENT from it.
+/// 2. The pinned official conformance suite iterates exactly this list and
+///    requires HTTP `404` plus JSON-RPC `-32601` for each.
+///
+/// `notifications/initialized` is likewise absent from the schema and is
+/// deliberately NOT here: it is a NOTIFICATION, so it carries no JSON-RPC id and
+/// has no response envelope in which a `-32601` could be delivered.
+///
+/// # This is one of TWO homes for "does this method exist on this era"
+///
+/// The other is the tasks-extension predicate in
+/// [`crate::server::task_dispatch`] — `V2_TASKS_METHOD_RETIRED` and the
+/// `tasks_*_serves_on_era` functions — which keys on a typed `ClientRequest`
+/// arm at the SHARED dispatch layer rather than on a method string at the HTTP
+/// ingress. Both produce `METHOD_NOT_FOUND` and both map to 404, so they are the
+/// same rule wearing two vocabularies.
+///
+/// **Which home does a new retirement belong in?**
+///
+/// - A method removed from the CORE `schema.ts` inventory → this table.
+/// - A method scoped to an EXTENSION (tasks, and anything that follows it) →
+///   the dispatch-side predicate, next to that extension's own era rules.
+///
+/// The split is deliberate but has a consequence worth knowing before you pick:
+/// era is resolved from `params._meta`, which is transport-independent, while
+/// this table lives in the HTTP transport. So a v2-opted-in stdio or WebSocket
+/// server retires `tasks/list` (shared dispatch) yet still serves the five
+/// below. Unifying them means hoisting this table to dispatch, which is blocked
+/// on the ordering constraint documented at [`retire_v2_method`]: retirement
+/// MUST run after `cross_check_method`, or a header/body smuggling attempt
+/// becomes an indistinguishable routine 404.
+const V2_RETIRED_METHODS: [(&str, Option<&str>); 5] = [
+    (
+        "initialize",
+        Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+    ),
+    // No replacement: v2 has no liveness RPC at all. See `v2_retirement_message`.
+    ("ping", None),
+    (LOG_LEVEL_SET_METHOD, Some(LOG_LEVEL_REQUEST_META_KEY)),
+    (
+        "resources/subscribe",
+        Some(crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD),
+    ),
+    (
+        "resources/unsubscribe",
+        Some(crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD),
+    ),
+];
+
+/// The [`V2_RETIRED_METHODS`] entry `method` names, matched by EXACT BYTE
+/// EQUALITY.
+///
+/// No case folding, no trimming, no prefix matching, no Unicode normalization
+/// (T-118.1-05-01). The method string arrives from an untrusted peer at a point
+/// EARLIER and less validated than typed parsing, so any leniency here is a way
+/// to force — or to dodge — a retirement the literal wire value does not ask for.
+/// `Initialize`, `` ping`` with a leading space and `logging/setlevel` are all
+/// NOT retired, and a unit test asserts it.
+///
+/// Returns the TABLE's own `&'static str`, never the caller's slice, so a
+/// rejection message built from this can never echo peer-supplied bytes
+/// (T-118.1-05-02).
+fn v2_retired_method(method: &str) -> Option<(&'static str, Option<&'static str>)> {
+    V2_RETIRED_METHODS
+        .iter()
+        .copied()
+        .find(|(retired, _)| *retired == method)
+}
+
+/// The `-32601` message a retired method answers with.
+///
+/// Both halves are `&'static str` from [`V2_RETIRED_METHODS`]. `ping` has no
+/// replacement clause because the 2026-07-28 transport removed the liveness RPC
+/// outright rather than relocating it, and inventing a substitute here would send
+/// an operator looking for a method that does not exist.
+fn v2_retirement_message(retired: &'static str, replacement: Option<&'static str>) -> String {
+    replacement.map_or_else(
+        || format!("Method not found: {retired} (retired in MCP 2026-07-28)"),
+        |replacement| {
+            format!("Method not found: {retired} (retired in MCP 2026-07-28; use {replacement})")
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The PER-REQUEST LOG LEVEL (Phase 118.2 plan 07, CONF-10 / D-10 / D-11 / D-12).
+//
+// Two eras, two sources, one answer:
+//
+//   * v1 sends the `logging/setLevel` RPC, which is captured HERE and stored
+//     PER SESSION in `v1::V1State` (D-11);
+//   * v2 retired that RPC and carries `io.modelcontextprotocol/logLevel` in the
+//     request's `params._meta` instead, read per request (D-10);
+//   * neither → `None`, and `DEFAULT_LOG_LEVEL` (`info`, D-12) applies at emit
+//     time.
+//
+// # Why the capture is at the HTTP INGRESS and not in the dispatch arm
+//
+// The ingress is the ONE point that holds all four facts at once: the resolved
+// era, the validated session id, the raw body, and a still-owned
+// `ProtocolContext`. Resolving here and writing the ANSWER onto the context makes
+// the read at emit time an `Option<LoggingLevel>` copy instead of a session-map
+// lock per record — and it means the v1 dispatch arm (plan 08) has nothing to do
+// but answer `Ok(json!({}))`.
+//
+// # Why the level is NOT stored on the server
+//
+// `ServerState::server` is one `Arc<tokio::sync::Mutex<Server>>` shared by every
+// session. A level held there would let client B's `setLevel` change client A's
+// filtering (T-118.2-07-01). The per-session home is also the correct lifetime:
+// `setLevel` is a v1 RPC, and on a `full-v2` build `V1State` is a zero-sized twin
+// that allocates nothing for a mechanism that build does not have.
+//
+// # `ServerCapabilities.logging` deliberately gates NOTHING here
+//
+// The sink is per request and the capability is advisory (RESEARCH Open
+// Question 6). Gating on it would make a correctly-plumbed server silently mute
+// because of a declaration it forgot to make.
+// ---------------------------------------------------------------------------
+
+/// Parse a PEER-SUPPLIED level value, or ignore it.
+///
+/// Deserializes through [`LoggingLevel`](crate::types::LoggingLevel)'s OWN serde
+/// mapping (`rename_all = "lowercase"`), so this parse can never disagree with
+/// the spelling the wire uses — a hand-written `match` over eight strings would
+/// be a second mapping free to drift from the first.
+///
+/// # Malformed input is IGNORED, never echoed, never fatal
+///
+/// Three properties, each deliberate (T-118.2-07-03 / T-118.2-07-04, ASVS V5/V7):
+///
+/// * **No panic.** `Deserialize` is fallible and the error is discarded.
+/// * **No echo.** The peer's bytes are never placed into an error message or a
+///   log line, following this crate's established rule for errors derived from
+///   peer input (`collected_body_over_cap`, `listen_overflow`). Nothing is
+///   returned but a typed value the server already knew how to name.
+/// * **No rejection.** A misspelled level falls back to the `info` default
+///   rather than becoming a `-32602`. The key is an ADVISORY, per-request
+///   diagnostic hint; failing a whole tool call because a hint was misspelled
+///   converts a logging preference into an availability failure. The v1
+///   `logging/setLevel` RPC is a request whose only purpose IS the level, so it
+///   is the arguable case — but the 2026-07-28 conformance suite pins its
+///   response to a literal `{}` (Pitfall 8), so it also stores-or-ignores and
+///   still answers `{}`.
+fn parse_peer_log_level(value: Option<&serde_json::Value>) -> Option<crate::types::LoggingLevel> {
+    <crate::types::LoggingLevel as serde::Deserialize>::deserialize(value?).ok()
+}
+
+/// Store the level a v1 `logging/setLevel` request asked for, against ITS session.
+///
+/// A no-op unless ALL of the following hold, which is what keeps the write
+/// session-scoped rather than server-scoped:
+///
+/// * sessions are live for this request (so never on v2, where the RPC is
+///   retired and the era carries no session at all);
+/// * the request has an already-VALIDATED session id — the transport passes the
+///   id `v1::resolve_session_for_request` accepted, so an unknown id was answered
+///   `404` long before this runs;
+/// * the body's `method` is EXACTLY [`LOG_LEVEL_SET_METHOD`];
+/// * `params.level` parses (see [`parse_peer_log_level`]).
+///
+/// The request then CONTINUES to dispatch unchanged — this is a capture, not a
+/// short circuit. The stored level takes effect from this request onward,
+/// including for any record the `setLevel` call's own dispatch arm emits.
+///
+/// `v1::set_session_log_level` is itself a no-op for an unknown session id, so
+/// the denial-of-service control (T-118.2-07-02) holds even if a future caller reaches this
+/// with an unvalidated id.
+fn capture_v1_set_level(
+    state: &ServerState,
+    sessions_on: bool,
+    session_id: Option<&str>,
+    body: Option<&serde_json::Value>,
+) {
+    if !sessions_on {
+        return;
+    }
+    let Some(session_id) = session_id else {
+        return;
+    };
+    let method = body.and_then(|body| body.get("method")).and_then(|method| {
+        method
+            .as_str()
+            .filter(|method| *method == LOG_LEVEL_SET_METHOD)
+    });
+    if method.is_none() {
+        return;
+    }
+    let Some(level) = parse_peer_log_level(params_of(body).get("level")) else {
+        return;
+    };
+    v1::set_session_log_level(&state.v1, session_id, level);
+}
+
+/// THE minimum log level for this request, captured and resolved in one place.
+///
+/// # Precedence
+///
+/// 1. **v2** — `params._meta["io.modelcontextprotocol/logLevel"]`, when the era
+///    is [`Era::V2`](crate::types::protocol::Era). Per request; v2 is
+///    session-free by construction, so nothing is stored and nothing can leak
+///    into another request.
+/// 2. **v1** — the level this SESSION last set, when sessions are live for the
+///    request and it carries a session id.
+/// 3. Otherwise **`None`**: leave `ProtocolContext::resolved_log_level` unset.
+///
+/// # `None` means two different things, and the ERA decides which
+///
+/// On **v1** it is "nothing overrode the default", so `DEFAULT_LOG_LEVEL`
+/// (`info`, D-12) applies at emit time — MCP 2025-11-25 says the server MAY
+/// decide which messages to send automatically.
+///
+/// On **v2** it is a PROHIBITION. SEP-2575 is explicit: *"If absent, the server
+/// MUST NOT send any notifications/message"*. This function still answers `None`
+/// for that case — the distinction is not expressible in its return type, and
+/// inventing a tri-state here would push the era rule into every reader of
+/// `resolved_log_level`. It is applied ONCE, at the far end, by
+/// [`attach_request_log_sink`](crate::server::core::attach_request_log_sink),
+/// which withholds the log SINK entirely for a v2 request with no resolved
+/// level; a sinkless emit is silence (D-08). See that function for why the sink
+/// rather than the level carries the rule.
+///
+/// The two arms cannot both apply: arm 2's `sessions_on` is `false` on v2 by
+/// [`v1::sessions_active`], which is why this reads as a precedence list rather
+/// than as a conflict rule.
+///
+/// The v1 CAPTURE runs first, unconditionally in source, so a `logging/setLevel`
+/// is recorded before arm 2 reads it back — and so the twin's no-op write is
+/// reached (rather than compiled out) on a `full-v2` build.
+///
+/// Called at BOTH POST ingress paths. See either call site for why "both or
+/// neither" is load-bearing (T-118.2-07-06).
+fn resolve_request_log_level(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    sessions_on: bool,
+    session_id: Option<&str>,
+    body: &PostBody<'_>,
+) -> Option<crate::types::LoggingLevel> {
+    // The SAME parse the v2 gate already paid for, serving both the capture and
+    // the `_meta` read. Adversarial or non-JSON bytes yield `None` and every read
+    // below simply finds nothing.
+    let body = body.json();
+
+    capture_v1_set_level(state, sessions_on, session_id, body);
+
+    if era == Some(crate::types::protocol::Era::V2) {
+        return parse_peer_log_level(
+            params_meta_of(body).and_then(|meta| meta.get(LOG_LEVEL_REQUEST_META_KEY)),
+        );
+    }
+    if sessions_on {
+        return session_id.and_then(|session_id| v1::session_log_level(&state.v1, session_id));
+    }
+    None
+}
+
+/// Turn an ACCEPTED v2 request for a retired method into its `-32601` rejection.
+///
+/// # Why this runs AFTER the header matrix, not before it
+///
+/// It consults only [`V2GateOutcome::EnforceOk`], which
+/// [`classify_v2_request`] produces only once `cross_check_method` has confirmed
+/// the `Mcp-Method` header and the JSON-RPC body method are the SAME string. A
+/// retirement decided before that cross-check would let a peer send
+/// `Mcp-Method: tools/call` with a body method of `ping` and collect a `404`
+/// instead of the `-32020` header/body disagreement — turning a smuggling signal
+/// into a routine-looking refusal. Ordering it here keeps the desync fail-closed.
+///
+/// The status is NOT chosen here: `METHOD_NOT_FOUND` reaches the wire through
+/// [`v2_status_for_code`], which maps it to `404`. A call-site status choice is
+/// exactly the drift Phase 113 removed.
+fn retire_v2_method(outcome: V2GateOutcome) -> V2GateOutcome {
+    let V2GateOutcome::EnforceOk { ref method, .. } = outcome else {
+        return outcome;
+    };
+    let Some((retired, replacement)) = v2_retired_method(method) else {
+        return outcome;
+    };
+    V2GateOutcome::Reject {
+        code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+        message: v2_retirement_message(retired, replacement),
+        data: None,
     }
 }
 
@@ -1313,7 +1866,10 @@ fn negotiation_error_to_gate_reject(
 /// `#[cfg(test)]` for the same reason).
 #[cfg(test)]
 fn raw_params_meta(body: &[u8]) -> Option<serde_json::Value> {
-    params_meta_of(raw_body_json(body).as_ref())
+    // Binds the parse to a local so the borrow `params_meta_of` returns outlives
+    // the call; this is the only caller that needs an OWNED `_meta`.
+    let parsed = raw_body_json(body);
+    params_meta_of(parsed.as_ref()).cloned()
 }
 
 /// Parse the raw JSON-RPC body ONCE. `None` for adversarial / non-JSON bytes.
@@ -1321,14 +1877,67 @@ fn raw_body_json(body: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice::<serde_json::Value>(body).ok()
 }
 
+/// One POST body's raw bytes plus its JSON, parsed AT MOST ONCE per request.
+///
+/// # Why a memo and not an eager parse
+///
+/// Two stages of the POST pipeline read the parsed body — the v2 header gate
+/// ([`run_v2_header_gate`]) and the log-level rule
+/// ([`resolve_request_log_level`]) — and each used to call [`raw_body_json`]
+/// itself, so every POST to an opted-in server walked the whole request body
+/// through `serde_json` TWICE.
+///
+/// A single eager parse at the top of the handler would remove the duplication
+/// and cost D-04: a server that never opted into `2026-07-28` short-circuits out
+/// of the gate BEFORE the parse, and a request rejected by the gate, session
+/// resolution, the legacy-version guard or auth is refused without an
+/// attacker-sized body ever being parsed. The memo keeps both properties —
+/// nothing parses until a reader actually asks, and the second ask is free.
+///
+/// [`std::sync::OnceLock`] rather than [`std::cell::OnceCell`] because this value
+/// is borrowed across the gate's `.await` points, and a non-`Sync` cell would
+/// make the handler futures non-`Send`.
+struct PostBody<'a> {
+    raw: &'a [u8],
+    json: std::sync::OnceLock<Option<serde_json::Value>>,
+}
+
+impl<'a> PostBody<'a> {
+    /// Wrap the raw request bytes. Parses nothing.
+    fn new(raw: &'a [u8]) -> Self {
+        Self {
+            raw,
+            json: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The raw bytes, for the readers that must see the LITERAL wire value a WAF
+    /// would see (D-06) rather than a re-serialization of the parse.
+    fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+
+    /// The parsed body, parsing on the FIRST call only.
+    fn json(&self) -> Option<&serde_json::Value> {
+        self.json.get_or_init(|| raw_body_json(self.raw)).as_ref()
+    }
+}
+
 /// [`raw_params_meta`] over an ALREADY-PARSED body.
-fn params_meta_of(value: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+///
+/// BORROWS out of `value` rather than cloning. Every consumer
+/// (`classify_v2_meta_version`, `resolve_raw_meta_protocol_context`,
+/// `require_v2_client_capabilities`) takes `Option<&Value>`, so a clone here was
+/// per-request waste that grew when `require_v2_client_capabilities` began
+/// mandating the nested `_meta.clientCapabilities` object. It also makes the
+/// signature say what this function's contract already claimed: the gate reads
+/// ONE shared value, not a copy of it.
+fn params_meta_of(value: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
     let params = value?.get("params")?;
     params
         .get(crate::types::mrtr::META_KEY)
         .or_else(|| params.get("meta"))
         .filter(|meta| !meta.is_null())
-        .cloned()
 }
 
 /// The raw top-level `params` value of an ALREADY-PARSED body, or `Null`.
@@ -1471,7 +2080,7 @@ fn attach_v2_mrtr_params(
 async fn run_v2_header_gate(
     state: &ServerState,
     headers: &HeaderMap,
-    raw_body: &[u8],
+    body: &PostBody<'_>,
     body_method_override: Option<&str>,
 ) -> (
     Option<crate::types::protocol::ProtocolContext>,
@@ -1487,23 +2096,54 @@ async fn run_v2_header_gate(
             return (None, V2GateOutcome::Passthrough);
         }
     }
-    // ONE parse of the raw body, shared by the era read, the header cross-check
-    // and the MRTR params read — they can never disagree about what it says.
-    // Deliberately OUTSIDE the lock: parsing an attacker-sized body while holding
-    // the server mutex would serialize every other request behind it.
-    let body_json = raw_body_json(raw_body);
-    let raw_meta = params_meta_of(body_json.as_ref());
+    // ONE parse of the raw body, shared by the era read, the header cross-check,
+    // the MRTR params read and the log-level rule downstream — they can never
+    // disagree about what it says. Deliberately OUTSIDE the lock: parsing an
+    // attacker-sized body while holding the server mutex would serialize every
+    // other request behind it.
+    let body_json = body.json();
+    let raw_meta = params_meta_of(body_json);
+    // THE THREE-WAY `_meta` VERDICT (CONF-06 / gaps G-6 + G-8), computed from the
+    // RAW header and the RAW `_meta` — i.e. BEFORE the accept list below.
+    //
+    // ORDERING, which is the entire G-8 fix: a header/`_meta` DISAGREEMENT
+    // short-circuits HERE, ahead of `resolve_raw_meta_protocol_context`. Left
+    // where it used to sit — after the resolver — an unsupported version that
+    // ALSO disagreed with the header failed the accept list first and was
+    // reported as `-32022`, so the disagreement never got a chance to classify.
+    // The accept list still runs, and still answers `-32022`, for the case where
+    // the two sides AGREE on a version the server does not support.
+    let verdict = classify_v2_meta_version(decode_version_header(headers), raw_meta);
     // The rejection is built INSIDE the lock scope so the accept-list is only
     // borrowed on the rare negotiation-failure branch. Cloning it into a `Vec`
     // on every request — under the server mutex — bought nothing: the happy path
     // never reads it.
     let resolved = {
         let server = state.server.lock().await;
-        // Non-opted-in servers run ZERO era-detection — the v1 path is
-        // byte-for-byte unchanged (D-04). `resolve_raw_meta_protocol_context`
-        // short-circuits to `Ok(None)` WITHOUT inspecting `_meta` at all.
+        // D-04 IS EVALUATED FIRST, and the disagreement short-circuit is INSIDE
+        // that guard rather than above it. A server that never opted into v2
+        // enforces NOTHING — `resolve_raw_meta_protocol_context` answers
+        // `Ok(None)` for it without inspecting `_meta` at all — so a
+        // disagreement check hoisted above this lock would make the header/body
+        // rule the ONE v2 rule a stock v1-only `Server::builder()` applies,
+        // turning requests it used to serve on the v1 path into `-32020`. The
+        // sibling `MissingRequired` verdict is already gated this way (it is
+        // consumed by `classify_v2_request` further down, which is only reached
+        // on an opted-in server), so this keeps the two halves of the same rule
+        // in step.
+        //
+        // G-8's ORDERING is preserved: the short-circuit still runs BEFORE
+        // `resolve_raw_meta_protocol_context` produces its accept-list
+        // rejection, so an unsupported version that ALSO disagrees with the
+        // header is still classified as a disagreement (`-32020`) rather than
+        // as an accept-list failure (`-32022`).
+        if crate::types::protocol::context::is_v2_opted_in(server.supported_protocol_versions()) {
+            if let V2MetaVerdict::Disagreement(message) = verdict {
+                return (None, header_mismatch_reject(message));
+            }
+        }
         server
-            .resolve_raw_meta_protocol_context(raw_meta.as_ref())
+            .resolve_raw_meta_protocol_context(raw_meta)
             .map_err(|err| {
                 negotiation_error_to_gate_reject(&err, server.supported_protocol_versions())
             })
@@ -1513,18 +2153,26 @@ async fn run_v2_header_gate(
         Err(reject) => return (None, reject),
     };
     // `Ok(None)` == not opted in → zero enforcement (D-04).
-    let Some(ref pc) = context else {
-        return (context.clone(), V2GateOutcome::Passthrough);
-    };
-    let meta_is_v2 = pc.era == crate::types::protocol::Era::V2;
-    let (extracted_method, body_name) = method_and_name_of(body_json.as_ref());
+    if context.is_none() {
+        return (None, V2GateOutcome::Passthrough);
+    }
+    let (extracted_method, body_name) = method_and_name_of(body_json);
     let body_method = body_method_override.or(extracted_method.as_deref());
-    let outcome = classify_v2_request(headers, meta_is_v2, body_method, body_name.as_deref());
+    let outcome = classify_v2_request(headers, verdict, body_method, body_name.as_deref());
+    // v2 METHOD RETIREMENT (CONF-05 / G-5), keyed on the method STRING and
+    // evaluated for every accepted v2 request — including the ones whose typed
+    // parse would have succeeded and whose dispatch would therefore have SERVED
+    // them. Runs after `classify_v2_request` on purpose; see `retire_v2_method`.
+    let outcome = retire_v2_method(outcome);
+    // The required `clientCapabilities` key (CONF-06 / G-6), applied to a request
+    // that is still ACCEPTED after retirement. Deliberately after
+    // `retire_v2_method`; see `require_v2_client_capabilities`.
+    let outcome = require_v2_client_capabilities(outcome, raw_meta);
     // MRTR params (HTTP-03): read on the ACCEPTED v2 path only, and only for an
     // MRTR-ELIGIBLE method; a present but unusable field becomes an
     // `INVALID_PARAMS` rejection here, BEFORE dispatch. `body_method` is the
     // value `classify_v2_request` just cross-checked, reused rather than re-read.
-    attach_v2_mrtr_params(context, outcome, body_json.as_ref(), body_method)
+    attach_v2_mrtr_params(context, outcome, body_json, body_method)
 }
 
 /// Crate-LOCAL ingress classification for the POST pipeline (Phase 112, VERS-04).
@@ -1688,6 +2336,10 @@ impl StreamableHttpServer {
     /// - [`DnsRebindingLayer`] -- Host/Origin header validation
     /// - [`SecurityHeadersLayer`] -- nosniff, DENY, no-store
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+        // Idempotent. `make_server_state` already tried, and succeeded whenever it
+        // ran inside a runtime; this covers the `with_config`-outside-a-runtime
+        // construction order.
+        peer_channel::ensure_outbound_drain(&self.state);
         let allowed = self.state.allowed_origins.clone();
         let cors = crate::server::tower_layers::build_mcp_cors_layer(&allowed);
 
@@ -1913,6 +2565,345 @@ fn serialize_response_as_json_value(
         )
     })?;
     Ok(json_value)
+}
+
+// ---------------------------------------------------------------------------
+// CONF-07 / G-3's v2 half (D-16): the POST response body as a multi-frame SSE
+// vehicle for `notifications/progress`.
+//
+// On v2 there are no sessions (`sessions_active_for(_, Some(Era::V2))` is false,
+// pinned by `sessions_active_truth_table`) and GET answers 405 (pinned by
+// `v2_verb_rejection`), so a POST's own response body is the ONLY channel a
+// server-to-client notification can travel on. This block generalizes the
+// one-shot `build_sse_response_from_single_message` into a builder that emits N
+// queued progress frames followed by the result frame.
+//
+// The measured basis (plan 12 Task 1): the pinned conformance suite
+// (0.2.0-alpha.11) reported `tools-call-with-progress` SUCCESS with
+// `progressCount: 3` against a server answering exactly this shape. Its v2 client
+// (`wt` in `dist/index.js`) pushes any frame with a `method` and no `id` onto its
+// `notifications` array, and THROWS -32600 on a frame carrying both.
+// ---------------------------------------------------------------------------
+
+/// Maximum number of progress notifications one v2 request may queue onto its
+/// POST response body.
+///
+/// # The number
+///
+/// **64.** The pinned suite's `tools-call-with-progress` asks for three, and
+/// `ServerProgressReporter` rate-limits a well-behaved handler to ten per second,
+/// so 64 admits roughly six seconds of continuous well-behaved reporting — far
+/// past any realistic tool — while capping the per-request memory a hostile
+/// handler can pin at 64 `Notification`s rather than at "however many it can emit
+/// before the response is built".
+///
+/// # The overflow policy: DROP-NEWEST, never block, never grow
+///
+/// The queue is a **bounded** `tokio::sync::mpsc` channel and the producer is a
+/// synchronous `Fn(Notification)` sink that cannot await, so it uses `try_send`:
+/// when the queue is full the notification is DROPPED and a `warn!` is logged.
+/// Progress is advisory by definition — the MCP spec says a receiver "is not
+/// obligated to provide these notifications" — so dropping is a conformant
+/// degradation, whereas blocking would let a slow reader stall a tool handler and
+/// growing without limit is the memory-DoS class Phase 113 fixed.
+///
+/// `build_sse_response_from_single_message` uses `mpsc::unbounded_channel`; that
+/// is sound for exactly-one-message and is deliberately NOT copied here
+/// (T-118.1-12-01).
+pub const V2_PROGRESS_QUEUE_CAPACITY: usize = 64;
+
+/// A frame that may legally appear on a v2 POST response stream.
+///
+/// # This type IS the control for `HttpServerNoIndependentRequestsOnStream`
+///
+/// The suite's v2 client refuses a top-level server-to-client REQUEST on this
+/// stream — it throws `-32600 "Server sent request '…' on response stream;
+/// stateless lifecycle forbids this (use MRTR)"`. Server-to-client requests stay
+/// MRTR on v2, which already works.
+///
+/// That constraint is enforced HERE, structurally: this enum has a notification
+/// arm and a result arm and **no request arm**, so a request frame on a v2
+/// response stream is not a bug to be avoided by review — it is unrepresentable.
+/// A comment saying "do not send requests here" would not be a control
+/// (T-118.1-12-02).
+///
+/// Contrast [`TransportMessage`], which carries a `Request { id, request }`
+/// variant and therefore must NOT be the item type of this stream.
+#[cfg_attr(not(feature = "streamable-http"), allow(dead_code))]
+enum V2ResponseFrame {
+    /// A one-way notification — today only `notifications/progress`.
+    Notification(crate::types::Notification),
+    /// The terminal result frame, carrying the LIVE request id (HTTP-05).
+    Result(crate::types::JSONRPCResponse),
+}
+
+impl V2ResponseFrame {
+    /// Project onto the wire type the shared serializer accepts.
+    ///
+    /// One-directional by construction: every `V2ResponseFrame` maps onto a
+    /// `TransportMessage`, and nothing maps back, so the missing request arm
+    /// cannot be reintroduced through this seam.
+    fn into_transport_message(self) -> TransportMessage {
+        match self {
+            Self::Notification(notification) => TransportMessage::Notification(notification),
+            Self::Result(response) => TransportMessage::Response(response),
+        }
+    }
+}
+
+/// The receiver half of one request's bounded progress queue.
+///
+/// Created BEFORE dispatch (so the sink handed to the handler has somewhere to
+/// write) and drained AFTER it (so the frames are all present when the response
+/// body is assembled). Owning it in a newtype keeps `FastPathDispatch` and
+/// `MiddlewareDispatch` from growing a bare `mpsc::Receiver` field whose
+/// element type nothing constrains.
+pub(crate) struct V2ProgressQueue {
+    receiver: mpsc::Receiver<crate::types::Notification>,
+}
+
+impl V2ProgressQueue {
+    /// Take every notification queued so far, in emission order.
+    ///
+    /// Non-blocking: the handler has already run to completion by the time this
+    /// is called (dispatch is awaited before the response is built), so the queue
+    /// is complete and `try_recv` drains it deterministically. Nothing here waits
+    /// on a producer, so a handler that emitted nothing costs one failed
+    /// `try_recv`.
+    fn drain(mut self) -> Vec<crate::types::Notification> {
+        let mut frames = Vec::new();
+        while let Ok(notification) = self.receiver.try_recv() {
+            frames.push(notification);
+        }
+        frames
+    }
+}
+
+/// Create one request's bounded progress queue.
+///
+/// Returns the sink to hand into the request's `TransportBackchannel` and the
+/// receiver to drain when the response is assembled. See
+/// [`V2_PROGRESS_QUEUE_CAPACITY`] for the bound and the drop-newest policy.
+pub(crate) fn new_v2_progress_queue() -> (
+    Arc<dyn Fn(crate::types::Notification) + Send + Sync>,
+    V2ProgressQueue,
+) {
+    let (tx, receiver) = mpsc::channel(V2_PROGRESS_QUEUE_CAPACITY);
+    let sink: Arc<dyn Fn(crate::types::Notification) + Send + Sync> =
+        Arc::new(move |notification| {
+            // DROP-NEWEST on a full queue. `try_send` never blocks, which is
+            // required: this closure is synchronous and runs on the handler's
+            // task.
+            if let Err(e) = tx.try_send(notification) {
+                tracing::warn!(
+                    target: "mcp.http",
+                    capacity = V2_PROGRESS_QUEUE_CAPACITY,
+                    error = %e,
+                    "v2 progress queue full or closed — dropping a progress notification"
+                );
+            }
+        });
+    (sink, V2ProgressQueue { receiver })
+}
+
+/// Append one SSE frame exactly as [`build_sse_response_from_single_message`]
+/// emits it — `id: <uuid>`, `event: message`, `data: <serialized message>`.
+///
+/// Hand-rendered rather than delegating to `axum`'s [`Event`] because the
+/// middleware path needs the same bytes as a complete `Vec<u8>` body and `Event`
+/// exposes no serializer. `the_hand_rendered_framing_matches_axum_event` below
+/// pins the two encodings together so this copy cannot drift.
+///
+/// Writes into a caller-owned buffer rather than returning a `String`: the
+/// multi-frame body appends up to [`V2_PROGRESS_QUEUE_CAPACITY`] + 1 frames, and
+/// a per-frame `String` immediately copied into the accumulator and dropped is
+/// one allocation and one copy per frame for nothing.
+///
+/// The PAYLOAD is appended with `push_str`, not interpolated through the
+/// formatter, and that is not a style choice: `tests/v2_bounded_reads_tripwire.rs`
+/// reviews byte accumulation by scanning for a fixed needle vocabulary that
+/// includes `push_str(` and not `write!(`. Spelling this append as a `write!`
+/// interpolation moves the one genuinely payload-sized accumulation in this file
+/// OUT of that reviewed population — silently, while the tripwire's allowlist
+/// entry rots into a dead entry. The constant framing around it still goes
+/// through `write!`, which is where the zero-allocation `Uuid` render belongs.
+fn write_sse_frame(out: &mut String, frame: V2ResponseFrame) {
+    use std::fmt::Write as _;
+
+    let message = frame.into_transport_message();
+    let json_bytes =
+        crate::shared::StdioTransport::serialize_message(&message).unwrap_or_else(|e| {
+            tracing::error!(target: "mcp.sse", error = %e, "Failed to serialize SSE message");
+            Vec::new()
+        });
+    let json_str = String::from_utf8(json_bytes).unwrap_or_else(|_| "{}".to_string());
+    // Writing into a String is infallible; the Result exists only for the fmt trait.
+    let _ = write!(out, "id: {}\nevent: message\ndata: ", Uuid::new_v4());
+    out.push_str(&json_str);
+    out.push_str("\n\n");
+}
+
+/// Render the whole multi-frame body: every progress frame, then the result.
+///
+/// # Termination (T-118.1-12-03)
+///
+/// The body is COMPLETE before it is handed to axum. The handler has already run
+/// to completion — dispatch is awaited before the response is assembled — so
+/// there is no long-lived stream here, no keep-alive to schedule, and no
+/// connection held open by a stalled handler. The stream terminates on the result
+/// frame because the result frame is the last byte written.
+fn render_v2_multi_frame_body(
+    progress: Vec<crate::types::Notification>,
+    result: crate::types::JSONRPCResponse,
+) -> String {
+    let mut body = String::new();
+    for notification in progress {
+        write_sse_frame(&mut body, V2ResponseFrame::Notification(notification));
+    }
+    write_sse_frame(&mut body, V2ResponseFrame::Result(result));
+    body
+}
+
+/// Build the multi-frame SSE POST response.
+///
+/// Sets `text/event-stream` plus the same anti-buffering treatment the long-lived
+/// listen stream uses, so an intermediary cannot coalesce the frames.
+fn build_v2_multi_frame_sse_response(
+    progress: Vec<crate::types::Notification>,
+    result: crate::types::JSONRPCResponse,
+) -> Response {
+    let body = render_v2_multi_frame_body(progress, result);
+    let mut response = (StatusCode::OK, body).into_response();
+    apply_v2_multi_frame_headers(response.headers_mut());
+    response
+}
+
+/// The `text/event-stream` + anti-buffering header set a multi-frame body needs.
+///
+/// ONE definition, applied by both the fast path (which mutates an already-built
+/// axum `Response`) and the middleware path (which assembles a `HeaderMap` before
+/// the chain runs), so the two cannot drift on content type or buffering.
+fn apply_v2_multi_frame_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(TEXT_EVENT_STREAM),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(X_ACCEL_BUFFERING, HeaderValue::from_static("no"));
+}
+
+/// Whether this request may answer with a multi-frame SSE body.
+///
+/// All three must hold (T-118.1-12-05):
+///
+/// * the era is **v2** — v1 has a session stream and uses it (plan 11);
+/// * JSON mode is **off** — an operator who configured JSON responses gets JSON;
+/// * the client's `Accept` includes **`text/event-stream`** — switching a client
+///   that asked only for JSON onto an event stream could break it or an
+///   intermediary between them.
+///
+/// Evaluated BEFORE dispatch so an ineligible request never even allocates a
+/// queue, which is what makes "a v2 call that emits no progress is byte-identical
+/// to today" true by construction rather than by a later branch.
+/// `accept` is the request's raw `Accept` value. Taken as a `&str` rather than a
+/// `HeaderMap` so the fast path (axum `HeaderMap`) and the middleware path
+/// (`ServerHttpRequest::get_header`) reach the SAME predicate instead of each
+/// re-deriving eligibility from the shape of its own request type.
+fn v2_multi_frame_eligible(
+    state: &ServerState,
+    era: Option<crate::types::protocol::Era>,
+    accept: Option<&str>,
+) -> bool {
+    era == Some(crate::types::protocol::Era::V2)
+        && !state.config.enable_json_response
+        && accept.is_some_and(|accept| accept.contains(TEXT_EVENT_STREAM))
+}
+
+/// Attach a v2 progress sink to this request's context, returning the queue.
+///
+/// The v2 twin of [`peer_channel::attach_session_backchannel`]'s v1 branch, and
+/// deliberately NOT a reuse of its closure: that one routes through
+/// `v1::route_to_session_stream` keyed by `session_id`, which has no meaning on
+/// an era with no sessions and would drop every frame silently (T-118.1-11-08).
+/// What the two share is the ATTACHMENT POINT and the sink TYPE.
+///
+/// No peer is attached: a v2 server-to-client REQUEST stays MRTR, and this stream
+/// structurally cannot carry one ([`V2ResponseFrame`]).
+fn attach_v2_progress_sink(
+    context: Option<crate::types::protocol::ProtocolContext>,
+    eligible: bool,
+) -> (
+    Option<crate::types::protocol::ProtocolContext>,
+    Option<V2ProgressQueue>,
+) {
+    if !eligible {
+        return (context, None);
+    }
+    let Some(context) = context else {
+        return (None, None);
+    };
+    let (sink, queue) = new_v2_progress_queue();
+    // LAYERED onto whatever the context already carries, not substituted for it.
+    // `attach_session_backchannel` returns early on v2 today, so in practice the
+    // slot is empty here — but building a fresh `TransportBackchannel` would
+    // DISCARD a peer handle if that ever stopped being true, and a silently
+    // dropped peer is exactly the class of defect this phase is closing.
+    let backchannel = context
+        .transport_backchannel()
+        .cloned()
+        .unwrap_or_default()
+        .with_notification_sink(sink);
+    (
+        Some(context.with_transport_backchannel(backchannel)),
+        Some(queue),
+    )
+}
+
+/// Decide whether this response becomes a multi-frame SSE body, and if so hand
+/// back its frames.
+///
+/// Returns `None` — meaning "use the unchanged response builder" — in every case
+/// but one:
+///
+/// * no queue (the request was not eligible, so none was created);
+/// * the queue is EMPTY (the handler reported no progress), which is what makes a
+///   no-progress v2 response byte-identical to today's;
+/// * the response is not a `Response` envelope (unreachable on this path, but the
+///   match states it rather than assuming it).
+///
+/// Takes `response_msg` BY VALUE and hands it back in the `Err` arm rather than
+/// cloning it into the `Ok` arm: the response carries the whole tool result,
+/// including any base64 image or audio blob, and both call sites own it and drop
+/// it unused on the multi-frame branch. The common no-progress path pays one
+/// failed `try_recv` and a move.
+fn take_v2_progress_frames(
+    queue: Option<V2ProgressQueue>,
+    response_msg: TransportMessage,
+) -> std::result::Result<
+    (
+        Vec<crate::types::Notification>,
+        crate::types::JSONRPCResponse,
+    ),
+    TransportMessage,
+> {
+    let Some(queue) = queue else {
+        return Err(response_msg);
+    };
+    // The envelope check comes FIRST. Draining before it would pull every queued
+    // frame out of the receiver and then drop them on the floor in the `Err`
+    // arm, silently losing progress the handler did emit; returning the message
+    // untouched leaves the queue intact for whatever the caller does next.
+    let result = match response_msg {
+        TransportMessage::Response(result) => result,
+        // Not a response envelope, so there is nothing to terminate the stream
+        // with — the match states it rather than assuming it.
+        other => return Err(other),
+    };
+    let progress = queue.drain();
+    if progress.is_empty() {
+        return Err(TransportMessage::Response(result));
+    }
+    Ok((progress, result))
 }
 
 /// Build an OK JSON response body from a `TransportMessage`.
@@ -2241,7 +3232,7 @@ type V2GateResolved = (
 async fn resolve_v2_gate(
     state: &ServerState,
     headers: &HeaderMap,
-    raw_body: &[u8],
+    body: &PostBody<'_>,
     ingress: &HttpIngress,
 ) -> std::result::Result<V2GateResolved, Response> {
     match ingress {
@@ -2255,7 +3246,7 @@ async fn resolve_v2_gate(
         | HttpIngress::TasksUpdate { .. } => {
             let method_override = matches!(ingress, HttpIngress::Discover { .. })
                 .then_some(crate::types::protocol::SERVER_DISCOVER_METHOD);
-            let (ctx, gate) = run_v2_header_gate(state, headers, raw_body, method_override).await;
+            let (ctx, gate) = run_v2_header_gate(state, headers, body, method_override).await;
             match gate {
                 V2GateOutcome::Reject {
                     code,
@@ -2263,7 +3254,13 @@ async fn resolve_v2_gate(
                     data,
                 } => {
                     let era = ctx.as_ref().map(|pc| pc.era);
-                    Err(v2_gate_reject_response(raw_body, era, code, &message, data))
+                    Err(v2_gate_reject_response(
+                        body.raw(),
+                        era,
+                        code,
+                        &message,
+                        data,
+                    ))
                 },
                 V2GateOutcome::Passthrough => Ok((ctx, None)),
                 V2GateOutcome::EnforceOk { method, name } => Ok((ctx, Some((method, name)))),
@@ -2333,15 +3330,17 @@ fn extract_negotiated_version(response: &TransportMessage) -> Option<String> {
 
 /// Compute the outbound `MCP-Protocol-Version` header value.
 ///
-/// Used by both POST handlers to echo either the negotiated version from an
-/// initialize response or the session's recorded version for subsequent
-/// requests, falling back to `DEFAULT_PROTOCOL_VERSION` when no session is
-/// associated with the response.
+/// Used by both POST handlers to echo the negotiated version from an initialize
+/// response, the session's recorded version for subsequent requests, or — when
+/// there is no session to recover it from, as on every STATELESS deployment —
+/// the version the client itself asserted on the request. Only a request that
+/// names no version at all reaches `DEFAULT_PROTOCOL_VERSION`.
 fn compute_outbound_protocol_version(
     state: &ServerState,
     response_session_id: Option<&String>,
     is_init_request: bool,
     negotiated_version: Option<&str>,
+    asserted_version: Option<&str>,
 ) -> String {
     if is_init_request {
         return negotiated_version.map_or_else(
@@ -2357,7 +3356,40 @@ fn compute_outbound_protocol_version(
             return negotiated_version;
         }
     }
+    // A STATELESS server has no session to recover the negotiated version from,
+    // so without this it advertised `DEFAULT_PROTOCOL_VERSION` on every request
+    // after the handshake — a version LOWER than the one it had just negotiated,
+    // which `StreamableHttpTransport` then latches and replays. The client is
+    // dragged down with it, and nothing decided the downgrade except whether the
+    // deployment was serverless. `tests/stateless_negotiated_version_header.rs`
+    // is the live-HTTP fence; the sibling defect on the init branch is
+    // `tests/v2_initialize_negotiated_version_header.rs`.
+    //
+    // The client asserted the version on THIS request, which is the only place
+    // a session-less server can still read it.
+    if let Some(known) = asserted_version.and_then(crate::types::protocol::known_protocol_version) {
+        return known.to_string();
+    }
     crate::DEFAULT_PROTOCOL_VERSION.to_string()
+}
+
+/// [`compute_outbound_protocol_version`] for a request that is NOT `initialize`.
+///
+/// Four of the six emission sites pass the same constant pair — `false, None` —
+/// because they answer a method that can never be the handshake. Naming that
+/// pair once removes it from four call sites and, more usefully, means the next
+/// input threaded through this path costs ONE edit rather than four. Threading
+/// `asserted_version` through cost five, which is what prompted this.
+///
+/// The two sites that pass a real runtime `is_init_request`
+/// (`handle_fast_path_request` and `dispatch_message_with_middleware`) keep the
+/// general form.
+fn outbound_protocol_version_after_init(
+    state: &ServerState,
+    response_session_id: Option<&String>,
+    asserted_version: Option<&str>,
+) -> String {
+    compute_outbound_protocol_version(state, response_session_id, false, None, asserted_version)
 }
 
 /// Best-effort error-hook dispatch for the middleware path.
@@ -2494,8 +3526,26 @@ async fn build_success_response_with_middleware(
     v1::apply_session_header(&mut response_headers, response_session_id, sessions_on);
     response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
 
-    let mut server_response =
-        ServerHttpResponse::new(StatusCode::OK, response_headers, response_body);
+    finish_with_middleware(response_headers, response_body, http_middleware, context).await
+}
+
+/// Run an ALREADY-COMPLETE header set and body through the response middleware
+/// chain and convert to an axum `Response`.
+///
+/// THE single site that calls [`ServerHttpMiddlewareChain::process_response`] on
+/// the middleware POST path. Extracted so the multi-frame SSE branch cannot skip
+/// it: that branch builds a complete byte buffer exactly like the JSON branch —
+/// the handler has already run — so an operator's response middleware must see
+/// it too. A branch that built its own `Response` and returned it directly would
+/// silently disable every configured response transform for precisely the
+/// requests that carry progress.
+async fn finish_with_middleware(
+    headers: HeaderMap,
+    body: Vec<u8>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    context: &ServerHttpContext,
+) -> Response {
+    let mut server_response = ServerHttpResponse::new(StatusCode::OK, headers, body);
 
     if let Err(e) = http_middleware
         .process_response(&mut server_response, context)
@@ -2558,6 +3608,9 @@ fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<HttpIngress,
 struct FastPathDispatch {
     is_init_request: bool,
     response_session_id: Option<String>,
+    /// The `MCP-Protocol-Version` the client asserted — see the field of the
+    /// same name on [`InternalResponseShape`].
+    asserted_protocol_version: Option<String>,
     /// Plan-04-resolved `ProtocolContext`, CONSUMED at dispatch (D-11).
     protocol_context: Option<crate::types::protocol::ProtocolContext>,
     /// When `Some((method, name))`, this is an accepted v2 request whose
@@ -2566,6 +3619,12 @@ struct FastPathDispatch {
     /// [`v1::sessions_active`] for THIS request — gates the `Mcp-Session-Id`
     /// response header (HTTP-01).
     sessions_on: bool,
+    /// This request's bounded v2 progress queue (CONF-07 / D-16), or `None` when
+    /// the request is not eligible for a multi-frame SSE body.
+    ///
+    /// Created BEFORE dispatch so the handler's sink has somewhere to write, and
+    /// carried here so the receiver survives to the response builder.
+    progress_queue: Option<V2ProgressQueue>,
 }
 
 async fn handle_fast_path_request(
@@ -2579,9 +3638,11 @@ async fn handle_fast_path_request(
     let FastPathDispatch {
         is_init_request,
         response_session_id,
+        asserted_protocol_version,
         protocol_context,
         v2_outbound,
         sessions_on,
+        progress_queue,
     } = dispatch;
 
     let era = protocol_context.as_ref().map(|pc| pc.era);
@@ -2590,10 +3651,10 @@ async fn handle_fast_path_request(
     let live_id = id.clone();
     // Thread the ALREADY-RESOLVED ProtocolContext into dispatch — the HTTP layer
     // resolved it once for the header gate; dispatch does NOT re-resolve (Plan 06
-    // / D-11 / Pitfall 2). The shared seam also retires the v2-removed
-    // `resources/subscribe`/`unsubscribe` (HTTP-04) identically on both paths.
+    // / D-11 / Pitfall 2). Every method the 2026-07-28 schema retired was already
+    // refused by the v2 ingress gate, which ran before this.
     let json_response =
-        dispatch_request_or_retire(state, id, request, auth_context, protocol_context).await;
+        dispatch_public_request(state, id, request, auth_context, protocol_context).await;
 
     tracing::debug!(
         target: "mcp.http",
@@ -2622,7 +3683,14 @@ async fn handle_fast_path_request(
 
     v1::store_response_event(state, era, response_session_id.as_ref(), &response_msg).await;
 
-    let mut response = build_response(state, response_msg, session_id, sessions_on);
+    // CONF-07 / D-16: if this v2 request queued progress, its response body
+    // becomes a multi-frame SSE stream. `None` — no queue, or a queue the handler
+    // never wrote to — falls through to the UNCHANGED builder, which is what
+    // keeps a no-progress v2 response byte-identical to today's.
+    let mut response = match take_v2_progress_frames(progress_queue, response_msg) {
+        Ok((progress, result)) => build_v2_multi_frame_sse_response(progress, result),
+        Err(response_msg) => build_response(state, response_msg, session_id, sessions_on),
+    };
 
     v1::apply_session_header(
         response.headers_mut(),
@@ -2635,6 +3703,7 @@ async fn handle_fast_path_request(
         response_session_id.as_ref(),
         is_init_request,
         negotiated_version.as_deref(),
+        asserted_protocol_version.as_deref(),
     );
     response
         .headers_mut()
@@ -2678,6 +3747,12 @@ async fn handle_fast_path_request(
 struct InternalResponseShape<'a> {
     /// The session id to echo, if any — already `None` on v2.
     response_session_id: Option<&'a String>,
+    /// The `MCP-Protocol-Version` the CLIENT asserted on this request.
+    ///
+    /// The only source a STATELESS server has for the negotiated version, since
+    /// it keeps no session to look one up in — see
+    /// [`compute_outbound_protocol_version`].
+    asserted_protocol_version: Option<&'a str>,
     /// `Some((method, name))` for an accepted v2 discover (VERS-05 echo).
     v2_outbound: Option<(String, String)>,
     /// [`v1::sessions_active`] for THIS request (HTTP-01).
@@ -2700,6 +3775,7 @@ async fn assemble_discover_response_fast(
 ) -> Response {
     let InternalResponseShape {
         response_session_id,
+        asserted_protocol_version,
         v2_outbound,
         sessions_on,
     } = shape;
@@ -2722,7 +3798,7 @@ async fn assemble_discover_response_fast(
 
     // Discover is never an init request → compute the outbound version normally.
     let version_to_send =
-        compute_outbound_protocol_version(state, response_session_id, false, None);
+        outbound_protocol_version_after_init(state, response_session_id, asserted_protocol_version);
     response
         .headers_mut()
         .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
@@ -2817,6 +3893,7 @@ async fn assemble_tasks_update_fast(
 ) -> Response {
     let InternalResponseShape {
         response_session_id,
+        asserted_protocol_version,
         v2_outbound,
         sessions_on,
     } = shape;
@@ -2838,7 +3915,7 @@ async fn assemble_tasks_update_fast(
     // `tasks/update` is never an init request → compute the outbound version
     // normally.
     let version_to_send =
-        compute_outbound_protocol_version(state, response_session_id, false, None);
+        outbound_protocol_version_after_init(state, response_session_id, asserted_protocol_version);
     response
         .headers_mut()
         .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
@@ -2871,6 +3948,7 @@ async fn assemble_tasks_update_with_middleware(
 ) -> Response {
     let InternalResponseShape {
         response_session_id,
+        asserted_protocol_version,
         v2_outbound,
         sessions_on,
     } = shape;
@@ -2885,7 +3963,7 @@ async fn assemble_tasks_update_with_middleware(
     v1::store_response_event(state, era, response_session_id, &response_msg).await;
 
     let version_to_send =
-        compute_outbound_protocol_version(state, response_session_id, false, None);
+        outbound_protocol_version_after_init(state, response_session_id, asserted_protocol_version);
 
     let mut response = build_success_response_with_middleware(
         &response_msg,
@@ -2933,7 +4011,8 @@ async fn assemble_tasks_update_with_middleware(
 // Both are GONE from the 2026-07-28 schema — the only surviving mention is the
 // "Replaces the former `resources/subscribe` RPC" comment on
 // `SubscriptionFilter.resourceSubscriptions`. On v2 they answer `404` + `-32601`
-// via [`v2_retired_method_of`]; the v1 path is completely untouched.
+// through the [`V2_RETIRED_METHODS`] table at the v2 ingress, alongside the three
+// other RPCs that era removes; the v1 path is completely untouched.
 // ===========================================================================
 
 /// Disable proxy response buffering so SSE frames reach the client immediately.
@@ -2944,60 +4023,30 @@ const X_ACCEL_BUFFERING: &str = "x-accel-buffering";
 /// How often a quiet listen stream emits an SSE comment keep-alive.
 const LISTEN_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// The `resources/*` subscription RPC this request invokes, if it is one of the
-/// two the 2026-07-28 schema retired.
+/// Dispatch a public request through the server core.
 ///
-/// Returns the WIRE method name so the `-32601` message names what the client
-/// actually sent. `None` for every other request, which is therefore dispatched
-/// exactly as before on BOTH eras.
-fn v2_retired_method_of(request: &Request) -> Option<&'static str> {
-    let Request::Client(client) = request else {
-        return None;
-    };
-    match **client {
-        ClientRequest::Subscribe(_) => Some("resources/subscribe"),
-        ClientRequest::Unsubscribe(_) => Some("resources/unsubscribe"),
-        _ => None,
-    }
-}
-
-/// Dispatch a public request, first retiring the v2-removed `resources/*`
-/// subscription RPCs (HTTP-04).
+/// THE single dispatch seam both POST entrypoints call, threading the
+/// ALREADY-RESOLVED `ProtocolContext` in rather than letting dispatch re-resolve
+/// the era (D-11).
 ///
-/// THE single dispatch seam both POST entrypoints call, so the retirement rule
-/// cannot drift between the fast and middleware paths. On a non-v2 era this is a
-/// pure pass-through — `v2_retired_method_of` is consulted only inside the era
-/// gate, so a v1 `resources/subscribe` reaches its existing handler with
-/// byte-identical behavior.
+/// # It no longer retires anything, and that is the point
 ///
-/// The `-32601` it returns flows through the SAME
-/// [`v2_dispatch_response_status`] code-driven mapper every other dispatch error
-/// uses, which is what turns it into HTTP `404` on v2.
-async fn dispatch_request_or_retire(
+/// Until Phase 118.1 plan 05 this function ALSO carried the v2 retirement rule,
+/// keyed on the parsed `ClientRequest` variant. A variant match can only ever see
+/// a request whose params already deserialized, so it was structurally incapable
+/// of retiring the shape a conformance client actually sends — `initialize` and
+/// `logging/setLevel` with `_meta`-only params never reach a typed `Request` at
+/// all. The rule therefore moved to [`retire_v2_method`], which reads the method
+/// STRING at the v2 ingress; both POST entrypoints run that gate BEFORE they
+/// reach this seam, so there is still exactly ONE place retirement is decided.
+/// Do not reintroduce a second, variant-keyed predicate here.
+async fn dispatch_public_request(
     state: &ServerState,
     id: crate::types::RequestId,
     request: Request,
     auth_context: Option<crate::server::auth::AuthContext>,
     protocol_context: Option<crate::types::protocol::ProtocolContext>,
 ) -> crate::types::JSONRPCResponse {
-    if matches!(
-        protocol_context.as_ref().map(|pc| pc.era),
-        Some(crate::types::protocol::Era::V2)
-    ) {
-        if let Some(method) = v2_retired_method_of(&request) {
-            return crate::types::JSONRPCResponse::error(
-                id,
-                crate::types::jsonrpc::JSONRPCError {
-                    code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
-                    message: format!(
-                        "Method not found: {method} (retired in MCP 2026-07-28; use {})",
-                        crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD
-                    ),
-                    data: None,
-                },
-            );
-        }
-    }
     let server = state.server.lock().await;
     server
         .handle_request_with_context(id, request, auth_context, protocol_context)
@@ -3603,11 +4652,36 @@ async fn handle_post_fast_path_inner(
         is_init_request,
     } = read_and_classify_fast(&state, request).await?;
 
+    // THE DEADLOCK FIX (T-118.1-10-01), and deliberately the SECOND statement of
+    // this function. An inbound JSON-RPC RESPONSE is correlated and answered HERE,
+    // before the three sites that take `state.server.lock()` — `run_v2_header_gate`
+    // twice (the accept-list read and the negotiation read) and
+    // `extract_and_validate_auth` once. A tool handler parked on a peer call holds
+    // that same mutex for its whole duration, so an answer routed after any of
+    // them could never arrive: one tool call would take the transport offline.
+    //
+    // ONLY responses bypass. A response carries no authority — it invokes no
+    // method and can only resolve a correlation the SERVER minted — whereas
+    // requests and notifications keep going through the full gate and auth
+    // pipeline below, unchanged. Widening this would be an auth bypass.
+    //
+    // ONE shared function with the middleware twin, in the spirit of
+    // `dispatch_request_or_retire`: the rule cannot drift between the two paths.
+    if let Some(accepted) =
+        peer_channel::try_route_inbound_response(&state, &ingress, session_id.as_deref()).await
+    {
+        return Ok(accepted);
+    }
+
     // v2 required-header gate (VERS-05). The ordering constraints this call
     // carries — gate BEFORE session resolution and BEFORE the legacy
     // protocol-version check — are documented on `resolve_v2_gate` itself.
+    //
+    // `post_body` is THE request body for the rest of this pipeline: the gate and
+    // the log-level rule below share its single lazy parse (see `PostBody`).
+    let post_body = PostBody::new(body.as_bytes());
     let (protocol_context, v2_outbound) =
-        resolve_v2_gate(&state, &headers, body.as_bytes(), &ingress).await?;
+        resolve_v2_gate(&state, &headers, &post_body, &ingress).await?;
     let is_v2_request = v2_outbound.is_some();
     let era = protocol_context.as_ref().map(|pc| pc.era);
     let sessions_on = v1::sessions_active(&state, era);
@@ -3631,15 +4705,71 @@ async fn handle_post_fast_path_inner(
 
     let auth_context = extract_and_validate_auth(&state, &headers).await?;
 
+    // The transport-side half of the server-to-client channel (CONF-07 / G-3):
+    // bind a session-scoped peer + notification sink onto the ALREADY-RESOLVED
+    // context, at the one site that knows which session this request arrived on.
+    // A no-op when there is no live session or the era suppresses them, and
+    // placed AFTER every era-gated stage so `era`, `sessions_on` and the legacy
+    // version guard all read exactly what they read before.
+    let protocol_context = peer_channel::attach_session_backchannel(
+        &state,
+        protocol_context,
+        peer_channel::BackchannelSite {
+            session_id: response_session_id.as_deref(),
+            sessions_on,
+            is_init_request,
+        },
+    )
+    .await;
+
+    // The v2 twin of the attachment above (CONF-07 / D-16), at the SAME point in
+    // the pipeline and for the same reason: this is the one site that knows both
+    // the resolved era and the client's `Accept`. Inert on v1 — that era has a
+    // session stream and plan 11 already routes to it.
+    let (protocol_context, progress_queue) = attach_v2_progress_sink(
+        protocol_context,
+        v2_multi_frame_eligible(
+            &state,
+            era,
+            headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()),
+        ),
+    );
+
+    // This request's minimum log level (CONF-10 / D-10 / D-11 / D-12), captured
+    // and resolved by the one named rule and written onto the context — which is
+    // the LAST point at which the context is still owned and mutable, and is
+    // after every era-gated stage, so `era` and `sessions_on` read exactly what
+    // they read above. `server::core::attach_request_log_sink` lifts it from
+    // there onto the request's `RequestHandlerExtra` at both dispatch roots; this
+    // file never constructs one and must not pretend to.
+    //
+    // The middleware twin carries this same block at the same position. BOTH or
+    // NEITHER: a level honoured on one ingress path and ignored on the other is
+    // indistinguishable from no level at all for whichever deployment shape takes
+    // the other path (T-118.2-07-06).
+    let request_log_level = resolve_request_log_level(
+        &state,
+        era,
+        sessions_on,
+        response_session_id.as_deref(),
+        &post_body,
+    );
+    let protocol_context = match (protocol_context, request_log_level) {
+        (Some(context), Some(level)) => Some(context.with_resolved_log_level(level)),
+        (context, _) => context,
+    };
+
     Ok(dispatch_message_fast(
         &state,
         ingress,
         FastPathDispatch {
             is_init_request,
             response_session_id,
+            asserted_protocol_version: protocol_version,
             protocol_context,
             v2_outbound,
             sessions_on,
+            progress_queue,
         },
         auth_context,
         session_id.as_ref(),
@@ -3746,12 +4876,12 @@ async fn validate_protocol_version_with_error_hook(
 async fn resolve_v2_gate_with_error_hook(
     state: &ServerState,
     headers: &HeaderMap,
-    raw_body: &[u8],
+    body: &PostBody<'_>,
     ingress: &HttpIngress,
     http_middleware: &ServerHttpMiddlewareChain,
     http_context: &ServerHttpContext,
 ) -> std::result::Result<V2GateResolved, Response> {
-    match resolve_v2_gate(state, headers, raw_body, ingress).await {
+    match resolve_v2_gate(state, headers, body, ingress).await {
         Ok(resolved) => Ok(resolved),
         Err(error_response) => {
             report_middleware_error(http_middleware, http_context, "v2 header gate rejected").await;
@@ -3768,11 +4898,16 @@ async fn resolve_v2_gate_with_error_hook(
 struct MiddlewareDispatch {
     is_init_request: bool,
     response_session_id: Option<String>,
+    /// The `MCP-Protocol-Version` the client asserted — see the field of the
+    /// same name on [`InternalResponseShape`].
+    asserted_protocol_version: Option<String>,
     protocol_context: Option<crate::types::protocol::ProtocolContext>,
     v2_outbound: Option<(String, String)>,
     /// [`v1::sessions_active`] for THIS request — gates the `Mcp-Session-Id`
     /// response header (HTTP-01).
     sessions_on: bool,
+    /// This request's bounded v2 progress queue — see the fast-path twin.
+    progress_queue: Option<V2ProgressQueue>,
 }
 
 /// Assemble the `server/discover` response on the middleware path (VERS-04).
@@ -3795,6 +4930,7 @@ async fn assemble_discover_response_with_middleware(
 ) -> Response {
     let InternalResponseShape {
         response_session_id,
+        asserted_protocol_version,
         v2_outbound,
         sessions_on,
     } = shape;
@@ -3813,7 +4949,7 @@ async fn assemble_discover_response_with_middleware(
 
     // Discover is never an init request → compute the outbound version normally.
     let version_to_send =
-        compute_outbound_protocol_version(state, response_session_id, false, None);
+        outbound_protocol_version_after_init(state, response_session_id, asserted_protocol_version);
 
     let mut response = build_success_response_with_middleware(
         &response_msg,
@@ -3886,6 +5022,7 @@ async fn dispatch_message_fast(
         HttpIngress::Discover { id, .. } => {
             let FastPathDispatch {
                 response_session_id,
+                asserted_protocol_version,
                 protocol_context,
                 v2_outbound,
                 sessions_on,
@@ -3897,6 +5034,7 @@ async fn dispatch_message_fast(
                 protocol_context.as_ref(),
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
+                    asserted_protocol_version: asserted_protocol_version.as_deref(),
                     v2_outbound,
                     sessions_on,
                 },
@@ -3930,6 +5068,7 @@ async fn dispatch_message_fast(
         HttpIngress::TasksUpdate { id, params } => {
             let FastPathDispatch {
                 response_session_id,
+                asserted_protocol_version,
                 protocol_context,
                 v2_outbound,
                 sessions_on,
@@ -3945,6 +5084,7 @@ async fn dispatch_message_fast(
                 },
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
+                    asserted_protocol_version: asserted_protocol_version.as_deref(),
                     v2_outbound,
                     sessions_on,
                 },
@@ -3952,9 +5092,20 @@ async fn dispatch_message_fast(
             ))
             .await
         },
-        HttpIngress::Public(
-            TransportMessage::Notification { .. } | TransportMessage::Response(_),
-        ) => StatusCode::ACCEPTED.into_response(),
+        HttpIngress::Public(TransportMessage::Notification { .. }) => {
+            StatusCode::ACCEPTED.into_response()
+        },
+        // UNREACHABLE BY CONSTRUCTION: `peer_channel::try_route_inbound_response`
+        // matched and answered every response envelope as the second statement of
+        // `handle_post_fast_path_inner`, before this pipeline began. The arm
+        // survives only because the match must stay exhaustive — and it now ROUTES
+        // through the identical correlation path rather than discarding, so a
+        // response that ever reached here by some future route could not silently
+        // lose a client's answer.
+        HttpIngress::Public(TransportMessage::Response(ref response)) => {
+            peer_channel::route_inbound_response(state, response, session_id.map(String::as_str))
+                .await
+        },
     }
 }
 
@@ -3974,9 +5125,11 @@ async fn dispatch_message_with_middleware(
     let MiddlewareDispatch {
         is_init_request,
         response_session_id,
+        asserted_protocol_version,
         protocol_context,
         v2_outbound,
         sessions_on,
+        progress_queue,
     } = dispatch;
     match ingress {
         HttpIngress::Discover { id, .. } => {
@@ -3986,6 +5139,7 @@ async fn dispatch_message_with_middleware(
                 protocol_context.as_ref(),
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
+                    asserted_protocol_version: asserted_protocol_version.as_deref(),
                     v2_outbound,
                     sessions_on,
                 },
@@ -4018,6 +5172,7 @@ async fn dispatch_message_with_middleware(
                 },
                 InternalResponseShape {
                     response_session_id: response_session_id.as_ref(),
+                    asserted_protocol_version: asserted_protocol_version.as_deref(),
                     v2_outbound,
                     sessions_on,
                 },
@@ -4031,11 +5186,10 @@ async fn dispatch_message_with_middleware(
             // Captured BEFORE dispatch consumes it (see the fast-path twin).
             let live_id = id.clone();
             // Thread the ALREADY-RESOLVED ProtocolContext into dispatch (Plan 06
-            // / D-11): never re-resolved downstream. The shared seam also retires
-            // the v2-removed `resources/subscribe`/`unsubscribe` (HTTP-04).
+            // / D-11): never re-resolved downstream. Every method the 2026-07-28
+            // schema retired was already refused by the v2 ingress gate.
             let json_response =
-                dispatch_request_or_retire(state, id, request, auth_context, protocol_context)
-                    .await;
+                dispatch_public_request(state, id, request, auth_context, protocol_context).await;
             // Code-driven v2 status (see the fast-path twin).
             let v2_status = v2_dispatch_response_status(era, &json_response);
             // Same structural guarantee as every other direct response (HTTP-05).
@@ -4059,17 +5213,49 @@ async fn dispatch_message_with_middleware(
                 response_session_id.as_ref(),
                 is_init_request,
                 negotiated_version.as_deref(),
+                asserted_protocol_version.as_deref(),
             );
 
-            let mut response = build_success_response_with_middleware(
-                &response_msg,
-                response_session_id.as_ref(),
-                &version_to_send,
-                sessions_on,
-                http_middleware,
-                http_context,
-            )
-            .await;
+            // CONF-07 / D-16, the middleware twin. The multi-frame body is a
+            // COMPLETE byte buffer by the time it is built (the handler has
+            // already run), so it goes through the SAME
+            // `finish_with_middleware` seam the JSON twin uses — no streaming
+            // contract is broken, and an operator's response middleware is not
+            // silently skipped for exactly the responses that carry progress.
+            let mut response = match take_v2_progress_frames(progress_queue, response_msg) {
+                Ok((progress, result)) => {
+                    // The session/version headers the JSON twin sets INSIDE
+                    // `build_success_response_with_middleware` are applied
+                    // here instead, so the two branches emit the same header
+                    // set and only the body framing differs.
+                    let mut headers = HeaderMap::new();
+                    apply_v2_multi_frame_headers(&mut headers);
+                    v1::apply_session_header(
+                        &mut headers,
+                        response_session_id.as_ref(),
+                        sessions_on,
+                    );
+                    headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+                    finish_with_middleware(
+                        headers,
+                        render_v2_multi_frame_body(progress, result).into_bytes(),
+                        http_middleware,
+                        http_context,
+                    )
+                    .await
+                },
+                Err(response_msg) => {
+                    build_success_response_with_middleware(
+                        &response_msg,
+                        response_session_id.as_ref(),
+                        &version_to_send,
+                        sessions_on,
+                        http_middleware,
+                        http_context,
+                    )
+                    .await
+                },
+            };
 
             // v2 outbound headers on BOTH success and structured error (VERS-05).
             if let Some((method, name)) = &v2_outbound {
@@ -4080,9 +5266,15 @@ async fn dispatch_message_with_middleware(
             }
             response
         },
-        HttpIngress::Public(
-            TransportMessage::Notification { .. } | TransportMessage::Response(_),
-        ) => StatusCode::ACCEPTED.into_response(),
+        HttpIngress::Public(TransportMessage::Notification { .. }) => {
+            StatusCode::ACCEPTED.into_response()
+        },
+        // UNREACHABLE BY CONSTRUCTION — see the fast-path twin. Routes rather
+        // than discards, for the same reason.
+        HttpIngress::Public(TransportMessage::Response(ref response)) => {
+            peer_channel::route_inbound_response(state, response, response_session_id.as_deref())
+                .await
+        },
     }
 }
 
@@ -4280,13 +5472,25 @@ async fn handle_post_with_middleware_inner(
         is_init_request,
     } = read_and_classify_with_middleware(&state, request, http_middleware).await?;
 
+    // The SAME deadlock fix as the fast-path twin, from the SAME position in the
+    // pipeline and through the SAME shared function — see that call site for the
+    // three bypassed lock sites and for why only responses may bypass them.
+    if let Some(accepted) =
+        peer_channel::try_route_inbound_response(&state, &ingress, session_id.as_deref()).await
+    {
+        return Ok(accepted);
+    }
+
     // v2 required-header gate (VERS-05). The ordering constraints this call
     // carries — gate BEFORE session resolution and BEFORE the legacy
     // protocol-version check — are documented on `resolve_v2_gate` itself.
+    // The fast-path twin's shared body — see that call site for why one lazy
+    // parse is threaded through both the gate and the log-level rule.
+    let post_body = PostBody::new(&server_request.body);
     let (protocol_context, v2_outbound) = resolve_v2_gate_with_error_hook(
         &state,
         &server_request.headers,
-        &server_request.body,
+        &post_body,
         &ingress,
         http_middleware,
         &http_context,
@@ -4323,6 +5527,46 @@ async fn handle_post_with_middleware_inner(
         extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
             .await?;
 
+    // The SAME transport-side attachment as the fast-path twin, from the same
+    // position in the pipeline — see that call site for why it sits here.
+    let protocol_context = peer_channel::attach_session_backchannel(
+        &state,
+        protocol_context,
+        peer_channel::BackchannelSite {
+            session_id: response_session_id.as_deref(),
+            sessions_on,
+            is_init_request,
+        },
+    )
+    .await;
+
+    // The v2 progress queue (CONF-07 / D-16) — see the fast-path twin.
+    let (protocol_context, progress_queue) = attach_v2_progress_sink(
+        protocol_context,
+        v2_multi_frame_eligible(
+            &state,
+            era,
+            server_request.get_header(header::ACCEPT.as_str()),
+        ),
+    );
+
+    // The SAME log-level capture and resolution as the fast-path twin, from the
+    // same position in the pipeline and through the SAME named rule — see that
+    // call site for why it sits here and why a level resolved on only ONE of the
+    // two ingress paths would be a deployment-shape-dependent defect that no
+    // single-path test can see (T-118.2-07-06).
+    let request_log_level = resolve_request_log_level(
+        &state,
+        era,
+        sessions_on,
+        response_session_id.as_deref(),
+        &post_body,
+    );
+    let protocol_context = match (protocol_context, request_log_level) {
+        (Some(context), Some(level)) => Some(context.with_resolved_log_level(level)),
+        (context, _) => context,
+    };
+
     // `Box::pin` the dispatch future: the discover per-path assembly (Plan 112-10)
     // grows it past clippy's large_future threshold; boxing keeps the handler
     // future small without changing behavior. Pre-dates plan 113.1 and is kept —
@@ -4334,9 +5578,11 @@ async fn handle_post_with_middleware_inner(
         MiddlewareDispatch {
             is_init_request,
             response_session_id,
+            asserted_protocol_version: protocol_version,
             protocol_context,
             v2_outbound,
             sessions_on,
+            progress_queue,
         },
         auth_context,
         http_middleware,
@@ -4609,36 +5855,187 @@ mod tests {
         );
     }
 
+    /// A raw `params._meta` value carrying `version` (when `Some`) plus
+    /// `clientCapabilities`, for the verdict truth table below.
+    fn meta_value(version: Option<&str>) -> serde_json::Value {
+        use crate::types::protocol::context::{
+            RESERVED_CLIENT_CAPABILITIES_KEY, RESERVED_PROTOCOL_VERSION_KEY,
+        };
+        let mut meta = serde_json::Map::new();
+        if let Some(version) = version {
+            meta.insert(
+                RESERVED_PROTOCOL_VERSION_KEY.to_string(),
+                serde_json::json!(version),
+            );
+        }
+        meta.insert(
+            RESERVED_CLIENT_CAPABILITIES_KEY.to_string(),
+            serde_json::json!({}),
+        );
+        serde_json::Value::Object(meta)
+    }
+
+    /// The FULL truth table of the three-way `_meta` verdict, as literal rows.
+    ///
+    /// This replaced `classify_era_cell_covers_every_matrix_cell`, whose 2x2
+    /// shape could not express the row this table's second and third entries
+    /// pin: an ABSENT required key is `MissingRequired` (`-32602`), NOT the
+    /// `Disagreement` (`-32020`) the old matrix collapsed it into (gap G-6).
     #[test]
-    fn classify_era_cell_covers_every_matrix_cell() {
-        // v2/v2 → enforce
+    fn classify_v2_meta_version_covers_every_row() {
+        use HeaderProtocolVersion as H;
+        use V2MetaVerdict as V;
+        let unsupported = meta_value(Some("v999.0.0"));
+        let legacy = meta_value(Some("2025-11-25"));
+        let v2 = meta_value(Some(V2));
+        let no_version = meta_value(None);
+        let not_an_object = serde_json::json!("definitely not an object");
+        let bad_version = serde_json::json!({
+            crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY: 42,
+        });
+
+        // --- Defer: no v2 signal on either side. ---
+        assert_eq!(classify_v2_meta_version(H::Absent, None), V::Defer);
+        assert_eq!(classify_v2_meta_version(H::Other, None), V::Defer);
+        assert_eq!(classify_v2_meta_version(H::Other, Some(&legacy)), V::Defer);
+        assert_eq!(
+            classify_v2_meta_version(H::Other, Some(&unsupported)),
+            V::Defer,
+            "an unsupported version with NO v2 signal is the accept list's business"
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::Absent, Some(&no_version)),
+            V::Defer,
+            "a v1 request with a `_meta` and no protocolVersion is NOT this rule's business"
+        );
+
+        // --- MissingRequired: a v2 signal plus an ABSENT required key. ---
+        assert_eq!(
+            classify_v2_meta_version(H::V2, None),
+            V::MissingRequired(ERR_META_ABSENT)
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::V2, Some(&no_version)),
+            V::MissingRequired(ERR_META_NO_PROTOCOL_VERSION)
+        );
+
+        // --- Defer: a v2 signal plus an unusable `_meta` carrier. ---
+        assert_eq!(
+            classify_v2_meta_version(H::V2, Some(&not_an_object)),
+            V::Defer,
+            "a non-object `_meta` is the resolver's MalformedMeta, not a missing key"
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::V2, Some(&bad_version)),
+            V::Defer,
+            "a present-but-unusable version is MalformedMeta, not a missing key"
+        );
+
+        // --- Disagreement: both sides present, naming different versions. ---
+        assert_eq!(
+            classify_v2_meta_version(H::V2, Some(&unsupported)),
+            V::Disagreement(ERR_HEADER_CLAIMS_V2),
+            "G-8: a disagreement is classified BEFORE the accept list"
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::V2, Some(&legacy)),
+            V::Disagreement(ERR_HEADER_CLAIMS_V2)
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::Absent, Some(&v2)),
+            V::Disagreement(ERR_META_CLAIMS_V2)
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::Other, Some(&v2)),
+            V::Disagreement(ERR_META_CLAIMS_V2)
+        );
+        assert_eq!(
+            classify_v2_meta_version(H::Malformed, Some(&v2)),
+            V::Disagreement(ERR_META_CLAIMS_V2)
+        );
+
+        // --- Enforce: both sides agree on 2026-07-28. ---
+        assert_eq!(classify_v2_meta_version(H::V2, Some(&v2)), V::Enforce);
+    }
+
+    /// `clientCapabilities` is REQUIRED on an accepted v2 request, `clientInfo`
+    /// is NOT, and neither is judged on a request the gate did not accept.
+    #[test]
+    fn require_v2_client_capabilities_is_the_only_required_optional_key() {
+        use crate::types::protocol::context::{
+            RESERVED_CLIENT_CAPABILITIES_KEY, RESERVED_CLIENT_INFO_KEY,
+        };
+        use crate::types::protocol::error_codes::INVALID_PARAMS;
+
+        let with_caps = serde_json::json!({ RESERVED_CLIENT_CAPABILITIES_KEY: {} });
+        let info_only =
+            serde_json::json!({ RESERVED_CLIENT_INFO_KEY: { "name": "c", "version": "1" } });
+
         assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::V2, true),
-            V2Classification::Enforce
+            require_v2_client_capabilities(accepted_v2(), Some(&with_caps)),
+            V2GateOutcome::EnforceOk { .. }
         ));
-        // v1/v1 → legacy
+        // clientInfo present, capabilities absent → rejected. clientInfo being
+        // present is NOT a substitute: it is a SHOULD with its own MUST-SERVE
+        // conformance check.
+        let rejected = require_v2_client_capabilities(accepted_v2(), Some(&info_only));
+        let V2GateOutcome::Reject { code, message, .. } = rejected else {
+            panic!("a capabilities-less accepted v2 request must be rejected");
+        };
+        assert_eq!(code, INVALID_PARAMS);
+        assert_eq!(message, ERR_META_NO_CLIENT_CAPABILITIES);
+        let V2GateOutcome::Reject { code, data, .. } =
+            require_v2_client_capabilities(accepted_v2(), None)
+        else {
+            panic!("an accepted v2 request with NO `_meta` at all must be rejected");
+        };
+        assert_eq!(code, INVALID_PARAMS);
+        assert!(data.is_none(), "the required-key rejection carries no data");
+        // A request that was NOT accepted is left exactly as it was, so this
+        // step can never preempt method retirement or a header rejection.
         assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::Other, false),
-            V2Classification::Legacy
+            require_v2_client_capabilities(V2GateOutcome::Passthrough, None),
+            V2GateOutcome::Passthrough
         ));
+        let retired = V2GateOutcome::Reject {
+            code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+            message: "retired".to_string(),
+            data: None,
+        };
         assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::Absent, false),
-            V2Classification::Legacy
+            require_v2_client_capabilities(retired, None),
+            V2GateOutcome::Reject {
+                code: crate::types::protocol::error_codes::METHOD_NOT_FOUND,
+                ..
+            }
         ));
-        // v2-header / non-v2-meta → reject
-        assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::V2, false),
-            V2Classification::Reject(HEADER_MISMATCH, _)
-        ));
-        // non-v2-header / v2-meta → reject
-        assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::Absent, true),
-            V2Classification::Reject(HEADER_MISMATCH, _)
-        ));
-        assert!(matches!(
-            classify_era_cell(HeaderProtocolVersion::Malformed, true),
-            V2Classification::Reject(HEADER_MISMATCH, _)
-        ));
+    }
+
+    /// Every rejection message this rule can emit is a `&'static str` CONSTANT,
+    /// so a rejection can never echo peer-supplied bytes (T-118.1-06-01).
+    #[test]
+    fn the_meta_rule_messages_are_constants_that_name_their_own_cause() {
+        for message in [
+            ERR_META_ABSENT,
+            ERR_META_NO_PROTOCOL_VERSION,
+            ERR_META_NO_CLIENT_CAPABILITIES,
+            ERR_HEADER_CLAIMS_V2,
+            ERR_META_CLAIMS_V2,
+        ] {
+            assert!(
+                !message.is_empty(),
+                "a rejection message must name its cause"
+            );
+        }
+        assert!(ERR_META_NO_PROTOCOL_VERSION
+            .contains(crate::types::protocol::context::RESERVED_PROTOCOL_VERSION_KEY));
+        assert!(ERR_META_NO_CLIENT_CAPABILITIES
+            .contains(crate::types::protocol::context::RESERVED_CLIENT_CAPABILITIES_KEY));
+        assert!(
+            !ERR_META_NO_CLIENT_CAPABILITIES
+                .contains(crate::types::protocol::context::RESERVED_CLIENT_INFO_KEY),
+            "clientInfo is a SHOULD and must not appear in a required-key message"
+        );
     }
 
     /// Every row of the [`require_v2_headers`] truth table, including the two
@@ -4748,7 +6145,12 @@ mod tests {
             (MCP_METHOD, "tools/call"),
             (MCP_NAME, "search"),
         ]);
-        let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+        let out = classify_v2_request(
+            &h,
+            V2MetaVerdict::Enforce,
+            Some("tools/call"),
+            Some("search"),
+        );
         assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
     }
 
@@ -4760,7 +6162,12 @@ mod tests {
             (MCP_NAME, "search"),
         ]);
         // body method disagrees with Mcp-Method (smuggling)
-        let out = classify_v2_request(&h, true, Some("resources/read"), Some("search"));
+        let out = classify_v2_request(
+            &h,
+            V2MetaVerdict::Enforce,
+            Some("resources/read"),
+            Some("search"),
+        );
         assert!(matches!(
             out,
             V2GateOutcome::Reject {
@@ -4788,7 +6195,7 @@ mod tests {
             (MCP_METHOD, "tools/list"),
             (MCP_NAME, ""),
         ]);
-        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        let out = classify_v2_request(&h, V2MetaVerdict::Enforce, Some("tools/list"), None);
         assert!(
             matches!(out, V2GateOutcome::EnforceOk { .. }),
             "an EMPTY Mcp-Name on a name-less v2 method must be ACCEPTED"
@@ -4801,7 +6208,7 @@ mod tests {
         // (the DRIFT-1 presence-on-every-request rule); D-13 reverses that,
         // because the official conformance suite sends exactly this shape.
         let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, "tools/list")]);
-        let out = classify_v2_request(&h, true, Some("tools/list"), None);
+        let out = classify_v2_request(&h, V2MetaVerdict::Enforce, Some("tools/list"), None);
         assert!(
             matches!(out, V2GateOutcome::EnforceOk { .. }),
             "an ABSENT Mcp-Name on a name-LESS method must be ACCEPTED (D-13)"
@@ -4825,7 +6232,7 @@ mod tests {
             (MCP_METHOD, "tools/call"),
             (MCP_NAME, &encoded),
         ]);
-        let out = classify_v2_request(&h, true, Some("tools/call"), Some(name));
+        let out = classify_v2_request(&h, V2MetaVerdict::Enforce, Some("tools/call"), Some(name));
         assert!(matches!(out, V2GateOutcome::EnforceOk { .. }));
     }
 
@@ -4842,7 +6249,12 @@ mod tests {
                 (MCP_METHOD, "tools/call"),
                 (MCP_NAME, bad),
             ]);
-            let out = classify_v2_request(&h, true, Some("tools/call"), Some("search"));
+            let out = classify_v2_request(
+                &h,
+                V2MetaVerdict::Enforce,
+                Some("tools/call"),
+                Some("search"),
+            );
             assert!(matches!(
                 out,
                 V2GateOutcome::Reject {
@@ -5133,7 +6545,7 @@ mod tests {
         // Non-name-bearing, NO Mcp-Name at all → accepted (THE D-13 CHANGE).
         for method in NAME_LESS_METHODS {
             let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, method)]);
-            let out = classify_v2_request(&h, true, Some(method), None);
+            let out = classify_v2_request(&h, V2MetaVerdict::Enforce, Some(method), None);
             assert!(
                 matches!(out, V2GateOutcome::EnforceOk { .. }),
                 "{method} carries no routing name, so a missing Mcp-Name must be accepted"
@@ -5142,7 +6554,7 @@ mod tests {
         // Name-bearing (MRTR *and* tasks), NO Mcp-Name → rejected.
         for method in NAME_BEARING_METHODS {
             let h = headers_from(&[(MCP_PROTOCOL_VERSION, V2), (MCP_METHOD, method)]);
-            let out = classify_v2_request(&h, true, Some(method), Some("x"));
+            let out = classify_v2_request(&h, V2MetaVerdict::Enforce, Some(method), Some("x"));
             assert!(
                 matches!(out, V2GateOutcome::Reject { .. }),
                 "{method} carries a routing name, so a missing Mcp-Name must be rejected"
@@ -5156,7 +6568,12 @@ mod tests {
             (MCP_NAME, "task-a"),
         ]);
         assert!(matches!(
-            classify_v2_request(&h, true, Some("tasks/get"), Some("task-b")),
+            classify_v2_request(
+                &h,
+                V2MetaVerdict::Enforce,
+                Some("tasks/get"),
+                Some("task-b")
+            ),
             V2GateOutcome::Reject { .. }
         ));
         // A tasks method whose Mcp-Name AGREES with params.taskId passes.
@@ -5166,7 +6583,12 @@ mod tests {
             (MCP_NAME, "task-a"),
         ]);
         assert!(matches!(
-            classify_v2_request(&h, true, Some("tasks/get"), Some("task-a")),
+            classify_v2_request(
+                &h,
+                V2MetaVerdict::Enforce,
+                Some("tasks/get"),
+                Some("task-a")
+            ),
             V2GateOutcome::EnforceOk { .. }
         ));
         // A stray Mcp-Name on a name-less method is accepted AND discarded, so it
@@ -5176,7 +6598,7 @@ mod tests {
             (MCP_METHOD, "tools/list"),
             (MCP_NAME, "attacker-supplied"),
         ]);
-        match classify_v2_request(&h, true, Some("tools/list"), None) {
+        match classify_v2_request(&h, V2MetaVerdict::Enforce, Some("tools/list"), None) {
             V2GateOutcome::EnforceOk { method, name } => {
                 assert_eq!(method, "tools/list");
                 assert_eq!(name, "", "a stray Mcp-Name must be sanitized to empty");
@@ -5197,13 +6619,24 @@ mod tests {
         assert_eq!(h.get(MCP_PROTOCOL_VERSION).unwrap(), V2);
     }
 
+    /// One [`V2MetaVerdict`] per index, so a proptest can range over the whole
+    /// three-way verdict rather than the old boolean `meta_is_v2`.
+    fn verdict_case(kind: u8) -> V2MetaVerdict {
+        match kind {
+            0 => V2MetaVerdict::Defer,
+            1 => V2MetaVerdict::MissingRequired(ERR_META_ABSENT),
+            2 => V2MetaVerdict::Disagreement(ERR_HEADER_CLAIMS_V2),
+            _ => V2MetaVerdict::Enforce,
+        }
+    }
+
     proptest::proptest! {
         /// The classifier NEVER panics over arbitrary header bytes + signal
         /// combinations, and holds the accept/reject invariants (T-112-13).
         #[test]
         fn v2_header_gate_proptest(
             header_kind in 0u8..4,
-            meta_is_v2 in proptest::bool::ANY,
+            verdict_kind in 0u8..4,
             have_method in proptest::bool::ANY,
             have_name in proptest::bool::ANY,
             method_val in "[a-z/]{0,20}",
@@ -5232,20 +6665,21 @@ mod tests {
                 }
             }
 
-            // Must not panic.
-            let out = classify_v2_request(&h, meta_is_v2, body_method.as_deref(), body_name.as_deref());
+            let verdict = verdict_case(verdict_kind);
 
-            let header_is_v2 = decode_version_header(&h) == HeaderProtocolVersion::V2;
+            // Must not panic.
+            let out = classify_v2_request(&h, verdict, body_method.as_deref(), body_name.as_deref());
+
             match out {
                 V2GateOutcome::Passthrough => {
-                    // Only when neither signal is v2.
-                    proptest::prop_assert!(!header_is_v2 && !meta_is_v2);
+                    // Only when the `_meta` verdict deferred.
+                    proptest::prop_assert_eq!(verdict, V2MetaVerdict::Defer);
                 },
                 V2GateOutcome::EnforceOk { ref name, .. } => {
-                    // Only when BOTH signals are v2, `Mcp-Method` is present, and
+                    // Only when the verdict ENFORCES, `Mcp-Method` is present, and
                     // `Mcp-Name` is present OR the method carries no routing name
                     // (Phase 118 D-13, widened by D-18).
-                    proptest::prop_assert!(header_is_v2 && meta_is_v2);
+                    proptest::prop_assert_eq!(verdict, V2MetaVerdict::Enforce);
                     proptest::prop_assert!(have_method);
                     proptest::prop_assert!(have_name || !is_name_bearing_method(&method_val));
                     // A name is carried ONLY for a name-bearing method (D-20).
@@ -5254,7 +6688,17 @@ mod tests {
                     }
                 },
                 V2GateOutcome::Reject { code, .. } => {
-                    proptest::prop_assert_eq!(code, HEADER_MISMATCH);
+                    // A required-`_meta`-key rejection is INVALID_PARAMS; every
+                    // other rejection this classifier can produce is a header
+                    // violation or a header/body disagreement.
+                    if matches!(verdict, V2MetaVerdict::MissingRequired(_)) {
+                        proptest::prop_assert_eq!(
+                            code,
+                            crate::types::protocol::error_codes::INVALID_PARAMS
+                        );
+                    } else {
+                        proptest::prop_assert_eq!(code, HEADER_MISMATCH);
+                    }
                 },
             }
         }
@@ -5349,7 +6793,6 @@ mod tests {
             method_bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..40),
             name_bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..40),
             body_bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..120),
-            meta_is_v2 in proptest::bool::ANY,
         ) {
             let mut h = HeaderMap::new();
             for (header_name, raw) in [
@@ -5372,16 +6815,29 @@ mod tests {
 
             // The raw-body reader is on the same unauthenticated path.
             let (body_method, body_name) = extract_body_method_and_name(&body_bytes);
+            // ...and so is the three-way `_meta` verdict: it reads the SAME raw
+            // body, so arbitrary bytes must reach it too and must not panic.
+            let raw_meta = raw_params_meta(&body_bytes);
+            let verdict = classify_v2_meta_version(decode_version_header(&h), raw_meta.as_ref());
             let out = classify_v2_request(
                 &h,
-                meta_is_v2,
+                verdict,
                 body_method.as_deref(),
                 body_name.as_deref(),
             );
-            // Every rejection is a structured outcome, never an unwind.
+            // Every rejection is a structured outcome, never an unwind. The
+            // required-key arm is INVALID_PARAMS; everything else is a header
+            // violation or a header/body disagreement.
             if let V2GateOutcome::Reject { code, .. } = out {
-                proptest::prop_assert_eq!(code, HEADER_MISMATCH);
+                let expected = if matches!(verdict, V2MetaVerdict::MissingRequired(_)) {
+                    crate::types::protocol::error_codes::INVALID_PARAMS
+                } else {
+                    HEADER_MISMATCH
+                };
+                proptest::prop_assert_eq!(code, expected);
             }
+            // The capabilities step never panics on adversarial `_meta` either.
+            let _ = require_v2_client_capabilities(out, raw_meta.as_ref());
         }
     }
 
@@ -5493,12 +6949,21 @@ mod tests {
     }
 
     /// A JSON-RPC body for `method` carrying a v2 `params._meta` under `key`.
+    ///
+    /// `io.modelcontextprotocol/clientCapabilities` is present because since
+    /// Phase 118.1 plan 06 it is a REQUIRED key on every accepted v2 request
+    /// (CONF-06 / gap G-6); a body without it is now a `-32602`, which would make
+    /// every `EnforceOk` assertion below fail for a reason unrelated to its
+    /// subject.
     fn v2_body_bytes(method: &str, key: &str) -> Vec<u8> {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": method,
-            "params": { key: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+            "params": { key: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
         })
         .to_string()
         .into_bytes()
@@ -5836,6 +7301,53 @@ mod tests {
         );
     }
 
+    /// THE memo claim: one parse, however many readers ask for it.
+    ///
+    /// Before `PostBody` the v2 gate and the log-level rule each called
+    /// `raw_body_json` themselves, so every POST to an opted-in server walked the
+    /// whole request body through `serde_json` twice. Comparing the two borrows by
+    /// ADDRESS is what makes this a fence rather than a restatement: a re-parse
+    /// hands back a different allocation, so weakening the memo into a
+    /// parse-per-call reds this test. It pins the MECHANISM, not the call sites —
+    /// a reader that goes back to calling `raw_body_json` directly instead of
+    /// asking `PostBody` is a review catch, not a test catch.
+    #[test]
+    fn post_body_parses_once_and_not_before_it_is_asked() {
+        let raw = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#;
+        let body = PostBody::new(raw);
+        assert!(
+            body.json.get().is_none(),
+            "construction must parse NOTHING — D-04's non-opted-in short-circuit and every \
+             pre-auth rejection refuse an attacker-sized body without ever parsing it"
+        );
+
+        let first = body.json().expect("a well-formed body parses");
+        let second = body.json().expect("the memo still holds it");
+        assert!(
+            std::ptr::eq(first, second),
+            "the second read must BE the first read's value, not an equal-looking re-parse"
+        );
+        assert_eq!(
+            body.raw(),
+            raw,
+            "the raw bytes are handed through verbatim, for the readers that must see the \
+             literal wire value (D-06)"
+        );
+    }
+
+    /// Adversarial bytes are `None` rather than a panic — and that `None` is
+    /// memoized too, so a malformed body is not re-parsed once per reader either.
+    #[test]
+    fn post_body_memoizes_a_failed_parse() {
+        let body = PostBody::new(b"not json at all");
+        assert!(body.json().is_none(), "non-JSON bytes read as nothing");
+        assert!(body.json().is_none(), "and keep reading as nothing");
+        assert!(
+            body.json.get().is_some(),
+            "the memo is FILLED with the `None` outcome, so the failed parse is paid for once"
+        );
+    }
+
     /// D-04 ordering: a NON-opted-in server short-circuits to Passthrough EVEN
     /// WITH a v2 `_meta` present — it must NOT reject as an unsupported version
     /// (the v2 `_meta` is never inspected).
@@ -5847,7 +7359,7 @@ mod tests {
         let (ctx, outcome) = run_v2_header_gate(
             &state,
             &headers,
-            &body,
+            &PostBody::new(&body),
             Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
         )
         .await;
@@ -5876,7 +7388,8 @@ mod tests {
         ] {
             let body = v2_body_bytes(method, "_meta");
             let (ctx, outcome) =
-                run_v2_header_gate(&state, &v2_headers_for(method), &body, None).await;
+                run_v2_header_gate(&state, &v2_headers_for(method), &PostBody::new(&body), None)
+                    .await;
             assert_eq!(
                 ctx.map(|c| c.era),
                 Some(crate::types::protocol::Era::V2),
@@ -5904,7 +7417,7 @@ mod tests {
         let (ctx, outcome) = run_v2_header_gate(
             &state,
             &headers,
-            &body,
+            &PostBody::new(&body),
             Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
         )
         .await;
@@ -5924,7 +7437,8 @@ mod tests {
         // No MCP-Protocol-Version header → conflict cell → Reject.
         let headers = headers_from(&[(MCP_METHOD, "tools/list"), (MCP_NAME, "")]);
         let body = v2_body_bytes("tools/list", "_meta");
-        let (_ctx, outcome) = run_v2_header_gate(&state, &headers, &body, None).await;
+        let (_ctx, outcome) =
+            run_v2_header_gate(&state, &headers, &PostBody::new(&body), None).await;
         assert!(matches!(outcome, V2GateOutcome::Reject { .. }));
     }
 
@@ -6385,6 +7899,177 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // v2 METHOD RETIREMENT (Phase 118.1 plan 05, CONF-05 / gap G-5).
+    //
+    // Nested in a module NAMED after the production surface so
+    // `cargo test --lib -- retirement` actually selects these tests rather
+    // than passing vacuously (the plan-09 lesson). A SIBLING of
+    // `subscriptions_listen`, where the two-variant predecessor lived: the
+    // rule stopped being a `resources/*` concern once it covered all five
+    // methods the 2026-07-28 schema removes.
+    // -------------------------------------------------------------------
+    mod v2_method_retirement {
+        use super::*;
+
+        /// The retirement set is EXACTLY the five methods the 2026-07-28 core
+        /// schema removes, spelled as a hand-written literal.
+        ///
+        /// The oracle is deliberately independent of `V2_RETIRED_METHODS`: a test
+        /// that iterated the table under test could only ever agree with itself,
+        /// and would keep passing if a sixth entry were added or `ping` were
+        /// dropped. This literal is what pins the CONTENTS.
+        #[test]
+        fn the_retirement_set_is_exactly_the_five_schema_removed_methods() {
+            const EXPECTED: [&str; 5] = [
+                "initialize",
+                "ping",
+                "logging/setLevel",
+                "resources/subscribe",
+                "resources/unsubscribe",
+            ];
+            for method in EXPECTED {
+                assert!(
+                    v2_retired_method(method).is_some(),
+                    "{method} is absent from the 2026-07-28 schema and MUST be retired on v2"
+                );
+            }
+            assert_eq!(
+                V2_RETIRED_METHODS.len(),
+                EXPECTED.len(),
+                "the table grew or shrank without this oracle moving with it"
+            );
+            // Methods the schema KEEPS are never retired — including
+            // `subscriptions/listen`, the replacement, which retiring would make
+            // v2 unable to subscribe at all.
+            for kept in [
+                "tools/list",
+                "tools/call",
+                "resources/read",
+                "completion/complete",
+                crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD,
+                crate::types::protocol::SERVER_DISCOVER_METHOD,
+            ] {
+                assert!(
+                    v2_retired_method(kept).is_none(),
+                    "{kept} survives in the 2026-07-28 schema and MUST NOT be retired"
+                );
+            }
+        }
+
+        /// T-118.1-05-01: the match is EXACT BYTE EQUALITY over a peer-supplied
+        /// string, so no near miss is retired.
+        ///
+        /// The method name is read at a point earlier and less validated than
+        /// typed parsing. Any case folding, trimming or prefix matching added
+        /// here would let a peer force a `404` on a method the schema keeps, or
+        /// dodge one on a method it removed.
+        #[test]
+        fn near_miss_method_strings_are_not_retired() {
+            for near_miss in [
+                "Initialize",
+                "INITIALIZE",
+                " ping",
+                "ping ",
+                "ping\n",
+                "logging/setlevel",
+                "logging/SetLevel",
+                "resources/subscribe2",
+                "xresources/subscribe",
+                "initialize\u{0}",
+                // A Unicode look-alike: Cyrillic small 'р' (U+0440), not ASCII 'p'.
+                "\u{440}ing",
+                "",
+            ] {
+                assert!(
+                    v2_retired_method(near_miss).is_none(),
+                    "{near_miss:?} is not one of the five retired methods and must not match"
+                );
+            }
+        }
+
+        /// T-118.1-05-02: the rejection names the TABLE's constant, never the
+        /// peer's bytes, and every entry's replacement is a real successor.
+        #[test]
+        fn the_retirement_message_names_the_constant_and_its_replacement() {
+            let (retired, replacement) =
+                v2_retired_method("resources/subscribe").expect("it is retired");
+            assert_eq!(
+                replacement,
+                Some(crate::types::subscriptions::SUBSCRIPTIONS_LISTEN_METHOD)
+            );
+            let message = v2_retirement_message(retired, replacement);
+            assert!(message.contains("resources/subscribe"), "{message}");
+            assert!(message.contains("subscriptions/listen"), "{message}");
+
+            // `ping` has NO replacement, so the message must not invent one.
+            let (retired, replacement) = v2_retired_method("ping").expect("it is retired");
+            assert_eq!(replacement, None);
+            let message = v2_retirement_message(retired, replacement);
+            assert!(message.contains("ping"), "{message}");
+            assert!(
+                !message.contains("use "),
+                "ping has no successor RPC; the message must not point at one: {message}"
+            );
+
+            assert_eq!(
+                v2_retired_method("initialize").expect("it is retired").1,
+                Some(crate::types::protocol::SERVER_DISCOVER_METHOD),
+                "v2 replaces the initialize handshake with the discover projection"
+            );
+            assert_eq!(
+                v2_retired_method("logging/setLevel")
+                    .expect("it is retired")
+                    .1,
+                Some(LOG_LEVEL_REQUEST_META_KEY),
+            );
+        }
+
+        /// `retire_v2_method` converts an ACCEPTED v2 request for a retired method
+        /// into `METHOD_NOT_FOUND`, and leaves every other outcome untouched.
+        ///
+        /// The `Passthrough` row is the v1 guarantee in miniature: a v1 request
+        /// never reaches `EnforceOk`, so retirement can never fire on it.
+        #[test]
+        fn retire_v2_method_only_rewrites_an_accepted_retired_method() {
+            let retired = retire_v2_method(V2GateOutcome::EnforceOk {
+                method: "logging/setLevel".to_string(),
+                name: String::new(),
+            });
+            let V2GateOutcome::Reject { code, message, .. } = retired else {
+                panic!("an accepted v2 logging/setLevel must be REJECTED");
+            };
+            assert_eq!(code, METHOD_NOT_FOUND);
+            assert!(message.contains("logging/setLevel"), "{message}");
+
+            // A method the schema keeps stays accepted.
+            assert!(matches!(
+                retire_v2_method(V2GateOutcome::EnforceOk {
+                    method: "tools/list".to_string(),
+                    name: String::new(),
+                }),
+                V2GateOutcome::EnforceOk { .. }
+            ));
+            // A non-accepted outcome is returned verbatim: retirement must not
+            // convert a header/body disagreement into a routine-looking 404.
+            assert!(matches!(
+                retire_v2_method(V2GateOutcome::Passthrough),
+                V2GateOutcome::Passthrough
+            ));
+            assert!(matches!(
+                retire_v2_method(V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    message: "desync".to_string(),
+                    data: None,
+                }),
+                V2GateOutcome::Reject {
+                    code: HEADER_MISMATCH,
+                    ..
+                }
+            ));
+        }
+    }
+
+    // -------------------------------------------------------------------
     // `subscriptions/listen` gate + wire frames (Plan 113-10, HTTP-04).
     //
     // Nested in a module NAMED after the production surface so
@@ -6438,7 +8123,7 @@ mod tests {
         fn projected_capabilities(caps: &ServerCapabilities) -> ServerCapabilities {
             let response = crate::server::core::build_discover_response(
                 RequestId::Number(1),
-                caps,
+                crate::server::core::DiscoverSource::from(caps),
                 &Implementation::new("s", "1"),
                 Some(&v2_context()),
             );
@@ -6515,36 +8200,6 @@ mod tests {
         }
 
         #[test]
-        fn only_the_two_retired_resource_rpcs_are_retired() {
-            let subscribe = Request::Client(Box::new(ClientRequest::Subscribe(
-                crate::types::resources::SubscribeRequest {
-                    uri: "mem://a".to_string(),
-                },
-            )));
-            let unsubscribe = Request::Client(Box::new(ClientRequest::Unsubscribe(
-                crate::types::resources::UnsubscribeRequest {
-                    uri: "mem://a".to_string(),
-                },
-            )));
-            let list = Request::Client(Box::new(ClientRequest::ListTools(
-                crate::types::tools::ListToolsRequest { cursor: None },
-            )));
-            assert_eq!(
-                v2_retired_method_of(&subscribe),
-                Some("resources/subscribe")
-            );
-            assert_eq!(
-                v2_retired_method_of(&unsubscribe),
-                Some("resources/unsubscribe")
-            );
-            assert_eq!(
-                v2_retired_method_of(&list),
-                None,
-                "no other method is retired by HTTP-04"
-            );
-        }
-
-        #[test]
         fn the_ack_frame_is_the_acknowledged_notification() {
             let agreed = SubscriptionFilter {
                 tools_list_changed: Some(true),
@@ -6594,6 +8249,165 @@ mod tests {
                 frame["result"]["_meta"][crate::server::core::RESERVED_SERVER_INFO_KEY]["name"],
                 json!("listen-server"),
                 "serverInfo comes from the SHARED envelope helper too"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // CONF-07 / G-3's v2 half (D-16): the multi-frame SSE POST response.
+    //
+    // Named after the production surface so `cargo test --lib -- v2_multi_frame`
+    // selects these rather than passing vacuously.
+    //
+    // The WIRE-level proof lives in `tests/v2_sse_progress.rs`, which drives a
+    // real server over real HTTP. What is proved HERE is the pair of properties
+    // an end-to-end test cannot reach: the queue's exact bound (the progress
+    // reporter's 100 ms rate limit stands between a handler and the queue, so no
+    // handler can push a queue to capacity through the public path), and the
+    // byte-equality of the hand-rendered framing with axum's own.
+    // -------------------------------------------------------------------
+    mod v2_multi_frame_sse {
+        use super::*;
+        use crate::types::notifications::{ProgressNotification, ProgressToken};
+        use crate::types::{JSONRPCResponse, Notification, RequestId};
+
+        /// A progress notification carrying `progress` as its value.
+        fn progress(value: f64) -> Notification {
+            Notification::Progress(ProgressNotification::new(
+                ProgressToken::String("tok".to_string()),
+                value,
+                None,
+            ))
+        }
+
+        /// T-118.1-12-01, measured DIRECTLY: the queue admits exactly
+        /// [`V2_PROGRESS_QUEUE_CAPACITY`] notifications and drops the rest.
+        ///
+        /// The sink is driven straight, bypassing `ServerProgressReporter` —
+        /// whose 100 ms rate limit would otherwise be the thing under test. This
+        /// is the assertion that distinguishes "bounded" from "we never happened
+        /// to overflow it".
+        #[test]
+        fn the_progress_queue_is_bounded_at_its_stated_capacity() {
+            let overflow = 500;
+            let (sink, queue) = new_v2_progress_queue();
+            for step in 0..(V2_PROGRESS_QUEUE_CAPACITY + overflow) {
+                #[allow(clippy::cast_precision_loss)]
+                sink(progress(step as f64));
+            }
+            let drained = queue.drain();
+            assert_eq!(
+                drained.len(),
+                V2_PROGRESS_QUEUE_CAPACITY,
+                "the per-request progress queue must cap at its stated bound, not grow"
+            );
+        }
+
+        /// DROP-NEWEST, stated in the constant's rustdoc and asserted here: the
+        /// frames that survive are the EARLIEST ones.
+        #[test]
+        fn the_overflow_policy_is_drop_newest() {
+            let (sink, queue) = new_v2_progress_queue();
+            for step in 0..(V2_PROGRESS_QUEUE_CAPACITY * 2) {
+                #[allow(clippy::cast_precision_loss)]
+                sink(progress(step as f64));
+            }
+            let drained = queue.drain();
+            let last = drained.last().expect("the queue is non-empty");
+            let Notification::Progress(last) = last else {
+                panic!("only progress notifications were pushed");
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let expected_last = (V2_PROGRESS_QUEUE_CAPACITY - 1) as f64;
+            assert!(
+                (last.progress - expected_last).abs() < f64::EPSILON,
+                "drop-newest keeps the EARLIEST frames: the last survivor should be \
+                 {expected_last}, got {}",
+                last.progress
+            );
+        }
+
+        /// An empty queue drains to nothing, which is what makes a no-progress v2
+        /// response fall through to the UNCHANGED builder.
+        #[test]
+        fn an_unused_queue_drains_empty() {
+            let (_sink, queue) = new_v2_progress_queue();
+            assert!(
+                queue.drain().is_empty(),
+                "a handler that never reported progress leaves the queue empty"
+            );
+        }
+
+        /// The hand-rendered framing is BYTE-IDENTICAL to what axum's `Sse` +
+        /// `Event` produce for the same message — modulo the random event id,
+        /// which is regenerated per frame by construction.
+        ///
+        /// This is the control for the one place plan 12 does not reuse the axum
+        /// type: the middleware path needs a complete `Vec<u8>` body and `Event`
+        /// exposes no serializer, so the framing is written out by hand. Without
+        /// this test that copy could silently drift from
+        /// [`build_sse_response_from_single_message`]'s.
+        #[tokio::test]
+        async fn the_hand_rendered_framing_matches_axum_event() {
+            let message = TransportMessage::Response(JSONRPCResponse::success(
+                RequestId::Number(7),
+                json!({"ok": true}),
+            ));
+
+            let axum_response = build_sse_response_from_single_message(message.clone());
+            let axum_bytes = axum::body::to_bytes(axum_response.into_body(), 64 * 1024)
+                .await
+                .expect("the one-shot SSE body reads");
+            let axum_body = String::from_utf8(axum_bytes.to_vec()).expect("utf8");
+
+            let TransportMessage::Response(response) = message else {
+                unreachable!("constructed as a Response above")
+            };
+            let hand_body = {
+                let mut rendered = String::new();
+                write_sse_frame(&mut rendered, V2ResponseFrame::Result(response));
+                rendered
+            };
+
+            // Strip the `id:` line from both — it is a fresh UUID each time.
+            let strip_id = |body: &str| {
+                body.lines()
+                    .filter(|line| !line.starts_with("id:"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert_eq!(
+                strip_id(&hand_body),
+                strip_id(&axum_body),
+                "the hand-rendered frame must match axum's `Event` framing byte for byte \
+                 (modulo the per-frame uuid); hand={hand_body:?} axum={axum_body:?}"
+            );
+        }
+
+        /// The multi-frame body puts every notification BEFORE the result, and
+        /// terminates on the result (T-118.1-12-03).
+        #[test]
+        fn the_body_ends_on_the_result_frame() {
+            let response = JSONRPCResponse::success(RequestId::Number(1), json!({"ok": true}));
+            let body = render_v2_multi_frame_body(vec![progress(1.0), progress(2.0)], response);
+
+            let data: Vec<&str> = body
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .collect();
+            assert_eq!(
+                data.len(),
+                3,
+                "two notifications plus the result; body: {body}"
+            );
+            assert!(
+                data[0].contains("notifications/progress")
+                    && data[1].contains("notifications/progress"),
+                "the notifications come first; body: {body}"
+            );
+            assert!(
+                data[2].contains("\"result\""),
+                "and the LAST frame is the result; body: {body}"
             );
         }
     }

@@ -2,24 +2,46 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::auth::{load_cached_config, DEFAULT_GRAPHQL_URL};
+use super::auth::{
+    discover_graphql_url, load_cached_config, refresh_graphql_url, DEFAULT_GRAPHQL_URL,
+};
 
-/// Resolve GraphQL URL with priority: env var > discovery cache > default.
-/// This is sync to avoid an async call on every GraphQL request.
-fn get_graphql_url() -> String {
-    // 1. Legacy env var (highest priority)
-    if let Ok(url) = std::env::var("PMCP_RUN_GRAPHQL_URL") {
+/// The explicit endpoint override, when it is set to something usable.
+///
+/// An EMPTY (or whitespace-only) `PMCP_RUN_GRAPHQL_URL` is treated as ABSENT,
+/// which is what `auth::refresh_graphql_url` already does through its own
+/// `nonempty_env`. The two must agree: a bare `std::env::var(..).ok()` here
+/// would post to the empty string while the refresh path decided no override
+/// existed and re-ran discovery, so the same variable would mean two different
+/// things on the two halves of one retry.
+fn graphql_url_override() -> Option<String> {
+    let value = std::env::var("PMCP_RUN_GRAPHQL_URL").ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Async endpoint resolution: env var > discovery cache > **discovery** > default.
+///
+/// The sync predecessor (`get_graphql_url`) could not perform discovery, so it
+/// degraded to `DEFAULT_GRAPHQL_URL` whenever the cache was cold — and that
+/// default resolves to nothing, turning a recoverable cache miss into an opaque
+/// "Failed to send GraphQL request". Every caller in this file is already async,
+/// so the sync ladder was deleted rather than left as a second, weaker copy of
+/// this one.
+async fn resolve_graphql_url() -> String {
+    if let Some(url) = graphql_url_override() {
         return url;
     }
-
-    // 2. Discovery cache (sync read, no network)
-    if let Some(config) = load_cached_config() {
-        if let Some(url) = config.graphql_url {
-            return url;
-        }
+    if let Some(url) = load_cached_config().and_then(|c| c.graphql_url) {
+        return url;
     }
-
-    // 3. Default
+    if let Some(url) = discover_graphql_url().await {
+        return url;
+    }
     DEFAULT_GRAPHQL_URL.to_string()
 }
 
@@ -388,7 +410,65 @@ pub async fn get_deployment(access_token: &str, deployment_id: &str) -> Result<D
 }
 
 /// Execute GraphQL query
+/// Does this error look like the endpoint does not know our schema?
+///
+/// AppSync rejects an operation the schema lacks at VALIDATION time, before any
+/// resolver runs, with `FieldUndefined` / `UnknownType` / `Validation error`. The
+/// usual cause is a client bug, but it is also exactly what a STALE discovery cache
+/// produces: pmcp.run federates three source APIs into one merged API, so a cached
+/// URL pointing at a single source API sees only part of the schema and reports the
+/// rest as undefined. Retrying elsewhere is only worth it for this error class.
+fn looks_like_unknown_schema(err: &anyhow::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("FieldUndefined")
+        || msg.contains("UnknownType")
+        || msg.contains("Validation error")
+}
+
+/// Execute a GraphQL request, re-running discovery once if the endpoint reports our
+/// operation as undefined.
+///
+/// The discovery cache is keyed by `api_url`, so it does not notice when the server
+/// changes which endpoint it advertises under a stable `api_url` — the entry then
+/// stays wrong for up to an hour. Rather than make users wait out the TTL (or know to
+/// delete a cache file), treat a schema-validation failure as evidence the cached
+/// endpoint is stale, refresh, and retry ONCE — and only when the refreshed URL is
+/// actually different, so a genuine client-side schema bug fails at its original
+/// speed instead of paying an extra round-trip to fail identically.
 async fn execute_graphql<T>(
+    access_token: &str,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    // NOT get_graphql_url(): that is sync, so with an empty cache it can only fall
+    // through to DEFAULT_GRAPHQL_URL — a host that does not resolve. Deleting the
+    // cache (or a first run on a fresh machine) would then fail with a transport
+    // error naming no endpoint. Here we are already async, so an absent cache is
+    // resolved by running discovery, which is what the sync path cannot do.
+    let url = resolve_graphql_url().await;
+    match execute_graphql_at(&url, access_token, query, variables.clone()).await {
+        Err(e) if looks_like_unknown_schema(&e) => {
+            let Some(fresh) = refresh_graphql_url().await else {
+                return Err(e);
+            };
+            if fresh == url {
+                return Err(e);
+            }
+            eprintln!(
+                "note: endpoint did not recognize the operation; discovery now advertises \n      {fresh}\n      (cached endpoint was stale) — retrying once."
+            );
+            execute_graphql_at(&fresh, access_token, query, variables).await
+        },
+        other => other,
+    }
+}
+
+/// Single GraphQL round-trip against an explicit endpoint.
+async fn execute_graphql_at<T>(
+    graphql_url: &str,
     access_token: &str,
     query: &str,
     variables: serde_json::Value,
@@ -400,7 +480,6 @@ where
     // loop hits this every 2s — a per-call client would redo TCP+TLS each time).
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     let client = CLIENT.get_or_init(reqwest::Client::new);
-    let graphql_url = get_graphql_url();
 
     let request = GraphQLRequest {
         query: query.to_string(),
@@ -408,7 +487,7 @@ where
     };
 
     let response = client
-        .post(&graphql_url)
+        .post(graphql_url)
         .header("Authorization", access_token)
         .header("Content-Type", "application/json")
         .json(&request)
@@ -1091,7 +1170,7 @@ pub async fn upload_test_scenario(
             $name: String!
             $description: String
             $content: String!
-            $format: UploadTestScenarioFormat
+            $format: String
         ) {
             uploadTestScenario(
                 serverId: $serverId
@@ -1135,7 +1214,7 @@ pub async fn download_test_scenario(
     let query = r#"
         query DownloadTestScenario(
             $scenarioId: String!
-            $format: DownloadTestScenarioFormat
+            $format: String
         ) {
             downloadTestScenario(
                 scenarioId: $scenarioId
@@ -1703,4 +1782,105 @@ pub async fn set_package_binding(
     response
         .set_package_binding
         .context("setPackageBinding returned null - check pmcp.run service logs")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_unknown_schema;
+
+    /// Every GraphQL variable declared by this file must use a type the pmcp.run
+    /// schema actually defines. All of these operations take scalars only, so the
+    /// check reduces to "is it a built-in GraphQL or AppSync scalar".
+    ///
+    /// Why this exists (2026-08-15): `uploadTestScenario` and `downloadTestScenario`
+    /// each declared `$format: UploadTestScenarioFormat` / `DownloadTestScenarioFormat`
+    /// — types that have never existed on ANY pmcp.run endpoint (the server takes a
+    /// plain `format: String`, and both call sites were already sending a lowercased
+    /// string). AppSync rejects the whole document at validation time with
+    /// "Unknown type UploadTestScenarioFormat", so both commands failed against every
+    /// server on the platform. The failure reads like a missing feature rather than a
+    /// client bug, which is what made it expensive to diagnose.
+    /// Only a schema-validation failure should trigger the discovery re-fetch and
+    /// retry. Matching too broadly would double the latency of every unrelated
+    /// failure; matching too narrowly leaves the stale-cache case unrecovered.
+    #[test]
+    fn unknown_schema_detection_matches_only_validation_failures() {
+        let stale = [
+            "GraphQL errors: Validation error of type FieldUndefined: Field \'uploadTestScenario\' in type \'Mutation\' is undefined",
+            "GraphQL errors: Validation error of type UnknownType: Unknown type UploadTestScenarioFormat",
+        ];
+        for m in stale {
+            assert!(
+                looks_like_unknown_schema(&anyhow::anyhow!(m.to_string())),
+                "should retry after refreshing discovery: {m}"
+            );
+        }
+
+        let unrelated = [
+            "Failed to send GraphQL request",
+            "GraphQL errors: Not Authorized to access uploadTestScenario on type Mutation",
+            "GraphQL request failed: 502 Bad Gateway",
+        ];
+        for m in unrelated {
+            assert!(
+                !looks_like_unknown_schema(&anyhow::anyhow!(m.to_string())),
+                "must NOT pay an extra discovery round-trip for: {m}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_variable_types_are_known_scalars() {
+        const SOURCE: &str = include_str!("graphql.rs");
+        // GraphQL built-ins plus the AppSync-specific scalars this API uses.
+        const KNOWN: &[&str] = &[
+            "String",
+            "Boolean",
+            "Int",
+            "Float",
+            "ID",
+            "AWSJSON",
+            "AWSDate",
+            "AWSTime",
+            "AWSDateTime",
+            "AWSTimestamp",
+            "AWSEmail",
+            "AWSURL",
+            "AWSPhone",
+            "AWSIPAddress",
+        ];
+
+        let mut offenders: Vec<(usize, String)> = Vec::new();
+        for (i, line) in SOURCE.lines().enumerate() {
+            // Match a variable declaration inside a query string: `$name: Type` / `Type!`.
+            let Some(colon) = line.find(": ") else {
+                continue;
+            };
+            if !line.trim_start().starts_with('$') {
+                continue;
+            }
+            // Normalize: drop a trailing comma (GraphQL allows comma-separated
+            // variable lists) and the non-null / list punctuation, leaving the
+            // bare named type — `[String!]!` and `String` both reduce to `String`.
+            let ty: String = line[colon + 2..]
+                .trim()
+                .trim_end_matches(',')
+                .chars()
+                .filter(|c| !matches!(c, '!' | '[' | ']'))
+                .collect();
+            let ty = ty.trim();
+            if ty.is_empty() || ty.contains(' ') {
+                continue;
+            }
+            if !KNOWN.contains(&ty) {
+                offenders.push((i + 1, ty.to_string()));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "GraphQL variables declared with a type pmcp.run does not define \
+             (AppSync rejects the whole document): {offenders:?}"
+        );
+    }
 }

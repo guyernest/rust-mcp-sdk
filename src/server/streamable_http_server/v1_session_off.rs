@@ -106,6 +106,38 @@ pub(crate) const fn session_protocol_version(
     None
 }
 
+/// No session, so no level was ever recorded against one.
+///
+/// The 2026-07-28 transport RETIRED `logging/setLevel` and carries the level per
+/// request in `params._meta` instead, so a session-scoped level would be the
+/// wrong authority even if a session existed to hold one. The resolver at the
+/// HTTP ingress reads the `_meta` key on this build and never consults this
+/// answer for anything but the v1 arm it can no longer take.
+///
+/// `None` also means the D-12 default (`info`) applies to any request that sends
+/// no `_meta` level — which is the same answer the real half gives a v1 session
+/// that never called `setLevel`.
+pub(crate) const fn session_log_level(
+    _state: &V1State,
+    _session_id: &str,
+) -> Option<crate::types::LoggingLevel> {
+    None
+}
+
+/// Recording a level is a no-op: there is no session row to record it against.
+///
+/// The RPC that would call this is one of the five the 2026-07-28 core schema
+/// removes, so on this build the write can never be reached with a live session
+/// id — and there is no map here for it to grow even if it were (T-118.2-07-02).
+/// The parameters are taken so the signature matches the real half's and are
+/// never read.
+pub(crate) const fn set_session_log_level(
+    _state: &V1State,
+    _session_id: &str,
+    _level: crate::types::LoggingLevel,
+) {
+}
+
 // ---------------------------------------------------------------------------
 // v1 SSE stream operations — every answer is a constant.
 // ---------------------------------------------------------------------------

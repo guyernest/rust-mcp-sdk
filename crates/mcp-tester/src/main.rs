@@ -57,6 +57,24 @@ struct Cli {
     #[arg(short, long, global = true, default_value = "pretty")]
     format: OutputFormat,
 
+    /// Dump every HTTP request and response this tool puts on the wire.
+    ///
+    /// Answers "what did we actually send?" — the first question in any
+    /// conformance dispute, and one this tool previously could not answer about
+    /// itself. Shows the request line, the headers (including the v2 routing
+    /// trio `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name`) and the body,
+    /// plus the response status and headers.
+    ///
+    /// Credential and session headers are REDACTED — a wire dump is exactly the
+    /// artifact that ends up pasted into a bug report.
+    ///
+    /// This is a preset over the SDK's `pmcp::wire` tracing target, not a
+    /// separate logger, so the equivalent without the flag is
+    /// `RUST_LOG=pmcp::wire=debug`, and any `tracing_subscriber` layer (JSON for
+    /// CI, for instance) composes with it.
+    #[arg(long, global = true)]
+    dump_wire: bool,
+
     /// Verbosity level (0-3)
     #[arg(short, long, global = true, default_value = "0")]
     verbose: u8,
@@ -162,6 +180,21 @@ enum Commands {
         /// era this degrades to a single run and says so.
         #[arg(long)]
         dual_run: bool,
+
+        /// Make `--dual-run`'s findings GATE the exit code.
+        ///
+        /// OFF by default, and that default is a deliberate contract: without
+        /// this flag the exit code keeps meaning "did the v1 suite pass", so
+        /// adding `--dual-run` to an existing CI job cannot change its verdict.
+        ///
+        /// With it, a v2 suite failure or an UNEXPECTED era difference exits
+        /// non-zero. Use it when you WANT the era comparison to be a gate rather
+        /// than a report — an opt-in flag whose findings cannot fail a job
+        /// cannot gate anything.
+        ///
+        /// Requires `--dual-run`; on its own it does nothing.
+        #[arg(long, requires = "dual_run")]
+        fail_on_era_findings: bool,
     },
 
     /// List and test available tools
@@ -272,7 +305,7 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.verbose);
+    init_tracing(cli.verbose, cli.dump_wire);
 
     if matches!(cli.format, OutputFormat::Pretty) {
         print_header();
@@ -291,10 +324,38 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Initialize tracing/logging from RUST_LOG or the `--verbose` count.
-fn init_tracing(verbose: u8) {
+/// Initialize tracing/logging from RUST_LOG, `--verbose`, or `--dump-wire`.
+///
+/// `--dump-wire` is a PRESET, not a parallel logger: it adds the SDK's
+/// `pmcp::wire` target at `debug` to whatever filter is already in force. That
+/// composition is the point —
+///
+/// - `--dump-wire` alone gives wire frames and nothing else, so the signal is
+///   not buried under unrelated SDK debug output;
+/// - `RUST_LOG=...` still wins for anything else, and a user who already knows
+///   `RUST_LOG=pmcp::wire=debug` needs no flag at all;
+/// - a CI job can swap in `tracing_subscriber`'s JSON layer and archive the
+///   frames as a machine-readable artifact, because these are ordinary tracing
+///   events rather than `println!`.
+fn init_tracing(verbose: u8, dump_wire: bool) {
+    let wire_directive = format!("{}=debug", pmcp::shared::wire_trace::WIRE_TARGET);
     let env_filter = if std::env::var("RUST_LOG").is_ok() {
-        tracing_subscriber::EnvFilter::from_default_env()
+        let base = tracing_subscriber::EnvFilter::from_default_env();
+        if dump_wire {
+            // ADD to the user's filter rather than replacing it: an explicit
+            // RUST_LOG is a deliberate choice and the flag is additive to it.
+            base.add_directive(
+                wire_directive
+                    .parse()
+                    .expect("the wire directive is a compile-time constant"),
+            )
+        } else {
+            base
+        }
+    } else if dump_wire {
+        // Wire frames ONLY. Turning on `pmcp=debug` wholesale here would bury
+        // the frames the user asked for under every other SDK debug line.
+        tracing_subscriber::EnvFilter::new(wire_directive)
     } else {
         let log_level = match verbose {
             0 => "error",
@@ -355,9 +416,19 @@ async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<T
             strict,
             domain,
             dual_run,
+            fail_on_era_findings,
         } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
-            run_conformance_command(cli, url, *strict, domain.clone(), *dual_run, oauth).await
+            run_conformance_command(
+                cli,
+                url,
+                *strict,
+                domain.clone(),
+                *dual_run,
+                *fail_on_era_findings,
+                oauth,
+            )
+            .await
         },
         Commands::Tools { url, test_all } => {
             let oauth = create_oauth_from_config(url, &oauth_config).await?;
@@ -509,6 +580,7 @@ async fn run_conformance_command(
     strict: bool,
     domain: Option<Vec<String>>,
     dual_run: bool,
+    fail_on_era_findings: bool,
     oauth: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     if dual_run {
@@ -521,6 +593,7 @@ async fn run_conformance_command(
             cli.api_key.as_deref(),
             oauth,
             cli.format,
+            fail_on_era_findings,
         )
         .await
     } else {
@@ -807,6 +880,7 @@ async fn run_dual_conformance_test(
     api_key: Option<&str>,
     oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
     format: OutputFormat,
+    fail_on_era_findings: bool,
 ) -> Result<TestReport> {
     use conformance::{ConformanceDomain, ConformanceRunner};
     use pmcp::types::protocol::PROTOCOL_VERSION_2026_07_28;
@@ -876,7 +950,46 @@ async fn run_dual_conformance_test(
             // by `the_binary_runs_in_both_modes_against_a_live_server` in
             // `tests/dual_run.rs`; see this function's rustdoc for the open
             // question about whether it should hold.
-            Ok(report.v1_report)
+            //
+            // `--fail-on-era-findings` is the OPT-IN answer to that question. It
+            // does not change the default contract — absent the flag this is the
+            // same v1 report as before, byte for byte — but when the caller asks
+            // for the comparison to be a GATE, the v2 failures and UNEXPECTED
+            // differences are folded in as named Core failures so the existing
+            // `handle_command_result` exit path reports them. Each carries the
+            // era in its name, so a red never leaves the reader guessing which
+            // suite produced it.
+            let mut out = report.v1_report.clone();
+            if fail_on_era_findings {
+                for test in report
+                    .v2_report
+                    .tests
+                    .iter()
+                    .filter(|t| t.status == report::TestStatus::Failed)
+                {
+                    out.add_test(report::TestResult::failed(
+                        format!("[v2 suite] {}", test.name),
+                        report::TestCategory::Core,
+                        test.duration,
+                        test.error
+                            .clone()
+                            .unwrap_or_else(|| "v2 suite failure (no reason recorded)".to_string()),
+                    ));
+                }
+                for finding in report
+                    .differences
+                    .iter()
+                    .filter(|d| d.class == era_diff::DifferenceClass::Unexpected)
+                {
+                    out.add_test(report::TestResult::failed(
+                        format!("[era] unexpected difference: {}", finding.observation_id),
+                        report::TestCategory::Core,
+                        Duration::from_secs(0),
+                        finding.detail.clone(),
+                    ));
+                }
+            }
+            Ok(out)
         },
         EraSupport::V1Only => {
             eprintln!(

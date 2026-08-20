@@ -463,7 +463,48 @@ const DEP_RESULT_STATUS_FIELD: &str = "status";
 /// `status` when the whole capability round trip finished.
 const DEP_STATUS_COMPLETED: &str = "completed";
 /// `status` when the era target declined to reach for the capability at all.
+///
+/// No longer the EXPECTED v1 value — phase 118.1 closed G-3's server half — but
+/// still named here because it is one of the two regressions the tripwire below
+/// must be able to describe: a return to this value means the peer went absent
+/// again.
 const DEP_STATUS_CAPABILITY_NOT_OFFERED: &str = "capability-not-offered";
+/// `status` when the peer WAS present, the request WAS issued, and the answer
+/// never came back.
+///
+/// The v1 expectation since phase 118.1 plan 11, and still the v1 expectation
+/// after phase 118.2 — but **for a different reason**, which is why the arm below
+/// now also asserts [`DEP_RESULT_DETAIL_FIELD`]. The wire spelling is a
+/// CATCH-ALL: `era_target::undelivered()` reports it for any peer error at all,
+/// so it cannot by itself distinguish "there was no stream to deliver on" (the
+/// pre-118.2 state) from "it was delivered and nobody answered" (now). The name
+/// is kept matching `era_target`'s so the two stay greppable; the module doc
+/// carries the account of what moved.
+///
+/// Re-spelled here rather than imported for the same reason every other token in
+/// this block is: a test that reads its expectation out of the code under test
+/// asserts nothing.
+const DEP_STATUS_NO_LIVE_STREAM: &str = "no-live-stream";
+
+/// The result field carrying the transport error text behind
+/// [`DEP_STATUS_NO_LIVE_STREAM`].
+const DEP_RESULT_DETAIL_FIELD: &str = "detail";
+
+/// What the `detail` must NAME now: the server waited out its dispatch budget.
+///
+/// A substring rather than the whole message, because the request id inside it
+/// (`dispatch-1`) is a counter this file has no business pinning.
+const DISPATCH_TIMEOUT_MARKER: &str = "timed out";
+
+/// What the `detail` said at the phase base `cb5d1365`, and must NOT say now.
+///
+/// Asserted in the NEGATIVE alongside [`DISPATCH_TIMEOUT_MARKER`], because
+/// "which hop is missing" is a property of the PAIR: a one-directional check
+/// would pass against an implementation whose error text happened to contain
+/// both. This is the marker that makes the detail assertion non-vacuous — it is
+/// exactly what the base tree reported, in 0.18 s, when no live client stream
+/// existed.
+const BASE_FAIL_FAST_MARKER: &str = "Dispatch oneshot channel closed";
 
 /// The per-request v2 `_meta` key that REPLACES the `logging/setLevel` RPC.
 const LOG_LEVEL_META_KEY: &str = "io.modelcontextprotocol/logLevel";
@@ -575,27 +616,84 @@ fn era_transport(url: &url::Url) -> pmcp::shared::streamable_http::StreamableHtt
 /// that positively BEFORE it is built, so a future transport swap fails loudly
 /// here instead of silently degrading to v1.
 ///
-/// # Two measured SDK gaps are pinned here rather than papered over
+/// # What the two tripwired arms assert NOW
 ///
 /// Phase 118 decision D-21 scopes the conformance claim to what genuinely
-/// passes and DECLARES the rest. Two arms below therefore assert measured
-/// reality with a tripwire message, not the seeded expectation:
+/// passes and DECLARES the rest, so these arms assert measured reality with a
+/// tripwire message rather than a seeded expectation. What that reality IS moved
+/// during phase 118.1; the history is kept so a reader can tell a fix from a
+/// regression.
 ///
-/// * **v2 `logging/setLevel` is still SERVED** (gap G-5 in
-///   `118-CONFORMANCE-GAPS.md`). `src/server/mod.rs:1897-1901` lumps
-///   `SetLoggingLevel` in with `Subscribe`/`Complete`/`Ping` and answers
-///   `Ok(json!({}))` with no era branch anywhere in `src/`. The REPLACEMENT
-///   mechanism works — the `_meta` arm below proves it — only the retirement of
-///   the old RPC is missing.
-/// * **v1 Sampling/Roots are unreachable over `StreamableHttpServer`** (gap
-///   G-3). Measured here: the server-to-client peer handle is set only in
-///   `Server::run()` (`src/server/mod.rs:1173`), which `StreamableHttpServer`
-///   never calls, so `extra.peer()` is `None`; and
-///   `RequestHandlerExtra::client_capabilities()` is populated only from the v2
-///   per-request `_meta` reserved key
-///   (`src/types/protocol/context.rs:384-390`), never from the v1 `initialize`
-///   handshake, so a v1 tool handler cannot see what the client declared. The
-///   v1 MECHANISM itself is proved to complete by
+/// * **v2 `logging/setLevel` is RETIRED, at the transport gate AND at both
+///   native dispatch roots.** Phase 118.1 plan 05 retired it by method STRING at
+///   the v2 HTTP ingress (the `V2_RETIRED_METHODS` table), which is what the
+///   arm below asserts on the wire. Until phase 118.2-08 that was the ONLY
+///   layer that knew: `src/server/mod.rs` lumped `SetLoggingLevel` in with
+///   `Subscribe`/`Unsubscribe`/`Ping` and answered `Ok(json!({}))` with no era
+///   branch anywhere in `src/`, while `ServerCore`'s `_ =>` catch-all answered
+///   `-32601` on BOTH eras — so a caller reaching a dispatch root off the HTTP
+///   path got an answer the suite had never measured. 118.2-08 (D-13) split the
+///   method out of that residual arm and gave both roots ONE era-branched
+///   shared unit, `server::core::set_logging_level_response`: a literal `{}` on
+///   v1, `-32601` on v2. The REPLACEMENT mechanism works too — the `_meta` arm
+///   below proves it. (Gap G-5 in `118-CONFORMANCE-GAPS.md` was CLOSED by phase
+///   118.1 plan 05 for the verbs it named; the residual `logging/setLevel`
+///   dispatch-root observation that survived it is closed by 118.2-08.)
+/// * **v1 Sampling/Roots REACH the capability over `StreamableHttpServer`, the
+///   request is now DELIVERED to pmcp's own client, and the round trip still
+///   stops one hop short — at the ANSWER.** The status this file asserts is
+///   `no-live-stream`, not `capability-not-offered`, and the difference is the
+///   whole of gap G-3's server half:
+///   - phase 118.1 plan 08 folded the v1 `initialize` handshake capabilities
+///     into the per-request context, so `client_capabilities()` is populated on
+///     v1 (it was previously fed only by the v2 `_meta` reserved key — gap G-9);
+///   - plans 10 and 11 put a SESSION-BOUND peer handle on the `StreamableHTTP`
+///     dispatch path, so `extra.peer()` is `Some` (it was previously set only in
+///     `Server::run()`, which this transport never calls).
+///
+///   **What phase 118.2 FIXED, and what it did not.** pmcp's own
+///   `StreamableHttpTransport` now opens the GET session stream after the
+///   `initialized` notification is answered `202`, and reads that body
+///   INCREMENTALLY. Both halves of that were defects and both are closed:
+///   118.2-01 found the `start_sse(None)` call sitting inside
+///   `if !response.status().is_success()` — and `202 Accepted` IS a success
+///   status, so the branch was dead and no GET was ever issued; 118.2-03 replaced
+///   the whole-body `collect()` at both read sites with the one incremental
+///   reader, because a session stream has no end-of-body for a `collect()` to
+///   wait for. 118.2-04 added bounded reconnect with `Last-Event-ID` on top.
+///   The pmcp-on-BOTH-ends proof of the resulting channel is
+///   `tests/pmcp_both_ends_logging.rs` in the `pmcp` crate: a handler-emitted
+///   `notifications/message` reaching a real `StreamableHttpTransport` over a
+///   live v1 session stream, before the call's own reply.
+///
+///   **The residual, and it MOVED rather than vanished.** Measured at the phase
+///   base `cb5d1365` and again at 118.2-10, with this arm's expectation
+///   temporarily flipped so the payload printed:
+///   - BASE, in 0.18 s: `detail: "Protocol error: -32603 - Dispatch oneshot
+///     channel closed"` — there was no live client stream, so the server failed
+///     the correlation AT ONCE;
+///   - NOW, in ~30 s: `detail: "Protocol error: -32001 - Server request
+///     dispatch-1 timed out"` — the request IS delivered (a scratch probe read
+///     `Request { id: "dispatch-1", request: Client(CreateMessage(..)) }` off
+///     pmcp's own client queue) and the server then waits out its dispatch budget
+///     for an answer that never comes.
+///   The client cannot ANSWER because `Client::dispatch_request` awaits
+///   `transport.send(..)` to COMPLETE before entering the receive loop that would
+///   dispatch the inbound request, and the server holds the `tools/call` POST open
+///   for the whole handler — so the client is parked inside its own `send()` while
+///   the handler waits on it. That is a lifecycle deadlock in `src/`, not a
+///   missing stream, and closing it is a design decision (overlap the client's
+///   send with its receive loop, or answer the request POST `202` before running
+///   the handler) which 118.2-10 recorded in the phase's `deferred-items.md`
+///   rather than smuggling in behind a test change. `DEP_STATUS_NO_LIVE_STREAM` is
+///   the value `era_target::undelivered()` reports for ANY peer error, so the wire
+///   spelling did not have to move for the CAUSE to; that is exactly why the arm
+///   below now also asserts the `detail`.
+///
+///   The SERVER half is measured directly, and
+///   green, by `tests/http_peer_roundtrip.rs` in the `pmcp` crate, which drives
+///   `sample`, `list_roots` and `elicit` to completion over v1 HTTP with a client
+///   that does hold a live stream. The v1 MECHANISM in-process is proved by
 ///   [`v1_sampling_and_roots_complete_via_server_to_client_requests`].
 #[tokio::test]
 async fn deprecated_capabilities_complete_under_both_eras() {
@@ -660,9 +758,12 @@ async fn v1_capability_arm(url: &url::Url) {
          WHAT TO DO: re-read the era gate in the target's log tool.\n  {logged}"
     );
 
-    // SAMPLING and ROOTS, v1 mechanism, over StreamableHttpServer. See the
-    // G-3 note on this module's CONF-03 test: both COMPLETE as tool calls, and
-    // both report that the target never reached for the capability.
+    // SAMPLING and ROOTS, v1 mechanism, over StreamableHttpServer. The target
+    // REACHES for the capability — phase 118.1 plans 08/10/11 closed the server
+    // half of G-3 — and since phase 118.2 the request is also DELIVERED to
+    // pmcp's own client over a live GET SSE stream. What is still missing is the
+    // ANSWER, so the server waits out its dispatch budget. See the module doc
+    // for the measured before/after and for why the wire STATUS did not move.
     for tool in ["dep__request_sampling", "dep__list_roots"] {
         let result = payload(
             &client
@@ -673,13 +774,55 @@ async fn v1_capability_arm(url: &url::Url) {
         assert_field(
             &result,
             DEP_RESULT_STATUS_FIELD,
-            DEP_STATUS_CAPABILITY_NOT_OFFERED,
+            DEP_STATUS_NO_LIVE_STREAM,
             &format!(
-                "v1 {tool} over StreamableHttpServer (gap G-3). If this now reports \
-                 `{DEP_STATUS_COMPLETED}`, G-3 HAS BEEN FIXED: the peer handle now reaches the \
-                 HTTP dispatch path. That is good news — update THIS assertion and re-measure \
-                 baseline rows ERA-13/ERA-14, whose v1 token is `absent` for exactly this reason"
+                "v1 {tool} over StreamableHttpServer. Two regressions are possible here and they \
+                 mean OPPOSITE things.\n\
+                 IF THIS REPORTS `{DEP_STATUS_CAPABILITY_NOT_OFFERED}`: the peer handle has gone \
+                 ABSENT from the HTTP dispatch path again, or the v1 handshake capabilities have \
+                 stopped reaching the request context. That is a SERVER REGRESSION of gap G-3 — \
+                 re-run `cargo nextest run -E 'binary(http_peer_roundtrip)'`, which measures the \
+                 server half directly and must be green.\n\
+                 IF THIS REPORTS `{DEP_STATUS_COMPLETED}`: a pmcp CLIENT has learned to ANSWER a \
+                 server-to-client request issued while its own call is outstanding, so the round \
+                 trip now lands. That is good news — update THIS assertion and the detail \
+                 assertion below it, close the client-lifecycle deferred item, and re-measure \
+                 baseline rows ERA-13/ERA-14."
             ),
+        );
+
+        // THE DETAIL. The status alone is a catch-all — `undelivered()` reports
+        // it for any peer error — so it cannot tell "no stream existed" from
+        // "delivered, unanswered". Pinning the detail is what makes this arm
+        // record WHICH hop is missing, and it is measurably non-vacuous: at the
+        // phase base `cb5d1365` this same field read
+        // `BASE_FAIL_FAST_MARKER` in 0.18 s.
+        let detail = result
+            .get(DEP_RESULT_DETAIL_FIELD)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "FAILURE MODE: v1 {tool} reported `{DEP_STATUS_NO_LIVE_STREAM}` with no \
+                     `{DEP_RESULT_DETAIL_FIELD}`.\n\
+                     CONSEQUENCE: the evidence for WHY the round trip did not complete is gone, \
+                     and the status alone cannot distinguish an undelivered request from an \
+                     unanswered one.\n\
+                     WHAT TO DO: restore the detail field in `era_target::undelivered()`.\n  \
+                     {result}"
+                )
+            });
+        assert!(
+            detail.contains(DISPATCH_TIMEOUT_MARKER) && !detail.contains(BASE_FAIL_FAST_MARKER),
+            "FAILURE MODE: v1 {tool} did not fail the way phase 118.2 left it failing.\n\
+             EXPECTED: a detail containing `{DISPATCH_TIMEOUT_MARKER}` and NOT containing \
+             `{BASE_FAIL_FAST_MARKER}` — the request is delivered on a live stream and the \
+             server waits out its dispatch budget for an answer.\n\
+             IF IT NOW CONTAINS `{BASE_FAIL_FAST_MARKER}`: the CLIENT has stopped holding a live \
+             GET SSE stream and the server is failing the correlation at once again. That is a \
+             REGRESSION of phase 118.2's client half — re-run \
+             `cargo nextest run -E 'binary(client_sse_stream)'` and \
+             `-E 'binary(pmcp_both_ends_logging)'` in the `pmcp` crate.\n\
+             OBSERVED: {detail}"
         );
     }
 }
@@ -739,20 +882,40 @@ async fn v2_capability_arm(url: &url::Url) {
         "v2 dep__log_emit",
     );
 
-    // G-5, PINNED AS MEASURED. The v2 schema retires the RPC; this SDK does
-    // not. Recorded as a tripwire so the day it IS retired, the failure names
-    // what to change.
+    // G-5, CLOSED AND PINNED. The 2026-07-28 schema retires the RPC, and since
+    // Phase 118.1 plan 05 this SDK retires it too — by method STRING at the v2
+    // ingress, so the refusal does not depend on the params parsing. The
+    // tripwire now guards the CLOSED state: it fires if the retirement is ever
+    // undone.
+    //
+    // This assertion was FLIPPED by plan 05, following the instruction its own
+    // pre-flip failure message gave verbatim. ERA-11 moved to v1 `served` / v2
+    // `error:-32601` with `kind: method-removed` in the SAME commit.
     let retired = client
         .set_logging_level(pmcp::types::notifications::LoggingLevel::Debug)
         .await;
-    assert!(
-        retired.is_ok(),
-        "FAILURE MODE: v2 `logging/setLevel` was REFUSED ({retired:?}).\n\
-         CONSEQUENCE: none — this is the CORRECT behaviour per the 2026-07-28 schema, and gap \
-         G-5 in 118-CONFORMANCE-GAPS.md has been closed.\n\
-         WHAT TO DO: flip this assertion to expect the refusal, change baseline row ERA-11 back \
-         to v1 `served` / v2 `error:-32601` with `kind: method-removed`, and strike G-5 from the \
-         gaps file. Do NOT re-open the gap to make this assertion pass."
+    let Err(error) = retired else {
+        panic!(
+            "FAILURE MODE: v2 `logging/setLevel` was SERVED, not refused.\n\
+             CONSEQUENCE: gap G-5 has REGRESSED — the SDK is answering an RPC the 2026-07-28 \
+             core schema removed, so it serves a surface the era it claims to speak does not \
+             define, and the official conformance suite's removed-methods probe will fail on it.\n\
+             WHAT TO DO: restore the v2 ingress retirement in \
+             src/server/streamable_http_server.rs (the V2_RETIRED_METHODS table). Do NOT relax \
+             this assertion, and do NOT move baseline row ERA-11 back to `era-agreement`; \
+             tests/v2_retired_methods.rs is the wire-level proof of the same fact and will be \
+             red alongside it."
+        );
+    };
+    assert_eq!(
+        error.error_code(),
+        Some(pmcp::ErrorCode::METHOD_NOT_FOUND),
+        "FAILURE MODE: v2 `logging/setLevel` was refused with {error:?}, not METHOD_NOT_FOUND.\n\
+         CONSEQUENCE: the method is unreachable, but for the wrong reason — a retirement the \
+         suite scores on the CODE (-32601) would not be credited, and the refusal could be a \
+         capability, auth or params rejection wearing a retirement's clothes.\n\
+         WHAT TO DO: check that the retirement still emits METHOD_NOT_FOUND through \
+         v2_status_for_code rather than some nearer-to-hand error."
     );
 
     // SAMPLING and ROOTS, v2 mechanism: the server answers `input_required`,

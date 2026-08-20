@@ -82,6 +82,121 @@ pub(crate) struct VerifiedContinuation {
     pub round: u8,
 }
 
+/// The per-request server-to-client capability handles a TRANSPORT can hand to
+/// dispatch (Phase 118.1 plan 10, CONF-07 / G-3).
+///
+/// # Why it rides on [`ProtocolContext`]
+///
+/// `RequestHandlerExtra` is built deep inside the dispatchers
+/// (`Server::call_tool_with_context`, `ServerCore::handle_call_tool`) and the
+/// peer is applied by `attach_peer` from a SINGLE global `peer_handle` field. A
+/// transport cannot reach either. But `ProtocolContext` is already resolved once
+/// at ingress, already threaded through `handle_request_with_context`, and
+/// already moved onto `RequestHandlerExtra` by `.with_protocol_context(..)` at
+/// both dispatch roots — so a request-scoped carrier riding here reaches the
+/// handler with NO signature change at any call site.
+///
+/// # `Debug` is hand-written and reports PRESENCE only
+///
+/// Both fields are live capability handles: the peer can issue
+/// `sampling/createMessage` and `elicitation/create` at the client, and the sink
+/// can emit notifications. They follow the same redaction discipline as the MRTR
+/// fields on the enclosing type — a single `tracing::debug!("{ctx:?}")` must not
+/// publish a capability handle or let a reader correlate one request's context
+/// with another's (T-118.1-10-09, the T-113-05 / T-113-31 class).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+pub(crate) struct TransportBackchannel {
+    /// The peer handle bound to the ORIGINATING session, if the transport has
+    /// a server-to-client channel for this request.
+    peer: Option<std::sync::Arc<dyn crate::shared::peer::PeerHandle>>,
+    /// A one-way notification sink for the same session.
+    ///
+    /// Typed EXACTLY as `ServerProgressReporter::new`'s second parameter so it
+    /// can be handed straight in with no adapter.
+    notification_sink: Option<std::sync::Arc<dyn Fn(crate::types::Notification) + Send + Sync>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Debug for TransportBackchannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportBackchannel")
+            .field("has_peer", &self.peer().is_some())
+            .field("has_notification_sink", &self.notification_sink().is_some())
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unwind safety, asserted DELIBERATELY.
+//
+// `PeerHandle` and the notification-sink `Fn` are public trait objects declared
+// without `+ RefUnwindSafe`, so `Arc<dyn …>` of either is neither `UnwindSafe`
+// nor `RefUnwindSafe`, and without these two impls the enclosing PUBLIC
+// `ProtocolContext` silently stops implementing both. `cargo semver-checks`
+// classifies that as `auto_trait_impl_removed` — a MAJOR break — which would
+// turn an intentionally additive `pub(crate)` field into a 3.0 gate. It is not a
+// theoretical concern: the check caught it on the first run of this plan.
+//
+// The assertion is honest rather than expedient. Both fields are opaque,
+// immutable-after-construction `Arc` capability handles: this type never mutates
+// through them and holds no invariant that a panic could tear. Every piece of
+// mutable state they reach — the dispatcher's `pending` and `owners` maps — is
+// behind `tokio::sync::RwLock`, which has no poisoning and therefore publishes
+// no broken-invariant signal for a `catch_unwind` caller to observe. Adding
+// `+ RefUnwindSafe` to the `PeerHandle` trait instead would be a MAJOR break of
+// its own (a new supertrait every external implementor must satisfy), so this is
+// the additive form of the same guarantee.
+//
+// Both are SAFE auto traits, so these are ordinary impls and assert nothing the
+// compiler would otherwise have to trust us about for memory safety.
+#[cfg(not(target_arch = "wasm32"))]
+impl std::panic::UnwindSafe for TransportBackchannel {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::panic::RefUnwindSafe for TransportBackchannel {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TransportBackchannel {
+    /// An empty backchannel. Layer capabilities on with the `with_*` builders.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attach the session-bound peer handle.
+    #[must_use]
+    pub(crate) fn with_peer(
+        mut self,
+        peer: std::sync::Arc<dyn crate::shared::peer::PeerHandle>,
+    ) -> Self {
+        self.peer = Some(peer);
+        self
+    }
+
+    /// Attach the session-bound notification sink.
+    #[must_use]
+    pub(crate) fn with_notification_sink(
+        mut self,
+        sink: std::sync::Arc<dyn Fn(crate::types::Notification) + Send + Sync>,
+    ) -> Self {
+        self.notification_sink = Some(sink);
+        self
+    }
+
+    /// The session-bound peer handle, if the transport supplied one.
+    pub(crate) fn peer(&self) -> Option<&std::sync::Arc<dyn crate::shared::peer::PeerHandle>> {
+        self.peer.as_ref()
+    }
+
+    /// The session-bound notification sink, if the transport supplied one.
+    pub(crate) fn notification_sink(
+        &self,
+    ) -> Option<&std::sync::Arc<dyn Fn(crate::types::Notification) + Send + Sync>> {
+        self.notification_sink.as_ref()
+    }
+}
+
 /// The protocol context resolved once at request ingress and threaded through
 /// dispatch.
 ///
@@ -128,13 +243,69 @@ pub struct ProtocolContext {
     /// server-owned codec verified the echoed `requestState` against the live
     /// principal and originating request.
     pub(crate) mrtr_verified: Option<VerifiedContinuation>,
+    /// The per-request server-to-client capability handles the TRANSPORT
+    /// supplied, if it has a back-channel for this request (CONF-07 / G-3).
+    ///
+    /// Crate-private for the same reason as the MRTR fields: this is internal
+    /// plumbing, and [`TransportBackchannel`] is `pub(crate)`, so a `pub` field
+    /// would expose a private type from a public interface. Adding a
+    /// `pub(crate)` field to a `#[non_exhaustive]` public struct is semver-MINOR.
+    ///
+    /// `#[cfg(not(target_arch = "wasm32"))]` because `src/shared/peer.rs` carries
+    /// a module-level gate of the same shape, so `PeerHandle` does not exist on
+    /// wasm at all.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) transport_backchannel: Option<TransportBackchannel>,
+    /// The minimum [`LoggingLevel`](crate::types::LoggingLevel) this request's
+    /// client asked to receive, resolved at HTTP ingress (Phase 118.2, CONF-10).
+    ///
+    /// # The problem this field exists to solve
+    ///
+    /// The level and the emitter live at opposite ends of dispatch. The HTTP
+    /// ingress KNOWS the level — a v1 session's stored `logging/setLevel` value,
+    /// or a v2 request's `io.modelcontextprotocol/logLevel` `_meta` key — but it
+    /// never constructs a [`RequestHandlerExtra`](crate::RequestHandlerExtra):
+    /// every construction site lives in `src/server/core.rs` and
+    /// `src/server/mod.rs`. The dispatch roots construct the `extra` but know
+    /// nothing about sessions. `ProtocolContext` is the value ALREADY threaded
+    /// between the two, so it is the carrier that needs no new signature
+    /// anywhere.
+    ///
+    /// Read by `server::core::attach_request_log_sink`, the one unit both native
+    /// dispatch roots call, which applies it via
+    /// `RequestHandlerExtra::with_log_level`. `None` means "nothing resolved",
+    /// and the emitter then falls back to
+    /// [`DEFAULT_LOG_LEVEL`](crate::server::cancellation::DEFAULT_LOG_LEVEL).
+    ///
+    /// # Rejected carrier, recorded so it is not re-proposed
+    ///
+    /// `server::streamable_http_server::peer_channel::attach_session_backchannel`
+    /// looks like the natural place, but it returns EARLY when sessions are off
+    /// or the request is an `initialize`. v2 has no sessions at all, so that
+    /// route structurally cannot carry a v2 level — a carrier that works for one
+    /// era and not the other is exactly the drift this phase exists to remove.
+    ///
+    /// # Isolation
+    ///
+    /// Per-request by construction: `ProtocolContext` is built at ingress and
+    /// moved into THAT request's `RequestHandlerExtra`. It is never stored on the
+    /// shared server, so one caller's level cannot leak into another's
+    /// (T-118.2-06-05).
+    ///
+    /// Crate-private for the same reason as the MRTR fields — internal plumbing —
+    /// and additive on an already-`#[non_exhaustive]` public struct.
+    /// `Option<LoggingLevel>` is a plain `Copy` enum, so unlike
+    /// [`TransportBackchannel`] it removes no auto-trait impl (see the
+    /// `UnwindSafe`/`RefUnwindSafe` note above).
+    pub(crate) resolved_log_level: Option<crate::types::notifications::LoggingLevel>,
 }
 
 impl std::fmt::Debug for ProtocolContext {
     /// Renders the negotiation fields in full and the MRTR fields as PRESENCE
     /// only — see the type-level note for why the derive was unsafe here.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProtocolContext")
+        let mut binding = f.debug_struct("ProtocolContext");
+        let out = binding
             .field("era", &self.era)
             .field("negotiated_version", &self.negotiated_version)
             .field("client_info", &self.client_info)
@@ -146,7 +317,21 @@ impl std::fmt::Debug for ProtocolContext {
             )
             .field("has_verified_continuation", &self.mrtr_verified.is_some())
             .field("mrtr_round", &self.mrtr_round())
-            .finish()
+            // Printed VERBATIM, not as presence: a severity threshold is not
+            // sensitive, and "which level was resolved for this request" is
+            // precisely the fact a developer chasing "my log records went
+            // nowhere" needs (the same reasoning `RequestHandlerExtra`'s
+            // `Debug` applies to its own `log_level`).
+            .field("resolved_log_level", &self.resolved_log_level);
+        // PRESENCE only. A peer handle and a notification sink are live
+        // capability handles, so they follow the same redaction discipline as
+        // the MRTR fields above (T-118.1-10-09).
+        #[cfg(not(target_arch = "wasm32"))]
+        out.field(
+            "has_transport_backchannel",
+            &self.transport_backchannel().is_some(),
+        );
+        out.finish()
     }
 }
 
@@ -162,7 +347,66 @@ impl ProtocolContext {
             client_capabilities: None,
             mrtr: None,
             mrtr_verified: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            transport_backchannel: None,
+            resolved_log_level: None,
         }
+    }
+
+    /// The minimum log level resolved for this request, if the ingress resolved
+    /// one (Phase 118.2, CONF-10).
+    ///
+    /// Returns an OWNED `Option` rather than a borrow because `LoggingLevel` is
+    /// `Copy`. Read by `server::core::attach_request_log_sink` — see the field's
+    /// documentation for why the carrier lives here.
+    // Why `allow(dead_code)`: the sole reader is `server::core::attach_request_log_sink`,
+    // which is `#[cfg(not(target_arch = "wasm32"))]`; on wasm32 this accessor has no caller.
+    #[allow(dead_code)]
+    pub(crate) fn resolved_log_level(&self) -> Option<crate::types::notifications::LoggingLevel> {
+        self.resolved_log_level
+    }
+
+    /// Attach the log level the HTTP ingress resolved for this request.
+    ///
+    /// Called by the transport ingress ONLY, once, after the era gate has run and
+    /// the level source (a v1 session's stored `logging/setLevel` value, or a v2
+    /// request's `_meta` key) is known. Never called by dispatch: dispatch READS
+    /// this value, it does not mint one.
+    // Why `allow(dead_code)`: the WRITER is the HTTP ingress
+    // (`server::streamable_http_server::resolve_request_log_level`, plan 07, which landed it at
+    // both POST ingress paths). That transport is not compiled on wasm32 or on a build without the
+    // HTTP server features, so on those configurations this builder has no caller.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn with_resolved_log_level(
+        mut self,
+        level: crate::types::notifications::LoggingLevel,
+    ) -> Self {
+        self.resolved_log_level = Some(level);
+        self
+    }
+
+    /// The per-request transport back-channel, if the transport supplied one.
+    ///
+    /// Read by `attach_peer` at both dispatch roots, which prefers a
+    /// REQUEST-SCOPED peer over the server's single global `peer_handle` — that
+    /// is what makes a server-to-client request reach the session that issued it
+    /// on a multiplexed transport (T-118.1-10-04).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn transport_backchannel(&self) -> Option<&TransportBackchannel> {
+        self.transport_backchannel.as_ref()
+    }
+
+    /// Attach the transport's per-request server-to-client capability handles.
+    ///
+    /// Called by the STREAMABLE-HTTP transport, once, after the era gate has run
+    /// and the originating session is known. Never called by dispatch: the value
+    /// is transport-owned by construction, so a handler cannot mint itself one.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub(crate) fn with_transport_backchannel(mut self, backchannel: TransportBackchannel) -> Self {
+        self.transport_backchannel = Some(backchannel);
+        self
     }
 
     /// Attach the client's implementation info.
@@ -412,12 +656,24 @@ fn resolve_negotiated_version(
         },
         // Absent signal: fall back to the first v1 version in the accept-list.
         // A v2-only accept-list (no v1 version) never silently serves v1.
-        None => accept_list
-            .iter()
-            .find(|v| super::version::protocol_era(v.as_str()) == Era::V1)
-            .cloned()
+        None => first_v1_version(accept_list)
             .ok_or(ProtocolNegotiationError::UnsupportedVersion(String::new())),
     }
+}
+
+/// The first v1 version in an accept-list, or `None` for a v2-only list.
+///
+/// The absent-signal fallback rule, as ONE unit. [`resolve_negotiated_version`]
+/// applies it when a request carries no era signal; `server::core`'s v1
+/// handshake capability fold applies it when it has to synthesise a context a
+/// non-opted-in server never resolved (Phase 118.1-08, G-9). Both must name the
+/// SAME version, and a shared function is what makes that structural rather
+/// than a comment claiming two copies "mirror each other exactly".
+pub(crate) fn first_v1_version(accept_list: &[ProtocolVersion]) -> Option<ProtocolVersion> {
+    accept_list
+        .iter()
+        .find(|v| super::version::protocol_era(v.as_str()) == Era::V1)
+        .cloned()
 }
 
 /// Deserialize a present RESERVED `_meta` object key into `T`, mapping a

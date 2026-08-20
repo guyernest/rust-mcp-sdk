@@ -475,6 +475,11 @@ pub struct Server {
     uri_to_tool_meta: HashMap<String, serde_json::Map<String, serde_json::Value>>,
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
     resources: Option<Arc<dyn ResourceHandler>>,
+    /// Completion provider backing `completion/complete` (Phase 118.1-04,
+    /// CONF-05). Mirrors `ServerCore`'s field of the same name so BOTH native
+    /// dispatchers consult the same registered seam through the same shared
+    /// unit. `None` still answers the spec shape with an empty `values` array.
+    completions: Option<Arc<dyn crate::types::completable::CompletionProviderTrait>>,
     sampling: Option<Arc<dyn SamplingHandler>>,
     client_capabilities: Arc<RwLock<Option<ClientCapabilities>>>,
     initialized: Arc<RwLock<bool>>,
@@ -1148,13 +1153,13 @@ impl Server {
         let (notification_tx, notification_rx) = mpsc::channel(100);
         self.notification_tx = Some(notification_tx);
 
-        // Hook cancellation manager to send notifications via the same channel
-        if let Some(tx) = &self.notification_tx {
-            let tx = tx.clone();
-            self.cancellation_manager
-                .set_notification_sender(Arc::new(move |notification| {
-                    let _ = tx.try_send(notification);
-                }));
+        // Hook cancellation manager to send notifications via the same channel,
+        // through the SINGLE `notification_tx`-to-sink conversion
+        // ([`Server::notification_tx_sink`]). This site used to carry its own
+        // `try_send` closure — a third copy of the same three lines, and a third
+        // chance to disagree about the send discipline.
+        if let Some(sender) = self.notification_tx_sink() {
+            self.cancellation_manager.set_notification_sender(sender);
         }
 
         // Outbound server-to-client request channel + dispatcher. Drain task
@@ -1202,18 +1207,168 @@ impl Server {
         Self::run_main_loop(actor).await
     }
 
-    /// Attach the cached peer handle to `extra` when a dispatcher is configured.
-    /// No-op on wasm32 and when running outside the `run()` lifecycle.
+    /// Attach a peer handle to `extra`, preferring the REQUEST-SCOPED one.
+    ///
+    /// No-op on wasm32, and — when neither source is present — outside the
+    /// `run()` lifecycle, exactly as before.
+    ///
+    /// # Precedence: the request-scoped transport handle wins (T-118.1-11-04)
+    ///
+    /// Two sources can supply a peer and they are NOT equivalent:
+    ///
+    /// 1. `self.peer_handle` — a SINGLE field on `Server`, set once by
+    ///    [`Server::run`] for the in-process actor loop. One transport, one
+    ///    client, so one handle says everything there is to say.
+    /// 2. the [`TransportBackchannel`](crate::types::protocol::context::TransportBackchannel)
+    ///    riding THIS request's `ProtocolContext`, attached by the
+    ///    `StreamableHTTP` transport at the one site that knows which session the
+    ///    request arrived on.
+    ///
+    /// On a MULTIPLEXED transport (1) cannot express "the session that issued
+    /// this request": a handle set there is shared by every concurrent session,
+    /// so one client's `sampling/createMessage` would be delivered to whichever
+    /// session the global handle happened to be bound to — the T-113-07
+    /// misbinding class. (2) is constructed per request and bound to the
+    /// originating session, so it is always the more specific answer and is
+    /// therefore read FIRST.
+    ///
+    /// The in-process path is untouched: `Server::run` attaches no backchannel,
+    /// so the `self.peer_handle` fallback below is what runs there.
+    ///
+    /// # Ordering
+    ///
+    /// Every dispatch site calls this AFTER its `tool_authorizer` check, so an
+    /// unauthorized caller returns before a handler body ever runs and therefore
+    /// never sees `extra.peer()` — the invariant stated at `src/shared/peer.rs`.
+    ///
+    /// Delegates to [`crate::server::core::attach_request_peer`], the ONE unit
+    /// `ServerCore::attach_peer` also calls — the precedence rule is defined
+    /// once and merely invoked here (twin-site parity).
+    ///
+    /// # It attaches the LOG SINK too (Phase 118.2, CONF-10)
+    ///
+    /// The name is kept for its call-site history, but this is now the single
+    /// post-authorization site where ALL of a request's server-to-client
+    /// capability handles are attached: the peer, the log sink, and the resolved
+    /// log level. They share one site DELIBERATELY — a second method a future
+    /// dispatch site had to remember to call is exactly the drift the shared
+    /// units exist to prevent. The `ServerCore` twin does the same, in the same
+    /// order, through the same two units.
     #[inline]
     fn attach_peer(
         &self,
         extra: crate::server::cancellation::RequestHandlerExtra,
     ) -> crate::server::cancellation::RequestHandlerExtra {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(peer) = self.peer_handle.as_ref() {
-            return extra.with_peer(peer.clone());
+        {
+            let extra = crate::server::core::attach_request_peer(extra, self.peer_handle.as_ref());
+            // The fallback is passed as a THUNK: `attach_request_log_sink` prefers
+            // this request's `TransportBackchannel` sink and never reads it on any
+            // HTTP-served request, so building it eagerly allocated one
+            // `Arc<dyn Fn(..)>` per dispatch only to drop it.
+            crate::server::core::attach_request_log_sink(extra, || self.notification_tx_sink())
         }
-        extra
+        #[cfg(target_arch = "wasm32")]
+        {
+            extra
+        }
+    }
+
+    /// The server-wide notification channel expressed as a sink, or `None` when
+    /// this server has no channel.
+    ///
+    /// The ONE place in the crate that turns `self.notification_tx` into an
+    /// `Arc<dyn Fn(Notification) + Send + Sync>`. Two consumers read it — the
+    /// progress-reporter path via [`Server::progress_notification_sink`] and the
+    /// log-sink path via [`Server::attach_peer`] — and a second `try_send`
+    /// closure would be a second chance to disagree about the send discipline.
+    ///
+    /// Both consumers call it only once they have decided they need it: the
+    /// `Arc` allocation happens on the branch that uses the value, never
+    /// speculatively ahead of the request-scoped sink that outranks it.
+    ///
+    /// `try_send` and a discarded result, deliberately: this is a bounded
+    /// channel, and a full channel must never block or fail a handler. The cost
+    /// is that a saturated channel drops records silently, which is why
+    /// `RequestHandlerExtra::log`'s `Ok(())` is documented as NOT being delivery
+    /// acknowledgement.
+    ///
+    /// It is `None` on every HTTP-served server, because `StreamableHttpServer`
+    /// never calls [`Server::run`] — which is exactly why the request-scoped
+    /// `TransportBackchannel` sink has to win over it.
+    #[inline]
+    fn notification_tx_sink(&self) -> Option<Arc<dyn Fn(Notification) + Send + Sync>> {
+        let tx = self.notification_tx.as_ref()?.clone();
+        Some(Arc::new(move |notification| {
+            let _ = tx.try_send(notification);
+        }))
+    }
+
+    /// The one-way notification sink this request's progress reporter emits
+    /// through, or `None` when the request has no vehicle at all.
+    ///
+    /// # Precedence mirrors [`Server::attach_peer`], for the same reason
+    ///
+    /// 1. the `TransportBackchannel`'s `notification_sink` on THIS request's
+    ///    `ProtocolContext` — session-bound, supplied by the `StreamableHTTP`
+    ///    transport at the one site that knows which session the request arrived
+    ///    on;
+    /// 2. `self.notification_tx`, the server-wide channel assigned by
+    ///    [`Server::run`] and by nothing else.
+    ///
+    /// The second is `None` on every HTTP-served server, because
+    /// `StreamableHttpServer` never calls `Server::run()`. That is precisely why
+    /// `extra.report_progress(..)` was silently inert over HTTP before phase
+    /// 118.1: `RequestHandlerExtra::report_progress` returns `Ok(())` when the
+    /// reporter is `None`, so the gap produced no error anywhere.
+    ///
+    /// The sink is handed through with NO adapter — the transport chose its type
+    /// to be `ServerProgressReporter::new`'s second parameter verbatim.
+    #[inline]
+    fn progress_notification_sink(
+        &self,
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] protocol_context: Option<
+            &crate::types::protocol::ProtocolContext,
+        >,
+    ) -> Option<Arc<dyn Fn(Notification) + Send + Sync>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(sink) = protocol_context
+            .and_then(crate::types::protocol::ProtocolContext::transport_backchannel)
+            .and_then(crate::types::protocol::context::TransportBackchannel::notification_sink)
+        {
+            return Some(Arc::clone(sink));
+        }
+        // The single `notification_tx`-to-sink conversion lives in
+        // `notification_tx_sink`; the log-sink path reads the same one.
+        self.notification_tx_sink()
+    }
+
+    /// Build this request's progress reporter, or `None` when the client asked
+    /// for no progress or the request carries no notification vehicle.
+    ///
+    /// The `progress_token` lookup is unchanged: a request with no
+    /// `params._meta.progressToken` still gets no reporter, so a handler that
+    /// calls `extra.report_progress(..)` anyway stays silent. Only the SENDER
+    /// resolution moved — see [`Server::progress_notification_sink`].
+    ///
+    /// ONE construction site for all three dispatchers (tools, prompts,
+    /// resources): they had three byte-identical copies, and a fourth would have
+    /// been the one that kept reading `self.notification_tx` alone.
+    #[inline]
+    fn progress_reporter_for(
+        &self,
+        meta: Option<&crate::types::protocol::RequestMeta>,
+        protocol_context: Option<&crate::types::protocol::ProtocolContext>,
+    ) -> Option<Arc<dyn crate::server::progress::ProgressReporter>> {
+        // DELIBERATE, and NOT to be "unified" with the log path: Phase 118.2
+        // D-07 removed the progress-token gate from the LOG sink only. Progress
+        // stays opt-in — a client that sent no `progressToken` has nothing to
+        // correlate progress notifications with — while `notifications/message`
+        // is unconditional. See `core::attach_request_log_sink`.
+        let token = meta.and_then(|meta| meta.progress_token.as_ref())?;
+        let sink = self.progress_notification_sink(protocol_context)?;
+        let reporter = crate::server::progress::ServerProgressReporter::new(token.clone(), sink);
+        Some(Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>)
     }
 
     /// Spawn the outgoing-notification forwarder.
@@ -1506,7 +1661,15 @@ impl Server {
     ) -> JSONRPCResponse {
         crate::server::core::build_discover_response(
             id,
-            &self.capabilities,
+            // The SINGLE accept-list source (G-7): the same slice
+            // `negotiation_error_to_gate_reject` puts in an
+            // `UNSUPPORTED_PROTOCOL_VERSION` rejection's `error.data.supported`
+            // becomes the result's `supportedVersions`. There is no second list
+            // to drift from.
+            crate::server::core::DiscoverSource::new(
+                &self.capabilities,
+                self.supported_protocol_versions(),
+            ),
             &self.info,
             protocol_context,
         )
@@ -1668,6 +1831,22 @@ impl Server {
         // parity rule this file follows everywhere else.
         let cacheable = crate::server::core::request_is_cacheable(&request);
 
+        // G-9 / CONF-08 (Phase 118.1-08): fold the v1 `initialize` handshake's
+        // advertised capabilities into the context threaded into DISPATCH — the
+        // SAME shared unit `ServerCore` calls, never a second copy (twin-site
+        // parity). The fold owns the lock, so the guard that keeps v2 traffic
+        // off it (T-118.1-08-02) lives there too rather than being re-spelled
+        // here; the read guard drops inside, before the `Initialize` arm below
+        // takes the WRITE lock a few lines down. The EGRESS keeps the UNFOLDED
+        // `protocol_context`: the fold is a handler-visibility concern, not a
+        // wire-shape one.
+        let dispatch_context = crate::server::core::fold_v1_handshake_capabilities(
+            protocol_context.clone(),
+            &self.client_capabilities,
+            &self.supported_protocol_versions,
+        )
+        .await;
+
         // The SECOND envelope claimant (Phase 114 plan 11), twin of the
         // `ServerCore` site: the `tasks/*` routes and the `tools/call` create
         // path state their own `resultType` and reserved-field ownership from the
@@ -1718,7 +1897,7 @@ impl Server {
                     id,
                     *boxed_req,
                     auth_context,
-                    protocol_context.clone(),
+                    dispatch_context,
                     &mut dispatch_claim,
                 ))
                 .await
@@ -1837,6 +2016,30 @@ impl Server {
             return response;
         }
 
+        // ADAPTER (b) — `logging/setLevel`, era-branched (Phase 118.2-08, D-13).
+        //
+        // Intercepted HERE, above `process_client_request`, for the same
+        // structural reason ADAPTER (a) above intercepts `tasks/*`: this
+        // method's v2 answer is a JSON-RPC ERROR with a SPECIFIC code, and
+        // `Self::create_response` flattens EVERY `Err` returned by
+        // `process_client_request` to `-32603 INTERNAL_ERROR`. A `-32601`
+        // therefore cannot travel through that function's
+        // `Result<serde_json::Value>` return type at all — the same
+        // `JSONRPCResponse -> Result<Value>` round-trip the `tasks/*` adapter
+        // exists to avoid. Making `create_response` code-aware instead would
+        // silently change the wire code of every other handler that returns a
+        // `Error::Protocol`, which is not this plan's change to make.
+        //
+        // The ANSWER itself is not computed here: it comes from the single
+        // shared unit in `server/core.rs`, the very same one `ServerCore`'s
+        // dispatch arm calls. One era branch, two roots — that is D-13.
+        if matches!(request, ClientRequest::SetLoggingLevel { .. }) {
+            return crate::server::core::set_logging_level_response(
+                id,
+                protocol_context.as_ref().map(|ctx| ctx.era),
+            );
+        }
+
         let result = self
             .process_client_request(
                 id.clone(),
@@ -1884,7 +2087,7 @@ impl Server {
                     .await
             },
             ClientRequest::ListResources(req) => {
-                self.handle_list_resources(request_id, req, auth_context)
+                self.handle_list_resources(request_id, req, auth_context, protocol_context)
                     .await
             },
             ClientRequest::ReadResource(req) => {
@@ -1894,12 +2097,60 @@ impl Server {
             ClientRequest::ListResourceTemplates(req) => {
                 Self::handle_list_resource_templates(self, req)
             },
-            ClientRequest::Subscribe(_)
-            | ClientRequest::Unsubscribe(_)
-            | ClientRequest::Complete(_)
-            | ClientRequest::SetLoggingLevel { level: _ }
-            | ClientRequest::Ping => Ok(serde_json::json!({})),
-            ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, *req).await,
+            // `completion/complete` (Phase 118.1-04, CONF-05 / G-4) — its OWN
+            // arm, no longer inside the catch-all below. The shared unit is
+            // DEFINED in `server/core.rs` and merely CALLED here, per the
+            // twin-site parity rule stated at `src/server/core.rs`'s MRTR
+            // section: `mod.rs` calls these helpers, it never defines its own.
+            ClientRequest::Complete(req) => {
+                crate::server::core::complete_completion(self.completions.as_ref(), &req)
+                    .await
+                    .and_then(|result| serde_json::to_value(result).map_err(Into::into))
+            },
+            // `logging/setLevel` (Phase 118.2-08, CONF-10 / D-13) — its OWN
+            // arm, no longer inside the residual below, and answering from the
+            // SAME shared unit in `server/core.rs` that `ServerCore`'s dispatch
+            // arm calls.
+            //
+            // Reached only when a caller drives this function DIRECTLY. On the
+            // production path `handle_client_request`'s ADAPTER (b) has already
+            // answered — it must, because the v2 half of the era branch is a
+            // `-32601` and `Self::create_response` flattens every `Err` from
+            // this function to `-32603`. The v1 half is the whole of what this
+            // arm can express, and it is spelled by calling the shared unit
+            // rather than by re-typing `json!({})`, so a future change to the
+            // measured shape (Pitfall 8) lands in exactly one place.
+            ClientRequest::SetLoggingLevel { level: _ } => {
+                Ok(crate::server::core::set_logging_level_v1_result())
+            },
+            // RESIDUAL, recorded rather than silently unified (Phase 118.1-04,
+            // RESEARCH Open Question 4): these THREE methods STILL diverge
+            // between the two native dispatchers. Here they answer
+            // `json!({})`; `ServerCore`'s `_ =>` arm
+            // (`src/server/core.rs`, the arm immediately after the
+            // `ClientRequest::SetLoggingLevel` one) answers `-32601 Method not
+            // supported`. Only this dispatcher is on the HTTP path, so only
+            // this side is measured by the official conformance suite. G-5
+            // (`resources/subscribe`, `resources/unsubscribe`,
+            // `logging/setLevel`, `ping` retirement on v2) is the requirement
+            // that owns them; unifying them here would smuggle a behaviour
+            // change in behind a conformance fix.
+            //
+            // HISTORY — a residual is recorded, never silently unified, and
+            // never silently SHRUNK either: `logging/setLevel` was the FOURTH
+            // method on this arm and left it in Phase 118.2-08 under D-13,
+            // because the official suite measures that method and the two roots
+            // disagreed about it. `ping` in particular must stay here: it
+            // already carries a recorded 118.1 v2 behaviour change (HTTP 404 /
+            // `-32601` at the transport gate) and a second, differently-shaped
+            // retirement at this layer would be a new divergence, not a fix.
+            ClientRequest::Subscribe(_) | ClientRequest::Unsubscribe(_) | ClientRequest::Ping => {
+                Ok(serde_json::json!({}))
+            },
+            ClientRequest::CreateMessage(req) => {
+                self.handle_create_message(request_id, *req, protocol_context)
+                    .await
+            },
             // Note: Elicitation responses are now handled as the response to
             // ServerRequest::ElicitationCreate in the JSON-RPC response flow,
             // not as a separate client request variant.
@@ -2036,24 +2287,13 @@ impl Server {
             }
         }
 
-        // Create progress reporter if progress token is provided
+        // The request-scoped progress reporter — the channel
+        // `extra.report_progress(..)` actually reads. Resolved BEFORE
+        // `protocol_context` is moved into `extra` below, because the transport's
+        // session-bound sink rides on it (Phase 118.1 plan 11).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let progress_reporter = req
-            ._meta
-            .as_ref()
-            .and_then(|meta| meta.progress_token.as_ref())
-            .and_then(|token| {
-                self.notification_tx.as_ref().map(|tx| {
-                    let tx = tx.clone();
-                    let reporter = crate::server::progress::ServerProgressReporter::new(
-                        token.clone(),
-                        Arc::new(move |notification| {
-                            let _ = tx.try_send(notification);
-                        }),
-                    );
-                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
-                })
-            });
+        let progress_reporter =
+            self.progress_reporter_for(req._meta.as_ref(), protocol_context.as_ref());
 
         // Clone the validated auth context for the create-path owner resolution
         // (the original is moved into `extra` below). This guarantees the
@@ -2184,7 +2424,26 @@ impl Server {
             // create-path gate, text-wrap, and widget enrichment are ALL bypassed
             // (mirrors the `ToolRejected` verbatim early-return below, which also
             // returns after the unconditional token cleanup).
+            //
+            // D-06 (Phase 118.1) RECLASSIFIES exactly one clause of D-04a: the
+            // bypass covers the response PIPELINE, not the handler's own
+            // `extra.set_result_meta(..)`. Those keys come from the same handler
+            // that authored this envelope, at the same trust level, so draining
+            // them here merges a handler's two `_meta` sources rather than
+            // reintroducing server-side rewriting. Handler-key-wins precedence,
+            // never a whole-map replace. Twin of the `ServerCore` arm.
             task_dispatch::DispatchOutput::Verbatim(call_result) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let call_result = {
+                    let mut call_result = call_result;
+                    if let Some(handler_meta) = result_meta_handle.take_result_meta() {
+                        crate::server::cancellation::merge_result_meta(
+                            &mut call_result,
+                            handler_meta,
+                        );
+                    }
+                    call_result
+                };
                 return Ok(serde_json::to_value(call_result)?);
             },
             task_dispatch::DispatchOutput::Middleware(result) => match result {
@@ -2299,9 +2558,13 @@ impl Server {
 
         // D-03.3: drain any handler-set result `_meta` (via extra.set_result_meta)
         // and merge it onto the Payload-built envelope with handler-key-wins
-        // precedence (unrelated widget/native keys preserved). Payload path ONLY —
-        // the verbatim `ToolOutput::Result` arm above returns earlier and owns its
-        // own `_meta`, so it never reaches here.
+        // precedence (unrelated widget/native keys preserved). The verbatim
+        // `ToolOutput::Result` arm above returns earlier and still owns its
+        // content, its redaction and its bypass of the response pipeline — but
+        // since D-06 (Phase 118.1) it performs this SAME drain against its own
+        // envelope before returning, so `set_result_meta` is no longer silently
+        // dropped there. By the time control reaches this line the slot has
+        // therefore only ever been filled by a Payload-path handler.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(handler_meta) = result_meta_handle.take_result_meta() {
             crate::server::cancellation::merge_result_meta(&mut call_result, handler_meta);
@@ -2352,24 +2615,12 @@ impl Server {
             .create_token(request_id_str.clone())
             .await;
 
-        // Create progress reporter if progress token is provided
+        // The request-scoped progress reporter — the SAME resolution the
+        // tools/call dispatcher makes, so a prompt handler over v1 HTTP emits on
+        // the session stream too (Phase 118.1 plan 11).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let progress_reporter = req
-            ._meta
-            .as_ref()
-            .and_then(|meta| meta.progress_token.as_ref())
-            .and_then(|token| {
-                self.notification_tx.as_ref().map(|tx| {
-                    let tx = tx.clone();
-                    let reporter = crate::server::progress::ServerProgressReporter::new(
-                        token.clone(),
-                        Arc::new(move |notification| {
-                            let _ = tx.try_send(notification);
-                        }),
-                    );
-                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
-                })
-            });
+        let progress_reporter =
+            self.progress_reporter_for(req._meta.as_ref(), protocol_context.as_ref());
 
         // Propagate the request `_meta` (raw JSON) and the once-at-ingress
         // resolved protocol context so prompt handlers read
@@ -2411,6 +2662,10 @@ impl Server {
         request_id: RequestId,
         req: ListResourcesRequest,
         auth_context: Option<auth::AuthContext>,
+        // THREADED, not resolved here (Phase 118.1-08, G-9) — the twin of the
+        // `ServerCore` site. `ListResourcesRequest` carries no `_meta`, so the
+        // context can only arrive from the caller.
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         if let Some(handler) = &self.resources {
             let request_id_str = request_id.to_string();
@@ -2423,7 +2678,8 @@ impl Server {
                     request_id_str.clone(),
                     cancellation_token,
                 )
-                .with_auth_context(auth_context),
+                .with_auth_context(auth_context)
+                .with_protocol_context(protocol_context),
             );
             let mut result = match handler.list(req.cursor, extra).await {
                 Ok(v) => {
@@ -2477,24 +2733,12 @@ impl Server {
             .create_token(request_id_str.clone())
             .await;
 
-        // Create progress reporter if progress token is provided
+        // The request-scoped progress reporter — the SAME resolution the
+        // tools/call dispatcher makes, so a resource read over v1 HTTP emits on
+        // the session stream too (Phase 118.1 plan 11).
         #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
-        let progress_reporter = req
-            ._meta
-            .as_ref()
-            .and_then(|meta| meta.progress_token.as_ref())
-            .and_then(|token| {
-                self.notification_tx.as_ref().map(|tx| {
-                    let tx = tx.clone();
-                    let reporter = crate::server::progress::ServerProgressReporter::new(
-                        token.clone(),
-                        Arc::new(move |notification| {
-                            let _ = tx.try_send(notification);
-                        }),
-                    );
-                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
-                })
-            });
+        let progress_reporter =
+            self.progress_reporter_for(req._meta.as_ref(), protocol_context.as_ref());
 
         // Propagate the request `_meta` (raw JSON) and the once-at-ingress
         // resolved protocol context so resource handlers read
@@ -2555,6 +2799,14 @@ impl Server {
         &self,
         request_id: RequestId,
         req: crate::types::CreateMessageParams,
+        // THREADED, not resolved here (Phase 118.1-08, G-9). This arm serves an
+        // INBOUND `sampling/createMessage` — a `ClientRequest` variant, so a
+        // client handshake absolutely does have meaning here and the site is
+        // THREAD-THEN-FOLD, not a NO-OP. (The server-to-client direction is a
+        // `ServerRequest` handled by the peer dispatcher, which builds no
+        // `RequestHandlerExtra` at all.) `CreateMessageParams` carries no
+        // `_meta`, so the context can only arrive from the caller.
+        protocol_context: Option<crate::types::protocol::ProtocolContext>,
     ) -> Result<Value> {
         let handler = self
             .sampling
@@ -2566,10 +2818,13 @@ impl Server {
             .cancellation_manager
             .create_token(request_id_str.clone())
             .await;
-        let extra = self.attach_peer(crate::server::cancellation::RequestHandlerExtra::new(
-            request_id_str.clone(),
-            cancellation_token,
-        ));
+        let extra = self.attach_peer(
+            crate::server::cancellation::RequestHandlerExtra::new(
+                request_id_str.clone(),
+                cancellation_token,
+            )
+            .with_protocol_context(protocol_context),
+        );
         let result = match handler.create_message(req, extra).await {
             Ok(v) => {
                 self.cancellation_manager
@@ -2865,6 +3120,11 @@ pub struct ServerBuilder {
     tools: HashMap<String, Arc<dyn ToolHandler>>,
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
     resources: Option<Arc<dyn ResourceHandler>>,
+    /// Completion provider backing `completion/complete` (Phase 118.1-04,
+    /// CONF-05), set via [`Self::completions`]. The twin of
+    /// `ServerCoreBuilder`'s slot of the same name: a provider registered
+    /// through EITHER builder family reaches its own dispatcher.
+    completions: Option<Arc<dyn crate::types::completable::CompletionProviderTrait>>,
     sampling: Option<Arc<dyn SamplingHandler>>,
     /// Cancellation manager for request cancellation
     cancellation_manager: cancellation::CancellationManager,
@@ -2980,6 +3240,7 @@ impl ServerBuilder {
             tools: HashMap::new(),
             prompts: HashMap::new(),
             resources: None,
+            completions: None,
             sampling: None,
             cancellation_manager: cancellation::CancellationManager::new(),
             roots_manager: roots::RootsManager::new(),
@@ -4142,6 +4403,72 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the completion provider backing `completion/complete`.
+    ///
+    /// The twin of
+    /// [`ServerCoreBuilder::completions`](crate::server::builder::ServerCoreBuilder::completions) —
+    /// same name, same signature, same single-provider shape — so a provider
+    /// registered through EITHER builder family reaches its own dispatcher. A
+    /// slot on one family with the dispatch arm on the other's server would be
+    /// an unreachable seam that still answered the spec shape, which is exactly
+    /// the false green this pair exists to prevent.
+    ///
+    /// A SINGLE, server-wide provider (the [`Self::resources`] shape, not the
+    /// name-keyed [`Self::prompt`] shape): the spec routes every
+    /// `completion/complete` to one seam and passes the `ref` as data. The
+    /// reference reaches the provider through
+    /// [`CompletionRequest::context`](crate::types::completable::CompletionRequest::context)
+    /// under the key `ref/prompt` or `ref/resource`.
+    ///
+    /// Registering a provider auto-advertises `capabilities.completions`.
+    /// Not registering one is NOT an error: `completion/complete` still answers
+    /// `{"completion": {"values": []}}`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::Server;
+    /// use pmcp::types::completable::StaticCompletionProvider;
+    ///
+    /// let server = Server::builder()
+    ///     .name("completion-server")
+    ///     .version("1.0.0")
+    ///     .completions(StaticCompletionProvider::from_strings(vec![
+    ///         "alpha".to_string(),
+    ///         "beta".to_string(),
+    ///     ]))
+    ///     .build()?;
+    /// # Ok::<(), pmcp::Error>(())
+    /// ```
+    #[must_use]
+    pub fn completions(
+        self,
+        provider: impl crate::types::completable::CompletionProviderTrait + 'static,
+    ) -> Self {
+        self.completions_arc(Arc::new(provider))
+    }
+
+    /// Set the completion provider with an Arc.
+    ///
+    /// This variant lets the caller share the provider `Arc` with something
+    /// outside the builder. Behavior is otherwise identical to
+    /// [`Self::completions`].
+    #[must_use]
+    pub fn completions_arc(
+        mut self,
+        provider: Arc<dyn crate::types::completable::CompletionProviderTrait>,
+    ) -> Self {
+        self.completions = Some(provider);
+
+        // Update capabilities to include completions.
+        // Use Some(default) instead of None to ensure the field serializes.
+        if self.capabilities.completions.is_none() {
+            self.capabilities.completions = Some(crate::types::CompletionCapabilities::default());
+        }
+
+        self
+    }
+
     /// Register a single SEP-2640 Agent Skill.
     ///
     /// Convenience over [`Self::skills`] for the single-skill case. The skill
@@ -5109,6 +5436,7 @@ impl ServerBuilder {
             uri_to_tool_meta,
             prompts: self.prompts,
             resources: final_resources,
+            completions: self.completions,
             sampling: self.sampling,
             client_capabilities: Arc::new(RwLock::new(None)),
             initialized: Arc::new(RwLock::new(false)),
@@ -6941,5 +7269,451 @@ mod tool_output_tests {
             ),
             other => panic!("expected ToolOutput::Payload, got {other:?}"),
         }
+    }
+}
+
+// ===========================================================================
+// `attach_peer` precedence and authorization ordering.
+//
+// Phase 118.1 plan 11. Two claims, both of which need crate-internal access —
+// `attach_peer` is private and `Server::peer_handle` is only ever set by
+// `Server::run()` — so they live here rather than in an integration test:
+//
+//   * T-118.1-11-04: when BOTH a global `Server::peer_handle` and a
+//     request-scoped `TransportBackchannel` peer are configured, the
+//     request-scoped one wins. A global handle cannot express WHICH session
+//     issued the request, so on a multiplexed transport it is the wrong answer.
+//   * `src/shared/peer.rs`'s authorization invariant: tool-level authz runs
+//     BEFORE the peer is wired, so a refused caller never reaches a handler body
+//     and therefore never sees `extra.peer()`.
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod peer_precedence_tests {
+    use super::*;
+    use crate::server::auth::AuthContext;
+    use crate::shared::peer::PeerHandle;
+    use crate::types::protocol::context::TransportBackchannel;
+    use crate::types::protocol::{Era, ProtocolContext, ProtocolVersion};
+    use crate::types::roots::{ListRootsResult, Root};
+    use crate::types::sampling::{CreateMessageParams, CreateMessageResult};
+    use crate::types::ProgressToken;
+    use crate::RequestHandlerExtra;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A peer that reports WHICH source supplied it, through the one method
+    /// with an observable, source-specific answer.
+    struct NamedPeer(&'static str);
+
+    #[async_trait]
+    impl PeerHandle for NamedPeer {
+        async fn sample(&self, _params: CreateMessageParams) -> Result<CreateMessageResult> {
+            Err(Error::protocol(
+                crate::ErrorCode::METHOD_NOT_FOUND,
+                "not the method under test",
+            ))
+        }
+
+        async fn list_roots(&self) -> Result<ListRootsResult> {
+            Ok(ListRootsResult {
+                roots: vec![Root {
+                    uri: format!("file:///{}", self.0),
+                    name: Some(self.0.to_string()),
+                }],
+            })
+        }
+
+        async fn progress_notify(
+            &self,
+            _token: ProgressToken,
+            _progress: f64,
+            _total: Option<f64>,
+            _message: Option<String>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The name the attached peer answers with, or `None` if none was attached.
+    async fn attached_peer_name(
+        extra: &crate::server::cancellation::RequestHandlerExtra,
+    ) -> Option<String> {
+        let peer = extra.peer()?;
+        let roots = peer.list_roots().await.expect("the fixture peer answers");
+        roots.roots.first().and_then(|r| r.name.clone())
+    }
+
+    /// A `ProtocolContext` carrying a request-scoped peer named `name`.
+    fn context_with_peer(name: &'static str) -> ProtocolContext {
+        let peer: Arc<dyn PeerHandle> = Arc::new(NamedPeer(name));
+        ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+        )
+        .with_transport_backchannel(TransportBackchannel::new().with_peer(peer))
+    }
+
+    fn bare_server() -> Server {
+        Server::builder()
+            .name("attach-peer-precedence")
+            .version("1.0.0")
+            .build()
+            .expect("server builds")
+    }
+
+    fn extra_with_context(
+        context: Option<ProtocolContext>,
+    ) -> crate::server::cancellation::RequestHandlerExtra {
+        crate::server::cancellation::RequestHandlerExtra::new(
+            "req-attach-peer".to_string(),
+            crate::server::cancellation::RequestHandlerExtra::default().cancellation_token,
+        )
+        .with_protocol_context(context)
+    }
+
+    /// THE precedence claim (T-118.1-11-04). Both sources configured at once.
+    #[tokio::test]
+    async fn the_request_scoped_peer_wins_over_the_global_peer_handle() {
+        let mut server = bare_server();
+        server.peer_handle = Some(Arc::new(NamedPeer("global")));
+
+        let extra = server.attach_peer(extra_with_context(Some(context_with_peer(
+            "request-scoped",
+        ))));
+
+        assert_eq!(
+            attached_peer_name(&extra).await.as_deref(),
+            Some("request-scoped"),
+            "a request-scoped transport handle must win: the global `peer_handle` is a SINGLE \
+             field and cannot express which session issued this request (T-118.1-11-04)"
+        );
+    }
+
+    /// The fallback is untouched: the in-process `Server::run` path attaches no
+    /// backchannel, so it must still see the global handle.
+    #[tokio::test]
+    async fn the_global_handle_still_applies_when_no_backchannel_rides_the_context() {
+        let mut server = bare_server();
+        server.peer_handle = Some(Arc::new(NamedPeer("global")));
+
+        let with_no_context = server.attach_peer(extra_with_context(None));
+        assert_eq!(
+            attached_peer_name(&with_no_context).await.as_deref(),
+            Some("global"),
+            "with no protocol context at all the global handle must still apply"
+        );
+
+        let bare_context = ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+        );
+        let with_peerless_context = server.attach_peer(extra_with_context(Some(bare_context)));
+        assert_eq!(
+            attached_peer_name(&with_peerless_context).await.as_deref(),
+            Some("global"),
+            "a context with no backchannel must fall through to the global handle"
+        );
+    }
+
+    /// Neither source configured: still a no-op, exactly as before.
+    #[tokio::test]
+    async fn attach_peer_is_a_no_op_when_neither_source_is_configured() {
+        let server = bare_server();
+        let extra = server.attach_peer(extra_with_context(None));
+        assert!(
+            extra.peer().is_none(),
+            "with no global handle and no backchannel, `extra.peer()` stays None"
+        );
+    }
+
+    /// A request-scoped peer applies even with NO global handle — the
+    /// `StreamableHTTP` case, where `Server::run()` never ran.
+    #[tokio::test]
+    async fn the_request_scoped_peer_applies_with_no_global_handle_at_all() {
+        let server = bare_server();
+        let extra = server.attach_peer(extra_with_context(Some(context_with_peer("transport"))));
+        assert_eq!(
+            attached_peer_name(&extra).await.as_deref(),
+            Some("transport"),
+            "the HTTP transport never calls `Server::run()`, so the request-scoped handle is \
+             the ONLY source there"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Authorization ordering.
+    // -----------------------------------------------------------------------
+
+    /// Records whether its body ever ran, and reports the peer it saw.
+    struct EntryRecordingTool(Arc<AtomicBool>);
+
+    #[async_trait]
+    impl ToolHandler for EntryRecordingTool {
+        async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> Result<Value> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(serde_json::json!({ "saw_peer": extra.peer().is_some() }))
+        }
+    }
+
+    /// Refuses every tool.
+    struct DenyAll;
+
+    #[async_trait]
+    impl crate::server::auth::ToolAuthorizer for DenyAll {
+        async fn can_access_tool(&self, _auth: &AuthContext, _tool: &str) -> Result<bool> {
+            Ok(false)
+        }
+
+        async fn required_scopes_for_tool(&self, _tool_name: &str) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// An unauthorized caller never reaches the handler BODY, so it can never
+    /// observe `extra.peer()` — regardless of which peer source is configured.
+    ///
+    /// The ordering this measures is structural: `handle_call_tool` runs the
+    /// `tool_authorizer` check (`src/server/mod.rs`, immediately after the
+    /// auth-context resolution) and only afterwards calls `attach_peer`.
+    #[tokio::test]
+    async fn an_unauthorized_caller_never_reaches_the_handler_body() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let mut server = Server::builder()
+            .name("authz-before-peer")
+            .version("1.0.0")
+            .tool("guarded", EntryRecordingTool(entered.clone()))
+            .tool_authorizer(DenyAll)
+            .build()
+            .expect("server builds");
+        // BOTH peer sources configured, so a leak through either would show up.
+        server.peer_handle = Some(Arc::new(NamedPeer("global")));
+
+        let mut claim = crate::server::core::DispatchEnvelopeClaim::default();
+        let result = server
+            .handle_call_tool(
+                RequestId::from(1i64),
+                CallToolRequest {
+                    name: "guarded".to_string(),
+                    arguments: serde_json::json!({}),
+                    task: None,
+                    _meta: None,
+                },
+                Some(AuthContext::new("someone")),
+                Some(context_with_peer("request-scoped")),
+                &mut claim,
+            )
+            .await;
+
+        assert!(result.is_err(), "a denied tool call must return an error");
+        assert!(
+            !entered.load(Ordering::SeqCst),
+            "the handler body must never run for an unauthorized caller — authz runs BEFORE \
+             `attach_peer`, so a refused caller never sees `extra.peer()`"
+        );
+    }
+}
+
+// ===========================================================================
+// `attach_request_log_sink` at the `Server` root — the TWIN of
+// `core_log_sink_tests` in `src/server/core.rs` (Phase 118.2 plan 06, CONF-10 /
+// D-07).
+//
+// Same crate-internal-access reason as `peer_precedence_tests` above:
+// `attach_peer`, `notification_tx_sink`, `progress_reporter_for` and
+// `Server::notification_tx` are all private, and `TransportBackchannel` /
+// `ProtocolContext::with_resolved_log_level` are `pub(crate)`. An integration
+// test can construct none of them.
+//
+// The claims measured here that the `ServerCore` side CANNOT measure:
+//
+//   * the `notification_tx`-derived fallback exists on this root and nowhere
+//     else, and the request-scoped sink still beats it;
+//   * D-07: the progress-token gate moved OFF the log sink and STAYED on the
+//     progress reporter. One request, both answers, in one test.
+// ===========================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod log_sink_precedence_tests {
+    use super::*;
+    use crate::types::protocol::context::TransportBackchannel;
+    use crate::types::protocol::{Era, ProtocolContext, ProtocolVersion};
+    use crate::types::LoggingLevel;
+    use std::sync::Mutex;
+
+    /// A sink that records every notification handed to it.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<Notification>>>);
+
+    impl Capture {
+        fn sink(&self) -> Arc<dyn Fn(Notification) + Send + Sync> {
+            let slot = Arc::clone(&self.0);
+            Arc::new(move |notification| {
+                slot.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(notification);
+            })
+        }
+
+        fn len(&self) -> usize {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len()
+        }
+    }
+
+    fn bare_context() -> ProtocolContext {
+        ProtocolContext::new(
+            Era::V1,
+            ProtocolVersion(crate::types::protocol::LATEST_PROTOCOL_VERSION.to_string()),
+        )
+    }
+
+    fn context_with_sink(capture: &Capture) -> ProtocolContext {
+        bare_context().with_transport_backchannel(
+            TransportBackchannel::new().with_notification_sink(capture.sink()),
+        )
+    }
+
+    fn extra_with_context(
+        context: Option<ProtocolContext>,
+    ) -> crate::server::cancellation::RequestHandlerExtra {
+        crate::server::cancellation::RequestHandlerExtra::new(
+            "req-attach-log-sink".to_string(),
+            crate::server::cancellation::RequestHandlerExtra::default().cancellation_token,
+        )
+        .with_protocol_context(context)
+    }
+
+    fn bare_server() -> Server {
+        Server::builder()
+            .name("attach-log-sink-precedence")
+            .version("1.0.0")
+            .build()
+            .expect("server builds")
+    }
+
+    /// The ROOT claim on this side: `Server::attach_peer` wires the log sink from
+    /// the server-wide `notification_tx` when the request carries no
+    /// back-channel of its own — the in-process `Server::run` path.
+    #[tokio::test]
+    async fn the_server_root_attaches_its_notification_tx_derived_fallback_log_sink() {
+        let mut server = bare_server();
+        let (tx, mut rx) = mpsc::channel(4);
+        server.notification_tx = Some(tx);
+
+        let extra = server.attach_peer(extra_with_context(Some(bare_context())));
+        extra
+            .log(
+                LoggingLevel::Warning,
+                "through the notification_tx fallback",
+            )
+            .expect("the emitter always returns Ok");
+
+        let received = rx.try_recv().expect("the fallback sink must deliver");
+        match received {
+            Notification::Server(crate::types::ServerNotification::LogMessage(params)) => {
+                assert_eq!(params.message, "through the notification_tx fallback");
+                assert_eq!(params.level, LoggingLevel::Warning);
+            },
+            other => panic!("expected a LogMessage notification, got {other:?}"),
+        }
+    }
+
+    /// The precedence rule measured on THIS root too, with both sources live at
+    /// once — the `ServerCore` twin cannot run this, because it has no
+    /// `notification_tx` to lose to.
+    #[tokio::test]
+    async fn the_request_scoped_sink_wins_over_the_notification_tx_fallback() {
+        let mut server = bare_server();
+        let (tx, mut rx) = mpsc::channel(4);
+        server.notification_tx = Some(tx);
+        let request_scoped = Capture::default();
+
+        let extra =
+            server.attach_peer(extra_with_context(Some(context_with_sink(&request_scoped))));
+        extra
+            .log(LoggingLevel::Warning, "which sink received me?")
+            .expect("the emitter always returns Ok");
+
+        assert_eq!(
+            request_scoped.len(),
+            1,
+            "the session-bound transport sink must win at the `Server` root exactly as it does at \
+             the `ServerCore` root (T-118.2-06-02/03)"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "the server-wide channel must NOT also receive one session's record"
+        );
+    }
+
+    /// D-07, stated as a test: ONE request with NO `progressToken` gets a LIVE
+    /// log sink and a `None` progress reporter.
+    ///
+    /// The gate moved off the sink and stayed on the reporter. Unifying the two
+    /// would either silence logs for every client that never asked for progress,
+    /// or make progress notifications unconditional — a client that sent no token
+    /// has nothing to correlate them with (T-118.2-06-04).
+    #[tokio::test]
+    async fn the_progress_token_gate_still_applies_to_progress_only() {
+        let mut server = bare_server();
+        let (tx, _rx) = mpsc::channel(4);
+        server.notification_tx = Some(tx);
+        let capture = Capture::default();
+        let context = context_with_sink(&capture);
+
+        assert!(
+            server.progress_reporter_for(None, Some(&context)).is_none(),
+            "no `params._meta.progressToken` must still mean no progress reporter"
+        );
+
+        let extra = server.attach_peer(extra_with_context(Some(context)));
+        assert!(
+            extra.log_sink.is_some(),
+            "the log sink is UNGATED by the progress token — a client that never asked for \
+             progress must still receive `notifications/message` (D-07)"
+        );
+        extra
+            .log(LoggingLevel::Info, "no progress token on this request")
+            .expect("the emitter always returns Ok");
+        assert_eq!(
+            capture.len(),
+            1,
+            "the record must reach the client even though this request has no progress reporter"
+        );
+    }
+
+    /// There is exactly ONE `notification_tx`-to-sink conversion, and both
+    /// consumers read it. Measured behaviourally rather than by grep: the
+    /// progress path and the log path must produce sinks that reach the SAME
+    /// channel with the SAME non-blocking discipline.
+    #[tokio::test]
+    async fn the_progress_and_log_paths_share_one_notification_tx_sink() {
+        let mut server = bare_server();
+        let (tx, mut rx) = mpsc::channel(4);
+        server.notification_tx = Some(tx);
+
+        let via_progress = server
+            .progress_notification_sink(None)
+            .expect("a server with a notification_tx has a sink");
+        let via_log = server
+            .notification_tx_sink()
+            .expect("the same server has the same sink");
+
+        via_progress(Notification::Server(
+            crate::types::ServerNotification::LogMessage(crate::types::LogMessageParams::new(
+                LoggingLevel::Info,
+                "via progress".to_string(),
+            )),
+        ));
+        via_log(Notification::Server(
+            crate::types::ServerNotification::LogMessage(crate::types::LogMessageParams::new(
+                LoggingLevel::Info,
+                "via log".to_string(),
+            )),
+        ));
+
+        assert!(rx.try_recv().is_ok(), "the progress-derived sink delivers");
+        assert!(rx.try_recv().is_ok(), "the log-derived sink delivers too");
     }
 }

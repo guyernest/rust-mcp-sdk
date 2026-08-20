@@ -2,16 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: MCP Spec 2026-07-28
-status: executing
-stopped_at: Phase 118.1 context gathered
-last_updated: "2026-08-10T17:15:44.616Z"
-last_activity: 2026-08-10 -- Phase 118.1 execution started
+current_phase: 118.2
+current_phase_name: The v1 client SSE transport and the `notifications/message` emitter
+status: planning
+stopped_at: Completed 119-01-PLAN.md
+last_updated: "2026-08-19T15:52:35.046Z"
+last_activity: 2026-08-19
+last_activity_desc: Phase 118.2 execution started
 progress:
-  total_phases: 73
-  completed_phases: 64
-  total_plans: 413
-  completed_plans: 399
-  percent: 88
+  total_phases: 11
+  completed_phases: 11
+  total_plans: 172
+  completed_plans: 172
+  percent: 100
 ---
 
 # Project State
@@ -21,15 +24,61 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-22) · .planning/ROADMAP.md (v2.5 milestone, Phases 112-119) · .planning/REQUIREMENTS.md (38 v1 reqs, 38/38 mapped) · .planning/research/SUMMARY.md (v2.5 research, HIGH confidence)
 
 **Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. The whole milestone stays additive (2.x minor).
-**Current focus:** Phase 118.1 — close-the-nine-conformance-gaps-g-1-g-9-found-by-the-officia
+**Current focus:** Phase 119 — documentation-three-shapes-v2-migration
 
 ## Current Position
 
-Phase: 118.1 (close-the-nine-conformance-gaps-g-1-g-9-found-by-the-officia) — EXECUTING
-Plan: 1 of 14
-Plans complete: **10 of 10** (118-01..118-10) — Phase 118 complete, `118-VERIFICATION.md` status `passed`
-Remaining: Phase 118.1 (nine conformance gaps G-1..G-9), then Phase 119 (docs)
-Status: Executing Phase 118.1
+Phase: 118.2 — The v1 client SSE transport and the `notifications/message` emitter
+Plan: Not started
+from 118.2-11's checkpoint). 118.2-12 was the phase's final act: the D-14 re-pin, held at
+`0.2.0-alpha.11` because it is already newest, bump delta NIL, developer approved 2026-08-17.
+Two deltas, never summed — SDK fixes `72/2 exit 1` → `73/1 exit 0` (`GAP_ATTRIBUTABLE_FAILURES`
+1 → 0); suite bump nil by construction. `WINDOWS.md` entries 5, 6, 7, 9 remain OPEN.
+Plans complete: **3 of 14** for Phase 118.1 (118.1-01, 118.1-02, 118.1-03); Phase 118 itself is
+10/10 with `118-VERIFICATION.md` status `passed`, merged to `main` as `aec3a947`
+Remaining: Phase 118.1 plans 04-14 (G-3..G-9), then Phase 119 (docs)
+Status: Ready to plan
+deliberately-RED fences were turned green by 118.1-03's emitter fix, not by weakening them:
+`tests/embedded_resource_golden.rs` is 10/10 with `git diff` on that file EMPTY since `2ab06a44`,
+and `cargo +nightly fuzz run content_tolerant_reader -- -max_total_time=300` completes 5,713,406
+executions with an empty artifacts directory.
+
+**118.1-03 HAS LANDED — G-1 AND G-2 ARE CLOSED.** Commits `fc40a606` (the batched breaking edit)
+
++ `fdb92352` (composition relays) + `188bca00` (every out-of-crate consumer + the live-run proof)
++ `c9056c72` (semver delta + CHANGELOG), +1545/-104 across 19 files.
+
+- `Content::Resource` emits `{"type":"resource","resource":{…}}` in the tool-result and
+  prompt-message positions on BOTH eras, carries `blob` and content-level `annotations`, and is
+  `#[non_exhaustive]` with `resource_with_blob` / `with_annotations` / `with_meta`.
+
+- **`ReadResourceResult.contents` is still FLAT** and gains only `blob` — `tests/v1_lists_golden.rs`
+  is 7/7 with `RESOURCES_READ` green, so the D-01 boundary held.
+
+- The reader is TOLERANT (D-03) via `#[serde(try_from)]` over ONE struct with an optional
+  `resource` and an optional `uri`, **not** a `#[serde(untagged)]` pair — RESEARCH assumption A1
+  is removed by construction rather than tested around.
+
+- Union rule, one sentence: `blob` is emitted only when `blob` is `Some` and `text` is `None`;
+  otherwise `text` is emitted, using the empty string when it is `None`. A payload carrying BOTH
+  is REJECTED on input (spec XOR).
+
+- **Accepted semver delta (D-15, one-time), recorded not hidden:** `enum_variant_marked_non_exhaustive`
+  (MAJOR) + `type_method_marked_deprecated` (MINOR); 223 checks, 221 pass, 2 fail, exit 100.
+  `enum_struct_variant_field_added` did NOT fire — batching the attribute with the fields cost ONE
+  major lint instead of two. Contrast `ServerDiscoverResult`, already `#[non_exhaustive]`
+  (`src/types/protocol/mod.rs:626-628`), which plan 07 extends for free.
+
+- The dual-conformance example is **RUN, not merely built**: `tests/embedded_resource_example_run.rs`
+  spawns the built binary on 127.0.0.1:8157 and records a real `blob` on both eras at
+  `target/118.1-03-blob-response.json`. Plan 04's sibling leg takes 8153.
+
+- `cargo pmcp new --kind mcp-app` scaffolds and `crates/pmcp-server/content/sdk-resources.md` were
+  both rewritten to constructor form — a stale struct literal there would emit non-compiling crates.
+
+- The four workspace-EXCLUDED example crates were measured at base `2ab06a44` FIRST: three were
+  already broken and now BUILD; `examples/26-server-tester` went 10 pre-existing errors to 8, with
+  the remainder logged to `deferred-items.md`.
 
 **117-13 HAS LANDED — THE D-03 CUT IS CLOSED, AND SMPL-01/SMPL-02 ARE DONE.** Commits `1a473e6d`
 (the verb split) + `50f039ab` (the severed-build 405 proof) + `ea301460` (config gating + the policy)
@@ -814,7 +863,7 @@ Prior-wave context — **113-21 landed the enumeration half of HTTP-09.** `tests
 Prior-wave context — **113-19 (wave 3) landed and the four-plan gap-closure round is CLOSED.** GAP-D: `decode_listen_chunks_for_fuzz` is now behind `#[cfg(any(feature = "fuzzing", test))]`; `#[doc(hidden)]` had hidden it from rustdoc but not from downstream callers or semver. Note for any re-verifier: `cargo public-api` OMITS `doc(hidden)` items, so the plan's seam-absence criterion passed vacuously (it was 0 before the fix too) — the falsifiable proof is a real downstream crate that fails `E0425` under `full` and compiles under `full,fuzzing`. GAP-E: the fuzz target's "latch never clears" tautology is replaced by a per-chunk `buffered_bytes() <= max_buffer_size` assertion, and it is PROVEN falsifiable — with only 113-17's pre-check disabled the campaign stays GREEN (113-17's two enforcement points are independently sufficient), and only with BOTH disabled does it crash (`the parser retained 9 bytes after chunk 0 under a 8-byte bound`). A 20 000-run campaign at `569f3533` is recorded in `113-FUZZ-EVIDENCE.md` § Campaign 2 (seed 3621664529, exit 0, artifacts dir EXISTS and is empty); campaign 1's PASS verdict is preserved verbatim because that campaign was green while GAP-A was open. The cross-cutting phase gate over 113-17 + 113-18 + 113-20 + 113-19 is GREEN: 6 suites, 4 build-matrix rows, `semver-checks` 223/223 no-update-required, zero REMOVED public items, zero new PMAT violations, `make quality-gate` exit 0 (243 ok / 0 FAILED). **NEXT: re-verify the phase** (`/gsd:verify-phase 113`) against `113-VERIFICATION.md`'s GAP-A..E; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip HTTP-01..05 / CLNT-01..02 to `[x]`. A value mismatch is a phase-reopening event. Still unowned: WR-01, WR-02, WR-04, D-113-F..K, UNAS-01.
 
 Prior-wave context — 113-18 closed GAP-B and GAP-C. GAP-B is closed by CONTRACT, not by the originally-planned liveness reclaim: the receiver and the `ListenGuard` share one `stream::unfold` state tuple, so sender liveness cannot observe remote death (the verifier's reproduction dropped the receiver while holding the guard — a state production cannot enter). Instead the duplicate refusal became RETRYABLE (`RATE_LIMITED` -32005 at HTTP 200, `v2_status_for_code` byte-unchanged) and the fresh-id reconnect contract is documented in three places and pinned by a live tripwire whose negative control fails. GAP-C/WR-06 closed: both entry-creating rejection paths route through `prune_after_rejection`, proven by a test that fails when the prune is removed. A re-verifier must reproduce GAP-B through a REAL socket. Earlier in this wave 113-17 landed the parser work — `SseParser`'s bound is now UNCONDITIONAL over `buffer + current_event.data + chunk` (GAP-A closed for real), the two whole-body transport sites go through a `pub(crate)` `feed_complete_body`, and `connect_sse`'s ceiling is a configurable 16 MiB with no public-config-struct change (semver 223/223, no update required). **113-20 has now landed and T-113-84 is DISCHARGED**: `feed_complete_body`'s byte-cap precondition is an established fact naming both enforcing call sites. Every whole-body read on `StreamableHttpTransport` — the POST response, the `start_sse` GET stream, AND the previously-unenumerated v2 error envelope — goes through one `collect_body_within_cap` helper that refuses an over-cap `Content-Length` before reading a byte and bounds the delivered bytes with `http_body_util::Limited` (a STREAMING bound, so an over-cap body is never allocated whole). Zero `response.collect()` remain in that file. `DEFAULT_MAX_COLLECTED_BODY_BYTES` (16 MiB) lives on a PRIVATE field with an additive `with_max_collected_body_bytes()` seam, so semver stays 223/223 no-update-required. Four per-site negative-control runs recorded. D-113-K records the deferred GET-path incremental-parsing rewrite (T-113-94). Wave 3 (113-19, the phase gate) is unblocked. After it, re-verify the phase; then, on or after 2026-07-28, re-run the 4-step procedure in `113-SPEC-RECHECK.md` § Recorded Exception, upgrade the Verdict, and only then flip the seven requirements. HTTP-04 stays `[~]` until that gate clears. A value mismatch is a phase-reopening event.
-Last activity: 2026-08-10 -- Phase 118.1 execution started
+Last activity: 2026-08-19 — Phase 119 complete, transitioned to Phase 118.2
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 
@@ -1227,6 +1276,80 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 117]: 117-13: config-field gating taken IN FULL — the fallback was not needed; the four StreamableHttpServerConfig v1-only fields plus the SessionCallback alias are gated, semver-safe only while full-v2 stays out of every published default set (A7)
 - [Phase 117]: 117-13: GET/DELETE are SPLIT not moved — the v2 405 head stays always-compiled and build_mcp_router is unchanged, so the severed build answers 405 (refused) rather than 404 (unrouted)
 - [Phase 117]: 117-13: EventStoreHandle moved into v1_session.rs, reversing 117-12's note — its last uses on both sides went with the SSE twins; the alternatives were the transport's first feature attribute or a blanket allow(dead_code)
+- [Phase 118.1]: Phase 118.1 requirement text is WIRE BEHAVIOUR with a literal (schema.ts range, JSON-RPC code, or symbol) in every one of CONF-04..CONF-08, so a D-10 FIXED/REFUTED/DEFERRED verdict cannot be satisfied by prose alone
+- [Phase 118.1]: ROADMAP Phase 118.1 wave numbers are copied from the 14 PLAN.md frontmatter blocks (12 waves), not re-derived from D-05's five clusters, so the roadmap cannot drift from the plans' depends_on graph
+- [Phase 118.1]: make doc-check is NOT reachable from make quality-gate (standalone target at Makefile:546-551) — a green local gate does not imply CI's Quality Gate will pass; run make doc-check explicitly before pushing rustdoc changes
+- [Phase 118.1]: Each embedded-resource golden is TWO tests (v1 + v2), not one test with two legs — a single test leaves the v2 leg unreachable behind the red v1 assertion, making the both-eras claim unfalsifiable until the fix lands
+- [Phase 118.1]: The v1 golden leg pins the FULL frame; the v2 leg pins only the content item as a byte substring, so CONF-04's fence cannot fail for Phase 112/115 envelope reasons
+- [Phase 118.1]: Blob and annotated fixtures are authored via serde_json::from_value of the flat legacy shape, because Content::Resource carries neither field yet — which is exactly why those goldens are red, and it doubles as a D-03 tolerant-reader exercise
+- [Phase ?]: Defect A: the 202 branch was dead code — 202 satisfies is_success(); handled before the guard, gated on a typed OutboundFrame::InitializedNotification
+- [Phase ?]: D-04: the client receive queue is mpsc::channel(64) of Result<TransportMessage> — readers await capacity, caller-task sites try_send and fail loudly
+- [Phase ?]: D-01/D-02: start_sse reads the GET session stream frame-at-a-time with the transport's max_collected_body_bytes as the parser bound, no new config knob
+- [Phase ?]: D-05: an unparseable session-stream frame ends the stream with a named, 200-char-truncated error instead of being silently dropped
+- [Phase ?]: Response-BODY middleware is bypassed on the GET session stream, matching post_streaming's existing contract
+- [Phase ?]: 118.2-05: extra.log ships exactly two methods (log, log_with_data), synchronous, Ok(()) explicitly NOT delivery acknowledgement
+- [Phase ?]: 118.2-05: DEFAULT_LOG_LEVEL = Info (D-12) — debug and finer suppressed until a client asks
+- [Phase ?]: 118.2-05: D-06 held — no PeerHandle method added; src/shared/peer.rs untouched
+- [Phase ?]: 118.2-05: pmcp LogMessageParams diverges from the vendored schema (requires message, data optional; spec is the reverse) — pinned by fence, owned by plan 08
+- [Phase ?]: 118.2-03: post_body decides the text/event-stream branch BEFORE the collect and hands the live body to the shared spawn_sse_reader — one reader, two sites
+- [Phase ?]: 118.2-03: SseParser::feed_complete_body DELETED with its test and its prose — a bound-bypassing entry point with no caller is the attractive nuisance its own doc named
+- [Phase ?]: 118.2-03: the POST SSE reader is DETACHED, not stored in abort_handle (that slot belongs to the GET session stream); its lifetime is the send-failure rule
+- [Phase ?]: 118.2-06: attach_peer EXTENDED at both dispatch roots rather than joined by a sibling attach_log_sink — all 9 production sites get the log sink structurally, not by remembering
+- [Phase ?]: 118.2-06: the log-level carrier is a crate-private ProtocolContext.resolved_log_level field; peer_channel::attach_session_backchannel was rejected because it returns early when sessions are off and v2 has no sessions
+- [Phase ?]: 118.2-06: behavioural log-sink fences live crate-internally (src/server/{core,mod}.rs) because the seams are pub(crate); tests/log_emitter.rs carries the structural both-roots guard
+- [Phase ?]: D-03 reconnect: the reference client's own curve (1s, x1.5, 30s cap, 2 attempts), so a pmcp client blinks back on the schedule server operators already tuned for
+- [Phase ?]: A server-sent SSE retry: wins over the computed backoff but is CLAMPED to MAX_SSE_RECONNECT_DELAY — an uncapped peer value parks a client's reader task
+- [Phase ?]: Only a DROP is retried; a D-02 overflow or D-05 parse failure is a corruption end that must never be re-opened
+- [Phase ?]: Reconnect reissues the GET ONLY — no silent re-initialize, which would mint a new session and orphan every in-flight correlation
+- [Phase ?]: No test-only backoff knob: it would have to be pub to reach an integration test, so the fences wait out the SHIPPED curve
+- [Phase ?]: cargo semver-checks is a breaking-change linter, not an API-diff inventory — it cannot report ADDITIONS, so a new public item has no line to quote
+- [Phase ?]: The capture landed at the HTTP ingress, not the dispatch arm: it is the one point holding the resolved era, the validated session id, the raw body and a still-owned ProtocolContext at once
+- [Phase ?]: Malformed level = IGNORE-and-default, never reject: an advisory per-request diagnostic hint must not convert a misspelling into an availability failure (T-118.2-07-03)
+- [Phase ?]: Fence 8 took the BEHAVIOURAL form — an empty ServerHttpMiddlewareChain routes every POST down the middleware ingress path, so the both-paths claim is measured on the wire
+- [Phase ?]: LOG_LEVEL_SET_METHOD replaces the literal inside V2_RETIRED_METHODS so the retirement table and the v1 capture cannot silently disagree about which method this is
+- [Phase ?]: 118.2-08 (D-13): logging/setLevel gets ONE era-branched shared unit, server::core::set_logging_level_response — a literal {} on v1 (Pitfall 8), -32601 on v2 — called by BOTH native dispatch roots. Server reaches it through an adapter in handle_client_request, not from process_client_request, because create_response flattens every Err to -32603 and a -32601 cannot ride a Result<Value>.
+- [Phase ?]: 118.2-08 VERDICT: the LogMessageParams message-vs-data spec divergence stays DECLARED, not fixed. Plan 05's trigger ("if the official suite validates params.data") is FALSIFIED by measurement — the pinned suite's only notifications/message scenario is the NEGATIVE sep-2575-server-no-log-without-loglevel, and logging-set-level inspects only the RPC response. Changing LogMessageParams is a breaking public-type change with zero conformance payoff today; mechanized by the_vendored_schema_requires_data_where_pmcp_emits_message.
+- [Phase ?]: 118.2-09: the two logging tools were SPLIT into separate match arms — test_tool_with_logging requires >=3 records, test_logging_tool requires ZERO (SEP-2575); one body could only satisfy one
+- [Phase ?]: 118.2-09: tracing::info! is KEPT alongside extra.log in the fixture, with a comment naming the two audiences (operator subscriber vs MCP client)
+- [Phase ?]: 118.2-10: the era-matrix v1 continuation arm was NOT flipped to completed — measurement falsified the flip. Delivery is fixed; the client cannot ANSWER a server-to-client request issued during its own call (parked inside transport.send while the server holds the tools/call POST). The arm was strengthened to pin the detail instead.
+- [Phase ?]: 118.2-10: the joint fence asserts at the TRANSPORT layer — there is no Client-level notification observation API and adding one is deferred. Zero new public API; src/ has no diff.
+- [Phase ?]: 118.2-13: Option A — emit_log_record defaults data to the message string, so every emitted notifications/message frame satisfies the schema's required data member with no Rust API change (cargo semver-checks: no semver update required)
+- [Phase ?]: 118.2-13: message stays on the wire as a pmcp extension — the schema does not close additionalProperties and the pinned reference client parses a data-bearing frame ok:true with message present
+- [Phase ?]: 118.2-11: 2025-11-25 gated on its OWN suite exit code (D-16) by joining FULLY_SCORED_GREEN_REVISIONS — a check-count floor is satisfiable by a failing run
+- [Phase ?]: 118.2-11: scored-scenario floor SPLIT per-revision (V1=30, V2=37) rather than lowering the shared 37 to 30, which would have weakened the v2 guard by 7 scenarios
+- [Phase ?]: 118.2-11: BLOCKING_GREEN_SCENARIOS WIDENED 29->30 rather than deleting the v1 entries as the script's own comment instructed — deletion would drive blocking_listed to 0 and violate a NEVER-LOWERED floor
+- [Phase ?]: 118.2-12: held the conformance pin at 0.2.0-alpha.11 (already newest); D-14 bump delta recorded as NIL, developer approved 2026-08-17
+- [Phase ?]: 118.2-12: the phase's two deltas stay separate and are never summed - SDK fixes 72/2 exit 1 -> 73/1 exit 0 (GAP_ATTRIBUTABLE_FAILURES 1 -> 0); suite bump NIL
+- [Phase ?]: 118.2-12: sign-off closes no defect - WINDOWS.md entries 5, 6, 7, 9 stay OPEN and ServerAcceptsWhitespaceHeaderValue stays unscored; no floor lowered, no D-21 exemption added
+- [Phase ?]: CR-01 closed by TWO bounds, not one: a 500ms MIN_SSE_RECONNECT_DELAY floor under any peer-supplied SSE retry:, AND a 30s RECONNECT_BUDGET_RESET_UPTIME gate on the reconnect-budget refund. Either alone leaves the loop unbounded.
+- [Phase ?]: The two-sided bound is spelled .max(MIN).min(MAX), NOT Duration::clamp — clamp panics when min > max and both operands are constants a later edit could invert; a panic inside a client reader task is a worse failure than a degraded value.
+- [Phase ?]: The uptime rule lives in a pure free fn budget_reset_earned(delivered, uptime), not an inline &&: run_session_stream is already split four ways to hold PMAT cog-25, and a pure predicate is testable at both sides of its threshold with no clock manipulation.
+- [Phase ?]: std::time::Instant, not tokio::time::Instant, for the uptime measurement — the tokio clock moves under tokio::time::pause(), which would make the refund arm depend on whether a caller paused time.
+- [Phase ?]: No new fuzz target for next_reconnect_delay: it is a pure two-argument fn fully covered by two proptest arms; a fuzz target over (u32, Option<u64>) would be a slower proptest. The existing streamable_sse_frames target was re-run (20,000 runs, exit 0) to prove the reader path is undisturbed.
+- [Phase ?]: CR-02 needs BOTH halves: measured 17 run / 16 passed / 1 failed with the latch and no id check. The latch removes the supply of poison; the id check stops it desynchronising the FIFO.
+- [Phase ?]: The terminal latch stores a reconstructable (TerminalKind, String) pair, not an Error: pmcp::Error is not Clone and making a public core type Clone to serve a private latch is the wrong trade.
+- [Phase ?]: The terminal latch is STICKY and write-once per TRANSPORT, not one-shot and not per-reader. One-shot restores exactly the CR-02 hazard; the stop-do-not-loop contract is stated in Transport::receive's rustdoc (T-118.2-15-04).
+- [Phase ?]: tokio::sync::watch generation counter subscribed BEFORE the first latch read, never Notify: notify_waiters wakes only tasks already parked, so a signal raised between two loop iterations is lost (T-118.2-15-05).
+- [Phase ?]: Arc<watch::Sender<u64>> rather than a bare Sender: Sender gained Clone in a tokio later than the declared 1.46 minimum, and 1.46 is not vendored here to measure against.
+- [Phase ?]: Discard-on-mismatch in dispatch_request, not re-queue and not an orphan buffer. Per-id response ROUTING is the correct long-term shape and is recorded in deferred-items.md (T-118.2-15-03, accepted).
+- [Phase ?]: The 25 tests the id check turned red were fixed by making three test mocks ECHO the request id, which is what a conformant server does. They had been asserting on the defect; the check was not weakened.
+- [Phase ?]: 118.2-17: WR-01 needs a FOURTH termination signal, not a fix to the existing three — a peer that holds the SSE stream open and sends only keep-alive comments defeats the failing send, both is_closed() checks and close()'s single-JoinHandle abort at once; a watch<bool> LEVEL raced against the parked body read covers it, and the shutdown exit is SILENT (no latch, no reconnect)
+- [Phase ?]: 118.2-17: the reconnect cursor is per-READER while last_event_id() stays transport-wide — the shared slot's write is unchanged in timing and value, and fence 20 asserts the public accessor still reports the most recent id from ANY stream so a later 'improvement' to it reds
+- [Phase ?]: 118.2-17: pmat quality-gate --checks complexity (threshold 23) is authoritative over a plan's --max-cognitive 25 — the WR-01 fix measured read_sse_body at exactly 25, passing the plan's verify while failing CI; closed by extracting end_of_frame_stop, not by an #[allow]
+- [Phase ?]: 118.2-16: WR-06's behaviour left byte-untouched and recorded as explicitly out of scope — fixing it reopens CONF-10 territory plans 07/08/13 booked closed, resting on D-10/D-11/D-12/D-13, two prior deferred-items verdicts and two WINDOWS.md entries
+- [Phase ?]: 118.2-16: a declined finding whose blast radius CHANGED gets its NARROWING recorded, not just its open status — WR-03 is now 'a second GET may exist', no longer 'may exist, poison the cursor, and outlive the transport', because plan 17 fixed WR-01/WR-02
+- [Phase ?]: 118.2-16: the pmat cognitive threshold 23 is recorded as UNCONFIRMED — pmat 3.15.0 help documents only --max-complexity-p99 (50) and complexity-entropy (2.0); what IS measured is the DIRECTION, a function at exactly 25 passing 'analyze complexity --max-cognitive 25' while failing 'quality-gate --checks complexity'. Run the gate, not the report
+- [Phase ?]: 118.2-16: an api-coverage detector hit on an implemented protocol is answered by a reasoned declaration with ZERO table rows — a fabricated matrix reads as evidence that endpoints were enumerated and verified when none exist
+- [Phase ?]: 118.2-18: CONF-09's EVIDENCE is amended, its Complete booking is NOT re-opened — the literal requirement text was and remains satisfied; what failed was the SAFETY truth 118.2-VERIFICATION.md added from the phase's own 'usable end to end' prose. Same shape as 118.2-11's CONF-07 amendment.
+- [Phase ?]: 118.2-18: no requirement ID minted — the REQ-ID token set is byte-identical before and after (65 plain / 58 word-boundary), so D-17's ten-orphan warning is not widened. The BEFORE snapshot is read out of 'git show HEAD:' so the check cannot be tautological.
+- [Phase ?]: 118.2-18: the phase's single authoritative semver verdict, re-run at final HEAD on BOTH feature sets — cargo semver-checks --baseline-rev cb5d1365 -p pmcp: 223 checks, 223 pass, 30 skip, no semver update required. Nothing fired; the closure is additive.
+- [Phase ?]: 118.2-18: the two consumer-observable behaviour changes are disclosed in WINDOWS.md (entries 12 sticky receive(), 13 discard-on-mismatch) AND as CONF-09 limitations (v)/(vi) — both were made in private code with a clean semver verdict, i.e. invisible to the tooling that normally catches them.
+- [Phase ?]: 118.2-18: the D-16 gate RED-ed on the first closing run (tools-call-sampling, WINDOWS entry 9's verbatim 'Dispatch oneshot channel closed') and is REPORTED, not accommodated. Run 2 green at 73/1 and 142/36, all six floors OK. Gate script and conformance/ byte-unchanged across the closure; D-21 carries forward verbatim.
+- [Phase ?]: 118.2-18: the first make quality-gate run failed 5/5 on streamable_http_oauth_integration at a PRE-EXISTING .expect (blamed to 1564e6226) with the macOS keychain ioErr -36 signature under disk pressure. Characterised by re-measurement at identical source (5/5 green, gate exit 0), not classified by path — streamable_http.rs IS in the closure's diff.
+- [Phase ?]: 118.2-18: the pmat cognitive threshold of '23' is NOT propagated as fact (pmat 3.15.0 documents no cognitive default). Only the measured direction is stated: a function at exactly 25 passes a plan verify written --max-cognitive 25 while failing pmat quality-gate. Run the gate, not the report.
+- [Phase ?]: 119-01: Phase 113 re-verification obligation DISCHARGED — 113-SPEC-RECHECK verdict PENDING -> PUBLISHED-CONFIRMED, both arms run 2026-08-18
+- [Phase ?]: 119-01: eleven requirements HTTP-01..08 / CLNT-01/02/05 flipped [~] -> [x]; TASK-01..06 deliberately NOT flipped (DQ6 still STILL-ABSENT)
+- [Phase ?]: 119-01: arm 2 re-run rather than cited (A-03) against newer conformance HEAD 74edef34 — byte-identical predicate, v2_conformance_pin 5/5
 
 ### Pending Todos
 
@@ -1255,6 +1378,11 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - D-116-FUZZGATE: make test-fuzz runs ZERO fuzzing iterations and reports success on a stable default toolchain (21/21 targets died on the nightly-only -Z flag; gate exit 0). Do not close the ALWAYS-FUZZ row on make quality-gate's exit code. Owner: 116-15.
 - D-116-LINT-OAUTH test-side twin: make quality-gate runs 0 of 116-09's 25 oauth-gated security tests (25 run under full,oauth). Fix is PAIRED — clear the 24 pre-existing src/client/oauth.rs clippy errors, THEN enable oauth in make lint and the gate test stage. Owner 116-15.
 - 117-11 FINDING (hand-off to 117-12/117-13/Phase 118): the pmcp SERVER still answers a well-formed initialize on the 2026-07-28 wire, returning a mixed envelope (v1 protocolVersion 2025-11-25 + v2 resultType and _meta.serverInfo). Baseline ERA-01 records v2 as absent; its source cites only client-side artifacts, so the server side was never severed. Pinned by tests/dual_run.rs::the_server_still_answers_initialize_on_the_v2_wire.
+- make lint blocked by a pre-existing clippy::let_underscore_future at src/shared/streamable_http.rs:1718 (authored by 118.2-03 at 8b19602d); one-token fix, gates every remaining plan in phase 118.2
+- SEP-2575: on v2, a request with no _meta logLevel still receives notifications/message — resolve_request_log_level returns and DEFAULT_LOG_LEVEL (info) applies. MEASURED in 118.2-09 (RED mutation 2). Fixture guards; src/ does not. Owner: 118.2-11 or a follow-on src/ plan.
+- A pmcp Client cannot answer a server-to-client request issued during its own call: Client::dispatch_request awaits transport.send(..) to complete before entering its receive loop, and the server holds the tools/call POST for the whole handler. Blocks v1 sampling/roots round trips over StreamableHttpServer (era_matrix reports no-live-stream with a 30s dispatch timeout).
+- ~~118.2-11 CHECKPOINT: official suite re-measured at held pin 0.2.0-alpha.11 — v1 leg 72/2 -> 71/3, exit 1. tools-call-with-logging 1/1 -> 0/2. Root cause: LogMessageParams emits 'message'; spec requires 'data'. Gate hardening (D-16) and CONF-09 booking BLOCKED on a src/ wire-format decision.~~ **RESOLVED 2026-08-17.** The developer chose the src/ fix; 118.2-13 shipped it (emit_log_record defaults `data` to the message string; semver-checks clean). 118.2-11 re-measured at the SAME held pin over 9 fresh runs: tools-call-with-logging **0/2 -> 2/0** (logCount 3, WireSchemaValid 10 messages / 0 violations), v1 leg **73 passed / 1 failed, exit 0**, GAP_ATTRIBUTABLE_FAILURES **-> 0**, G-3 CLOSED in full. Gate hardened (D-16): 2025-11-25 joined FULLY_SCORED_GREEN_REVISIONS with a per-revision scored floor, BLOCKING_GREEN_SCENARIOS widened 29 -> 30. CONF-09 booked. See 118-CONFORMANCE-GAPS.md '## Dispositions — Phase 118.2 (amendment 2)'.
+- 118.2-11 MEASURED FLAKE (new, open): 2025-11-25:tools-call-elicitation failed 1 of 9 fresh suite runs with 'Dispatch oneshot channel closed' — the same client request-lifecycle race as the blocker above. It is a pre-existing BLOCKING_GREEN_SCENARIOS entry and was ALREADY gate-fatal before the leg was hardened, so the hardening added no new exposure. Stated in the script's own output, NOT exempted. WINDOWS.md entry 9.
 
 ## Deferred Items
 
@@ -1282,16 +1410,17 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-08-10T05:44:59.432Z
-Stopped at: Phase 118.1 context gathered
-Resume file: .planning/phases/118.1-close-the-nine-conformance-gaps-g-1-g-9-found-by-the-officia/118.1-CONTEXT.md
-Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`).
+Last session: 2026-08-19T04:39:12.472Z
+Stopped at: Completed 119-01-PLAN.md
+Resume file: None
+Next: **Phase 118.2 planning — `/gsd:plan-phase 118.2`.** `118.2-CONTEXT.md` is committed (`21215f12`) with 17 locked decisions; Phase 118.1 is 14/14 COMPLETE and its plan-04 pointer that stood here is retired. Two residuals to plan: the client live-SSE read (BOTH collect sites — `src/shared/streamable_http.rs:1002` GET and `:1543` POST-response; the POST case deadlocks in-tool elicitation and was added to scope during discussion) and the `notifications/message` emitter on `RequestHandlerExtra` (no `PeerHandle` method — D-06 declines the roadmap's implied trait addition). Mint `CONF-09`/`CONF-10` **with REQUIREMENTS.md table rows**, not body-only IDs. **Carry forward: `make quality-gate` does NOT run `make doc-check`** (standalone target at `Makefile:546-551`), **`make test-fuzz` cannot fail** (`Makefile:242-249` swallows a crashing target behind `|| echo`), and **there is no pre-commit hook installed** (`.git/hooks/` holds only `.sample` files) — run `cargo fmt --all`, the repo's clippy invocation and `doc-check` explicitly, and read a fuzz campaign's real exit code rather than the target's. **Also carry forward from the 118.1 `/code-review` (2026-08-11): the cross-session `client_capabilities` misattribution is UNOWNED** — `ServerState.server` is one `Arc<Mutex<Server>>` shared by every StreamableHTTP session, so a handler serving client A can read client B's capabilities; it was offered as a 118.2 fold-in and declined, and it needs a phase. *(The block below is retained verbatim for its three standing obligations; Phase 116 itself is complete and its own `Next` pointer is stale.)* **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`); Phase 118.1 plan 14 carried it to v2.6 with the measurement as the reason.
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Notes |
 |-------|------|----------|-------|
+| Phase 118.1 P03 | 125min | 5 tasks | 19 files |
 | Phase 116 P11 | 265min | 2 tasks | 3 files |
 | (v2.4 phases not yet planned) | — | — | — |
 | Phase 109 P00 | 25min | 2 tasks | 7 files |
@@ -1416,3 +1545,26 @@ Next: **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/g
 | Phase 117 P12 | 95min | 2 tasks | 3 files |
 | Phase 117 P14 | 130min | 3 tasks | 7 files |
 | Phase 117 P13 | 45min | 3 tasks | 5 files |
+| Phase 118.1 P01 | 35min | 4 tasks | 2 files |
+| Phase 118.1 P02 | 23m | 3 tasks | 5 files |
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 118.2 P01 | 4h | 4 tasks | 6 files |
+| Phase 118.2 P05 | 50m | 3 tasks | 4 files |
+| Phase 118.2 P03 | ~2h | 2 tasks | 4 files |
+| Phase 118.2 P06 | 65 min | 2 tasks | 4 files |
+| Phase 118.2 P04 | ~5h | 3 tasks | 6 files |
+| Phase 118.2 P07 | ~95 min | 3 tasks | 7 files |
+| Phase 118.2 P08 | ~85 min | 2 tasks | 5 files |
+| Phase 118.2 P09 | 70m | 2 tasks | 6 files |
+| Phase 118.2 P10 | ~2h | 2 tasks | 4 files |
+| Phase 118.2 P13 | 50m | 3 tasks | 6 files |
+| Phase 118.2 P12 | ~75min | 3 tasks | 4 files |
+| Phase 118.2 P14 | ~6h | 3 tasks | 2 files |
+| Phase 118.2 P15 | 2h | 3 tasks | 5 files |
+| Phase 118.2 P17 | ~3h | 3 tasks | 2 files |
+| Phase 118.2 P16 | ~15 min | 2 tasks | 2 files |
+| Phase 118.2 P18 | ~1h50m | 3 tasks | 3 files |
+| Phase 119 P01 | 35m | 3 tasks | 3 files |

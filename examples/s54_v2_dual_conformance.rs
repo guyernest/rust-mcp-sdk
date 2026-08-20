@@ -80,46 +80,62 @@
 //!
 //! The scored 2026-07-28 failures that this example CANNOT fix, because every
 //! one of them lives in `src/` rather than in a fixture, with the gap they
-//! trace to:
+//! trace to.
 //!
-//! | Scored scenario | Gap | What `src/` does |
+//! **STATUS as of plan 118.1-12: all nine are struck through.** The rows are kept
+//! rather than deleted because each one records the DEFECT and the plan that
+//! closed it, and a reader tracing a scenario back to its cause needs both. A
+//! struck-through row is history; a live row would be a claim that the defect is
+//! still present, and there are none left in this table.
+//!
+//! | Scored scenario | Gap | What `src/` did, and what closed it |
 //! |---|---|---|
-//! | `tools-call-embedded-resource`, `tools-call-mixed-content`, `prompts-get-embedded-resource` | G-1 | `Content::Resource` serialises FLAT; the spec's `EmbeddedResource` nests under `resource` |
-//! | `resources-read-binary` | G-2 | no blob-bearing resource-contents variant exists |
-//! | `tools-call-with-progress` | G-3 | `notification_tx` is set only in `Server::run()`, which `StreamableHttpServer` never calls |
-//! | `completion-complete` | G-4 | `completion/complete` is a catch-all arm returning `{}` |
-//! | `server-stateless` (`HttpServerMethodNotFound404ping`) | G-5 | `ping` is served under v2 instead of being retired — and see the sharper finding below |
-//! | `server-stateless` (`ServerImplementsDiscover`, `ServerUnsupportedVersionError`) | G-7 (new) | `server/discover` emits `protocolVersion`, never the `supportedVersions` array the spec mandates — `grep -rn supportedVersions src/` finds nothing |
-//! | `server-stateless` (3x `RequestMetaInvalid`, `HttpServerMetaInvalid400`) | G-6 (new) | a missing / malformed `_meta` answers `-32020`, not the `-32602` + HTTP 400 the spec requires; a missing `clientCapabilities` is not rejected at all |
-//! | `server-stateless` (`HttpServerHeaderMismatch400`) | G-8 (new) | a header/`_meta` protocol-version disagreement answers `-32022`, not `-32020` |
+//! | ~~`tools-call-embedded-resource`, `tools-call-mixed-content`, `prompts-get-embedded-resource`~~ | G-1 | CLOSED in 118.1-03: `Content::Resource` now emits the spec's `EmbeddedResource`, nested under `resource` |
+//! | ~~`resources-read-binary`~~ | G-2 | CLOSED in 118.1-03: `Content::resource_with_blob` plus `blob` in the flat `ReadResourceResult.contents` projection |
+//! | ~~`tools-call-with-progress`~~ | G-3 | CLOSED across 118.1-10/11/12. HISTORY: `notification_tx` was set only in `Server::run()`, which `StreamableHttpServer` never calls, so `extra.report_progress(..)` was silently inert over HTTP on BOTH eras. v1 now routes through a session-bound `TransportBackchannel` onto the issuing session's SSE stream (118.1-11); v2 — which has no session and answers 405 on GET — carries the frames on its own POST RESPONSE BODY as multi-frame SSE (118.1-12 / D-16). RESIDUAL: pmcp's own CLIENT transport cannot hold a live GET SSE stream, so the v1 round trip is server-side-only. See `deferred-items.md` |
+//! | ~~`completion-complete`~~ | G-4 | CLOSED in 118.1-04: `completion/complete` has its own registration slot on BOTH builder families and answers the spec `CompleteResult` shape; this example registers a provider (see `completion_provider`) |
+//! | ~~`server-stateless` (`HttpServerMethodNotFound404ping`)~~ | G-5 | CLOSED in 118.1-05: `ping` WAS served under v2 instead of being retired; retirement is now keyed on the method set — see the section below |
+//! | ~~`server-stateless` (`ServerImplementsDiscover`, `ServerUnsupportedVersionError`)~~ | G-7 (new) | CLOSED in 118.1-07: `server/discover` emitted only `protocolVersion` and never the `supportedVersions` array the spec mandates |
+//! | ~~`server-stateless` (3x `RequestMetaInvalid`, `HttpServerMetaInvalid400`)~~ | G-6 (new) | CLOSED in 118.1-06: a missing / malformed `_meta` answered `-32020` rather than the spec's `-32602` + HTTP 400, and a missing `clientCapabilities` was not rejected at all |
+//! | ~~`server-stateless` (`HttpServerHeaderMismatch400`)~~ | G-8 (new) | CLOSED in 118.1-06 alongside G-6: a header/`_meta` protocol-version disagreement answered `-32022` rather than `-32020` |
+//! | ~~(no scored scenario — a handler-visibility gap)~~ | G-9 | CLOSED in 118.1-08: a v1 handshake's declared client capabilities never reached `RequestHandlerExtra::client_capabilities()`, which read only the v2 `_meta` key, so a v1 handler could not see that its client had declared `sampling`/`roots` |
 //!
 //! Everything else that fails is a MISSING FIXTURE, and fixtures are exactly
 //! what this file is for. Do not cite this example as "pmcp passes the official
 //! suite"; cite it for the dual-era claim, which one process does demonstrate.
 //!
-//! ## The removed-method retirement is WEAKER than the suite's score suggests
+//! ## Removed-method retirement (G-5 — closed by plan 118.1-05)
 //!
 //! v2 removes five RPCs: `initialize`, `ping`, `logging/setLevel`,
-//! `resources/subscribe` and `resources/unsubscribe`. The suite scores four of
-//! the five as passing. Probed directly with WELL-FORMED params, only two are
-//! genuinely retired:
+//! `resources/subscribe` and `resources/unsubscribe`. All five are now retired
+//! by EXACT METHOD STRING through the `V2_RETIRED_METHODS` table in
+//! `src/server/streamable_http_server.rs`, so each answers `404` + `-32601`
+//! however well-formed its `params` are:
 //!
 //! | Method under v2 | Suite's probe (`params` = `_meta` only) | Well-formed `params` |
 //! |---|---|---|
-//! | `initialize` | 404 + `-32601` | **HTTP 200, served** — and answers `protocolVersion: "2025-11-25"` |
-//! | `ping` | HTTP 200, served | HTTP 200, served |
-//! | `logging/setLevel` | 404 + `-32601` | **HTTP 200, served** |
-//! | `resources/subscribe` | 404 + `-32601` | 404 + `-32601` (genuinely retired) |
-//! | `resources/unsubscribe` | 404 + `-32601` | 404 + `-32601` (genuinely retired) |
+//! | `initialize` | 404 + `-32601` | 404 + `-32601` |
+//! | `ping` | 404 + `-32601` | 404 + `-32601` |
+//! | `logging/setLevel` | 404 + `-32601` | 404 + `-32601` |
+//! | `resources/subscribe` | 404 + `-32601` | 404 + `-32601` |
+//! | `resources/unsubscribe` | 404 + `-32601` | 404 + `-32601` |
 //!
-//! `v2_retired_method_of` in `src/server/streamable_http_server.rs` matches
-//! exactly `Subscribe` and `Unsubscribe` and nothing else. The other three
-//! answer `-32601` to the suite only because its probe sends `params` carrying
-//! `_meta` alone, which does not deserialize into `InitializeRequest` or
-//! `SetLoggingLevel` — a PARSE failure that happens to produce the required
-//! code. Two of the four "passes" therefore pass for the wrong reason, and the
-//! `docs/v1-sunset-policy.md` tension about a v2 server still answering
-//! `initialize` is CONFIRMED at the wire rather than merely suspected.
+//! BEFORE plan 118.1-05 the retirement was materially WEAKER than the suite's
+//! score suggested. The predicate then — `v2_retired_method_of` — matched
+//! exactly `Subscribe` and `Unsubscribe` and nothing else. `initialize`,
+//! `ping` and `logging/setLevel` were genuinely SERVED under well-formed
+//! params (`initialize` even answering `protocolVersion: "2025-11-25"`), and
+//! answered `-32601` to the suite only because its probe sends `params`
+//! carrying `_meta` alone, which does not deserialize into `InitializeRequest`
+//! or `SetLoggingLevel` — a PARSE failure that happened to produce the required
+//! code. Two of the four "passes" therefore passed for the wrong reason.
+//!
+//! Because the suite's own `initialize` and `logging/setLevel` checks were
+//! GREEN on a server that retired NEITHER, they MUST NOT be cited as evidence
+//! for G-5. `tests/v2_retired_methods.rs` is the fence that actually measures
+//! it — it sends well-formed params and requires 404 + `-32601` for all five.
+//! The `docs/v1-sunset-policy.md` tension about a v2 server still answering
+//! `initialize` is now resolved at the wire rather than merely suspected.
 //!
 //! # Divergence from `s47_v2_stateless_mrtr`: `PMCP_REQUEST_STATE_KEY`
 //!
@@ -139,17 +155,18 @@ use pmcp::types::capabilities::{
     ClientCapabilities, CompletionCapabilities, LoggingCapabilities, PromptCapabilities,
     ResourceCapabilities, ServerCapabilities, ToolCapabilities,
 };
-use pmcp::types::elicitation::ElicitRequestParams;
+use pmcp::types::completable::StaticCompletionProvider;
+use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
 use pmcp::types::mrtr::{InputRequest, InputRequests, InputResponse, MrtrSignal};
 use pmcp::types::protocol::{
     ProtocolVersion, LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION_2026_07_28,
 };
 use pmcp::types::sampling::{CreateMessageParams, SamplingMessage, SamplingMessageContent};
 use pmcp::types::{
-    CallToolResult, Content, GetPromptResult, ListResourcesResult, PromptArgument, PromptInfo,
-    PromptMessage, ReadResourceResult, ResourceInfo, Role, ToolInfo,
+    CallToolResult, Content, GetPromptResult, ListResourcesResult, LoggingLevel, PromptArgument,
+    PromptInfo, PromptMessage, ReadResourceResult, ResourceInfo, Role, ToolInfo,
 };
-use pmcp::{PromptHandler, RequestHandlerExtra, ResourceHandler, Server};
+use pmcp::{PeerHandle, PromptHandler, RequestHandlerExtra, ResourceHandler, Server};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -277,6 +294,38 @@ const DEFAULT_ADDR: &str = "127.0.0.1:8149";
 /// (T-118-15).
 const REQUEST_STATE_KEY_VAR: &str = "PMCP_REQUEST_STATE_KEY";
 
+/// Interval between the `test_tool_with_progress` reports.
+///
+/// ONE TICK ABOVE `ServerProgressReporter`'s 100 ms rate-limit window, and that
+/// is the whole reason for the number. See the tool body for the defect this
+/// fixed: at the previous 50 ms the middle report was inside the window and was
+/// dropped, so the tool delivered two frames where the scenario requires three.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Interval between the `test_tool_with_logging` records.
+///
+/// # The budget, measured rather than guessed
+///
+/// `tools-call-with-logging` calls the tool, then
+/// `await new Promise(e=>setTimeout(e,200))`, then requires
+/// `a.length >= 3`. Every millisecond this tool sleeps is a millisecond of that
+/// 200 ms window spent inside the call, so the interval buys nothing the
+/// scenario measures and costs headroom the scenario needs. The previous 50 ms
+/// spacing burned 150 ms of a 200 ms budget before dispatch latency was even
+/// counted.
+///
+/// 15 ms × 2 gaps = **30 ms total**, and the last record is emitted with NO
+/// trailing sleep — the same emit-first / sleep-only-between shape
+/// `test_tool_with_progress` uses. It is still non-zero so that the scenario's
+/// stated purpose survives ("the delays are important to test that clients can
+/// receive multiple log notifications during tool execution"): three records
+/// arrive as three separate frames rather than as one burst at completion.
+///
+/// Contrast `PROGRESS_INTERVAL` above, which is 120 ms for a REASON — it must
+/// clear `ServerProgressReporter`'s 100 ms rate-limit window. The log emitter
+/// has no rate limit (D-09), so nothing forces this number upward.
+const LOG_RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(15);
+
 /// Serves every `test://` URI the 2025-11-25 scored set names.
 ///
 /// One handler covers both `list` and `read` because [`ResourceHandler`] is a
@@ -324,21 +373,33 @@ impl ResourceHandler for ConformanceResources {
                 "This is the content of the static text resource.",
                 "text/plain",
             )],
-            // NOTE: the suite requires `{uri, mimeType, blob}` here. pmcp's
-            // `Content` enum has no blob-bearing resource variant, so this arm
-            // cannot express the required shape — see the SDK-gap note in this
-            // plan's SUMMARY. The closest expressible value is emitted so the
-            // resource still exists and still reads.
-            "test://static-binary" => vec![Content::image(TINY_PNG_BASE64, "image/png")],
+            // The suite's `resources-read-binary` requires `{uri, mimeType, blob}`
+            // here. G-2 closed in 118.1-03: `Content::resource_with_blob` is the
+            // `BlobResourceContents` arm (schema.ts:1548) and the flat
+            // `ReadResourceResult.contents` projection now emits its `blob`.
+            "test://static-binary" => vec![Content::resource_with_blob(
+                uri,
+                TINY_PNG_BASE64,
+                "image/png",
+            )],
             "test://example-resource" => vec![Content::resource_with_text(
                 uri,
                 "This is an example resource for testing.",
                 "text/plain",
             )],
+            // Carries content-level `annotations` so the D-06 placement — a
+            // SIBLING of `resource`, never inside it (schema.ts:1741) — is
+            // exercised end to end by a live server rather than only by a unit
+            // test. This is the one URI in this example that carries them.
             "test://embedded-resource" => vec![Content::resource_with_text(
                 uri,
                 "This is an embedded resource content.",
                 "text/plain",
+            )
+            .with_annotations(
+                pmcp::types::content::Annotations::new()
+                    .with_audience(vec!["user".to_string()])
+                    .with_priority(0.5),
             )],
             "test://mixed-content-resource" => vec![Content::resource_with_text(
                 uri,
@@ -798,29 +859,115 @@ impl ConformanceTool {
             )])),
 
             "test_tool_with_progress" => {
-                // The scenario requires at least three notifications with
-                // non-decreasing progress, and the delays are what let a client
-                // observe them as separate messages rather than one burst.
-                for step in [0.0_f64, 50.0, 100.0] {
+                // The scenario requires at least THREE notifications with
+                // non-decreasing progress:
+                //   `i.length < 3 && a.push("Expected at least 3 progress
+                //    notifications, got " + i.length)`
+                //
+                // # Why the interval is 120 ms and not 50 ms (fixed in 118.1-12)
+                //
+                // `ServerProgressReporter` admits at most one notification per
+                // 100 ms. It makes exactly two unconditional exceptions: the
+                // FIRST report always goes, and a FINAL report (`progress ==
+                // total`) always goes. Reports 1 (0/100) and 3 (100/100) ride
+                // those. Report 2 (50/100) is neither — so at the previous 50 ms
+                // spacing it landed INSIDE the rate-limit window and was
+                // silently dropped, and this tool delivered TWO frames while the
+                // comment above it claimed three. One short of the floor, which
+                // is a FAILURE even with the transport working.
+                //
+                // `PROGRESS_INTERVAL` is one tick above that window, so all
+                // three are admitted. It also still serves the original purpose
+                // of the delay: a client observes separate messages rather than
+                // one burst.
+                for (index, step) in [0.0_f64, 50.0, 100.0].into_iter().enumerate() {
+                    if index > 0 {
+                        tokio::time::sleep(PROGRESS_INTERVAL).await;
+                    }
                     extra.report_progress(step, Some(100.0), None).await?;
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
                 Ok(CallToolResult::new(vec![Content::text(
                     "Tool with progress completed",
                 )]))
             },
 
-            "test_tool_with_logging" | "test_logging_tool" => {
-                // Three info-level records, spaced so a client can receive them
-                // DURING the call rather than all at completion.
-                for message in [
-                    "Tool execution started",
-                    "Tool processing data",
-                    "Tool execution completed",
-                ] {
-                    tracing::info!("{message}");
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
+            // The two logging tools carry OPPOSITE contracts and therefore no
+            // longer share a body. `tools-call-with-logging` (2025-06-18,
+            // removed in v2) drives `test_tool_with_logging` and fails on
+            // `a.length < 3`; `sep-2575-server-no-log-without-loglevel` (v2)
+            // drives `test_logging_tool` and fails if it sees a SINGLE
+            // `notifications/message` frame. One arm answering both could only
+            // ever satisfy one of them. They were merged when neither emitted
+            // anything, which made them look identical.
+            "test_tool_with_logging" => {
+                // THREE `info` records ON THE WIRE.
+                //
+                // `tracing::info!` does NOT satisfy this scenario and never
+                // did: a `tracing` record goes to this process's subscriber
+                // (configured in `main` at `pmcp=info,s54_v2_dual_conformance=info`)
+                // and reaches the operator's terminal. `extra.log(..)` emits a
+                // `notifications/message` and reaches the CLIENT. Two
+                // audiences, two mechanisms — the referee only ever sees the
+                // second, which is why this scenario stayed red while the
+                // fixture "logged" three times per call.
+                //
+                // Both are kept, deliberately: when this fixture is run by
+                // hand against a live suite the `tracing` line is how an
+                // operator watches the tool fire, and the comment above is
+                // there so no future reader deletes `extra.log` believing
+                // `tracing` covers it.
+                //
+                // `info`, not `debug`, and not because the scenario forces it:
+                // the scenario calls `setLoggingLevel('debug')` first, so any
+                // level would pass its filter. Emitting at `info` means the
+                // three records still clear `DEFAULT_LOG_LEVEL` (D-12) if a
+                // future scenario drops the `setLevel` call, which is the
+                // difference between a fixture that passes and one that passes
+                // for a reason that can evaporate.
+                // Unrolled rather than looped: the three message strings are
+                // quoted character for character from the scenario's
+                // `**Behavior**` block, and `grep -c 'extra.log'` counting the
+                // records this tool promises is worth more than three saved
+                // lines. Emit FIRST, sleep only BETWEEN, never after the last
+                // one — the same shape as `test_tool_with_progress` above.
+                tracing::info!("Tool execution started");
+                extra.log(LoggingLevel::Info, "Tool execution started")?;
+                tokio::time::sleep(LOG_RECORD_INTERVAL).await;
+
+                tracing::info!("Tool processing data");
+                extra.log(LoggingLevel::Info, "Tool processing data")?;
+                tokio::time::sleep(LOG_RECORD_INTERVAL).await;
+
+                tracing::info!("Tool execution completed");
+                extra.log(LoggingLevel::Info, "Tool execution completed")?;
+                Ok(CallToolResult::new(vec![Content::text(
+                    "Tool with logging completed",
+                )]))
+            },
+
+            "test_logging_tool" => {
+                // SEP-2575, the NEGATIVE case: the v2 client authorizes logging
+                // per request through
+                // `params._meta["io.modelcontextprotocol/logLevel"]`, and the
+                // vendored schema is explicit — "If absent, the server MUST NOT
+                // send any notifications/message". The scenario sends this call
+                // with a `_meta` that does NOT carry the key and fails the
+                // server if any `notifications/message` frame comes back.
+                //
+                // This tool emits UNCONDITIONALLY, and that is the point: the
+                // rule lives in `src/`, not in this fixture. The gap it used to
+                // work around — with no resolved level the emitter fell back to
+                // `DEFAULT_LOG_LEVEL` (`info`, D-12) and emitted, failing
+                // SEP-2575 — is closed in
+                // `server::core::attach_request_log_sink`, which now attaches NO
+                // sink for a v2 request that carried no level. A sinkless emit is
+                // silence (D-08).
+                //
+                // Kept unguarded deliberately: a fixture that checks
+                // `extra.log_level.is_some()` first would pass whether or not
+                // `src/` implements the rule, and every OTHER pmcp server — none
+                // of which carries such a guard — would still violate it.
+                extra.log(LoggingLevel::Info, "Diagnostic logging authorized")?;
                 Ok(CallToolResult::new(vec![Content::text(
                     "Tool with logging completed",
                 )]))
@@ -871,16 +1018,145 @@ impl ConformanceTool {
                 ))]))
             },
 
-            // All three elicitation tools hit the same wall: pmcp's
-            // `PeerHandle` exposes `sample`, `sample_with_tools`, `list_roots`
-            // and `progress_notify` — there is no `elicit`, and the
-            // `ElicitationManager` that would issue one is not reachable from a
-            // handler. Recorded as an SDK gap in this plan's SUMMARY.
-            "test_elicitation"
-            | "test_elicitation_sep1034_defaults"
-            | "test_elicitation_sep1330_enums" => Err(pmcp::Error::internal(
-                "no server->client channel on this transport: elicitation/create cannot be issued",
-            )),
+            // ---------------------------------------------------------------
+            // The three elicitation tools.
+            //
+            // HISTORY, kept because it is the finding this phase turns on. These
+            // three used to return a hardcoded
+            // `Err("no server->client channel on this transport")` under a
+            // comment claiming pmcp's `PeerHandle` had no `elicit` and that the
+            // issuing machinery was unreachable from a handler. BOTH claims were
+            // true when written and BOTH are now false: `PeerHandle::elicit`
+            // lands at `src/shared/peer.rs:172` (plan 09, D-07) and the HTTP
+            // server->client seam lands in plans 10 and 11, measured green by
+            // `tests/http_peer_roundtrip.rs::http_peer_elicit_completes_over_a_v1_session`.
+            //
+            // Leaving the refusal in place made this example report an SDK gap
+            // that no longer exists — a FALSE RED, which corrupts a conformance
+            // measurement exactly as badly as a false green. Plan 118.1-13
+            // measured the consequence: three scored `2025-11-25` scenarios red,
+            // plus a flapping `2026-07-28` check (`ServerAcceptsWhitespaceHeaderValue`)
+            // that picks an arbitrary tool by name and happened to land here.
+            //
+            // Each of the three requests a DIFFERENT schema, because each scenario
+            // validates a different SEP. They are deliberately not collapsed into
+            // one shared form.
+            "test_elicitation" => {
+                let message = args
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Please provide your information");
+                let peer = elicitation_peer(&extra)?;
+                let answer = peer
+                    .elicit(ElicitRequestParams::Form {
+                        message: message.to_string(),
+                        requested_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "username": { "type": "string", "title": "Username" },
+                                "email": { "type": "string", "title": "Email", "format": "email" },
+                            },
+                            "required": ["username", "email"],
+                        }),
+                    })
+                    .await?;
+                Ok(CallToolResult::new(vec![Content::text(
+                    format_elicit_answer(&answer),
+                )]))
+            },
+
+            // SEP-1034: every primitive type carries a `default`. The suite reads
+            // `params.requestedSchema.properties` and checks the type AND the
+            // default of each of the five fields, so the values below are load
+            // bearing and must not be "tidied".
+            "test_elicitation_sep1034_defaults" => {
+                let peer = elicitation_peer(&extra)?;
+                let answer = peer
+                    .elicit(ElicitRequestParams::Form {
+                        message: "Confirm your profile defaults".to_string(),
+                        requested_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "name":   { "type": "string",  "default": "John Doe" },
+                                "age":    { "type": "integer", "default": 30 },
+                                "score":  { "type": "number",  "default": 95.5 },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["active", "inactive", "pending"],
+                                    "default": "active",
+                                },
+                                "verified": { "type": "boolean", "default": true },
+                            },
+                        }),
+                    })
+                    .await?;
+                Ok(CallToolResult::new(vec![Content::text(
+                    format_elicit_answer(&answer),
+                )]))
+            },
+
+            // SEP-1330: all five enum variants in one schema. The suite asserts
+            // the variants are kept DISTINCT — an untitled enum must not also
+            // carry `oneOf` or `enumNames`, a titled one must use `oneOf` and not
+            // `enum`, and the untitled multi-select must use `items.enum` rather
+            // than `items.anyOf`. Merging any two of these breaks the scenario.
+            "test_elicitation_sep1330_enums" => {
+                let peer = elicitation_peer(&extra)?;
+                let answer = peer
+                    .elicit(ElicitRequestParams::Form {
+                        message: "Choose your options".to_string(),
+                        requested_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                // 1. untitled single-select: `enum`, nothing else.
+                                "untitledSingle": {
+                                    "type": "string",
+                                    "enum": ["option1", "option2", "option3"],
+                                },
+                                // 2. titled single-select: `oneOf` of const/title,
+                                //    and deliberately NO `enum` alongside it.
+                                "titledSingle": {
+                                    "type": "string",
+                                    "oneOf": [
+                                        { "const": "value1", "title": "First Option" },
+                                        { "const": "value2", "title": "Second Option" },
+                                        { "const": "value3", "title": "Third Option" },
+                                    ],
+                                },
+                                // 3. legacy titled: `enumNames` parallel to `enum`,
+                                //    same length. Deprecated, still asserted.
+                                "legacyEnum": {
+                                    "type": "string",
+                                    "enum": ["opt1", "opt2", "opt3"],
+                                    "enumNames": ["Option One", "Option Two", "Option Three"],
+                                },
+                                // 4. untitled multi-select: `items.enum`, not anyOf.
+                                "untitledMulti": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "enum": ["option1", "option2", "option3"],
+                                    },
+                                },
+                                // 5. titled multi-select: `items.anyOf` of const/title.
+                                "titledMulti": {
+                                    "type": "array",
+                                    "items": {
+                                        "anyOf": [
+                                            { "const": "value1", "title": "First Choice" },
+                                            { "const": "value2", "title": "Second Choice" },
+                                            { "const": "value3", "title": "Third Choice" },
+                                        ],
+                                    },
+                                },
+                            },
+                        }),
+                    })
+                    .await?;
+                Ok(CallToolResult::new(vec![Content::text(
+                    format_elicit_answer(&answer),
+                )]))
+            },
 
             // ---------------------------------------------------------------
             // The two `test_mrtr_*` tools that are NOT MRTR-shaped. Their
@@ -1199,13 +1475,15 @@ impl ConformanceTool {
 /// Attach an [`MrtrSignal`] to a `CallToolResult` so the dispatch layer seals it.
 ///
 /// The `_meta` field is set DIRECTLY rather than through
-/// `RequestHandlerExtra::set_result_meta`, and that is load-bearing. Every tool
-/// here is served through `handle_output` returning `ToolOutput::Result`, and
-/// that verbatim arm returns BEFORE the dispatcher drains the handler's result
-/// `_meta` slot (`src/server/mod.rs`: "the verbatim `ToolOutput::Result` arm
-/// above returns earlier and owns its own `_meta`"). A signal set through
-/// `set_result_meta` on this path is silently dropped, and the tool ships an
-/// empty success for an operation it never completed.
+/// `RequestHandlerExtra::set_result_meta`. Every tool here is served through
+/// `handle_output` returning `ToolOutput::Result`, and until D-06 (Phase 118.1
+/// plan 09) that verbatim arm returned BEFORE the dispatcher drained the
+/// handler's result `_meta` slot — a signal set through `set_result_meta` on
+/// this path was silently dropped, and the tool shipped an empty success for an
+/// operation it never completed. Both dispatchers now perform that drain before
+/// the verbatim early return, so `set_result_meta` would work here too; the
+/// direct write is kept because it puts the signal on the value this function
+/// returns, where a reader can see it without knowing the dispatch rules.
 fn input_required(text: &str, signal: MrtrSignal) -> pmcp::Result<CallToolResult> {
     let (key, value) = signal
         .into_meta_entry()
@@ -1362,6 +1640,39 @@ fn elicited_bool(extra: &RequestHandlerExtra, key: &str, field: &str) -> Option<
     result.content.as_ref()?.get(field)?.as_bool()
 }
 
+/// The server->client back-channel, or an explicit refusal naming the transport.
+///
+/// `extra.peer()` is `Some` on every transport that wires the seam. It was `None`
+/// under `StreamableHttpServer` until plans 118.1-10 and 118.1-11 wired it, which
+/// is why the three elicitation tools used to refuse unconditionally. The refusal
+/// is KEPT for the case where a handler genuinely has no peer — but it is now
+/// reached only when that is TRUE, rather than asserted in advance.
+fn elicitation_peer(extra: &RequestHandlerExtra) -> pmcp::Result<&Arc<dyn PeerHandle>> {
+    extra.peer().ok_or_else(|| {
+        pmcp::Error::internal(
+            "no server->client channel on this transport: elicitation/create cannot be issued",
+        )
+    })
+}
+
+/// Renders an elicitation answer in the shape the suite's scenario docs print:
+/// `Elicitation completed: action=<accept/decline/cancel>, content={...}`.
+///
+/// The action is rendered from the wire spelling (serde's camelCase), not from
+/// `{:?}` on the enum, so `Accept` reads as `accept` the way a client sees it.
+fn format_elicit_answer(answer: &ElicitResult) -> String {
+    let action = match answer.action {
+        ElicitAction::Accept => "accept",
+        ElicitAction::Decline => "decline",
+        ElicitAction::Cancel => "cancel",
+    };
+    let content = answer.content.as_ref().map_or_else(
+        || "{}".to_string(),
+        |c| serde_json::to_string(c).unwrap_or_else(|_| "{}".to_string()),
+    );
+    format!("Elicitation completed: action={action}, content={content}")
+}
+
 /// The sampling request shape the `tools-call-sampling` scenario specifies.
 fn sampling_params(prompt: &str) -> CreateMessageParams {
     CreateMessageParams::new(vec![SamplingMessage::new(
@@ -1415,7 +1726,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             ProtocolVersion(LATEST_PROTOCOL_VERSION.to_string()),
             ProtocolVersion(PROTOCOL_VERSION_2026_07_28.to_string()),
         ])
-        .resources(ConformanceResources);
+        .resources(ConformanceResources)
+        // G-4 (CONF-05, closed in 118.1-04). The suite's `completion-complete`
+        // scenario calls `completion/complete` against
+        // `test_prompt_with_arguments` with `argument.value = "test"`, so the
+        // provider's values START with `test` — `StaticCompletionProvider`
+        // filters by prefix, and a provider whose values could not match would
+        // exercise the seam without demonstrating it.
+        .completions(completion_provider());
 
     for name in PROMPT_NAMES {
         builder = builder.prompt(name, ConformancePrompt { name });
@@ -1468,6 +1786,22 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 /// scenario reports an error that looks like a transport fault. `logging`
 /// backs `logging-set-level`, `completions` backs `completion/complete`, and
 /// `resources.subscribe` backs `resources-subscribe` / `resources-unsubscribe`.
+/// The minimal `completion/complete` provider this target registers (G-4).
+///
+/// Values are fixed and prefixed `test` so they survive
+/// [`StaticCompletionProvider`]'s prefix filter against the suite's
+/// `argument.value = "test"`. The suite's own source comments that "completion
+/// support can be minimal or return empty arrays", so a fixed array is exactly
+/// what the referee asks for — the scenario scores on `result.completion.values`
+/// being an array, not on the candidates being clever.
+fn completion_provider() -> StaticCompletionProvider {
+    StaticCompletionProvider::from_strings(vec![
+        "test_completion_alpha".to_string(),
+        "test_completion_beta".to_string(),
+        "test_completion_gamma".to_string(),
+    ])
+}
+
 fn conformance_capabilities() -> ServerCapabilities {
     // `ServerCapabilities` is `#[non_exhaustive]`, so it is built by mutating a
     // `Default` rather than with a struct literal.
@@ -1558,6 +1892,13 @@ fn v1_tools_list_body() -> String {
 /// A v2 `tools/list` body — the era ALSO travels in `params._meta`, which is
 /// what makes the very first byte a client sends a real request rather than an
 /// `initialize` handshake.
+///
+/// `io.modelcontextprotocol/clientCapabilities` is REQUIRED on every v2 request
+/// (Phase 118.1, gap G-6): a `_meta` carrying only the protocol version is
+/// answered `-32602` + HTTP 400. This body is printed as a copy-pasteable `curl`
+/// below, so omitting the key would hand the reader a request the server refuses.
+/// `io.modelcontextprotocol/clientInfo` is deliberately absent — it is a SHOULD,
+/// and leaving it out keeps the printed command exercising that optionality.
 fn v2_tools_list_body() -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -1566,6 +1907,9 @@ fn v2_tools_list_body() -> String {
         "params": {
             "_meta": {
                 pmcp::testing::META_PROTOCOL_VERSION: PROTOCOL_VERSION_2026_07_28,
+                pmcp::testing::META_CLIENT_CAPABILITIES: {
+                    "elicitation": {}, "sampling": {}, "roots": {},
+                },
             },
         },
     })

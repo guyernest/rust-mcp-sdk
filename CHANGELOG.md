@@ -5,6 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - Unreleased
+
+### ⚠ WIRE CHANGE — embedded resources now serialize as the spec's `EmbeddedResource`
+
+**This is a conformance FIX, and there is no opt-out escape hatch.** An embedded
+resource inside a tool result (`CallToolResult.content`) or a prompt message
+(`GetPromptResult.messages[].content`) now serializes as the shape the MCP
+schema declares:
+
+```json
+{ "type": "resource", "resource": { "uri": "…", "mimeType": "…", "text": "…" } }
+```
+
+Previously pmcp emitted a FLAT object with the payload hoisted to the top level:
+
+```json
+{ "type": "resource", "uri": "…", "text": "…", "mimeType": "…" }
+```
+
+The change applies to **both** 2025-11-25 and 2026-07-28 — the era decision is
+per request, and this is not an era-dependent shape.
+
+**Why there is no opt-out.** `EmbeddedResource.resource` is
+`TextResourceContents | BlobResourceContents` in every published version of the
+schema (`schema.ts:1734-1748`). The flat object matched no arm of that union, so
+every other MCP implementation rejected or misread pmcp's embedded resources.
+Reliance on the flat shape was reliance on a bug, and keeping a flag to reproduce
+it would keep pmcp emitting a shape no conformant peer can read.
+
+**What did NOT change: `ReadResourceResult.contents` stays FLAT.** That position
+is `ResourceContents[]` (`schema.ts:1514-1560`), which the spec declares flat and
+without a `type` discriminator, and which pmcp already emitted correctly. It
+gains `blob` and nothing else.
+
+### Added
+
+- `Content::Resource` gains **`blob`** — the `BlobResourceContents` arm
+  (`schema.ts:1548`), so a binary resource can finally be embedded and so
+  `resources/read` on a binary resource answers `{uri, mimeType, blob}`.
+- `Content::Resource` gains **`annotations`** — `EmbeddedResource.annotations`
+  (`schema.ts:1741`), emitted as a SIBLING of `resource`, never inside it.
+- `Content::resource_with_blob(uri, blob, mime_type)`, `Content::with_annotations`
+  and `Content::with_meta`. These are **mandatory, not convenient**: see the
+  `#[non_exhaustive]` note below.
+- `Content`'s reader is now TOLERANT: it accepts the nested spec shape **and**
+  the legacy flat shape, and emits only the nested one. This also fixes a
+  client-side defect — before this release a spec-conformant embedded resource
+  from any other SDK's server failed to parse at all with ``missing field `uri` ``.
+  The tolerance is a compatibility affordance for mixed-version fleets, not a
+  second supported wire format.
+- **`SharedSender`** — a new public trait, plus a defaulted
+  `Transport::shared_sender()` accessor that returns `None`. A transport that
+  implements it hands the client an OWNED send handle, so `Client` takes its
+  transport guard only long enough to ask for that handle, drops it, and only
+  then awaits the send. Additive: a transport that does not implement it keeps
+  the previous exclusive path. `StreamableHttpTransport` implements it;
+  `PooledTransport`, `HttpTransport` and `WasmHttpTransport` do not.
+- **`Era` / `protocol_era()` and the `V2_PROTOCOL_VERSIONS` table** — v2
+  membership now has ONE source of truth that both the era classifier and the
+  `MCP-Protocol-Version` echo read, so adding a future v2-generation version is
+  a single-table edit and cannot make the echo advertise the wrong spelling.
+
+### Changed
+
+- **`Content::Resource` is now `#[non_exhaustive]`.** Downstream crates construct
+  it through `Content::resource_with_text` / `Content::resource_with_blob` (plus
+  the `.with_annotations(..)` / `.with_meta(..)` builders) and match it with a
+  `..` rest pattern. This is deliberate and one-time: landing the attribute in
+  the same change as `blob` and `annotations` makes every FUTURE spec field on
+  this variant a minor version bump instead of a major one.
+- An embedded resource carrying neither `text` nor `blob` emits
+  `{"type":"resource","resource":{"uri":"…","text":""}}`. Both arms of the spec
+  union require content, so `text` is the default arm; an object carrying neither
+  key would match no arm at all.
+- A payload carrying BOTH `text` and `blob` inside `resource` is REJECTED on
+  input, because the spec type is an XOR.
+- **A stalled peer can no longer wedge a whole `Client`.** Client sends route
+  through an owned handle taken under a momentary guard that is released BEFORE
+  the round trip is awaited, so a peer that accepts a POST and never writes its
+  response head now blocks only its own call — not every other operation on that
+  client, `close()` included. Two disclosed exceptions remain: a POOLED
+  `StreamableHttpTransport` keeps the exclusive path, and `Client::open_event_stream`
+  still holds a read guard across the `subscriptions/listen` response head.
+- **Concurrent token vends on one transport are single-flighted.** Two paths that
+  were serialised only by accident are now serialised in their own right: the
+  `401` refresh (purge through retry BUILD), and — new in this release — the
+  ORDINARY vend while the credential cache is cold. Several concurrent first
+  requests on one cloned transport previously reached `AuthProvider::get_access_token`
+  once each; against a ROTATING refresh token the identity provider accepts one and
+  rejects the rest, and each rejection invalidates the token the winner cached, so
+  the transport's auth failed permanently before any `401` had occurred. NOTE the
+  limit: this holds only if your `AuthProvider` CACHES what `get_access_token`
+  returns. The trait states no caching contract and pmcp cannot enforce one —
+  against a non-caching provider the vends are serialised but still plural.
+- **Session-stream restarts are atomic.** Two overlapping restarts can no longer
+  leave an orphaned reader holding a live connection.
+
+### Fixed
+
+- **Docs: the v2 server track said the opposite of the code.** The README and the
+  migration guide both stated that servers need do nothing for v2 — that a server
+  built with default features "already answers both eras". The default accept-list
+  is v1-only BY DESIGN (`default_accept_list()` excludes `2026-07-28`, so no server
+  reaches the v2 era by accident), and v2 is reached only through
+  `ServerBuilder::with_supported_protocol_versions(..)`. A team following the guide
+  shipped a v1-only server and believed it was done, with the failure silent until
+  a v2 client arrived. Both documents now teach the opt-in, with the v1 version
+  listed ALONGSIDE v2. No code change: the docs were wrong, not the default.
+- **`pmcp-code-mode` no longer declares `execute_code` as a safe read.**
+  `readOnlyHint`/`destructiveHint` were shared with `validate_code`, telling every
+  host it could auto-approve execution of caller-supplied code. `execute_code` now
+  declares nothing and the MCP defaults (`readOnlyHint = false`,
+  `destructiveHint = true`) stand.
+
+### Deprecated
+
+- `Content::resource(uri)` — a URI-only value cannot be a spec-valid
+  `EmbeddedResource`; that is `ResourceLink`. Use `Content::resource_with_text` /
+  `Content::resource_with_blob` for embedded content, or `Content::resource_link`
+  for a reference. The body and the returned variant are unchanged; removal is
+  scheduled for the next major.
+
+### Migration
+
+- **Readers of pmcp tool results and prompt messages must read
+  `content.resource.uri` instead of `content.uri`** (and `content.resource.text`
+  / `content.resource.blob`). `content._meta` and `content.annotations` stay at
+  content level and are unmoved — the MCP Apps widget path that destructures
+  `{ uri, meta, .. }` at content level reads `_meta` there and is unaffected.
+- pmcp's own reader accepts BOTH shapes, so a mixed-version fleet keeps working
+  in the client direction while servers roll forward.
+- Rust callers who built `Content::Resource { .. }` with a struct literal switch
+  to `Content::resource_with_text` / `Content::resource_with_blob`; callers who
+  matched it exhaustively add a `..` rest pattern.
+- Readers of `ReadResourceResult.contents` change nothing, except that a binary
+  resource now actually carries its payload under `blob`.
+
+Phase 119's migration guide is written against this section.
+
 ## [2.18.0] - 2026-08-16
 
 SEP-2352 credential storage and OAuth discovery hardening (Phase 116). `pmcp`
@@ -106,7 +245,7 @@ behaviour changes are called out below because both are visible to operators.
   and the header/body cross-check is unchanged wherever a name exists. Nothing
   about 2025-11-25 changes — the era decision is per request.
 
-## [2.17.0] - Unreleased
+## [2.17.0] - 2026-07-19
 
 Hosted-agent loop enablement (Phase 108). Three paired, fully **additive** core
 changes that let a tool handler call back into its client mid-request without

@@ -173,6 +173,23 @@ impl std::fmt::Debug for CancellationManager {
     }
 }
 
+/// The log level in force when nothing configured one for a request.
+///
+/// `info`, which means `debug` and finer are SUPPRESSED until a client asks for
+/// them. Three reasons, in order of weight:
+///
+/// 1. It is the conventional default across MCP implementations, so a server
+///    ported to pmcp behaves the way its operators already expect.
+/// 2. A chatty handler cannot flood a client that never opted in. Verbosity is
+///    something a client requests, not something a server imposes.
+/// 3. The MCP conformance scenario emits at `info` or above, so a server that
+///    never configures a level still passes it.
+///
+/// Raising a level is a per-request decision (see
+/// [`RequestHandlerExtra::with_log_level`]); this constant only decides what
+/// happens when no decision was made.
+pub const DEFAULT_LOG_LEVEL: crate::types::LoggingLevel = crate::types::LoggingLevel::Info;
+
 /// Extra context passed to request handlers.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -195,6 +212,24 @@ pub struct RequestHandlerExtra {
     /// Optional progress reporter for this request
     #[allow(dead_code)]
     pub progress_reporter: Option<Arc<dyn ProgressReporter>>,
+    /// Request-scoped notification sink for `notifications/message` records
+    /// emitted by [`RequestHandlerExtra::log`] / [`RequestHandlerExtra::log_with_data`].
+    ///
+    /// UNGATED by any progress token — a log record is not progress, and a
+    /// client that never sent a `progressToken` still gets its logs. `None`
+    /// when the enclosing dispatch path attached no sink (unit-test fixtures,
+    /// `RequestHandlerExtra::default()`, transports without a back-channel);
+    /// emission is then a silent no-op returning `Ok(())`. See
+    /// [`RequestHandlerExtra::log`] for the accepted cost of that silence.
+    #[allow(dead_code)]
+    pub log_sink: Option<Arc<dyn Fn(Notification) + Send + Sync>>,
+    /// The log level resolved for this request, if anything set one.
+    ///
+    /// `None` means nothing set one, and the effective level falls back to
+    /// [`DEFAULT_LOG_LEVEL`]. Records strictly below the effective level are
+    /// dropped by [`RequestHandlerExtra::log`] before anything is constructed.
+    #[allow(dead_code)]
+    pub log_level: Option<crate::types::LoggingLevel>,
     /// Task augmentation request from the client (MCP Tasks).
     ///
     /// When `Some`, the client supports async task polling and requested
@@ -277,6 +312,8 @@ impl RequestHandlerExtra {
             auth_context: None,
             metadata: HashMap::new(),
             progress_reporter: None,
+            log_sink: None,
+            log_level: None,
             task_request: None,
             request_meta: None,
             protocol_context: None,
@@ -315,6 +352,28 @@ impl RequestHandlerExtra {
         progress_reporter: Option<Arc<dyn ProgressReporter>>,
     ) -> Self {
         self.progress_reporter = progress_reporter;
+        self
+    }
+
+    /// Attach the request-scoped notification sink for log records.
+    ///
+    /// The construction seam the dispatch layer uses to wire
+    /// [`log`](Self::log) / [`log_with_data`](Self::log_with_data) to whatever
+    /// back-channel this request has. Without it both emitters are silent
+    /// no-ops that still return `Ok(())`.
+    #[must_use]
+    pub fn with_log_sink(mut self, sink: Arc<dyn Fn(Notification) + Send + Sync>) -> Self {
+        self.log_sink = Some(sink);
+        self
+    }
+
+    /// Set the log level for this request.
+    ///
+    /// Records strictly below `level` are dropped by the emitters. When this is
+    /// never called the effective level is [`DEFAULT_LOG_LEVEL`].
+    #[must_use]
+    pub fn with_log_level(mut self, level: crate::types::LoggingLevel) -> Self {
+        self.log_level = Some(level);
         self
     }
 
@@ -397,6 +456,21 @@ impl RequestHandlerExtra {
 
     /// Returns the client's SELF-REPORTED advertised capabilities, or `None`
     /// when absent.
+    ///
+    /// # Both eras reach this accessor
+    ///
+    /// On MCP `2026-07-28` the value comes from the per-request
+    /// `_meta["io.modelcontextprotocol/clientCapabilities"]`, resolved once at
+    /// ingress. On MCP `2025-11-25` it comes from the `initialize` handshake,
+    /// folded into the same `ProtocolContext` at the dispatch root by
+    /// `core::fold_v1_handshake_capabilities` (Phase 118.1-08, G-9). This method
+    /// reads ONLY `protocol_context.client_capabilities` in either case — it
+    /// deliberately does NOT reach for the server-level `client_capabilities`
+    /// lock, because it is a sync method on a value already moved into the
+    /// handler while the dispatch path holds that lock, and that shape
+    /// deadlocks.
+    ///
+    /// Absent both signals the answer is `None`, never a fabricated default.
     ///
     /// **Security — self-reported, not for authorization:** like
     /// [`client_info`](Self::client_info), these capabilities are client-supplied
@@ -542,9 +616,8 @@ impl RequestHandlerExtra {
     /// that returns a plain `Value` and does NOT override
     /// [`ToolHandler::handle_output`](crate::server::ToolHandler::handle_output))
     /// to attach task augmentation or custom `_meta` without owning the full
-    /// envelope. The keys are accumulated in an interior-mutable slot and, on the
-    /// **Payload dispatch path**, merged onto the server-built `CallToolResult`'s
-    /// `_meta` after the handler returns.
+    /// envelope. The keys are accumulated in an interior-mutable slot and merged
+    /// onto the outgoing `CallToolResult`'s `_meta` after the handler returns.
     ///
     /// Takes `&self`: the slot is interior-mutable, so this works even though the
     /// handler receives `RequestHandlerExtra` by value (the slot `Arc` is shared
@@ -562,12 +635,26 @@ impl RequestHandlerExtra {
     ///
     /// # Path scope
     ///
-    /// This affects the **Payload path ONLY**. It is **IGNORED** on the
-    /// [`ToolOutput::Result`](crate::server::ToolOutput::Result) path — a handler
-    /// that returns a full `CallToolResult` owns its entire envelope (including
-    /// `_meta`) and must set related-task metadata on that value directly, e.g.
-    /// via
-    /// [`CallToolResult::with_related_task`](crate::types::CallToolResult::with_related_task).
+    /// This applies on **both** tool-output paths, on **both** dispatchers
+    /// (`Server` and `ServerCore`):
+    ///
+    /// - **Payload path** — the keys merge onto the envelope the dispatcher
+    ///   builds (text-wrap / widget enrichment / `outputSchema` bridge).
+    /// - **[`ToolOutput::Result`](crate::server::ToolOutput::Result) (verbatim)
+    ///   path** — since D-06 (Phase 118.1) the keys merge onto the envelope the
+    ///   HANDLER authored, immediately before it is emitted. That arm still
+    ///   bypasses response middleware, the task create-path gate and the
+    ///   text-wrap tail (D-04 / D-04a); the bypass covers the response
+    ///   *pipeline*, not the handler's own `_meta`, which is authored by the same
+    ///   handler at the same trust level as the envelope itself. Before D-06 the
+    ///   keys were silently DROPPED here.
+    ///
+    /// A verbatim handler may of course still set `_meta` on the value directly,
+    /// e.g. via
+    /// [`CallToolResult::with_related_task`](crate::types::CallToolResult::with_related_task);
+    /// when it does both, the merge precedence above decides — the
+    /// `set_result_meta` key wins the collision, and the envelope's unrelated
+    /// keys survive.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_result_meta(&self, meta: serde_json::Map<String, serde_json::Value>) {
         let mut guard = self
@@ -648,6 +735,199 @@ impl RequestHandlerExtra {
         }
     }
 
+    /// Emit an MCP `notifications/message` log record to this request's client.
+    ///
+    /// The first PRODUCTION constructor of
+    /// [`ServerNotification::LogMessage`](crate::types::ServerNotification::LogMessage).
+    /// Synchronous on purpose: the sink is a synchronous
+    /// `Arc<dyn Fn(Notification) + Send + Sync>`, no trait is involved, and
+    /// making this `async` would force every logging call site into an `.await`
+    /// to buy nothing.
+    ///
+    /// # `Ok(())` is NOT delivery acknowledgement
+    ///
+    /// `Ok(())` means the record was handed to whatever sink this request has,
+    /// or that there was none — it does NOT mean the client received it. The
+    /// sink's type is `Fn(Notification) -> ()`: it returns unit and therefore
+    /// *cannot* report failure, and the fallback `notification_tx` path in
+    /// `Server` likewise ignores its own `try_send` result. Do not build retry
+    /// logic on this `Result`. It exists so that a future "sink refused" signal
+    /// is an additive change rather than a breaking one.
+    ///
+    /// # No sink means silence, not an error
+    ///
+    /// With no sink attached the call is a no-op returning `Ok(())`, exactly as
+    /// [`report_progress`](Self::report_progress) is. That keeps a handler
+    /// callable outside a server —
+    /// [`RequestHandlerExtra::default()`](Self::default) is documented for
+    /// testing and simple tool invocations, and a handler that logs must not
+    /// become un-unit-testable. The accepted cost, stated plainly: a MISPLUMBED
+    /// transport looks identical to a quiet handler. The conformance fence — a
+    /// test asserting records actually arrive over the wire — is what catches
+    /// that, so this is a production-diagnostics hole rather than a false green
+    /// in the gate.
+    ///
+    /// # Level filtering
+    ///
+    /// A record strictly below the effective level (this request's
+    /// [`with_log_level`](Self::with_log_level), else [`DEFAULT_LOG_LEVEL`]) is
+    /// dropped before anything is constructed. Comparison is on the typed
+    /// [`LoggingLevel`](crate::types::LoggingLevel), whose declaration order is
+    /// syslog severity order — never on the serialized strings, where
+    /// `"critical" < "debug"` inverts the filter.
+    ///
+    /// # No rate limiting, and what that does and does not promise
+    ///
+    /// Unlike progress reporting, this emitter applies NO rate limit. Progress
+    /// values are idempotent — dropping an intermediate one loses nothing
+    /// because the next supersedes it — whereas each log record is the only
+    /// copy of its information, so a limiter would silently delete evidence.
+    ///
+    /// That is a statement about the EMITTER, not a promise that no record can
+    /// ever be dropped downstream. On MCP 2026-07-28 the vehicle a record rides
+    /// is the request's bounded progress queue: an `mpsc::channel(64)` with an
+    /// explicit DROP-NEWEST `try_send` policy, because the sink closure is
+    /// synchronous and must not block. A handler emitting more than that
+    /// capacity of notifications in one call LOSES THE EXCESS, and every one of
+    /// those calls still returns `Ok(())`. A handler that must not lose records
+    /// should keep a single call under the queue capacity.
+    ///
+    /// # When records go nowhere on 2026-07-28
+    ///
+    /// That vehicle is attached only when the request is multi-frame eligible —
+    /// era is 2026-07-28, the server is not configured for JSON responses, and
+    /// the request's `Accept` header includes `text/event-stream`. A 2026-07-28
+    /// client that asked for JSON only therefore receives no log records at all.
+    /// That is correct behaviour for a client that declined the streaming
+    /// channel, not a bug.
+    ///
+    /// # Capabilities
+    ///
+    /// Emission is deliberately NOT gated on
+    /// [`ServerCapabilities::logging`](crate::types::ServerCapabilities). The
+    /// sink is per-request and the capability is advisory; gating here would
+    /// make a correctly-plumbed server silently mute. Servers SHOULD still
+    /// declare the capability so clients know to expect records.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::LoggingLevel;
+    /// use pmcp::RequestHandlerExtra;
+    ///
+    /// // No server, so no sink — the call succeeds and emits nothing.
+    /// let extra = RequestHandlerExtra::default();
+    /// assert!(extra.log(LoggingLevel::Info, "starting work").is_ok());
+    /// ```
+    pub fn log(&self, level: crate::types::LoggingLevel, message: impl Into<String>) -> Result<()> {
+        self.emit_log_record(level, message.into(), None);
+        Ok(())
+    }
+
+    /// Emit a `notifications/message` log record carrying structured data.
+    ///
+    /// Identical to [`log`](Self::log) in every respect — same synchronous
+    /// emission, same level filtering, same no-sink silence, and the same
+    /// `Ok(())`-is-not-acknowledgement caveat — except that `data` is attached
+    /// to the record's `data` member.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::LoggingLevel;
+    /// use pmcp::RequestHandlerExtra;
+    /// use serde_json::json;
+    ///
+    /// let extra = RequestHandlerExtra::default();
+    /// assert!(extra
+    ///     .log_with_data(LoggingLevel::Warning, "retrying", json!({ "attempt": 2 }))
+    ///     .is_ok());
+    /// ```
+    pub fn log_with_data(
+        &self,
+        level: crate::types::LoggingLevel,
+        message: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Result<()> {
+        self.emit_log_record(level, message.into(), Some(data));
+        Ok(())
+    }
+
+    /// The one place the filter rule and the record shape live.
+    ///
+    /// Both public emitters delegate here so the level comparison exists exactly
+    /// once — two copies of a filter is two chances to get the direction wrong.
+    ///
+    /// Returns `()`, not `Result<()>`: nothing here can fail today, and a
+    /// private helper that wraps an infallible body in `Ok` is a lie the
+    /// compiler cannot catch. The PUBLIC emitters still return `Result<()>` —
+    /// that is a deliberate evolution seam so a future "sink refused" signal is
+    /// additive rather than breaking, and it is not a claim that this body has
+    /// a failure mode.
+    ///
+    /// # `data` is always populated, even when the caller supplied none
+    ///
+    /// `LoggingMessageNotificationParams` declares `data` REQUIRED with no
+    /// `message` member at all (`schema/vendored/core-2026-07-28/schema.ts`), and
+    /// the official reference client's `LoggingMessageNotificationParamsSchema`
+    /// spells it `z.unknown()` — which is NON-OPTIONAL under the bundled zod v4.
+    /// A frame without `data` therefore fails to parse and is dropped on the
+    /// floor: measured, at the pinned suite, as
+    /// `invalid_type at params.data: expected nonoptional, received undefined`.
+    ///
+    /// So when the caller used [`log`](Self::log) and supplied no data, `data` is
+    /// set to the message string. `message` still rides alongside, as a pmcp
+    /// extension the schema permits (it does not close `additionalProperties`)
+    /// and the reference client tolerates (it strips unknown members rather than
+    /// rejecting them). When the caller used
+    /// [`log_with_data`](Self::log_with_data), their value is passed through
+    /// VERBATIM and is never overwritten by the message.
+    ///
+    /// Do not "simplify" the default away: without it,
+    /// `2025-11-25:tools-call-with-logging` scores 0/2 and the suite's
+    /// `WireSchemaValid` check reports
+    /// `LoggingMessageNotification/params: must have required property 'data'`.
+    ///
+    /// Both early returns below stay AHEAD of this: a record below the effective
+    /// level, or one with no sink attached, still constructs no payload at all.
+    fn emit_log_record(
+        &self,
+        level: crate::types::LoggingLevel,
+        message: String,
+        data: Option<serde_json::Value>,
+    ) {
+        let effective = self.log_level.unwrap_or(DEFAULT_LOG_LEVEL);
+        if level < effective {
+            // Below the bar: return before constructing anything at all.
+            return;
+        }
+
+        let Some(sink) = self.log_sink.as_ref() else {
+            // D-08: no sink is silence, not an error.
+            return;
+        };
+
+        // `data` is REQUIRED by the wire schema, so a caller who supplied none
+        // gets the message string. See this function's rustdoc for the
+        // measurement; the short version is that the official reference client
+        // drops a frame without `data` on the floor.
+        //
+        // The `clone` is in the `None` arm ONLY and is not a borrow-checker
+        // concession: the frame genuinely carries the text twice, under `data`
+        // and under `message`, so exactly one extra allocation is the floor. The
+        // `Some` arm moves the caller's value and clones nothing.
+        let data = data.unwrap_or_else(|| serde_json::Value::String(message.clone()));
+
+        // `logger` is deliberately left `None`. Synthesising one from the tool
+        // name would be a guess, and a guessed logger category is worse than an
+        // absent one because it looks authoritative.
+        let params = crate::types::LogMessageParams::new(level, message).with_data(data);
+
+        sink(Notification::Server(
+            crate::types::ServerNotification::LogMessage(params),
+        ));
+    }
+
     /// Report count-based progress if available.
     pub async fn report_count(
         &self,
@@ -678,6 +958,8 @@ impl Default for RequestHandlerExtra {
             auth_context: None,
             metadata: HashMap::new(),
             progress_reporter: None,
+            log_sink: None,
+            log_level: None,
             task_request: None,
             request_meta: None,
             protocol_context: None,
@@ -782,6 +1064,11 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("task_request", &self.task_request.is_some())
             .field("request_meta", &self.request_meta)
             .field("protocol_context", &self.protocol_context)
+            // Presence only — a sink is a closure with no useful Debug, and
+            // whether one is attached is exactly the fact a developer chasing
+            // "my logs went nowhere" needs (see `RequestHandlerExtra::log`).
+            .field("log_sink", &self.log_sink.is_some())
+            .field("log_level", &self.log_level)
             .field("extensions", &self.extensions);
         #[cfg(not(target_arch = "wasm32"))]
         debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));
@@ -1052,5 +1339,96 @@ mod tests {
         let debug_out = format!("{:?}", extra);
         // http::Extensions Debug prints type names, not field values
         assert!(!debug_out.contains("SECRET_VALUE_DO_NOT_LEAK"));
+    }
+}
+
+/// Property tests for the `_meta` merge both dispatchers now call on BOTH
+/// output paths (D-06, Phase 118.1 plan 09).
+///
+/// The verbatim `ToolOutput::Result` arm merges handler-authored keys into an
+/// envelope the HANDLER built, which can already carry widget, native and
+/// related-task keys. A whole-map replace there would silently destroy them, so
+/// the merge invariants are stated as properties over arbitrary key sets rather
+/// than over the handful of literals the integration fences happen to use
+/// (T-118.1-09-04).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod merge_result_meta_properties {
+    use super::merge_result_meta;
+    use crate::types::CallToolResult;
+    use proptest::prelude::*;
+    use serde_json::{Map, Value};
+
+    /// Arbitrary `_meta`-shaped map: reverse-DNS-ish keys, scalar values.
+    fn meta_map_strategy() -> impl Strategy<Value = Map<String, Value>> {
+        proptest::collection::hash_map("[a-z]{1,6}/[a-z]{1,6}", 0u64..1000, 0..8).prop_map(|m| {
+            m.into_iter()
+                .map(|(k, v)| (k, Value::from(v)))
+                .collect::<Map<String, Value>>()
+        })
+    }
+
+    proptest! {
+        /// Handler keys win; every existing key that the handler did NOT name
+        /// survives untouched; the result is exactly the union of both key sets.
+        #[test]
+        fn merge_is_a_union_with_handler_keys_winning(
+            existing in meta_map_strategy(),
+            handler in meta_map_strategy(),
+        ) {
+            let mut result = CallToolResult::new(vec![]);
+            if !existing.is_empty() {
+                result = result.with_meta(existing.clone());
+            }
+
+            merge_result_meta(&mut result, handler.clone());
+
+            if existing.is_empty() && handler.is_empty() {
+                // Nothing to merge and nothing pre-existing: no `_meta` is
+                // fabricated, so a no-opt-in handler stays byte-identical.
+                prop_assert!(result._meta.is_none());
+                return Ok(());
+            }
+
+            let merged = result._meta.as_ref().expect("_meta present after a non-empty merge");
+
+            for (key, value) in &handler {
+                prop_assert_eq!(merged.get(key), Some(value), "handler key must win: {}", key);
+            }
+            for (key, value) in &existing {
+                if !handler.contains_key(key) {
+                    prop_assert_eq!(
+                        merged.get(key),
+                        Some(value),
+                        "unrelated existing key must survive: {}",
+                        key
+                    );
+                }
+            }
+
+            let mut union: std::collections::BTreeSet<&String> = existing.keys().collect();
+            union.extend(handler.keys());
+            prop_assert_eq!(merged.len(), union.len(), "merge must add no keys of its own");
+        }
+
+        /// Merging is idempotent: applying the same handler map twice cannot
+        /// drift (repeated drains on a retried dispatch stay safe).
+        #[test]
+        fn merge_is_idempotent(
+            existing in meta_map_strategy(),
+            handler in meta_map_strategy(),
+        ) {
+            let mut once = CallToolResult::new(vec![]);
+            let mut twice = CallToolResult::new(vec![]);
+            if !existing.is_empty() {
+                once = once.with_meta(existing.clone());
+                twice = twice.with_meta(existing);
+            }
+
+            merge_result_meta(&mut once, handler.clone());
+            merge_result_meta(&mut twice, handler.clone());
+            merge_result_meta(&mut twice, handler);
+
+            prop_assert_eq!(once._meta, twice._meta);
+        }
     }
 }
