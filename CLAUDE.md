@@ -276,6 +276,21 @@ make test-integration   # Integration tests
    gate the core SDK release. Its `webhook` (reqwest) and `http`
    (`pmcp/streamable-http`) features are non-default, so the default publish
    build is reqwest-free and wasm-clean.
+16. `pmcp-server` (the docs/resources MCP server at `crates/pmcp-server/`). A root
+   workspace member pinning `pmcp` (item 2) and `mcp-tester` (item 10), so it must
+   publish AFTER both. **This entry was missing from this list until 2026-08-21** —
+   it was present in `release.yml` the whole time, so CI published it correctly and
+   only the prose order was wrong. Its sibling `pmcp-server-lambda` is
+   `publish = []` and never publishes.
+17. `pmcp-tasks` (the experimental 0.x MCP-Tasks crate at `crates/pmcp-tasks/`). Pins
+   `pmcp` (item 2) only, and NOTHING in this workspace depends on it — so it
+   publishes late, like `pmcp-package`, and a failure here must not gate the core
+   SDK release. **This entry was missing from BOTH this list and `release.yml`
+   until 2026-08-21**, so it had never published at all; pmcp-run's built-in
+   servers consume it out-of-repo with `features = ["dynamodb"]` and could not pin
+   until 0.1.0 was published by hand. Both ledgers are now covered by the
+   `release-coverage` CI check (see below), which is what makes a third recurrence
+   a build failure rather than a discovery.
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,
