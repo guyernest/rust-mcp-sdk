@@ -225,6 +225,13 @@ jobs:
       with:
         components: rustfmt, clippy
     
+    # Release-ledger coverage. Runs FIRST and costs ~2s: a crate with no publish
+    # step ships nothing, and that has now happened twice (pmcp-openapi-server,
+    # pmcp-tasks). Lives in the quality-gate job because `gate.needs` already
+    # includes it, so a failure blocks merge via the org-required `gate` check.
+    - name: Release-ledger coverage
+      run: ./scripts/check-release-coverage.sh
+
     - name: Cache cargo
       uses: actions/cache@v6
       with:
