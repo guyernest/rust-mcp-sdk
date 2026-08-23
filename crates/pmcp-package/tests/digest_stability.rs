@@ -12,12 +12,16 @@
 //!   SAME `manifest_digest()`/`canonicalize()` path as the other three package
 //!   types — proven directly by the agent stability test below.
 
-use pmcp_package::digest::{canonicalize, manifest_digest};
+use pmcp_package::digest::{canonicalize, manifest_digest, verify};
+use pmcp_package::error::PackageError;
 use pmcp_package::package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
 use pmcp_package::reference::{ComponentRef, ComponentType};
 use pmcp_package::slot::{ConfigSlot, SlotType};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+mod common;
+use common::{london_tube_spec_bytes, pack_london_tube, read_manifest_bytes};
 
 fn read_fixture(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -342,5 +346,109 @@ fn reordering_workflow_components_and_slots_via_new_yields_same_digest() {
     assert_eq!(
         digest_forward, digest_backward,
         "WorkflowManifest::new must sort deterministically regardless of input order"
+    );
+}
+
+// =========================================================================
+// Plan 120-05 Task 4 (D-12) — the PACKED-MANIFEST golden.
+//
+// The four constants above pin `manifest_digest(&struct)`, which is a
+// function of the STRUCT's serialized fields and is therefore BLIND to the
+// layer set, the layer order, the media-type strings and the layer
+// annotations. This one packs a real layout and pins what `finalize_pack`
+// RETURNS, which is the only value in the crate that moves when any of those
+// four change. That difference is the whole point of adding it.
+// =========================================================================
+
+/// The packed OCI manifest digest of the WITH-SPEC config-only london-tube
+/// package.
+///
+/// # What this constant is a function of — and what it is NOT
+///
+/// It is `sha256(canonical manifest bytes)`, i.e. a function of
+/// `{schemaVersion, mediaType, artifactType, the config descriptor, and per
+/// layer: mediaType + size + digest + annotations}`.
+///
+/// It is **NOT** a function of the package's name or version: the index
+/// descriptor's `name`/`version` annotations are applied AFTER `write_manifest`
+/// has already computed the manifest digest. So "proving" this golden moves by
+/// bumping the package version yields a FALSE GREEN — mutate a layer instead.
+///
+/// # Why the WITH-SPEC case (D-14)
+///
+/// The spec layer is optional. Pinning the without-spec shape would let the
+/// spec-less path quietly become the default while this test stayed green, so
+/// the pinned case carries the spec and a companion assertion below requires
+/// the without-spec digest to DIFFER.
+///
+/// Authored by the procedure the four struct goldens used: write the assertion
+/// with a placeholder, run once, copy `actual` out of the failure. Never
+/// computed through a second code path — `pack.rs` keeps one hash with one
+/// source of truth.
+const EXPECTED_CONFIG_SERVER_PACKED_MANIFEST_DIGEST: &str =
+    "sha256:5bd6bad19359c974d487e2754323c075a57c58559bac1619eb29d005882cf7e1";
+
+#[test]
+fn config_server_packed_manifest_digest_matches_pinned_constant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, digest) = pack_london_tube(dir.path(), Some(&london_tube_spec_bytes()));
+    assert_eq!(
+        digest.as_str(),
+        EXPECTED_CONFIG_SERVER_PACKED_MANIFEST_DIGEST,
+        "the PACKED manifest digest of the with-spec config-only package changed. Unlike the \
+         four struct-level goldens, this one sees the layer SET, the layer ORDER, the \
+         media-type strings and the layer filename annotations — so one of those four moved, \
+         and a previously published CLI can no longer read this package. Bump the format \
+         version intentionally; do NOT silently repin."
+    );
+}
+
+#[test]
+fn the_with_spec_and_without_spec_packed_digests_differ() {
+    let with_dir = tempfile::tempdir().unwrap();
+    let (_, with_spec) = pack_london_tube(with_dir.path(), Some(&london_tube_spec_bytes()));
+    let without_dir = tempfile::tempdir().unwrap();
+    let (_, without_spec) = pack_london_tube(without_dir.path(), None);
+    assert_ne!(
+        with_spec, without_spec,
+        "the pinned golden must not be satisfiable by a package that dropped its spec layer — \
+         if these were equal, the spec-less shape could quietly become the default"
+    );
+}
+
+/// PKG-03 criterion 3: the spec is BAKED into the package, so one byte of it is
+/// a different package — and the stale digest is REJECTED against the new
+/// manifest's bytes.
+///
+/// Both halves are required. `assert_ne!` alone shows the digest moved but not
+/// that anything catches a stale one; the `verify` half is what makes tamper
+/// detection a property rather than an observation.
+#[test]
+fn one_flipped_spec_byte_moves_the_packed_digest_and_the_stale_one_is_rejected() {
+    let spec = london_tube_spec_bytes();
+    let mut mutated = spec.clone();
+    mutated[0] ^= 0x01;
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let (_, digest_a) = pack_london_tube(dir_a.path(), Some(&spec));
+    let dir_b = tempfile::tempdir().unwrap();
+    let (layout_b, digest_b) = pack_london_tube(dir_b.path(), Some(&mutated));
+
+    assert_ne!(
+        digest_a, digest_b,
+        "the OpenAPI spec is BAKED into the package: a one-byte change is a different package, \
+         never a slot a target environment fills in"
+    );
+
+    let manifest_bytes_b = read_manifest_bytes(&layout_b);
+    // Sanity: the NEW digest does verify against the NEW bytes, so the failure
+    // below is about staleness and not about reading the wrong blob.
+    verify(&digest_b, &manifest_bytes_b).expect("the fresh digest must verify against its bytes");
+
+    let err = verify(&digest_a, &manifest_bytes_b)
+        .expect_err("the stale digest must not verify against the new manifest");
+    assert!(
+        matches!(err, PackageError::DigestMismatch { .. }),
+        "expected DigestMismatch, got: {err}"
     );
 }

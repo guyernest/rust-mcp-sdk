@@ -19,16 +19,19 @@ use pmcp_package::error::{PackageError, Result};
 use pmcp_package::oci::media_types::{
     MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_OPENAPI_SPEC,
 };
+use pmcp_package::oci::parse_declared_config_slots;
 use pmcp_package::oci::{
     pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, UnpackedBinary,
 };
-use pmcp_package::oci::{parse_declared_config_slots, DeclaredConfigSlot};
-use pmcp_package::package::{
-    AssetsSection, AuthSection, AwsSection, CedarPolicySet, DeployDescriptor, ObservabilitySection,
-    ServerPackage, ServerSection, TargetSection, ToolMetadata,
-};
+use pmcp_package::package::{CedarPolicySet, ServerPackage, ToolMetadata};
 use pmcp_package::slot::{aggregate, classify, required_slots, ConfigSlot, SlotClass, SlotType};
-use std::collections::BTreeMap;
+
+mod common;
+use common::{
+    london_tube_package, minimal_deploy_descriptor, openapi_server_crate_dir, pack_london_tube,
+    parse_env_ref_grammar_table, referenced_binary, referenced_binary_digest, vendored_fixture,
+    ENV_REF_GRAMMAR_TABLE, LONDON_TUBE_CONFIG_NAME, LONDON_TUBE_SPEC_NAME, REFERENCED_MEDIA_TYPE,
+};
 
 /// The author's `config.toml`, verbatim — the bytes a Shape A server's whole
 /// identity rests on. Deliberately holds comments, blank lines and
@@ -54,54 +57,6 @@ api_key = "${TFL_API_KEY}"
 
 const CONFIG_FILE_NAME: &str = "london-tube.toml";
 
-fn minimal_deploy_descriptor() -> DeployDescriptor {
-    DeployDescriptor {
-        target: TargetSection {
-            target_type: "pmcp-run".to_string(),
-            version: "1.0.0".to_string(),
-        },
-        metadata: None,
-        aws: AwsSection {
-            region: "us-east-1".to_string(),
-        },
-        server: ServerSection {
-            name: "london-tube".to_string(),
-            memory_mb: Some(1024),
-            timeout_seconds: 30,
-            memory: None,
-            cpu: None,
-            ingress: None,
-            allow_unauthenticated: None,
-            binary: None,
-        },
-        environment: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
-        secrets: BTreeMap::new(),
-        auth: AuthSection {
-            enabled: false,
-            provider: "none".to_string(),
-            callback_urls: vec![],
-            cognito: None,
-            dcr: None,
-            groups: None,
-            scopes: None,
-        },
-        observability: ObservabilitySection {
-            log_retention_days: 30,
-            enable_xray: true,
-            create_dashboard: true,
-            alarms: None,
-        },
-        composition: None,
-        assets: Some(AssetsSection {
-            include: vec![],
-            exclude: vec!["**/*.tmp".to_string()],
-        }),
-        iam: None,
-        gcp: None,
-        layout: None,
-    }
-}
-
 /// A representative pure-config `ServerPackage`. Note it carries no binary
 /// information at all — that is a layer, not a field (D-08).
 fn config_server_package() -> ServerPackage {
@@ -123,22 +78,6 @@ fn config_server_package() -> ServerPackage {
             name: "TFL_API_KEY".to_string(),
         })
         .with_config_key("backend.api_key")],
-    }
-}
-
-/// The digest of the runtime binary the target environment must resolve.
-/// Supplied verbatim by the caller — `pmcp-package` never derives or confirms
-/// it (no registry client by design).
-fn referenced_binary_digest() -> ManifestDigest {
-    ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.0.0-aarch64")
-}
-
-const REFERENCED_MEDIA_TYPE: &str = "application/x-lambda-bootstrap; arch=arm64";
-
-fn referenced_binary() -> BinaryMode<'static> {
-    BinaryMode::Referenced {
-        digest: referenced_binary_digest(),
-        media_type: REFERENCED_MEDIA_TYPE.to_string(),
     }
 }
 
@@ -1075,25 +1014,6 @@ type = "api_key"
 // test directory. The copy is only trustworthy with the guard below.
 // =====================================================================
 
-const LONDON_TUBE_FIXTURE_DIR: &str = "config_server_london_tube_v1";
-const LONDON_TUBE_CONFIG_NAME: &str = "london-tube.toml";
-const LONDON_TUBE_SPEC_NAME: &str = "london-tube-api.yaml";
-
-/// The vendored copy under this crate's `tests/golden_fixtures/`.
-fn vendored_fixture(name: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden_fixtures")
-        .join(LONDON_TUBE_FIXTURE_DIR)
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
-}
-
-/// The sibling crate directory the fixtures were copied FROM.
-fn openapi_server_crate_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../pmcp-openapi-server")
-}
-
 /// The vendored copies must stay byte-identical to their sources, or the
 /// digest this crate pins is a digest of a config the real server no longer
 /// boots from (T-120-23).
@@ -1130,71 +1050,6 @@ fn the_vendored_london_tube_fixtures_have_not_drifted_from_their_sources() {
     }
 }
 
-/// Map one parsed `[[config_slots]]` declaration onto the package slot it
-/// describes. Deriving the package's slots from the config's own declarations
-/// is the point: hand-writing them would make the test agree with itself
-/// rather than with the config, so a fixture whose declaration block was
-/// edited or deleted would still pass.
-fn slot_from_declaration(declaration: &DeclaredConfigSlot) -> ConfigSlot {
-    let tested = || {
-        declaration.tested_value.clone().unwrap_or_else(|| {
-            panic!(
-                "a {} declaration must carry a tested_value",
-                declaration.kind
-            )
-        })
-    };
-    let slot = match declaration.kind.as_str() {
-        "endpoint" => SlotType::Endpoint {
-            name: declaration.name.clone(),
-            tested_value: tested(),
-        },
-        "secret" => SlotType::Secret {
-            name: declaration.name.clone(),
-        },
-        "auth_mode" => SlotType::AuthMode {
-            name: declaration.name.clone(),
-            tested_value: tested(),
-        },
-        unexpected => panic!("the fixture declared an unexpected slot kind: {unexpected}"),
-    };
-    ConfigSlot::new(slot).with_config_key(declaration.key.as_str())
-}
-
-/// The real-fixture `ServerPackage`: same deploy/tool metadata as the inline
-/// fixture, but with `config_slots` DERIVED from the fixture's own declaration
-/// block rather than hand-written.
-fn london_tube_package(config_bytes: &[u8]) -> ServerPackage {
-    let declared = parse_declared_config_slots(config_bytes)
-        .expect("the real fixture's declaration block must parse");
-    let mut package = config_server_package();
-    package.config_slots = declared.iter().map(slot_from_declaration).collect();
-    package
-}
-
-/// Pack the real fixture pair (config + spec) into `dir`.
-fn pack_london_tube(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
-    let config_bytes = vendored_fixture(LONDON_TUBE_CONFIG_NAME);
-    let spec_bytes = vendored_fixture(LONDON_TUBE_SPEC_NAME);
-    let package = london_tube_package(&config_bytes);
-    let layout = OciLayout::create(dir).unwrap();
-    let digest = pack_server(
-        &package,
-        referenced_binary(),
-        Some(ConfigFile {
-            file_name: LONDON_TUBE_CONFIG_NAME,
-            bytes: &config_bytes,
-        }),
-        Some(OpenApiSpecFile {
-            file_name: LONDON_TUBE_SPEC_NAME,
-            bytes: &spec_bytes,
-        }),
-        &layout,
-    )
-    .expect("the real london-tube fixture must pack as a config-only package");
-    (layout, digest)
-}
-
 /// The proving case: the real config the reference OpenAPI server boots from,
 /// with its three declared slots and its `${TFL_BASE_URL}` endpoint
 /// placeholder, packs as a config-only package with no bootstrap layer. Both
@@ -1203,7 +1058,7 @@ fn pack_london_tube(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
 #[test]
 fn the_real_london_tube_fixture_packs_as_a_config_only_package() {
     let dir = tempfile::tempdir().unwrap();
-    let (layout, _) = pack_london_tube(dir.path());
+    let (layout, _) = pack_london_tube(dir.path(), Some(&common::london_tube_spec_bytes()));
 
     let media_types = layer_media_types(&layout);
     assert!(
@@ -1368,4 +1223,81 @@ fn the_real_fixtures_three_slots_classify_aggregate_and_carry_no_spec_derived_sl
         required.iter().all(|r| r.config_key.is_some()),
         "every config-server slot names the config path it fills"
     );
+}
+
+// =====================================================================
+// Plan 120-05 Task 4 — the package half of the cross-crate env-reference
+// grammar parity assertion. The toolkit half lives in
+// crates/pmcp-server-toolkit/tests/env_ref_grammar_parity.rs and reads
+// the SAME table.
+// =====================================================================
+
+/// Every row of `tests/golden_fixtures/env_ref_grammar_v1.tsv` must hold.
+///
+/// `is_env_reference` is a private helper, so the grammar is asserted through
+/// the public surface that depends on it: a slot-declared value key holding the
+/// row's input packs iff the row says `accept`.
+///
+/// This is not a weaker assertion than calling the predicate directly — it is
+/// the one that matters, because "does this config pack?" is the question the
+/// grammar actually answers for a user.
+#[test]
+fn is_env_reference_agrees_with_the_shared_grammar_table_on_every_row() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden_fixtures")
+        .join(ENV_REF_GRAMMAR_TABLE);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the shared grammar table {path:?} must exist: {e}"));
+    let cases = parse_env_ref_grammar_table(&text);
+    assert!(
+        cases.len() >= 10,
+        "the table must be non-trivial; it had {} rows",
+        cases.len()
+    );
+
+    for case in &cases {
+        // A TOML basic string cannot carry a raw `"` or `\`; no row needs one,
+        // and asserting it here keeps a future row from silently mis-encoding.
+        assert!(
+            !case.input.contains('"') && !case.input.contains('\\'),
+            "grammar-table inputs must be TOML-basic-string safe; row was {:?}",
+            case.input
+        );
+        let config = format!(
+            "[[config_slots]]\nkey = \"backend.api_key\"\nkind = \"secret\"\nname = \"K\"\n\n\
+             [backend]\napi_key = \"{}\"\n",
+            case.input
+        );
+        let package = {
+            let mut package = config_server_package();
+            package.config_slots = vec![ConfigSlot::new(SlotType::Secret {
+                name: "K".to_string(),
+            })
+            .with_config_key("backend.api_key")];
+            package
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let result = pack_server(
+            &package,
+            referenced_binary(),
+            Some(ConfigFile {
+                file_name: CONFIG_FILE_NAME,
+                bytes: config.as_bytes(),
+            }),
+            None,
+            &layout,
+        );
+        assert_eq!(
+            result.is_ok(),
+            case.accepted,
+            "grammar drift on row {:?}: the table says {}, pmcp-package says {}. This table is \
+             the contract with pmcp-server-toolkit's parse_env_ref — change it only \
+             deliberately, and move BOTH implementations.",
+            case.input,
+            if case.accepted { "accept" } else { "reject" },
+            if result.is_ok() { "accept" } else { "reject" },
+        );
+    }
 }

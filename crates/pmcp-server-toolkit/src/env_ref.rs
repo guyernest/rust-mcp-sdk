@@ -62,14 +62,23 @@
 /// `${`-strip in the old api_key resolver in `crate::http::auth` and
 /// `expand_braced_var` in `crate::code_mode`): all env-reference resolution now
 /// flows through this one chokepoint so the discipline cannot drift per-variant.
-// Why: in a `--no-default-features` build neither `http` (credentials,
-// `base_url`) nor `code-mode` (`token_secret`) is compiled, so no caller exists
-// and rustc reports the function as dead. Gating the module on
-// `any(feature = "http", feature = "code-mode")` is exactly the mistake this
-// relocation undoes — the grammar must be defined in ONE ungated place, and its
-// own unit tests still exercise it in every configuration.
-#[allow(dead_code)]
-pub(crate) fn parse_env_ref(raw: &str) -> Option<&str> {
+///
+/// # Why this is `pub`
+///
+/// The grammar is duplicated by necessity in `pmcp-package`'s
+/// `is_env_reference` — that crate is the workspace-excluded leaf and neither
+/// crate may depend on the other. The two implementations are held to a shared
+/// accept/reject table asserted from an INTEGRATION test in each crate
+/// (`tests/env_ref_grammar_parity.rs` here). An integration test is an external
+/// consumer, so the reference implementation has to be reachable from outside
+/// the crate for that parity claim to be checkable at all.
+///
+/// (It was previously `pub(crate)` with an `#[allow(dead_code)]`, because in a
+/// `--no-default-features` build neither `http` nor `code-mode` is compiled and
+/// no in-crate caller exists. Being `pub` removes that need: the module is
+/// still deliberately UNGATED, so the grammar is defined in one place that
+/// compiles in every feature configuration.)
+pub fn parse_env_ref(raw: &str) -> Option<&str> {
     if let Some(v) = raw.strip_prefix("env:") {
         Some(v)
     } else {
