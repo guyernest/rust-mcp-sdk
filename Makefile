@@ -424,6 +424,15 @@ lint-plans:
 	./scripts/lint-plan-verify-commands.sh
 	@echo "$(GREEN)✓ No verification command masks the status of what it verifies$(NC)"
 
+# Release-ledger coverage: every publishable workspace member must have a
+# publish step in release.yml. Sub-second, chained into `quality-gate` below
+# and invoked by the CI quality-gate job so local and CI stay aligned.
+.PHONY: check-release-coverage
+check-release-coverage:
+	@echo "$(BLUE)Checking release-ledger coverage...$(NC)"
+	./scripts/check-release-coverage.sh
+	@echo "$(GREEN)✓ Every publishable workspace member has a publish step$(NC)"
+
 # Phase 118 (CONF-01) — the OFFICIAL MCP conformance suite, both spec revisions,
 # against ONE dual-version example process.
 #
@@ -884,6 +893,7 @@ quality-gate:
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
 	@echo "$(BLUE)🏭 Jidoka: Stopping the line for quality verification$(NC)"
 	@$(MAKE) lint-plans
+	@$(MAKE) check-release-coverage
 	@$(MAKE) fmt-check
 	@$(MAKE) lint
 	# doc-check runs HERE because CI runs it and this gate did not: a branch

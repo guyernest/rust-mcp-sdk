@@ -288,9 +288,11 @@ make test-integration   # Integration tests
    SDK release. **This entry was missing from BOTH this list and `release.yml`
    until 2026-08-21**, so it had never published at all; pmcp-run's built-in
    servers consume it out-of-repo with `features = ["dynamodb"]` and could not pin
-   until 0.1.0 was published by hand. Both ledgers are now covered by the
-   `release-coverage` CI check (see below), which is what makes a third recurrence
-   a build failure rather than a discovery.
+   until 0.1.0 was published by hand. The `release.yml` ledger is now machine-checked
+   by `scripts/check-release-coverage.sh` (chained into `make quality-gate` and the CI
+   quality-gate job), which is what makes a third recurrence a build failure rather
+   than a discovery. This prose list remains hand-maintained, and workspace-excluded
+   crates (`pmcp-package`) are a known blind spot of the check until Phase 124 (PKGR-01).
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,

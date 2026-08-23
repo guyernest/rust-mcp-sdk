@@ -208,6 +208,15 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
+    # Release-ledger coverage. Runs before the multi-minute disk-cleanup and
+    # tool installs — sub-second, needs only the runner's preinstalled cargo
+    # and jq. Lives in the quality-gate job because `gate.needs` already
+    # includes it, so a failure blocks merge via the org-required `gate` check.
+    # Also chained into `make quality-gate` so local and CI stay aligned.
+    # Rationale: see the script header.
+    - name: Release-ledger coverage
+      run: make check-release-coverage
+
     - name: Free Disk Space
       uses: jlumbroso/free-disk-space@main
       with:
@@ -224,13 +233,6 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
-    
-    # Release-ledger coverage. Runs FIRST and costs ~2s: a crate with no publish
-    # step ships nothing, and that has now happened twice (pmcp-openapi-server,
-    # pmcp-tasks). Lives in the quality-gate job because `gate.needs` already
-    # includes it, so a failure blocks merge via the org-required `gate` check.
-    - name: Release-ledger coverage
-      run: ./scripts/check-release-coverage.sh
 
     - name: Cache cargo
       uses: actions/cache@v6
