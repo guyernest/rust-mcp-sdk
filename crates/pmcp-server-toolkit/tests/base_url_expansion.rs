@@ -162,35 +162,45 @@ fn error_names_the_variable_and_field_but_never_the_resolved_value() {
 fn env_var_guard_restores_prior_state_including_on_panic() {
     let _lock = support::env_lock();
 
-    // (a) previously UNSET → restored to unset, after a PANICKING body.
-    std::env::remove_var(VAR);
-    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = support::EnvVarGuard::set(VAR, "http://127.0.0.1:1");
-        assert_eq!(std::env::var(VAR).as_deref(), Ok("http://127.0.0.1:1"));
-        panic!("deliberate panic inside the guarded scope");
-    }))
-    .is_err();
-    assert!(panicked, "the guarded body must have panicked");
-    assert!(
-        std::env::var(VAR).is_err(),
-        "a previously-unset variable must be restored to UNSET even after a panic"
-    );
+    // (a) previously UNSET → restored to unset, after a PANICKING body. The
+    //     OUTER guard establishes the precondition (and itself restores
+    //     whatever this binary's env held before the test).
+    {
+        let _outer = support::EnvVarGuard::unset(VAR);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = support::EnvVarGuard::set(VAR, "http://127.0.0.1:1");
+            assert_eq!(std::env::var(VAR).as_deref(), Ok("http://127.0.0.1:1"));
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert!(
+            std::env::var(VAR).is_err(),
+            "a previously-unset variable must be restored to UNSET even after a panic"
+        );
+    }
 
     // (b) previously SET → restored to the OLD value, after a panicking body.
-    std::env::set_var(VAR, "http://original.invalid");
-    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = support::EnvVarGuard::set(VAR, "http://overridden.invalid");
-        assert_eq!(std::env::var(VAR).as_deref(), Ok("http://overridden.invalid"));
-        panic!("deliberate panic inside the guarded scope");
-    }))
-    .is_err();
-    assert!(panicked, "the guarded body must have panicked");
-    assert_eq!(
-        std::env::var(VAR).as_deref(),
-        Ok("http://original.invalid"),
-        "a previously-set variable must be restored to its OLD value even after a panic"
-    );
+    {
+        let _outer = support::EnvVarGuard::set(VAR, "http://original.invalid");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = support::EnvVarGuard::set(VAR, "http://overridden.invalid");
+            assert_eq!(
+                std::env::var(VAR).as_deref(),
+                Ok("http://overridden.invalid")
+            );
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert_eq!(
+            std::env::var(VAR).as_deref(),
+            Ok("http://original.invalid"),
+            "a previously-set variable must be restored to its OLD value even after a panic"
+        );
+    }
 
-    // Leave the process env as we found it for any later test in this binary.
-    std::env::remove_var(VAR);
+    // Both outer guards have dropped: the process env is exactly as this test
+    // found it. Every mutation above went through the guard — there is no bare
+    // `set_var` in this file.
 }

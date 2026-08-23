@@ -1160,23 +1160,6 @@ fn map_auto_approve_levels(levels: &[String], cfg: &mut CodeModeConfig) {
     }
 }
 
-/// Extract `NAME` from a string of the exact shape `${NAME}`.
-///
-/// Returns `Some(name)` only when `raw` both starts with `${` and ends with `}`
-/// AND `name` is non-empty. A string that merely *contains* `${` (e.g. an
-/// Athena `output_location` substring, or a malformed `${` without a closing
-/// brace) returns `None`, so it falls through to the existing inline-secret
-/// handling (still rejected unless the dev flag is set). This is what scopes
-/// `${VAR}` expansion to `token_secret` only and preserves the R9 guarantee
-/// (REVIEW FIX #6).
-fn expand_braced_var(raw: &str) -> Option<&str> {
-    let inner = raw.strip_prefix("${")?.strip_suffix('}')?;
-    if inner.is_empty() {
-        return None;
-    }
-    Some(inner)
-}
-
 /// Per review R9: `token_secret` is `env:`- or `${VAR}`-only by default. Inline
 /// literals are REJECTED at config-validation time unless
 /// `allow_inline_token_secret_for_dev` is set. Returns the resolved bytes
@@ -1217,10 +1200,20 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
             "[code_mode] token_secret is required when code-mode is enabled".to_string(),
         )
     })?;
-    if let Some(var) = raw.strip_prefix("env:") {
-        return resolve_secret_env_var(var);
-    }
-    if let Some(var) = expand_braced_var(raw) {
+    // Both reference forms (`env:VAR` and `${VAR}`) are parsed by the ONE
+    // toolkit-wide grammar chokepoint (Phase 120 Plan 04 Task 2). This module
+    // previously carried its own `expand_braced_var`; a second `${}` parser with
+    // slightly different edge cases is a latent security bug, so the grammar is
+    // now single-sourced and only the RESOLUTION policy stays local (error on
+    // unset, never a fall-back to a weak or empty secret — T-85-01-01).
+    //
+    // A string that merely *contains* `${` (e.g. an Athena `output_location`
+    // substring) is still NOT a reference — `parse_env_ref` requires the exact
+    // `${...}` shape — so it falls through to the inline-secret handling below
+    // and stays rejected unless the dev flag is set (R9 / REVIEW FIX #6). The
+    // malformed `${}` form is now an explicit "env var not set" error instead of
+    // being accepted as a 3-byte inline literal under the dev flag.
+    if let Some(var) = crate::env_ref::parse_env_ref(raw) {
         return resolve_secret_env_var(var);
     }
     if section.allow_inline_token_secret_for_dev {

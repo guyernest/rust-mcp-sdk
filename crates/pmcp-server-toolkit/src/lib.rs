@@ -29,6 +29,16 @@
 pub mod auth;
 pub mod builder_ext;
 pub mod config;
+
+/// The `${VAR}` / `env:VAR` reference grammar — the ONE parse chokepoint every
+/// env-reference path in the toolkit shares (credentials, `token_secret`, and
+/// `[backend].base_url`).
+///
+/// Deliberately carries NO `#[cfg(feature = ...)]` gate: the function used to
+/// live inside the feature-gated `http` module, which made "the toolkit's
+/// universal chokepoint" true only in `http` builds.
+pub(crate) mod env_ref;
+
 pub mod error;
 pub mod prompts;
 pub mod resources;

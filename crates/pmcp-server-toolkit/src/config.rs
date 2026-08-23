@@ -482,6 +482,77 @@ pub struct BackendSection {
     pub http: HttpConfig,
 }
 
+#[cfg(feature = "http")]
+impl BackendSection {
+    /// Resolve [`Self::base_url`], expanding a `${VAR}` / `env:VAR` reference
+    /// from the process environment. Callers MUST use this rather than reading
+    /// `base_url` directly — the raw field may hold an unresolved placeholder.
+    ///
+    /// A Shape A server's endpoint is frequently a slot the target environment
+    /// fills, so the config records `base_url = "${TFL_BASE_URL}"` and the
+    /// package digest stays environment-independent. Without expansion that
+    /// literal `${...}` parses, VALIDATES (it is non-empty, so the emptiness
+    /// rule passes) and is then sent as the request URL.
+    ///
+    /// Resolution rules — the grammar is [`crate::env_ref::parse_env_ref`], the
+    /// single toolkit-wide chokepoint:
+    /// - a plain literal (no `${...}` / `env:` prefix) is returned VERBATIM;
+    /// - `${VAR}` / `env:VAR` reads `VAR` from the process environment;
+    /// - a MALFORMED `${}` reference (an empty name) is an error;
+    /// - an UNSET variable, or one set to an empty / whitespace-only value, is
+    ///   an error.
+    ///
+    /// # Deliberate divergence from credential resolution
+    ///
+    /// A credential resolves an unset reference to the empty string so an
+    /// optional credential is OMITTED (see `crate::http::auth`). An endpoint
+    /// does NOT get that treatment: an empty credential yields a degraded
+    /// request, but an empty endpoint yields a broken one, and
+    /// [`ServerConfig::validate`] only checks emptiness at parse time — an
+    /// empty resolution would sail through and then break every request. This
+    /// uses the error-on-unset semantics of `code_mode`'s `token_secret`
+    /// resolution instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ToolkitError::UnresolvedBaseUrlRef`] when the reference cannot
+    /// be resolved. Per T-120-17 the error names the FIELD and the
+    /// environment-variable NAME only — never a resolved URL or credential.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_server_toolkit::config::ServerConfig;
+    ///
+    /// let cfg = ServerConfig::from_toml_strict_validated(
+    ///     "[server]\nname = \"demo\"\nversion = \"0.1.0\"\n\
+    ///      [backend]\nbase_url = \"https://api.example.com\"\n",
+    /// )
+    /// .expect("valid config");
+    /// let backend = cfg.backend.as_ref().expect("[backend] present");
+    /// // A plain literal is used verbatim.
+    /// assert_eq!(backend.resolved_base_url().unwrap(), "https://api.example.com");
+    /// ```
+    pub fn resolved_base_url(&self) -> std::result::Result<String, ToolkitError> {
+        match crate::env_ref::parse_env_ref(&self.base_url) {
+            // Plain literal — used verbatim (every existing [backend] config
+            // and the four SQL reference configs land here, unchanged).
+            None => Ok(self.base_url.clone()),
+            // Malformed `${}` — a reference to an empty name. A credential
+            // treats this as "omit"; an endpoint cannot be omitted.
+            Some("") => Err(ToolkitError::UnresolvedBaseUrlRef { var: String::new() }),
+            Some(name) => match std::env::var(name) {
+                Ok(value) if !value.trim().is_empty() => Ok(value),
+                // Unset, or set-but-empty/whitespace — the same error either
+                // way. The VALUE is never carried into the error.
+                _ => Err(ToolkitError::UnresolvedBaseUrlRef {
+                    var: name.to_string(),
+                }),
+            },
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // [code_mode]
 // -----------------------------------------------------------------------------
