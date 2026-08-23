@@ -234,6 +234,12 @@ fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Des
 /// resolved literal rather than a `${VAR}` / `env:VAR` reference (D-04). See
 /// [`crate::oci::config_validation`].
 ///
+/// When `config` is `None`, returns [`PackageError::ConfigSlotViolation`] if
+/// any package slot carries a `config_key`: the key names a path inside a
+/// config document this package does not ship, a claim nothing can validate or
+/// fill. Keyless slots (the pre-0.2 embedded shape) remain legal without a
+/// config.
+///
 /// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
 /// [`PackageError::ConfigSlotViolation`]: crate::error::PackageError::ConfigSlotViolation
 ///
@@ -308,20 +314,38 @@ pub fn pack_server(
     spec: Option<OpenApiSpecFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
-    // Pre-write gates. Both run BEFORE the first `write_blob` below, so a
+    // Pre-write gates. All run BEFORE the first `write_blob` below, so a
     // rejected pack adds neither a blob nor an index entry — which is what
     // makes "a resolved secret never travels in a layer" a property of the
     // filesystem and not merely of the return value.
     //
-    // They run only when a config file is present: an embedded, pre-built
-    // package has no config document to read declarations out of, and every
-    // pre-0.2 server package is exactly that shape.
+    // The document gates run only when a config file is present: an embedded,
+    // pre-built package has no config document to read declarations out of,
+    // and every pre-0.2 server package is exactly that shape.
     if let Some(config) = config {
         // One parse feeds both gates — the `_in` variants take the document.
         let document = parse_document(config.bytes)?;
         let declared = parse_declared_config_slots_in(&document)?;
         validate_config_slot_agreement(&declared, &package.config_slots)?;
         validate_config_slot_placeholders_in(&document, &package.config_slots)?;
+    } else {
+        // No config file: a slot may still be declared (the keyless embedded
+        // shape every pre-0.2 package has), but a slot naming a `config_key`
+        // points into a config document this package does not ship — a claim
+        // nothing could validate at pack time and nothing could fill at
+        // deploy time. Refusing it here is the mirror of the "a value slot
+        // must name the config key it fills" rule on the with-config path.
+        for slot in &package.config_slots {
+            if let Some(config_key) = slot.config_key.as_deref() {
+                return Err(PackageError::ConfigSlotViolation {
+                    key: config_key.to_string(),
+                    reason: "the package slot names a config key, but the package ships no \
+                             config file for that key to address — pack with the config \
+                             document, or drop the slot's config_key"
+                        .to_string(),
+                });
+            }
+        }
     }
 
     let envelope = ServerEnvelope {

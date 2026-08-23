@@ -418,12 +418,17 @@ fn package_fact_map(package_slots: &[ConfigSlot]) -> Result<BTreeMap<&str, SlotF
 ///   `None` on one of these is itself a violation: a packable config server
 ///   whose endpoint or credential slot does not say WHERE it lives cannot be
 ///   validated by pack and cannot tell a target environment where to write.
-/// - **Structural — [`SlotType::AuthMode`].** Exempt (D-17). The toolkit's
-///   `AuthConfig` is internally tagged (`#[serde(tag = "type")]`), so a
-///   reference-shaped value at that key fails serde's variant dispatch before
-///   any resolution could happen — there is no placeholder form of that key
-///   that both parses and defers, which makes the baked literal the only legal
-///   content. Deviation on it surfaces through slot classification instead.
+/// - **Structural — [`SlotType::AuthMode`].** Exempt from the PLACEHOLDER rule
+///   (D-17). The toolkit's `AuthConfig` is internally tagged
+///   (`#[serde(tag = "type")]`), so a reference-shaped value at that key fails
+///   serde's variant dispatch before any resolution could happen — there is no
+///   placeholder form of that key that both parses and defers, which makes the
+///   baked literal the only legal content. Deviation on it surfaces through
+///   slot classification instead. Exempt is not unchecked, though: when the
+///   slot names a `config_key`, that key must resolve to a real STRING key
+///   (a dangling declaration is a defect, not a pass), and the baked literal
+///   must equal the declared `tested_value` — a package that ships one mode
+///   while claiming it was tested with another records a false baseline.
 /// - **Not config-value slots — [`SlotType::OauthClient`],
 ///   [`SlotType::ChannelBinding`], [`SlotType::HumanRole`],
 ///   [`SlotType::LlmProvider`], [`SlotType::BudgetOverride`].** With
@@ -503,6 +508,15 @@ fn check_slot_placeholder(document: &toml::Value, slot: &ConfigSlot) -> Result<(
             };
             if is_env_reference(raw) {
                 Ok(())
+            } else if is_malformed_env_reference(raw) {
+                Err(violation(
+                    config_key,
+                    "holds a malformed environment reference; a reference is exactly one \
+                     `${VAR}` or `env:VAR` naming a single variable ([A-Za-z0-9_]+) — a \
+                     multi-placeholder composition like `${SCHEME}://${HOST}` cannot be \
+                     resolved by any target environment, so compose the full value in ONE \
+                     variable instead",
+                ))
             } else {
                 Err(violation(
                     config_key,
@@ -512,8 +526,43 @@ fn check_slot_placeholder(document: &toml::Value, slot: &ConfigSlot) -> Result<(
                 ))
             }
         },
-        // --- Structural: exempt (D-17) ------------------------------------
-        SlotType::AuthMode { .. } => Ok(()),
+        // --- Structural: exempt from the PLACEHOLDER rule (D-17) ----------
+        //
+        // Exempt does not mean unchecked. The baked literal is the only legal
+        // content for the auth-mode key, so what CAN be validated is anchoring
+        // and honesty: a declared `config_key` must resolve to a real string
+        // key ("a slot declaration pointing at no key is a defect, not a
+        // pass"), and the baked value must BE the declared `tested_value` —
+        // the tested_value is the package's claim about what it ships, and a
+        // config that ships `bearer` while claiming it was tested with
+        // `api_key` gives downstream deviation classification a false
+        // baseline. A slot with no `config_key` anchors nothing and is left
+        // alone (agreement with a declaring config already forces the key on).
+        SlotType::AuthMode { tested_value, .. } => {
+            let Some(config_key) = slot.config_key.as_deref() else {
+                return Ok(());
+            };
+            let value = resolve_dotted_key(document, config_key)?;
+            let toml::Value::String(baked) = value else {
+                return Err(violation(
+                    config_key,
+                    "an auth-mode slot must address a string key (the serde tag); this key \
+                     holds a non-string TOML value",
+                ));
+            };
+            if baked == tested_value {
+                Ok(())
+            } else {
+                // Names the key and the FIELD only — the baked discriminator is
+                // document content and is not echoed, per the uniform rule.
+                Err(violation(
+                    config_key,
+                    "the baked auth-mode literal disagrees with the slot's declared \
+                     `tested_value`; the config is the source of truth, so update the \
+                     declaration (and the package slot) to the mode the config actually ships",
+                ))
+            }
+        },
         // --- Not config-value slots ---------------------------------------
         SlotType::OauthClient { .. }
         | SlotType::ChannelBinding { .. }
@@ -604,11 +653,15 @@ fn is_bare_key(component: &str) -> bool {
 /// Whether `raw` is an environment REFERENCE rather than a resolved literal.
 ///
 /// Recognises exactly two forms: an `env:` prefix with a non-empty remainder,
-/// and a `${` … `}` wrapper with a non-empty inner name. Everything else — a
-/// bare literal, an unterminated brace, text after the closing brace, the
-/// malformed empty-name forms `${}` and `env:` — is a literal as far as this
-/// rule is concerned, because none of them names a variable a target
-/// environment could supply.
+/// and a `${` … `}` wrapper whose inner name is ONE valid variable
+/// (`[A-Za-z0-9_]+`). Everything else — a bare literal, an unterminated
+/// brace, text after the closing brace, the malformed empty-name forms `${}`
+/// and `env:`, and multi-placeholder brace compositions like
+/// `${SCHEME}://${HOST}` (whose "name" would be the unsettable
+/// `SCHEME}://${HOST`) — answers `false`, because none of it names a variable
+/// a target environment could supply. The malformed shapes get their own pack
+/// error (see [`is_malformed_env_reference`]) so the refusal names the real
+/// defect.
 ///
 /// # A deliberate duplication, kept honest by a table
 ///
@@ -624,18 +677,45 @@ fn is_bare_key(component: &str) -> bool {
 /// whichever crate is wrong.
 ///
 /// Note the two implementations differ in SHAPE, not in verdict:
-/// `parse_env_ref` returns `Some("")` for `${}` / `env:` (its caller resolves
-/// an empty name to omission), while this predicate answers `false` for both
-/// because an empty name is not something a package can ask an environment to
-/// fill. The table encodes that correspondence explicitly rather than papering
-/// over it.
+/// `parse_env_ref` returns `Some("")` for every malformed brace form — `${}`
+/// and multi-placeholder compositions alike (its caller resolves an empty
+/// name to omission or an error) — while this predicate answers `false`,
+/// because a malformed reference is not something a package can ask an
+/// environment to fill. The table encodes that correspondence explicitly
+/// rather than papering over it, and its coherence rule (a reject row must
+/// resolve to nothing at runtime) is why the `env:` arm is identical on both
+/// sides.
 fn is_env_reference(raw: &str) -> bool {
     if let Some(rest) = raw.strip_prefix("env:") {
         return !rest.is_empty();
     }
     raw.strip_prefix("${")
         .and_then(|inner| inner.strip_suffix('}'))
-        .is_some_and(|name| !name.is_empty())
+        .is_some_and(is_valid_env_var_name)
+}
+
+/// Whether `name` is a variable name a TARGET environment can actually be
+/// told to set: non-empty, ASCII alphanumerics and `_` only. Applied to the
+/// `${NAME}` form only — that is the form a config author composes by
+/// accident (`${SCHEME}://${HOST}`). The explicit `env:NAME` form keeps its
+/// any-non-empty-remainder rule on BOTH sides of the grammar: the parity
+/// contract forbids a value one side resolves and the other refuses.
+fn is_valid_env_var_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Reference-SHAPED but not a valid single reference: the empty forms (`${}`,
+/// `env:`) and multi-placeholder brace compositions (`${A}://${B}`, whose
+/// interior is the unsettable `A}://${B`). Distinguished from a plain literal
+/// so the pack error can name the real defect — "this composition can never
+/// resolve" — instead of claiming the value is a resolved literal.
+fn is_malformed_env_reference(raw: &str) -> bool {
+    if let Some(rest) = raw.strip_prefix("env:") {
+        return rest.is_empty();
+    }
+    raw.strip_prefix("${")
+        .and_then(|inner| inner.strip_suffix('}'))
+        .is_some_and(|name| !is_valid_env_var_name(name))
 }
 
 #[cfg(test)]
@@ -711,6 +791,41 @@ mod tests {
         assert_eq!(declared[2].kind, "auth_mode");
         assert_eq!(declared[2].name, "backend-auth-mode");
         assert_eq!(declared[2].tested_value.as_deref(), Some("api_key"));
+    }
+
+    // --- The ACCEPTED_KINDS const cannot drift from SlotType ---------------
+
+    #[test]
+    fn accepted_kinds_are_exactly_the_key_discriminators_of_the_config_slot_types() {
+        // ACCEPTED_KINDS is a hand-written mirror of the three config-capable
+        // SlotType discriminators. Nothing derives one from the other, so this
+        // pin is what turns a fourth packable kind added on only ONE side into
+        // a red test instead of a pack-time "unknown config-slot kind" for a
+        // kind the type system already supports.
+        let discriminators = [
+            SlotType::Endpoint {
+                name: String::new(),
+                tested_value: String::new(),
+            }
+            .key()
+            .0,
+            SlotType::Secret {
+                name: String::new(),
+            }
+            .key()
+            .0,
+            SlotType::AuthMode {
+                name: String::new(),
+                tested_value: String::new(),
+            }
+            .key()
+            .0,
+        ];
+        assert_eq!(
+            ACCEPTED_KINDS, discriminators,
+            "ACCEPTED_KINDS must stay byte-identical to the SlotType::key() discriminators \
+             of the config-capable kinds — update both together"
+        );
     }
 
     // --- Test 2: no declaration table is legal, not an error ---------------
@@ -1013,6 +1128,33 @@ name = "TFL_BASE_URL"
         validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap();
     }
 
+    // --- Test 1b: a malformed reference is refused, naming the defect -----
+
+    #[test]
+    fn a_multi_placeholder_composition_is_refused_as_a_malformed_reference() {
+        // Reference-SHAPED but resolvable by no environment: the interior
+        // "name" would be `TFL_SCHEME}://${TFL_HOST`. Without the distinct
+        // malformed arm this packed green and failed at every boot.
+        let config = b"[backend]\nbase_url = \"${TFL_SCHEME}://${TFL_HOST}\"\n";
+        let err = validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("malformed environment reference"),
+            "the error must name the real defect, got: {msg}"
+        );
+        assert!(msg.contains("backend.base_url"), "must name the key: {msg}");
+    }
+
+    #[test]
+    fn the_empty_brace_form_is_refused_as_a_malformed_reference_too() {
+        let config = b"[backend]\nbase_url = \"${}\"\n";
+        let err = validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap_err();
+        assert!(
+            err.to_string().contains("malformed environment reference"),
+            "got: {err}"
+        );
+    }
+
     // --- Test 2: an endpoint holding a resolved literal is refused --------
 
     #[test]
@@ -1045,6 +1187,59 @@ name = "TFL_BASE_URL"
         // deserializes at all — the literal IS the only legal content.
         let config = b"[backend.auth]\ntype = \"api_key\"\n";
         validate_config_slot_placeholders(config, &[auth_mode_slot()]).unwrap();
+    }
+
+    // --- Test 4b: the auth-mode exemption is anchored, not unconditional ---
+
+    #[test]
+    fn an_auth_mode_slot_whose_config_key_resolves_to_nothing_is_a_violation() {
+        // The declaration points at a key the config does not have — the same
+        // "pointing at no key is a defect, not a pass" rule value slots get.
+        let config = b"[backend]\nbase_url = \"${X}\"\n";
+        let (key, reason) = expect_violation(
+            validate_config_slot_placeholders(config, &[auth_mode_slot()]).unwrap_err(),
+        );
+        assert_eq!(key, "backend.auth.type");
+        assert!(reason.contains("resolves to nothing"), "was: {reason}");
+    }
+
+    #[test]
+    fn an_auth_mode_baked_literal_disagreeing_with_tested_value_is_refused_without_echo() {
+        // The config ships `bearer` while the slot claims it was tested with
+        // `api_key` — packing that records a false baseline for downstream
+        // deviation classification, so it is refused. The baked discriminator
+        // is document content and must not be echoed.
+        let config = b"[backend.auth]\ntype = \"bearer\"\n";
+        let err = validate_config_slot_placeholders(config, &[auth_mode_slot()]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("backend.auth.type"), "was: {message}");
+        assert!(message.contains("`tested_value`"), "was: {message}");
+        assert!(
+            !message.contains("bearer"),
+            "the baked literal is document content and must not be echoed; was: {message}"
+        );
+    }
+
+    #[test]
+    fn an_auth_mode_key_addressing_a_non_string_is_a_violation() {
+        let config = b"[backend.auth]\ntype = 7\n";
+        let (key, reason) = expect_violation(
+            validate_config_slot_placeholders(config, &[auth_mode_slot()]).unwrap_err(),
+        );
+        assert_eq!(key, "backend.auth.type");
+        assert!(reason.contains("non-string"), "was: {reason}");
+    }
+
+    #[test]
+    fn an_auth_mode_slot_with_no_config_key_anchors_nothing_and_is_skipped() {
+        // Agreement with a declaring config forces the key on; a bare package
+        // slot with no key fills no config path, so there is nothing to check.
+        let config = b"[backend.auth]\ntype = \"api_key\"\n";
+        let slot = ConfigSlot::new(SlotType::AuthMode {
+            name: "backend-auth-mode".to_string(),
+            tested_value: "api_key".to_string(),
+        });
+        validate_config_slot_placeholders(config, &[slot]).unwrap();
     }
 
     // --- Test 5: config_key is conditional, not unconditionally skipped ---
@@ -1220,6 +1415,19 @@ name = "TFL_BASE_URL"
         // Unterminated, trailing text, plain literals, whitespace-wrapped.
         assert!(!is_env_reference("${TFL_BASE_URL"));
         assert!(!is_env_reference("${TFL_BASE_URL}-suffix"));
+        // Multi-placeholder compositions and non-portable names are
+        // reference-SHAPED but resolvable by no target environment.
+        assert!(!is_env_reference("${TFL_SCHEME}://${TFL_HOST}"));
+        assert!(!is_env_reference("${A}-${B}"));
+        assert!(!is_env_reference("${TFL-HOST}"));
+        // The explicit `env:` form keeps its any-non-empty-remainder rule —
+        // the composition accident is a brace-form problem.
+        assert!(is_env_reference("env:FOO}BAR"));
+        assert!(is_malformed_env_reference("${TFL_SCHEME}://${TFL_HOST}"));
+        assert!(is_malformed_env_reference("${}"));
+        assert!(is_malformed_env_reference("env:"));
+        assert!(!is_malformed_env_reference("https://api.tfl.gov.uk"));
+        assert!(!is_malformed_env_reference("${TFL_BASE_URL}"));
         assert!(!is_env_reference("https://api.tfl.gov.uk"));
         assert!(!is_env_reference(""));
         assert!(!is_env_reference("  ${TFL_BASE_URL}  "));

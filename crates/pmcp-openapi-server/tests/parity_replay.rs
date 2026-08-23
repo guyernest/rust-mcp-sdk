@@ -40,6 +40,28 @@ use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Serializes the tests that point the fixture somewhere through the
+/// process-GLOBAL `TFL_BASE_URL` / `TFL_APP_KEY` environment variables.
+///
+/// Without it, `london_tube_parity_through_real_binary_path` (wiremock URI) and
+/// the `#[ignore]`d `parity_live_tfl` (the real TfL URL) race under
+/// `--include-ignored` on the default multi-threaded runner: whichever
+/// `set_var` lands last wins for BOTH servers' assembly-time resolution, so the
+/// "offline" replay can silently target live TfL, or the live test a dead
+/// wiremock port. The toolkit's `tests/support::env_lock` exists for exactly
+/// this discipline; this is that crate-local twin. The guard is held for the
+/// whole test body because the variables must stay stable until `run_serving`
+/// has assembled (they are read once, at dispatch time). The variables are
+/// deliberately NOT restored afterwards — no other test in this binary reads
+/// them, and a restore racing a still-running server would be a worse trade.
+static TFL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn tfl_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    TFL_ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Absolute path to the vendored fixtures directory.
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -51,11 +73,6 @@ fn examples_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
 }
 
-/// The Code Mode showcase surface that BOTH the enriched fixture and the
-/// pointable example must ship (P901-FIXTURE / P901-EXAMPLE): the three context
-/// resource URIs + the `start_code_mode` prompt. Asserting it in one place keeps
-/// the two configs from drifting apart on the showcase surface. `label` names the
-/// config under test so a failure points at the right file.
 /// PKG-03: BOTH london-tube copies declare exactly the same three config slots
 /// — the endpoint, the api-key credential and the auth mode — and hold the
 /// `${TFL_BASE_URL}` endpoint placeholder rather than a baked literal.
@@ -123,6 +140,11 @@ fn assert_london_tube_config_slots(cfg: &ServerConfig, config_text: &str, label:
     );
 }
 
+/// The Code Mode showcase surface that BOTH the enriched fixture and the
+/// pointable example must ship (P901-FIXTURE / P901-EXAMPLE): the three context
+/// resource URIs + the `start_code_mode` prompt. Asserting it in one place keeps
+/// the two configs from drifting apart on the showcase surface. `label` names the
+/// config under test so a failure points at the right file.
 fn assert_london_tube_code_mode_surface(cfg: &ServerConfig, label: &str) {
     let resource_uris: Vec<&str> = cfg.resources.iter().map(|r| r.uri.as_str()).collect();
     for uri in [
@@ -297,6 +319,10 @@ async fn mount_london_tube(server: &MockServer) {
 /// literal `${...}`).
 #[tokio::test]
 async fn london_tube_parity_through_real_binary_path() {
+    // Serialize with parity_live_tfl — both mutate the same process-global
+    // variables, and assembly-time resolution must see THIS test's values.
+    let _env_lock = tfl_env_lock();
+
     // The fixture's `${TFL_APP_KEY}` resolves from the process env at auth
     // provider construction time — set it BEFORE spawning the server.
     std::env::set_var("TFL_APP_KEY", DUMMY_APP_KEY);
@@ -433,6 +459,11 @@ async fn london_tube_parity_through_real_binary_path() {
 #[tokio::test]
 #[ignore = "live network — requires PMCP_OPENAPI_LIVE_TEST=1 + a real TFL_APP_KEY"]
 async fn parity_live_tfl() {
+    // Serialize with the offline parity test — see TFL_ENV_LOCK. Taken BEFORE
+    // the gates below so even the skip paths cannot interleave with a
+    // concurrent offline run's env reads.
+    let _env_lock = tfl_env_lock();
+
     // Double-gate: even when run with --ignored, bail unless explicitly enabled
     // AND a real key is present (never hit the live API by accident).
     if std::env::var("PMCP_OPENAPI_LIVE_TEST").ok().as_deref() != Some("1") {

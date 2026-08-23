@@ -188,6 +188,21 @@ pub enum ConfigValidationError {
          e.g. \"https://api.example.com\")"
     )]
     EmptyBackendBaseUrl,
+    /// `[backend].base_url` is REFERENCE-shaped but does not name exactly one
+    /// environment variable — the empty `${}` form, or a multi-placeholder
+    /// composition like `"${SCHEME}://${HOST}"`. The grammar
+    /// ([`crate::env_ref::parse_env_ref`]) resolves one whole-value `${VAR}` /
+    /// `env:VAR` reference; it does not interpolate inside a larger string, so
+    /// no environment could ever satisfy such a value. Without this check the
+    /// config loads cleanly and every boot fails with an
+    /// `UnresolvedBaseUrlRef` naming an empty variable.
+    #[error(
+        "[backend].base_url is a malformed environment reference; a reference must be \
+         exactly one `${{VAR}}` or `env:VAR` naming a single variable — inline \
+         compositions like \"${{SCHEME}}://${{HOST}}\" cannot be resolved by any \
+         environment, so compose the full URL in ONE variable instead"
+    )]
+    MalformedBackendBaseUrlRef,
     /// Per Phase 120 Plan 04 (PKG-03): a `[[config_slots]]` entry at `index`
     /// has an empty / whitespace-only `key` or `name`. A slot declaration whose
     /// key names no config path — or whose name names no environment variable —
@@ -200,4 +215,17 @@ pub enum ConfigValidationError {
     /// `validate()` is ever called.
     #[error("[[config_slots]] entry at index {0} has an empty key or name")]
     EmptyConfigSlotField(usize),
+    /// A `[[config_slots]]` entry at `index` is `kind = "secret"` but carries a
+    /// `tested_value`. Identity-bearing slots structurally carry no value — the
+    /// `tested_value` field on a secret declaration is the one place a REAL
+    /// credential could sit in a config that is served but never packed (the
+    /// pack-time agreement gate only runs on packaging), so the rule is
+    /// enforced at validation time rather than trusted as prose. The message
+    /// deliberately does not echo the value.
+    #[error(
+        "[[config_slots]] entry at index {0} is kind = \"secret\" but carries a tested_value; \
+         identity-bearing slots record no value — remove it (a credential must never sit in \
+         the config file)"
+    )]
+    SecretSlotCarriesTestedValue(usize),
 }

@@ -46,3 +46,15 @@ ${TFL_BASE_URL	reject
 ${TFL_BASE_URL}-suffix	reject
 <EMPTY>	reject
   ${TFL_BASE_URL}  	reject
+# --- Multi-placeholder compositions (grammar v2 tightening, 2026-08-23) ---
+# A brace reference names exactly ONE variable matching [A-Za-z0-9_]+. A
+# composition is reference-SHAPED, so the toolkit parses it as a MALFORMED
+# reference (empty name -> omission/error, never a literal on the wire),
+# and a package refuses it at pack with an error naming the defect. The
+# explicit `env:` form keeps its any-non-empty-remainder rule on BOTH sides:
+# the coherence rule below (a reject row must resolve to nothing) forbids a
+# value one side resolves and the other refuses.
+${TFL_SCHEME}://${TFL_HOST}	reject	<EMPTYNAME>
+${A}-${B}	reject	<EMPTYNAME>
+${TFL-HOST}	reject	<EMPTYNAME>
+env:FOO}BAR	accept	FOO}BAR

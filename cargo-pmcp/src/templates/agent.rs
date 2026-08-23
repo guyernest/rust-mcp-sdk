@@ -46,7 +46,7 @@ use pmcp_package::{AgentPackage, ConfigSlot, SlotType};
 /// asserts this equals the workspace `crates/pmcp-agent` package version so the
 /// hardcoded pin cannot silently drift from the released crate (D-05) —
 /// mirroring the `workbook_server::PMCP_VERSION` drift guard.
-const PMCP_AGENT_VERSION: &str = "0.2.0";
+const PMCP_AGENT_VERSION: &str = "0.3.0";
 
 /// The `pmcp-package` version REQUIREMENT the emitted `Cargo.toml` declares —
 /// a caret major.minor line, not a full version.

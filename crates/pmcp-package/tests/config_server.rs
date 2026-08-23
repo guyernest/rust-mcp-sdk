@@ -193,8 +193,18 @@ fn an_embedded_package_still_round_trips_its_bootstrap_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let layout = OciLayout::create(dir.path()).unwrap();
 
+    // KEYLESS slots: an embedded, config-less package is the pre-0.2 shape,
+    // whose slots never name a config path. (A keyed slot without a config
+    // file is refused — see the dedicated test below.)
+    let mut package = config_server_package();
+    package.config_slots = package
+        .config_slots
+        .into_iter()
+        .map(|slot| ConfigSlot::new(slot.slot))
+        .collect();
+
     pack_server(
-        &config_server_package(),
+        &package,
         BinaryMode::Embedded(&bootstrap),
         None,
         None,
@@ -208,6 +218,35 @@ fn an_embedded_package_still_round_trips_its_bootstrap_bytes() {
     assert_eq!(
         unpacked.config, None,
         "a package packed without a config must unpack without one"
+    );
+}
+
+/// The inverse of "a value slot must name the config key it fills": a slot
+/// naming a `config_key` while the package ships NO config file points into a
+/// document that does not exist — a coverage claim nothing can validate at
+/// pack time and nothing can fill at deploy time, so `pack_server` refuses it
+/// before writing a single blob.
+#[test]
+fn a_keyed_slot_without_a_config_file_is_refused_naming_the_dangling_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+
+    // config_server_package()'s slots each carry a config_key derived from
+    // CONFIG_TOML's declaration block — but no ConfigFile travels with them.
+    let err = pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        None,
+        None,
+        &layout,
+    )
+    .expect_err("a config_key with no config document to address must not pack");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.api_key");
+    assert!(reason.contains("ships no"), "was: {reason}");
+    assert!(
+        layout.read_index().unwrap().manifests().is_empty(),
+        "the refusal must land before anything is written"
     );
 }
 
@@ -651,15 +690,18 @@ proptest! {
     ) {
         // The baseline is seed-independent, so compute it once per test binary
         // instead of re-packing and re-unpacking an identical layout on every
-        // proptest case. The TempDir rides along in the static to stay alive.
-        static BASELINE: std::sync::LazyLock<(tempfile::TempDir, pmcp_package::UnpackedServer)> =
+        // proptest case. The TempDir is dropped INSIDE the closure — an
+        // `UnpackedServer` owns every byte it yields, so nothing reads the
+        // directory afterwards, and a TempDir parked in a static is never
+        // dropped (statics don't run destructors), which would leak one packed
+        // layout into $TMPDIR per test-binary run.
+        static BASELINE: std::sync::LazyLock<pmcp_package::UnpackedServer> =
             std::sync::LazyLock::new(|| {
                 let dir = tempfile::tempdir().unwrap();
                 let (layout, _) = packed_full_package(dir.path());
-                let server = unpack_server(&layout).unwrap();
-                (dir, server)
+                unpack_server(&layout).unwrap()
             });
-        let baseline = &BASELINE.1;
+        let baseline = &*BASELINE;
 
         let mut order: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
         order.sort_by_key(|&i| seed[i]);

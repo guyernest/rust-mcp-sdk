@@ -479,17 +479,6 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
     }
 }
 
-/// Build a STATIC auth provider from `cfg`, shared as `Arc<dyn HttpAuthProvider>`.
-///
-/// For [`AuthConfig::OAuthPassthrough`], use [`create_passthrough_auth_provider`]
-/// instead — without a token this returns a [`MissingTokenAuth`] (if required) or
-/// [`NoAuth`], since the per-request token is not yet known at startup.
-///
-/// # Errors
-///
-/// This constructor never fails today (returns `Ok`) — the fallible signature is
-/// reserved so a future variant requiring construction-time validation can error
-/// without a breaking change.
 /// Resolve a single credential value, expanding a `${VAR}` or `env:VAR` reference
 /// from the process environment — the ONE chokepoint applied to every credential
 /// field (api_key, bearer `token`, basic `password`, oauth2 `client_secret`) as
@@ -537,6 +526,17 @@ fn expand_api_key_map(map: &HashMap<String, String>) -> HashMap<String, String> 
         .collect()
 }
 
+/// Build a STATIC auth provider from `cfg`, shared as `Arc<dyn HttpAuthProvider>`.
+///
+/// For [`AuthConfig::OAuthPassthrough`], use [`create_passthrough_auth_provider`]
+/// instead — without a token this returns a [`MissingTokenAuth`] (if required) or
+/// [`NoAuth`], since the per-request token is not yet known at startup.
+///
+/// # Errors
+///
+/// This constructor never fails today (returns `Ok`) — the fallible signature is
+/// reserved so a future variant requiring construction-time validation can error
+/// without a breaking change.
 pub fn create_auth_provider(
     cfg: &AuthConfig,
 ) -> Result<Arc<dyn HttpAuthProvider>, HttpConnectorError> {

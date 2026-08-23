@@ -276,6 +276,14 @@ impl ServerConfig {
             if slot.key.trim().is_empty() || slot.name.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyConfigSlotField(i));
             }
+            // Identity-bearing slots structurally carry no value (the whole
+            // "secrets never travel" premise) — a `tested_value` on a `secret`
+            // declaration is the one field where a REAL credential could sit in
+            // a config that is served but never packed, so the doc-comment rule
+            // is enforced here rather than trusted.
+            if slot.kind == ConfigSlotKind::Secret && slot.tested_value.is_some() {
+                return Err(ConfigValidationError::SecretSlotCarriesTestedValue(i));
+            }
         }
         // Phase 90 gap-closure (GAP 3 / WR-02): when a `[backend]` block is
         // declared, its `base_url` must be non-empty. Catch a typo'd / omitted
@@ -287,6 +295,15 @@ impl ServerConfig {
         if let Some(backend) = &self.backend {
             if backend.base_url.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyBackendBaseUrl);
+            }
+            // Phase 120 follow-up: a reference-shaped base_url must name
+            // exactly ONE variable. The grammar maps every malformed brace
+            // form — the empty `${}` and multi-placeholder compositions like
+            // `${SCHEME}://${HOST}` — to the empty name; catching that here
+            // turns a boot-time `UnresolvedBaseUrlRef` with an empty variable
+            // name into a load-time error naming the actual mistake.
+            if crate::env_ref::parse_env_ref(&backend.base_url) == Some("") {
+                return Err(ConfigValidationError::MalformedBackendBaseUrlRef);
             }
         }
         Ok(())
@@ -498,7 +515,9 @@ impl BackendSection {
     /// single toolkit-wide chokepoint:
     /// - a plain literal (no `${...}` / `env:` prefix) is returned VERBATIM;
     /// - `${VAR}` / `env:VAR` reads `VAR` from the process environment;
-    /// - a MALFORMED `${}` reference (an empty name) is an error;
+    /// - a MALFORMED reference — the empty `${}`, or a multi-placeholder
+    ///   composition like `${A}://${B}` (a brace reference names exactly ONE
+    ///   variable) — is an error;
     /// - an UNSET variable, or one set to an empty / whitespace-only value, is
     ///   an error.
     ///
@@ -745,7 +764,11 @@ pub struct ConfigSlotDecl {
     #[serde(default)]
     pub name: String,
     /// The value exercised when the server was tested. `None` for
-    /// identity-bearing slots (a secret), which structurally carry no value.
+    /// identity-bearing slots (a secret), which structurally carry no value —
+    /// ENFORCED by [`ServerConfig::validate`], not just stated: a `secret`
+    /// entry carrying a `tested_value` is refused, because that field is the
+    /// one place a real credential could sit in a config that is served but
+    /// never packed.
     #[serde(default)]
     pub tested_value: Option<String>,
 }
@@ -1136,6 +1159,66 @@ mod tests {
             Err(ConfigValidationError::EmptyBackendBaseUrl) => {},
             other => panic!("expected EmptyBackendBaseUrl, got {other:?}"),
         }
+    }
+
+    /// A multi-placeholder composition (`${SCHEME}://${HOST}`) is a MALFORMED
+    /// reference — the grammar resolves one whole-value `${VAR}`, it does not
+    /// interpolate — so validate() refuses it at load time instead of letting
+    /// every boot fail with an `UnresolvedBaseUrlRef` naming an empty variable.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_multi_placeholder_backend_base_url() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "${TFL_SCHEME}://${TFL_HOST}"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::MalformedBackendBaseUrlRef) => {},
+            other => panic!("expected MalformedBackendBaseUrlRef, got {other:?}"),
+        }
+    }
+
+    /// The empty `${}` form is the same class of defect and gets the same
+    /// load-time refusal.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_empty_name_backend_base_url_ref() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "${}"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::MalformedBackendBaseUrlRef) => {},
+            other => panic!("expected MalformedBackendBaseUrlRef, got {other:?}"),
+        }
+    }
+
+    /// A well-formed single reference stays valid — the check refuses only
+    /// malformed shapes, never the deferred-to-environment pattern itself.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_accepts_single_reference_backend_base_url() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "${TFL_BASE_URL}"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        cfg.validate()
+            .expect("a single ${VAR} backend.base_url reference must validate");
     }
 
     /// A `[backend]` block with a non-empty `base_url` validates OK.
@@ -1678,6 +1761,37 @@ mod tests {
                 "empty {field} must yield EmptyConfigSlotField(0), got: {err:?}"
             );
         }
+    }
+
+    /// `validate()` refuses a `secret` declaration carrying a `tested_value` —
+    /// identity-bearing slots structurally record no value, and this field is
+    /// the one place a REAL credential could sit in a config that is served
+    /// but never packed (pack-time gates only run on packaging).
+    #[test]
+    fn config_slot_secret_with_tested_value_fails_validation_without_echoing_it() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[config_slots]]
+            key = "backend.auth.query_params.app_key"
+            kind = "secret"
+            name = "TFL_APP_KEY"
+            tested_value = "sentinel-real-credential"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parses; the rule is semantic");
+        let err = cfg
+            .validate()
+            .expect_err("a secret slot carrying a tested_value must fail validation");
+        assert!(
+            matches!(err, ConfigValidationError::SecretSlotCarriesTestedValue(0)),
+            "got: {err:?}"
+        );
+        assert!(
+            !err.to_string().contains("sentinel-real-credential"),
+            "the error must not echo the value: {err}"
+        );
     }
 
     proptest! {

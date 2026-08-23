@@ -160,6 +160,41 @@ mod tests {
     use super::{dispatch, DispatchError};
     use pmcp_server_toolkit::config::ServerConfig;
 
+    /// RAII guard: set (or remove) an env var, restore the prior value on drop
+    /// — including when an assertion panics mid-test. A trailing `remove_var`
+    /// line is skipped on panic and leaks the variable into every later test
+    /// in the binary; the toolkit's `tests/support::EnvVarGuard` exists for the
+    /// same reason (this crate's unit tests cannot reach that module, so the
+    /// minimal twin lives here). Each test uses a UNIQUE variable name, which
+    /// is what stands in for a lock.
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(old) => std::env::set_var(self.key, old),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
     /// A london-tube-shaped config with a `[backend]` block (base_url + no auth).
     fn cfg_with_backend() -> ServerConfig {
         let toml = r#"
@@ -224,7 +259,7 @@ version = "0.1.0"
     async fn dispatch_unresolved_base_url_reference_is_an_error() {
         // A uniquely-named variable so this test cannot collide with a sibling.
         const VAR: &str = "PMCP_OPENAPI_DISPATCH_UNSET_BASE_URL_TEST";
-        std::env::remove_var(VAR);
+        let _guard = EnvVarGuard::unset(VAR);
 
         let toml = format!(
             r#"
@@ -258,7 +293,9 @@ base_url = "${{{VAR}}}"
     #[tokio::test]
     async fn dispatch_resolves_a_set_base_url_reference() {
         const VAR: &str = "PMCP_OPENAPI_DISPATCH_SET_BASE_URL_TEST";
-        std::env::set_var(VAR, "http://127.0.0.1:9999");
+        // Guard, not a bare set_var: restoration must survive a failing assert,
+        // or the variable leaks into every later test in this binary.
+        let _guard = EnvVarGuard::set(VAR, "http://127.0.0.1:9999");
 
         let toml = format!(
             r#"
@@ -277,8 +314,7 @@ base_url = "${{{VAR}}}"
             "a resolvable ${{VAR}} endpoint dispatches: {:?}",
             result.err()
         );
-
-        std::env::remove_var(VAR);
+        // The guard restores VAR on drop — panic-safe, unlike a trailing remove_var.
     }
 
     #[test]

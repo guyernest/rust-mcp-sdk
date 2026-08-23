@@ -13,8 +13,9 @@
 
 use pmcp_package::oci::media_types::{
     ARTIFACT_TYPE_AGENT, ARTIFACT_TYPE_SERVER, ARTIFACT_TYPE_TEAM, ARTIFACT_TYPE_WORKFLOW,
-    MT_AGENT_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG,
-    MT_SERVER_ENVELOPE, MT_SERVER_OPENAPI_SPEC, MT_TEAM_CONFIG, MT_WORKFLOW_MANIFEST,
+    MT_AGENT_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET,
+    MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
+    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA, MT_TEAM_CONFIG, MT_WORKFLOW_MANIFEST,
 };
 
 /// The four portable `.pmcp` package kinds.
@@ -81,7 +82,11 @@ pub fn detect_kind(s: &str) -> Option<PackageKind> {
         | MT_SERVER_CONFIG
         | MT_SERVER_OPENAPI_SPEC
         | MT_SERVER_BINARY_REF
-        | MT_SERVER_BOOTSTRAP => Some(PackageKind::Server),
+        | MT_SERVER_BOOTSTRAP
+        | MT_SERVER_DEPLOY_DESCRIPTOR
+        | MT_SERVER_CEDAR_POLICY_SET
+        | MT_SERVER_TOOL_METADATA
+        | MT_SERVER_CONFIG_SLOTS => Some(PackageKind::Server),
         ARTIFACT_TYPE_WORKFLOW | MT_WORKFLOW_MANIFEST => Some(PackageKind::Workflow),
         _ => None,
     }
@@ -131,6 +136,10 @@ mod tests {
         (MT_SERVER_OPENAPI_SPEC, PackageKind::Server),
         (MT_SERVER_BINARY_REF, PackageKind::Server),
         (MT_SERVER_BOOTSTRAP, PackageKind::Server),
+        (MT_SERVER_DEPLOY_DESCRIPTOR, PackageKind::Server),
+        (MT_SERVER_CEDAR_POLICY_SET, PackageKind::Server),
+        (MT_SERVER_TOOL_METADATA, PackageKind::Server),
+        (MT_SERVER_CONFIG_SLOTS, PackageKind::Server),
         (ARTIFACT_TYPE_WORKFLOW, PackageKind::Workflow),
         (MT_WORKFLOW_MANIFEST, PackageKind::Workflow),
     ];
@@ -263,6 +272,10 @@ mod tests {
             MT_SERVER_OPENAPI_SPEC,
             MT_SERVER_BINARY_REF,
             MT_SERVER_BOOTSTRAP,
+            MT_SERVER_DEPLOY_DESCRIPTOR,
+            MT_SERVER_CEDAR_POLICY_SET,
+            MT_SERVER_TOOL_METADATA,
+            MT_SERVER_CONFIG_SLOTS,
         ] {
             assert_eq!(
                 detect_kind(mt),
