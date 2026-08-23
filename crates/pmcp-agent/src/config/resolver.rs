@@ -98,6 +98,9 @@ fn warn_if_deviates(tested: &SlotType, resolved: &str) {
     // Build a proposed slot mirroring the tested variant but with the resolved
     // value, then let `detect_deviation` decide (it returns `None` for
     // identity-bearing kinds, so this is safe for every slot type).
+    // EXHAUSTIVE by design — no catch-all. A wildcard here would make every future
+    // behavior-relevant variant silently skip deviation warning while every existing test
+    // stayed green (the same failure mode `SlotType::tested_value` guards against).
     let proposed = match tested {
         SlotType::LlmProvider { name, .. } => SlotType::LlmProvider {
             name: name.clone(),
@@ -107,7 +110,19 @@ fn warn_if_deviates(tested: &SlotType, resolved: &str) {
             name: name.clone(),
             tested_value: resolved.to_string(),
         },
-        _ => return,
+        SlotType::Endpoint { name, .. } => SlotType::Endpoint {
+            name: name.clone(),
+            tested_value: resolved.to_string(),
+        },
+        SlotType::AuthMode { name, .. } => SlotType::AuthMode {
+            name: name.clone(),
+            tested_value: resolved.to_string(),
+        },
+        // Identity-bearing: no tested value to deviate from.
+        SlotType::Secret { .. }
+        | SlotType::OauthClient { .. }
+        | SlotType::ChannelBinding { .. }
+        | SlotType::HumanRole { .. } => return,
     };
     if let Some(dev) = detect_deviation(tested, &proposed) {
         tracing::warn!(
@@ -141,7 +156,9 @@ where
         // Behavior-relevant: a supplied override, else the tested default. Either
         // way the run proceeds; a differing value only warns.
         SlotType::LlmProvider { tested_value, .. }
-        | SlotType::BudgetOverride { tested_value, .. } => {
+        | SlotType::BudgetOverride { tested_value, .. }
+        | SlotType::Endpoint { tested_value, .. }
+        | SlotType::AuthMode { tested_value, .. } => {
             let value = lookup_plain(name).unwrap_or_else(|| tested_value.clone());
             warn_if_deviates(&slot.slot, &value);
             Ok(ResolvedValue::Plain(value))

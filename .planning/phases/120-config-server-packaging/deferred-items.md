@@ -45,3 +45,24 @@ are release-ledger or historical-design text, not in-repo emitters:
 `crates/pmcp-package/README.md` was NOT deferred — it is the published
 crate's own user-facing doc and would have shipped inside 0.2.0 telling users
 to depend on `0.1`, so this plan updated it.
+
+## Plan 120-03 — pre-existing `cargo-pmcp` test failures (out of scope)
+
+Six `cargo test -p cargo-pmcp` tests fail on this worktree's base commit
+(`a298f5f5`) and are unrelated to plan 120-03's `ConfigSlot`/`SlotType` change:
+none of the three modules containing them references `ConfigSlot` or `SlotType`
+(`grep -c 'ConfigSlot\|SlotType'` returns 0 for all three), and none of the
+three files is in this plan's `files_modified`.
+
+- `deployment::targets::aws_lambda::artifact::tests::fetch_builtin_binary_downloads_and_populates_cache_on_miss`
+- `deployment::targets::aws_lambda::artifact::tests::fetch_builtin_binary_uses_cache_without_network_on_hit`
+- `deployment::targets::aws_lambda::artifact::tests::fetch_builtin_binary_rejects_corrupt_cache`
+- `commands::configure::resolver::tests::resolve_target_returns_target_source_for_target_fields`
+- `commands::doctor::tests::doctor_widget_check_warns_for_mixed_crate_without_build_rs`
+- `commands::doctor::tests::doctor_widget_check_warns_when_include_str_lacks_build_rs`
+
+The three `artifact.rs` ones fail on a download-stub lookup
+(`stub has no entry for .../v1.2.3/pmcp-sql-server-aarch64-unknown-linux-gnu`),
+i.e. environment/fixture state, not compilation. Last touched by `0396f178`
+(pmcp-cfn-renderer extraction, PR #313). Left for a dedicated fix; deviation
+Rule scope boundary forbids repairing unrelated pre-existing failures here.

@@ -65,5 +65,8 @@ pub use package::{
     AgentPackage, CedarPolicySet, DeployDescriptor, ServerPackage, TeamPackage, WorkflowManifest,
 };
 pub use reference::{ComponentRef, PinnedRef};
-pub use slot::{aggregate, classify, detect_deviation, ConfigSlot, Deviation, SlotClass, SlotType};
+pub use slot::{
+    aggregate, classify, detect_deviation, required_slots, ConfigSlot, Deviation, RequiredSlot,
+    SlotClass, SlotType,
+};
 pub use validation::validate as validate_deploy_descriptor;

@@ -177,18 +177,14 @@ fn behavior_relevant_deviation_detected_but_identity_bearing_slot_is_not() {
 
 #[test]
 fn aggregate_returns_slot_conflict_for_divergent_llm_provider_tested_values() {
-    let a = ConfigSlot {
-        slot: SlotType::LlmProvider {
-            name: "primary-llm".to_string(),
-            tested_value: "anthropic".to_string(),
-        },
-    };
-    let b = ConfigSlot {
-        slot: SlotType::LlmProvider {
-            name: "primary-llm".to_string(),
-            tested_value: "openai".to_string(),
-        },
-    };
+    let a = ConfigSlot::new(SlotType::LlmProvider {
+        name: "primary-llm".to_string(),
+        tested_value: "anthropic".to_string(),
+    });
+    let b = ConfigSlot::new(SlotType::LlmProvider {
+        name: "primary-llm".to_string(),
+        tested_value: "openai".to_string(),
+    });
     let err = aggregate([&a, &b]).unwrap_err();
     assert!(
         matches!(err, PackageError::SlotConflict { .. }),

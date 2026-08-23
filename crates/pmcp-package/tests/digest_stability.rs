@@ -237,12 +237,10 @@ fn agent_package_digest_is_stable_across_100_computations_via_canonicalize() {
         name: "claims-triage-agent".to_string(),
         version: semver::Version::parse("1.2.0").unwrap(),
         instructions: "You triage incoming insurance claims.".to_string(),
-        llm: ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "anthropic".to_string(),
-            },
-        },
+        llm: ConfigSlot::new(SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "anthropic".to_string(),
+        }),
         max_tokens: 8192,
         max_iterations: 15,
         connectors: vec![ComponentRef::Range {
@@ -255,12 +253,10 @@ fn agent_package_digest_is_stable_across_100_computations_via_canonicalize() {
         output_schema: Some(serde_json::json!({ "type": "object" })),
         importance: Some("HIGH".to_string()),
         finalizer_role: Some("formatter".to_string()),
-        budget_defaults: vec![ConfigSlot {
-            slot: SlotType::BudgetOverride {
-                name: "monthly-cap".to_string(),
-                tested_value: "500".to_string(),
-            },
-        }],
+        budget_defaults: vec![ConfigSlot::new(SlotType::BudgetOverride {
+            name: "monthly-cap".to_string(),
+            tested_value: "500".to_string(),
+        })],
     };
 
     let first = manifest_digest(&package)

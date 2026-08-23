@@ -107,11 +107,9 @@ fn config_server_package() -> ServerPackage {
             description: "Current status of every tube line".to_string(),
             annotations: Some(serde_json::json!({ "read_only_hint": true })),
         }],
-        config_slots: vec![ConfigSlot {
-            slot: SlotType::Secret {
-                name: "TFL_API_KEY".to_string(),
-            },
-        }],
+        config_slots: vec![ConfigSlot::new(SlotType::Secret {
+            name: "TFL_API_KEY".to_string(),
+        })],
     }
 }
 
