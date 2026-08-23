@@ -31,13 +31,29 @@ on manifest field names, layer ordering, or digest values.
   `pmcp-package`. Add `pmcp-package = { version = "0.2", path = "../pmcp-package" }` to
   `pmcp-openapi-server`'s `[dev-dependencies]`.
   **Rationale, measured:** that crate's dev-deps already carry every other thing this phase needs
-  — `mcp-tester` (`ScenarioExecutor`), `wiremock`, `tempfile`, `tokio`, `url`. `pmcp-package`'s
-  own `[dev-dependencies]` is **empty**, so placing the test there would mean adding all of them
-  *and* the served binary. Decisively: `pmcp-package` is workspace-**excluded** (root
-  `Cargo.toml:831`), so `make quality-gate` and the CI quality-gate job never reach its tests —
-  the exact blind spot that let CR-01 sit undetected through Phase 120. Path-depping into the
-  excluded crate is a proven pattern (`pmcp-agent/Cargo.toml:18`, `cargo-pmcp/Cargo.toml:87`).
+  — `mcp-tester` (`ScenarioExecutor`), `wiremock`, `tempfile`, `tokio`, `url` — *and the served
+  binary itself*. Placing the test in `pmcp-package` would mean dev-depping the binary crate into
+  the standalone workspace, which is the decisive cost. Path-depping into the excluded crate is a
+  proven pattern (`pmcp-agent/Cargo.toml:18`, `cargo-pmcp/Cargo.toml:87`).
   — **Reversibility:** reversible — a dev-dep line and a file move; nothing published depends on it.
+
+  > **⚠ Rationale corrected 2026-08-23 (Phase 121 planning, RESEARCH CF-1/CF-2). The decision
+  > stands; two of its original supporting claims were false and are struck.**
+  > 1. *"`pmcp-package`'s own `[dev-dependencies]` is empty"* — it is not: `proptest = "1.11"`
+  >    and `tempfile = "3"` [Cargo.toml `[dev-dependencies]`].
+  > 2. *"Decisively: `pmcp-package` is workspace-excluded, so `make quality-gate` and the CI
+  >    quality-gate job never reach its tests"* — they do, via `pmcp-package-gate`
+  >    (`Makefile:881-886`, chained at `Makefile:906`, present since `8c02a872`). `cargo test
+  >    --manifest-path` with no target filter runs every `tests/*.rs` binary in that crate.
+  >
+  > **The blind spot is real but belongs to the destination crate, not the source.** Nothing runs
+  > `crates/pmcp-openapi-server/tests/` in any gate — `test-integration` is `cargo test --test '*'`
+  > which resolves to the root `pmcp` package only (`Makefile:241-243`), CI's `test` job is
+  > root-scoped (`ci.yml:733`), and `org-gate-checks.yml`'s `workspace-test` uses `--lib --bins`.
+  > So this phase's own deliverable would be ungated. **Resolved by user decision at plan time:
+  > Phase 121 adds a `test-openapi-server` Makefile target with a nonzero-test-count guard,
+  > chained into `test-all`.** Build/gate wiring is inside this phase's fence; production API
+  > remains outside it.
 
 - **D-02:** New file **`tests/roundtrip_e2e.rs`**, with `parity_replay.rs`'s reusable helpers
   (`mount_london_tube`, `assert_london_tube_config_slots`, `assert_london_tube_code_mode_surface`,
@@ -51,6 +67,25 @@ on manifest field names, layer ordering, or digest values.
 - **D-03:** Mirror `cargo-pmcp/tests/pmcp_package_pin.rs` as a **pin tripwire** for the new
   dev-dep, so a silent `0.2` → `0.3` drift fails loudly rather than resolving to a version the
   E2E was never written against.
+
+### Gate Coverage
+
+- **D-13:** *(added 2026-08-23 at plan time, from RESEARCH CF-2 — user decision.)* Phase 121 adds
+  a **`test-openapi-server` Makefile target with a nonzero-test-count guard**, chained into
+  `test-all` so `make quality-gate` executes this phase's deliverable. Today nothing does:
+  `test-integration` is `cargo test --test '*'`, which resolves to the root `pmcp` package only
+  (`Makefile:241-243`); CI's `test` job is root-scoped (`ci.yml:733`); `org-gate-checks.yml`'s
+  `workspace-test` uses `--lib --bins`, excluding `tests/`. Without this, PKG-04 ships a
+  regression net that only runs when a human types the command — and `parity_replay.rs` has been
+  in that hole all along.
+  **The count guard is not optional:** `test-tester` and `test-cargo-pmcp` are the two verbatim
+  precedents and both carry an `awk '/^test result:/ { total += $4 }'` floor, because a target
+  that runs zero tests exits 0. This repo has shipped that exact shape three times (CR-01, the
+  RTK-truncated gate run, and `list_tools()`'s `unwrap_or_default()`).
+  **Scope note:** build/gate wiring is inside the `<domain>` fence, which prohibits *production
+  API* changes — no toolkit resolution path, no `pmcp-package` surface, no manifest schema change.
+  A Makefile target is none of those.
+  — **Reversibility:** reversible — one Makefile target and one chain line.
 
 ### Slot Enumeration Contract
 
