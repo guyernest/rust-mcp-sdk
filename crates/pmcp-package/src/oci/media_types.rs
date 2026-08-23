@@ -4,20 +4,28 @@
 //!
 //! # Layer inventory
 //!
-//! - `ServerPackage` decomposes into FIVE content-addressed layers: the
-//!   bootstrap binary ([`MT_SERVER_BOOTSTRAP`] — supplied as raw bytes,
-//!   never a struct field), the deploy descriptor
+//! - `ServerPackage` decomposes into content-addressed layers. Exactly ONE
+//!   binary layer is always present, and it is one of two mutually exclusive
+//!   shapes: the embedded bootstrap binary ([`MT_SERVER_BOOTSTRAP`] — supplied
+//!   as raw bytes, never a struct field) OR a binary REFERENCE
+//!   ([`MT_SERVER_BINARY_REF`] — a small JSON layer naming the digest and
+//!   media type of a binary the target environment resolves for itself; a
+//!   pure-config Shape A server carries this one and no bytes at all).
+//!   Alongside it are the four typed sections — the deploy descriptor
 //!   ([`MT_SERVER_DEPLOY_DESCRIPTOR`]), the cedar policy set
 //!   ([`MT_SERVER_CEDAR_POLICY_SET`]), tool metadata
 //!   ([`MT_SERVER_TOOL_METADATA`]), and the declared config slots
-//!   ([`MT_SERVER_CONFIG_SLOTS`]). The remaining `ServerPackage` fields not
-//!   covered by any of those four typed sections — `name`, `version`, the
-//!   top-level `digest`, and `binary_ref` — are packed as their own small
-//!   "envelope" layer ([`MT_SERVER_ENVELOPE`]) so every field round-trips
-//!   losslessly by plain serialize/deserialize, with no derivation trickery
-//!   needed at unpack time (`binary_ref.digest` is passed through exactly as
-//!   given by the caller; the bootstrap OCI layer's OWN `Descriptor` is a
-//!   separate, independently digest-verified value).
+//!   ([`MT_SERVER_CONFIG_SLOTS`]) — plus the `name`/`version`/top-level
+//!   `digest` "envelope" layer ([`MT_SERVER_ENVELOPE`]) so every remaining
+//!   field round-trips losslessly by plain serialize/deserialize.
+//! - Two OPTIONAL vendor-content layers may follow: the author's verbatim
+//!   server config file ([`MT_SERVER_CONFIG`]) and, for an OpenAPI-backed
+//!   server, its spec file ([`MT_SERVER_OPENAPI_SPEC`]). Both carry raw
+//!   author bytes (never re-derived from a parsed struct) and record the
+//!   original file name in their descriptor's
+//!   `org.opencontainers.image.title` annotation.
+//! - Layers are located at unpack time by MEDIA TYPE, never by position — the
+//!   optional layers make any positional contract false.
 //! - `AgentPackage`/`TeamPackage`/`WorkflowManifest` each pack as a SINGLE
 //!   JSON layer ([`MT_AGENT_CONFIG`]/[`MT_TEAM_CONFIG`]/
 //!   [`MT_WORKFLOW_MANIFEST`]) — the whole struct serialized once; no
@@ -51,6 +59,25 @@ pub const MT_SERVER_CEDAR_POLICY_SET: &str =
 pub const MT_SERVER_TOOL_METADATA: &str = "application/vnd.pmcp.mcp-server.tool-metadata.v1+json";
 /// The server's declared config slots (`ServerPackage.config_slots`).
 pub const MT_SERVER_CONFIG_SLOTS: &str = "application/vnd.pmcp.mcp-server.config-slots.v1+json";
+/// The author's server config file (`config.toml`), carried VERBATIM as raw
+/// bytes. Generic across all three Shape A pure-config siblings (SQL,
+/// workbook, OpenAPI) — the config's *dialect* is the server binary's
+/// concern, not the package format's, so there is one media type rather than
+/// one per kind. The original file name travels in the layer descriptor's
+/// `org.opencontainers.image.title` annotation.
+pub const MT_SERVER_CONFIG: &str = "application/vnd.pmcp.mcp-server.config.v1+toml";
+/// An OpenAPI-backed server's spec file, carried VERBATIM as raw bytes.
+/// Unlike [`MT_SERVER_CONFIG`] this one IS per-kind: only an OpenAPI server
+/// has a spec, and its bytes are the spec document exactly as the author
+/// wrote it (JSON or YAML — the extension travels in the descriptor's
+/// `org.opencontainers.image.title` annotation).
+pub const MT_SERVER_OPENAPI_SPEC: &str = "application/vnd.pmcp.mcp-server.openapi-spec.v1";
+/// A REFERENCE to a server binary the package does not embed: the digest and
+/// media type of a blob the *target environment* resolves for itself. The
+/// mutually-exclusive counterpart of [`MT_SERVER_BOOTSTRAP`] — a package
+/// carries exactly one of the two, never both and never neither. The payload
+/// is a canonical-JSON `BinaryRef`.
+pub const MT_SERVER_BINARY_REF: &str = "application/vnd.pmcp.mcp-server.binary-ref.v1+json";
 
 // ---------------------------------------------------------------------
 // AgentPackage / TeamPackage / WorkflowManifest — one layer each

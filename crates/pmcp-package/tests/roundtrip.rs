@@ -19,7 +19,7 @@
 use pmcp_package::digest::canonicalize;
 use pmcp_package::oci::{
     pack_agent, pack_server, pack_team, pack_workflow, unpack_agent, unpack_server, unpack_team,
-    unpack_workflow, OciLayout,
+    unpack_workflow, BinaryMode, OciLayout, UnpackedBinary,
 };
 use pmcp_package::package::{
     AgentPackage, HumanRole, ServerPackage, TeamLimits, TeamMember, TeamPackage, TeamRole,
@@ -59,15 +59,23 @@ fn server_package_fixture_round_trips_and_matches_canonical_bytes() {
     let bootstrap = b"fake-arm64-bootstrap-binary-bytes-for-testing".to_vec();
     let dir = tempfile::tempdir().unwrap();
     let layout = OciLayout::create(dir.path()).unwrap();
-    pack_server(&parsed, &bootstrap, &layout).unwrap();
-    let (unpacked, unpacked_bootstrap) = unpack_server(&layout).unwrap();
+    pack_server(
+        &parsed,
+        BinaryMode::Embedded(&bootstrap),
+        None,
+        None,
+        &layout,
+    )
+    .unwrap();
+    let unpacked = unpack_server(&layout).unwrap();
 
     assert_eq!(
-        unpacked, parsed,
+        unpacked.package, parsed,
         "ServerPackage must round-trip pack/unpack losslessly"
     );
     assert_eq!(
-        unpacked_bootstrap, bootstrap,
+        unpacked.binary,
+        UnpackedBinary::Embedded(bootstrap),
         "bootstrap bytes must round-trip pack/unpack losslessly"
     );
 }

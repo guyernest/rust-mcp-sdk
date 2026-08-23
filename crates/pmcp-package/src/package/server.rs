@@ -352,11 +352,21 @@ pub struct ToolMetadata {
 // BinaryRef — a reference to the bootstrap blob, never the bytes themselves
 // ---------------------------------------------------------------------
 
-/// A reference to the server's bootstrap Lambda binary. The binary bytes
-/// are NEVER inlined here — `pack_server(package, bootstrap,
-/// layout)` takes the raw bytes as a SEPARATE argument and turns them into a
-/// content-addressed OCI layer; this type only carries the resulting digest
-/// (once packed — `None` beforehand) plus a descriptive media-type hint.
+/// A reference to the server's bootstrap binary — the WIRE payload of the
+/// `application/vnd.pmcp.mcp-server.binary-ref.v1+json` layer.
+///
+/// The binary bytes are NEVER inlined here: `pack_server` takes a
+/// [`BinaryMode`] as a SEPARATE argument and turns it into either an embedded
+/// bootstrap layer or a binary-ref layer carrying this struct. This type only
+/// carries a digest plus a descriptive media-type hint.
+///
+/// `digest` is `Option` for WIRE TOLERANCE only — a decoded layer can be
+/// missing it, and `unpack_server` rejects that case. The API-level
+/// [`BinaryMode::Referenced`] digest is non-optional, so callers of the
+/// packing API cannot express an unpinned binary at all.
+///
+/// [`BinaryMode`]: crate::oci::pack::BinaryMode
+/// [`BinaryMode::Referenced`]: crate::oci::pack::BinaryMode::Referenced
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BinaryRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,7 +386,6 @@ pub struct ServerPackage {
     /// Set at pack time — `None` before packing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<crate::digest::ManifestDigest>,
-    pub binary_ref: BinaryRef,
     pub deploy: DeployDescriptor,
     pub policies: CedarPolicySet,
     pub tools: Vec<ToolMetadata>,
@@ -628,10 +637,6 @@ mod tests {
             name: "team-fs".to_string(),
             version: semver::Version::parse("1.0.0").unwrap(),
             digest: None,
-            binary_ref: BinaryRef {
-                digest: None,
-                media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
-            },
             deploy: sample_deploy_descriptor(),
             policies: CedarPolicySet(vec![sample_cedar_policy()]),
             tools: vec![ToolMetadata {
@@ -647,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn server_package_binary_ref_carries_no_inline_bytes() {
+    fn binary_ref_carries_no_inline_bytes() {
         // Structural proof: BinaryRef's only fields are `digest` (a
         // ManifestDigest, itself a validated String newtype) and
         // `media_type` (a String) — there is no way to construct one
@@ -657,5 +662,24 @@ mod tests {
             media_type: "application/x-lambda-bootstrap".to_string(),
         };
         assert!(binary_ref.digest.is_some());
+    }
+
+    #[test]
+    fn server_package_has_no_binary_ref_field() {
+        // D-08: "which binary" is a LAYER, not a struct field, so the
+        // serialized ServerPackage must not carry a `binary_ref` key at all.
+        // A stale field here would be a second source of truth able to
+        // disagree with the package's actual binary layer.
+        let pkg = ServerPackage {
+            name: "team-fs".to_string(),
+            version: semver::Version::parse("1.0.0").unwrap(),
+            digest: None,
+            deploy: sample_deploy_descriptor(),
+            policies: CedarPolicySet(vec![]),
+            tools: vec![],
+            config_slots: vec![],
+        };
+        let json = serde_json::to_value(&pkg).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("binary_ref"));
     }
 }
