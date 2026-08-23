@@ -2320,14 +2320,14 @@ piece that scoping did not produce.*
   3. The baked-versus-slot split is enforced, not merely written down: changing one byte of `london-tube-api.yaml` changes the package's canonical manifest digest and `digest::verify` (`crates/pmcp-package/src/digest/verify.rs:28`) rejects the stale digest — while endpoint, credentials and auth mode surface as `ConfigSlot`s that `classify` (`crates/pmcp-package/src/slot/classification.rs:24`) sorts and `aggregate` (`crates/pmcp-package/src/slot/aggregate.rs:23`) returns, with no spec-derived slot among them (PKG-03)
   4. A golden fixture pins the config-only package kind's canonical digest under `crates/pmcp-package/tests/golden_fixtures/`, so a later change to the layer set, layer order or media-type strings fails `crates/pmcp-package/tests/digest_stability.rs` instead of silently shipping a package the previously published CLI cannot read (PKG-01, PKG-02)
 
-**Plans**: 5 plans (3 waves)
+**Plans**: 5 plans (4 waves)
 
 Plans:
 - [ ] 120-01-PLAN.md — Tracer: config-only pack/unpack end-to-end, plus the one-way 0.2.0 wire break (wave 1)
 - [ ] 120-02-PLAN.md — Optional OpenAPI spec layer, 0.1.x refusal, media-type index hardening (wave 2)
-- [ ] 120-03-PLAN.md — Slot vocabulary: `SlotType::Endpoint`/`AuthMode`, `ConfigSlot.config_key`, `required_slots` (wave 2)
-- [ ] 120-04-PLAN.md — Toolkit `[[config_slots]]` + `base_url` `${VAR}` expansion + the london-tube proving fixture (wave 2)
-- [ ] 120-05-PLAN.md — Pack-time placeholder validation and the packed-manifest golden (wave 3)
+- [ ] 120-04-PLAN.md — Toolkit `[[config_slots]]` + `base_url` `${VAR}` expansion + the london-tube proving fixture (wave 2, parallel with 120-02)
+- [ ] 120-03-PLAN.md — Slot vocabulary: `SlotType::Endpoint`/`AuthMode`, `ConfigSlot.config_key`, `required_slots` (wave 3)
+- [ ] 120-05-PLAN.md — Pack-time placeholder validation and the packed-manifest golden (wave 4)
 
 ### Phase 121: Local Round-Trip E2E
 
