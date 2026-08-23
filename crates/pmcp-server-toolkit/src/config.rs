@@ -1292,6 +1292,213 @@ mod tests {
         assert!(matches!(err, ToolkitError::Parse(_)), "got: {err:?}");
     }
 
+    // -------------------------------------------------------------------------
+    // `[[config_slots]]` — PKG-03 slot declarations (Phase 120 Plan 04 Task 1)
+    // -------------------------------------------------------------------------
+
+    /// The three-slot declaration block the london-tube proving fixture carries.
+    const CONFIG_SLOTS_TOML: &str = r#"
+        [server]
+        name = "london-tube"
+        version = "1.1.0"
+
+        [[config_slots]]
+        key = "backend.base_url"
+        kind = "endpoint"
+        name = "TFL_BASE_URL"
+        tested_value = "https://api.tfl.gov.uk"
+
+        [[config_slots]]
+        key = "backend.auth.query_params.app_key"
+        kind = "secret"
+        name = "TFL_APP_KEY"
+
+        [[config_slots]]
+        key = "backend.auth.type"
+        kind = "auth_mode"
+        name = "backend-auth-mode"
+        tested_value = "api_key"
+    "#;
+
+    /// Test 1: a `[[config_slots]]` block parses through the STRICT + validated
+    /// entry point and exposes all three entries with their fields intact.
+    #[test]
+    fn config_slots_block_parses_through_strict_entry_point() {
+        let cfg = ServerConfig::from_toml_strict_validated(CONFIG_SLOTS_TOML)
+            .expect("[[config_slots]] must parse through the strict entry point");
+        assert_eq!(cfg.config_slots.len(), 3, "three declared slots");
+
+        assert_eq!(cfg.config_slots[0].key, "backend.base_url");
+        assert_eq!(cfg.config_slots[0].kind, ConfigSlotKind::Endpoint);
+        assert_eq!(cfg.config_slots[0].name, "TFL_BASE_URL");
+        assert_eq!(
+            cfg.config_slots[0].tested_value.as_deref(),
+            Some("https://api.tfl.gov.uk")
+        );
+
+        assert_eq!(cfg.config_slots[1].kind, ConfigSlotKind::Secret);
+        assert_eq!(cfg.config_slots[1].name, "TFL_APP_KEY");
+        assert_eq!(cfg.config_slots[2].kind, ConfigSlotKind::AuthMode);
+    }
+
+    /// Test 2: the field is ADDITIVE — a config with no `[[config_slots]]` block
+    /// parses unchanged and yields an empty vec (`#[serde(default)]`).
+    #[test]
+    fn config_without_config_slots_parses_with_empty_vec() {
+        let cfg = ServerConfig::from_toml_strict_validated(MINIMAL)
+            .expect("a config omitting [[config_slots]] still parses");
+        assert!(
+            cfg.config_slots.is_empty(),
+            "absent block yields an empty vec, not a default entry"
+        );
+    }
+
+    /// Test 3: `deny_unknown_fields` still bites at the TOP level — a typo'd
+    /// `[[config_slotz]]` is a hard parse error, never a silently-ignored block.
+    #[test]
+    fn top_level_config_slots_typo_is_still_rejected() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[config_slotz]]
+            key = "backend.base_url"
+            kind = "endpoint"
+            name = "TFL_BASE_URL"
+        "#;
+        let err = ServerConfig::from_toml(toml)
+            .expect_err("a typo'd top-level array-of-tables must be rejected");
+        assert!(matches!(err, ToolkitError::Parse(_)), "got: {err:?}");
+    }
+
+    /// Test 4: the decl struct is itself `deny_unknown_fields` — a typo INSIDE
+    /// the block (`nmae`) is rejected rather than silently dropped.
+    #[test]
+    fn config_slot_unknown_inner_key_is_rejected() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[config_slots]]
+            key = "backend.base_url"
+            kind = "endpoint"
+            nmae = "TFL_BASE_URL"
+        "#;
+        let err = ServerConfig::from_toml(toml)
+            .expect_err("an unknown key inside [[config_slots]] must be rejected");
+        assert!(matches!(err, ToolkitError::Parse(_)), "got: {err:?}");
+    }
+
+    /// Test 5: `tested_value` is OPTIONAL — an identity-bearing slot structurally
+    /// carries no value, so omitting it parses to `None`.
+    #[test]
+    fn config_slot_tested_value_is_optional() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[config_slots]]
+            key = "backend.auth.query_params.app_key"
+            kind = "secret"
+            name = "TFL_APP_KEY"
+        "#;
+        let cfg = ServerConfig::from_toml_strict_validated(toml)
+            .expect("an entry without tested_value parses");
+        assert_eq!(cfg.config_slots.len(), 1);
+        assert!(
+            cfg.config_slots[0].tested_value.is_none(),
+            "omitted tested_value parses to None"
+        );
+    }
+
+    /// Test 6 (Codex MEDIUM — the invalid-kind hole): `kind` is a CLOSED
+    /// vocabulary. A typo such as `endpont` — or an empty string — is a PARSE
+    /// error naming the accepted set, not a declaration that parses cleanly and
+    /// then fails to map to any package slot type two crates away.
+    #[test]
+    fn config_slot_invalid_kind_is_rejected_naming_the_accepted_set() {
+        for bad in ["endpont", ""] {
+            let toml = format!(
+                r#"
+                [server]
+                name = "demo"
+                version = "0.1.0"
+
+                [[config_slots]]
+                key = "backend.base_url"
+                kind = "{bad}"
+                name = "TFL_BASE_URL"
+                "#
+            );
+            let err = ServerConfig::from_toml(&toml)
+                .expect_err("an unrecognized config-slot kind must be rejected at parse time");
+            let rendered = err.to_string();
+            for accepted in ["endpoint", "secret", "auth_mode"] {
+                assert!(
+                    rendered.contains(accepted),
+                    "the error for kind = \"{bad}\" must name the accepted kind \
+                     `{accepted}`: {rendered}"
+                );
+            }
+        }
+    }
+
+    /// Test 7: all three valid kinds parse, and the parsed value is a CLOSED
+    /// enum — comparable as `ConfigSlotKind`, not as a free string. A fourth
+    /// kind is therefore a deliberate addition here, never a silent
+    /// pass-through to the package side.
+    #[test]
+    fn config_slot_all_three_kinds_parse_as_a_closed_enum() {
+        let cfg = ServerConfig::from_toml_strict_validated(CONFIG_SLOTS_TOML)
+            .expect("all three kinds parse");
+        let kinds: Vec<ConfigSlotKind> = cfg.config_slots.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ConfigSlotKind::Endpoint,
+                ConfigSlotKind::Secret,
+                ConfigSlotKind::AuthMode
+            ],
+            "kind is a closed enum, not a free string"
+        );
+    }
+
+    /// `validate()` rejects an entry whose `key` or `name` is empty/whitespace,
+    /// carrying the offending entry INDEX (the `EmptyTableName(i)` error shape).
+    #[test]
+    fn config_slot_empty_key_or_name_fails_validation() {
+        for field in ["key", "name"] {
+            let (key, name) = if field == "key" {
+                ("   ", "TFL_BASE_URL")
+            } else {
+                ("backend.base_url", "  ")
+            };
+            let toml = format!(
+                r#"
+                [server]
+                name = "demo"
+                version = "0.1.0"
+
+                [[config_slots]]
+                key = "{key}"
+                kind = "endpoint"
+                name = "{name}"
+                "#
+            );
+            let cfg = ServerConfig::from_toml(&toml).expect("parses; emptiness is semantic");
+            let err = cfg
+                .validate()
+                .expect_err("an empty config-slot key/name must fail validation");
+            assert!(
+                matches!(err, ConfigValidationError::EmptyConfigSlotField(0)),
+                "empty {field} must yield EmptyConfigSlotField(0), got: {err:?}"
+            );
+        }
+    }
+
     proptest! {
         /// TEST-02: any valid `ServerConfig` round-trips through TOML.
         ///
