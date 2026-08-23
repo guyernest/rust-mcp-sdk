@@ -323,13 +323,7 @@ mod tests {
         // D-05: the hardcoded PMCP_AGENT_VERSION must not drift from the workspace
         // `pmcp-agent` package version. Parse its Cargo.toml `[package] version`
         // and compare — mirroring the workbook_server PMCP_VERSION drift guard.
-        let parsed: toml::Value =
-            toml::from_str(AGENT_CARGO_TOML).expect("parse pmcp-agent Cargo.toml");
-        let agent_version = parsed
-            .get("package")
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-            .expect("pmcp-agent Cargo.toml has [package] version");
+        let agent_version = package_version(AGENT_CARGO_TOML, "pmcp-agent");
         assert_eq!(
             PMCP_AGENT_VERSION, agent_version,
             "the scaffold's hardcoded pmcp-agent pin `{PMCP_AGENT_VERSION}` drifted from the \

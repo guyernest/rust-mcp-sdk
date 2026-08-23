@@ -105,14 +105,20 @@ pub const LONDON_TUBE_FIXTURE_DIR: &str = "config_server_london_tube_v1";
 pub const LONDON_TUBE_CONFIG_NAME: &str = "london-tube.toml";
 pub const LONDON_TUBE_SPEC_NAME: &str = "london-tube-api.yaml";
 
-/// Read a file out of this crate's vendored london-tube fixture directory.
-pub fn vendored_fixture(name: &str) -> Vec<u8> {
+/// Read a file out of this crate's `tests/golden_fixtures/` tree. The one
+/// canonical fixture reader — per-binary copies of this loop are exactly the
+/// duplication this module's header forbids.
+pub fn fixture_bytes(relative: impl AsRef<Path>) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("golden_fixtures")
-        .join(LONDON_TUBE_FIXTURE_DIR)
-        .join(name);
+        .join(relative.as_ref());
     std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
+}
+
+/// Read a file out of this crate's vendored london-tube fixture directory.
+pub fn vendored_fixture(name: &str) -> Vec<u8> {
+    fixture_bytes(Path::new(LONDON_TUBE_FIXTURE_DIR).join(name))
 }
 
 pub fn london_tube_config_bytes() -> Vec<u8> {

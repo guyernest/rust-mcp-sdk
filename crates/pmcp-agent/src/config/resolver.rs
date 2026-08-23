@@ -95,34 +95,12 @@ pub trait SlotResolver: Send + Sync {
 /// Warn (and proceed) when a resolved value deviates from the slot's tested
 /// value (D-15). No-op for identity-bearing slots (they have no tested value).
 fn warn_if_deviates(tested: &SlotType, resolved: &str) {
-    // Build a proposed slot mirroring the tested variant but with the resolved
-    // value, then let `detect_deviation` decide (it returns `None` for
-    // identity-bearing kinds, so this is safe for every slot type).
-    // EXHAUSTIVE by design — no catch-all. A wildcard here would make every future
-    // behavior-relevant variant silently skip deviation warning while every existing test
-    // stayed green (the same failure mode `SlotType::tested_value` guards against).
-    let proposed = match tested {
-        SlotType::LlmProvider { name, .. } => SlotType::LlmProvider {
-            name: name.clone(),
-            tested_value: resolved.to_string(),
-        },
-        SlotType::BudgetOverride { name, .. } => SlotType::BudgetOverride {
-            name: name.clone(),
-            tested_value: resolved.to_string(),
-        },
-        SlotType::Endpoint { name, .. } => SlotType::Endpoint {
-            name: name.clone(),
-            tested_value: resolved.to_string(),
-        },
-        SlotType::AuthMode { name, .. } => SlotType::AuthMode {
-            name: name.clone(),
-            tested_value: resolved.to_string(),
-        },
-        // Identity-bearing: no tested value to deviate from.
-        SlotType::Secret { .. }
-        | SlotType::OauthClient { .. }
-        | SlotType::ChannelBinding { .. }
-        | SlotType::HumanRole { .. } => return,
+    // `SlotType::with_tested_value` owns the behavior-relevant/identity-bearing
+    // split — one exhaustive match in pmcp-package, next to `tested_value`, so a
+    // future variant cannot be routed to different families here and there.
+    // Identity-bearing slots return `None`: no tested value to deviate from.
+    let Some(proposed) = tested.with_tested_value(resolved) else {
+        return;
     };
     if let Some(dev) = detect_deviation(tested, &proposed) {
         tracing::warn!(

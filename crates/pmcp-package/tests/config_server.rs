@@ -23,14 +23,14 @@ use pmcp_package::oci::parse_declared_config_slots;
 use pmcp_package::oci::{
     pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, UnpackedBinary,
 };
-use pmcp_package::package::{CedarPolicySet, ServerPackage, ToolMetadata};
+use pmcp_package::package::ServerPackage;
 use pmcp_package::slot::{aggregate, classify, required_slots, ConfigSlot, SlotClass, SlotType};
 
 mod common;
 use common::{
-    london_tube_package, minimal_deploy_descriptor, openapi_server_crate_dir, pack_london_tube,
-    parse_env_ref_grammar_table, referenced_binary, referenced_binary_digest, vendored_fixture,
-    ENV_REF_GRAMMAR_TABLE, LONDON_TUBE_CONFIG_NAME, LONDON_TUBE_SPEC_NAME, REFERENCED_MEDIA_TYPE,
+    london_tube_package, openapi_server_crate_dir, pack_london_tube, parse_env_ref_grammar_table,
+    referenced_binary, referenced_binary_digest, vendored_fixture, ENV_REF_GRAMMAR_TABLE,
+    LONDON_TUBE_CONFIG_NAME, LONDON_TUBE_SPEC_NAME, REFERENCED_MEDIA_TYPE,
 };
 
 /// The author's `config.toml`, verbatim — the bytes a Shape A server's whole
@@ -59,26 +59,13 @@ const CONFIG_FILE_NAME: &str = "london-tube.toml";
 
 /// A representative pure-config `ServerPackage`. Note it carries no binary
 /// information at all — that is a layer, not a field (D-08).
+///
+/// Delegates to `common::london_tube_package`, which DERIVES `config_slots`
+/// from CONFIG_TOML's own `[[config_slots]]` block — so this package agrees
+/// with the config by construction rather than by a hand-written copy that
+/// could drift from it (the failure mode `common/mod.rs` documents).
 fn config_server_package() -> ServerPackage {
-    ServerPackage {
-        name: "london-tube".to_string(),
-        version: semver::Version::parse("1.0.0").unwrap(),
-        digest: None,
-        deploy: minimal_deploy_descriptor(),
-        policies: CedarPolicySet(vec![]),
-        tools: vec![ToolMetadata {
-            name: "get_status".to_string(),
-            description: "Current status of every tube line".to_string(),
-            annotations: Some(serde_json::json!({ "read_only_hint": true })),
-        }],
-        // Agrees exactly with CONFIG_TOML's single `[[config_slots]]` entry —
-        // `pack_server` compares the two and refuses a package that claims a
-        // slot its shipped config does not declare (or vice versa).
-        config_slots: vec![ConfigSlot::new(SlotType::Secret {
-            name: "TFL_API_KEY".to_string(),
-        })
-        .with_config_key("backend.api_key")],
-    }
+    london_tube_package(CONFIG_TOML)
 }
 
 fn config_file() -> ConfigFile<'static> {
@@ -662,9 +649,17 @@ proptest! {
     fn any_layer_permutation_unpacks_to_an_equal_server(
         seed in proptest::collection::vec(0u32..1000, FULL_LAYER_COUNT)
     ) {
-        let baseline_dir = tempfile::tempdir().unwrap();
-        let (baseline_layout, _) = packed_full_package(baseline_dir.path());
-        let baseline = unpack_server(&baseline_layout).unwrap();
+        // The baseline is seed-independent, so compute it once per test binary
+        // instead of re-packing and re-unpacking an identical layout on every
+        // proptest case. The TempDir rides along in the static to stay alive.
+        static BASELINE: std::sync::LazyLock<(tempfile::TempDir, pmcp_package::UnpackedServer)> =
+            std::sync::LazyLock::new(|| {
+                let dir = tempfile::tempdir().unwrap();
+                let (layout, _) = packed_full_package(dir.path());
+                let server = unpack_server(&layout).unwrap();
+                (dir, server)
+            });
+        let baseline = &BASELINE.1;
 
         let mut order: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
         order.sort_by_key(|&i| seed[i]);
@@ -673,7 +668,7 @@ proptest! {
         let (layout, _) = packed_full_package(dir.path());
         rewrite_manifest_layers(&layout, &order).unwrap();
 
-        prop_assert_eq!(unpack_server(&layout).unwrap(), baseline);
+        prop_assert_eq!(&unpack_server(&layout).unwrap(), baseline);
     }
 }
 

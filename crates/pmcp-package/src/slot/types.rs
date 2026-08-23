@@ -143,6 +143,43 @@ impl SlotType {
             | SlotType::AuthMode { tested_value, .. } => Some(tested_value.as_str()),
         }
     }
+
+    /// A copy of this slot with its `tested_value` replaced by `value`, or `None` for an
+    /// identity-bearing variant (which has no such field to replace).
+    ///
+    /// This is the one place a "proposed" slot is built from a resolved value, so the
+    /// behavior-relevant/identity-bearing split stays enumerated here — next to
+    /// [`tested_value`](Self::tested_value), the match that defines it — instead of being
+    /// re-encoded by each consumer that wants to feed
+    /// [`detect_deviation`](crate::slot::deviation::detect_deviation) a resolved value.
+    /// EXHAUSTIVE by design, no catch-all, for the same reason as `tested_value`: adding a
+    /// variant without deciding its family must be a compile error, not a silent skip.
+    pub fn with_tested_value(&self, value: &str) -> Option<SlotType> {
+        match self {
+            // Identity-bearing: no tested value to replace.
+            SlotType::Secret { .. }
+            | SlotType::OauthClient { .. }
+            | SlotType::ChannelBinding { .. }
+            | SlotType::HumanRole { .. } => None,
+            // Behavior-relevant: mirror the variant with the resolved value.
+            SlotType::LlmProvider { name, .. } => Some(SlotType::LlmProvider {
+                name: name.clone(),
+                tested_value: value.to_string(),
+            }),
+            SlotType::BudgetOverride { name, .. } => Some(SlotType::BudgetOverride {
+                name: name.clone(),
+                tested_value: value.to_string(),
+            }),
+            SlotType::Endpoint { name, .. } => Some(SlotType::Endpoint {
+                name: name.clone(),
+                tested_value: value.to_string(),
+            }),
+            SlotType::AuthMode { name, .. } => Some(SlotType::AuthMode {
+                name: name.clone(),
+                tested_value: value.to_string(),
+            }),
+        }
+    }
 }
 
 /// A single declared config slot held by a package component. The one canonical "a component

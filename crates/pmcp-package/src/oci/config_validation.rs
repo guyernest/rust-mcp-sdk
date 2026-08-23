@@ -68,7 +68,7 @@ fn violation(key: &str, reason: impl Into<String>) -> PackageError {
 /// credential-bearing config is exactly the value this crate exists to keep out
 /// of error text. The byte span is reported instead — enough to locate the
 /// problem, incapable of quoting it.
-fn parse_document(config_bytes: &[u8]) -> Result<toml::Value> {
+pub(crate) fn parse_document(config_bytes: &[u8]) -> Result<toml::Value> {
     let text = std::str::from_utf8(config_bytes)
         .map_err(|_| violation(DOCUMENT_LABEL, "config bytes are not valid UTF-8"))?;
     toml::from_str::<toml::Value>(text).map_err(|e| {
@@ -150,7 +150,14 @@ pub struct DeclaredConfigSlot {
 /// assert!(parse_declared_config_slots(b"name = \"x\"\n").unwrap().is_empty());
 /// ```
 pub fn parse_declared_config_slots(config_bytes: &[u8]) -> Result<Vec<DeclaredConfigSlot>> {
-    let document = parse_document(config_bytes)?;
+    parse_declared_config_slots_in(&parse_document(config_bytes)?)
+}
+
+/// Document-taking half of [`parse_declared_config_slots`], so a caller that
+/// runs several gates over the same config (`pack_server`) parses the TOML once.
+pub(crate) fn parse_declared_config_slots_in(
+    document: &toml::Value,
+) -> Result<Vec<DeclaredConfigSlot>> {
     let Some(raw) = document.get(TABLE_LABEL) else {
         return Ok(Vec::new());
     };
@@ -457,9 +464,17 @@ fn package_fact_map(package_slots: &[ConfigSlot]) -> Result<BTreeMap<&str, SlotF
 /// assert!(!err.to_string().contains("a-real-credential"));
 /// ```
 pub fn validate_config_slot_placeholders(config_bytes: &[u8], slots: &[ConfigSlot]) -> Result<()> {
-    let document = parse_document(config_bytes)?;
+    validate_config_slot_placeholders_in(&parse_document(config_bytes)?, slots)
+}
+
+/// Document-taking half of [`validate_config_slot_placeholders`], so a caller
+/// that runs several gates over the same config (`pack_server`) parses once.
+pub(crate) fn validate_config_slot_placeholders_in(
+    document: &toml::Value,
+    slots: &[ConfigSlot],
+) -> Result<()> {
     for slot in slots {
-        check_slot_placeholder(&document, slot)?;
+        check_slot_placeholder(document, slot)?;
     }
     Ok(())
 }

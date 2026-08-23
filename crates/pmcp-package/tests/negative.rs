@@ -14,14 +14,12 @@ use pmcp_package::{
     ComponentRef, ConfigSlot, DeployDescriptor, ManifestDigest, OciLayout, PackageError,
     ServerPackage, SlotType, WorkflowManifest,
 };
-use std::path::Path;
+mod common;
 
+/// Read a checked-in golden fixture's raw bytes (delegates to the shared
+/// `common::fixture_bytes` so the path/panic logic lives once per crate).
 fn read_fixture(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden_fixtures")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
+    common::fixture_bytes(name)
 }
 
 // --- 1. Malformed manifest JSON -> serde parse error -----------------------
@@ -230,6 +228,7 @@ fn malformed_digest_string_fails_parse_and_deserialize() {
 // =====================================================================
 
 mod server_layout {
+    use super::common::{referenced_binary, REFERENCED_MEDIA_TYPE};
     use super::*;
     use oci_spec::image::{
         Descriptor, ImageIndexBuilder, ImageManifest, MediaType, SCHEMA_VERSION,
@@ -242,7 +241,6 @@ mod server_layout {
         ServerPackage,
     };
 
-    const REFERENCED_MEDIA_TYPE: &str = "application/x-lambda-bootstrap; arch=arm64";
     /// The config bytes packed alongside the golden server fixture. It declares
     /// the ONE slot that fixture carries, because `pack_server` now requires the
     /// shipped config's `[[config_slots]]` block and the package's slot list to
@@ -265,12 +263,8 @@ mod server_layout {
         package
     }
 
-    fn referenced_binary() -> BinaryMode<'static> {
-        BinaryMode::Referenced {
-            digest: ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.0.0-aarch64"),
-            media_type: REFERENCED_MEDIA_TYPE.to_string(),
-        }
-    }
+    // `referenced_binary()` and `REFERENCED_MEDIA_TYPE` are imported from
+    // `common` above — the same values every other test in this crate packs.
 
     fn config_file() -> ConfigFile<'static> {
         ConfigFile {

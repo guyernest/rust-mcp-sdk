@@ -18,17 +18,14 @@ use pmcp_package::package::{AgentPackage, ServerPackage, TeamPackage, WorkflowMa
 use pmcp_package::reference::{ComponentRef, ComponentType};
 use pmcp_package::slot::{ConfigSlot, SlotType};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 mod common;
 use common::{london_tube_spec_bytes, pack_london_tube, read_manifest_bytes};
 
+/// Read a checked-in golden fixture's raw bytes (delegates to the shared
+/// `common::fixture_bytes` so the path/panic logic lives once per crate).
 fn read_fixture(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden_fixtures")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
+    common::fixture_bytes(name)
 }
 
 // --- Pinned wire-freeze digests (PRIMARY gate) -----------------------------
