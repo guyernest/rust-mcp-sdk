@@ -221,3 +221,288 @@ fn malformed_digest_string_fails_parse_and_deserialize() {
         "a malformed digest string must fail to deserialize"
     );
 }
+
+// =====================================================================
+// 9-14. Server-layout failure modes (plan 120-02 Task 2)
+//
+// Every case below hand-builds a MALFORMED server layout by rewriting a
+// well-formed one, following this file's established tamper idiom. Because
+// the layout is content-addressed and `unpack_server` digest-verifies the
+// index descriptor BEFORE parsing the manifest, a rewrite must write a NEW
+// manifest blob and REPLACE the index's single descriptor — never edit in
+// place, which would fail at `verify` before reaching the code under test.
+// =====================================================================
+
+mod server_layout {
+    use super::*;
+    use oci_spec::image::{
+        Descriptor, ImageIndexBuilder, ImageManifest, MediaType, SCHEMA_VERSION,
+    };
+    use pmcp_package::oci::media_types::{
+        MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_ENVELOPE,
+    };
+    use pmcp_package::{
+        pack_server, unpack_server, BinaryMode, CedarPolicySet, ConfigFile, OciLayout,
+        ServerPackage,
+    };
+
+    const REFERENCED_MEDIA_TYPE: &str = "application/x-lambda-bootstrap; arch=arm64";
+    const CONFIG_TOML: &[u8] = b"name = \"london-tube\"\n";
+
+    /// A minimal, well-formed `ServerPackage`, built from the tracked golden
+    /// fixture so the deploy/policy/tool sections stay realistic.
+    fn server_package() -> ServerPackage {
+        let bytes = read_fixture("server_team_fs_v1.json");
+        let mut package: ServerPackage = serde_json::from_slice(&bytes).unwrap();
+        package.policies = CedarPolicySet(package.policies.0);
+        package
+    }
+
+    fn referenced_binary() -> BinaryMode<'static> {
+        BinaryMode::Referenced {
+            digest: ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.0.0-aarch64"),
+            media_type: REFERENCED_MEDIA_TYPE.to_string(),
+        }
+    }
+
+    fn config_file() -> ConfigFile<'static> {
+        ConfigFile {
+            file_name: "london-tube.toml",
+            bytes: CONFIG_TOML,
+        }
+    }
+
+    /// Pack a well-formed, config-only (referenced-binary) server package into
+    /// a fresh layout.
+    fn packed_config_only(dir: &std::path::Path) -> OciLayout {
+        let layout = OciLayout::create(dir).unwrap();
+        pack_server(
+            &server_package(),
+            referenced_binary(),
+            Some(config_file()),
+            None,
+            &layout,
+        )
+        .unwrap();
+        layout
+    }
+
+    fn read_manifest(layout: &OciLayout) -> ImageManifest {
+        let index = layout.read_index().unwrap();
+        layout.read_manifest(&index.manifests()[0]).unwrap()
+    }
+
+    /// Write `manifest` as a NEW content-addressed blob and REPLACE the
+    /// index's single descriptor with one pointing at it — the only rewrite
+    /// shape `unpack_server`'s verify-before-parse accepts.
+    fn replace_manifest(layout: &OciLayout, manifest: &ImageManifest) {
+        let bytes = pmcp_package::canonicalize(manifest).unwrap();
+        let descriptor = layout.write_manifest(&bytes).unwrap();
+        let index = ImageIndexBuilder::default()
+            .schema_version(SCHEMA_VERSION)
+            .manifests(vec![descriptor])
+            .build()
+            .unwrap();
+        layout.write_index(&index).unwrap();
+    }
+
+    fn write_layer(layout: &OciLayout, media_type: &str, bytes: &[u8]) -> Descriptor {
+        layout
+            .write_blob(MediaType::from(media_type), bytes)
+            .unwrap()
+    }
+
+    // --- 9. A 0.1.x-shaped envelope is refused, never mis-read ------------
+
+    #[test]
+    fn an_envelope_carrying_the_legacy_binary_ref_shape_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = packed_config_only(dir.path());
+
+        // The 0.1.x envelope shape: the binary's identity lived INSIDE the
+        // envelope rather than on its own layer. `ServerEnvelope` has no
+        // `deny_unknown_fields`, so a plain deserialize would silently drop
+        // this key and hand back a structurally valid 0.2.0 struct.
+        let legacy = br#"{"name":"x","version":"1.0.0","binary_ref":{"media_type":"application/x-lambda-bootstrap; arch=arm64"}}"#;
+        let new_envelope = write_layer(&layout, MT_SERVER_ENVELOPE, legacy);
+
+        let mut manifest = read_manifest(&layout);
+        let layers: Vec<Descriptor> = manifest
+            .layers()
+            .iter()
+            .map(|l| {
+                if l.media_type().to_string() == MT_SERVER_ENVELOPE {
+                    new_envelope.clone()
+                } else {
+                    l.clone()
+                }
+            })
+            .collect();
+        manifest.set_layers(layers);
+        replace_manifest(&layout, &manifest);
+
+        let err = unpack_server(&layout)
+            .expect_err("a 0.1.x-shaped envelope must never deserialize into a 0.2.0 struct");
+        let message = err.to_string();
+        assert!(
+            message.contains("0.1"),
+            "the refusal must name the shape it found; message was: {message}"
+        );
+        assert!(
+            message.contains("0.2.0"),
+            "the refusal must name the version the format changed in; message was: {message}"
+        );
+    }
+
+    // --- 10. Duplicate media type -> Layout naming the type ---------------
+
+    #[test]
+    fn two_layers_sharing_one_media_type_are_rejected_naming_that_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = packed_config_only(dir.path());
+
+        let mut manifest = read_manifest(&layout);
+        let mut layers = manifest.layers().clone();
+        let config = layers
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_SERVER_CONFIG)
+            .expect("the packed layout must carry a config layer")
+            .clone();
+        layers.push(config);
+        manifest.set_layers(layers);
+        replace_manifest(&layout, &manifest);
+
+        let err = unpack_server(&layout)
+            .expect_err("a duplicated media type must be rejected, never last-wins");
+        assert!(
+            matches!(err, PackageError::Layout { .. }),
+            "expected Layout, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains(MT_SERVER_CONFIG),
+            "the error must name the duplicated media type; message was: {err}"
+        );
+    }
+
+    // --- 11. BOTH binary arms -> Layout ------------------------------------
+
+    #[test]
+    fn a_manifest_carrying_both_binary_arms_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = packed_config_only(dir.path());
+
+        let mut manifest = read_manifest(&layout);
+        let mut layers = manifest.layers().clone();
+        layers.push(write_layer(&layout, MT_SERVER_BOOTSTRAP, b"\x7fELF-fake"));
+        manifest.set_layers(layers);
+        replace_manifest(&layout, &manifest);
+
+        let err = unpack_server(&layout)
+            .expect_err("exactly one binary arm is required — both is malformed");
+        assert!(
+            matches!(err, PackageError::Layout { .. }),
+            "expected Layout, got {err:?}"
+        );
+    }
+
+    // --- 12. NEITHER binary arm -> Layout ----------------------------------
+
+    #[test]
+    fn a_manifest_carrying_neither_binary_arm_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = packed_config_only(dir.path());
+
+        let mut manifest = read_manifest(&layout);
+        let layers: Vec<Descriptor> = manifest
+            .layers()
+            .iter()
+            .filter(|l| {
+                let mt = l.media_type().to_string();
+                mt != MT_SERVER_BINARY_REF && mt != MT_SERVER_BOOTSTRAP
+            })
+            .cloned()
+            .collect();
+        manifest.set_layers(layers);
+        replace_manifest(&layout, &manifest);
+
+        let err = unpack_server(&layout)
+            .expect_err("exactly one binary arm is required — neither is malformed");
+        assert!(
+            matches!(err, PackageError::Layout { .. }),
+            "expected Layout, got {err:?}"
+        );
+    }
+
+    // --- 13. binary-ref with a null digest -> Layout naming the digest -----
+
+    #[test]
+    fn a_binary_ref_whose_wire_digest_is_null_is_rejected_naming_the_missing_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = packed_config_only(dir.path());
+
+        // `BinaryRef::digest` is `Option<ManifestDigest>` for wire tolerance,
+        // so an explicit null decodes to `None` — the one shape the API type
+        // cannot express, and an instruction to run an UNPINNED binary.
+        let unpinned = serde_json::to_vec(&serde_json::json!({
+            "digest": serde_json::Value::Null,
+            "media_type": REFERENCED_MEDIA_TYPE,
+        }))
+        .unwrap();
+        let new_ref = write_layer(&layout, MT_SERVER_BINARY_REF, &unpinned);
+
+        let mut manifest = read_manifest(&layout);
+        let layers: Vec<Descriptor> = manifest
+            .layers()
+            .iter()
+            .map(|l| {
+                if l.media_type().to_string() == MT_SERVER_BINARY_REF {
+                    new_ref.clone()
+                } else {
+                    l.clone()
+                }
+            })
+            .collect();
+        manifest.set_layers(layers);
+        replace_manifest(&layout, &manifest);
+
+        let err =
+            unpack_server(&layout).expect_err("an unpinned binary reference must be rejected");
+        assert!(
+            matches!(err, PackageError::Layout { .. }),
+            "expected Layout, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("digest"),
+            "the error must name the missing field; message was: {err}"
+        );
+    }
+
+    // --- 14. Regression: the refusal is NARROW ----------------------------
+
+    #[test]
+    fn well_formed_0_2_0_packages_of_either_binary_mode_still_unpack() {
+        let referenced_dir = tempfile::tempdir().unwrap();
+        let referenced_layout = packed_config_only(referenced_dir.path());
+        let referenced = unpack_server(&referenced_layout)
+            .expect("a well-formed 0.2.0 referenced package must still unpack");
+        assert_eq!(referenced.config.unwrap().bytes, CONFIG_TOML);
+
+        let bootstrap = b"fake-arm64-bootstrap-binary-bytes-for-testing".to_vec();
+        let embedded_dir = tempfile::tempdir().unwrap();
+        let embedded_layout = OciLayout::create(embedded_dir.path()).unwrap();
+        pack_server(
+            &server_package(),
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            &embedded_layout,
+        )
+        .unwrap();
+        let embedded = unpack_server(&embedded_layout)
+            .expect("a well-formed 0.2.0 embedded package must still unpack");
+        assert_eq!(
+            embedded.binary,
+            pmcp_package::UnpackedBinary::Embedded(bootstrap)
+        );
+    }
+}

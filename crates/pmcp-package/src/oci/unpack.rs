@@ -226,6 +226,23 @@ fn read_named_file_layer(
     Ok(Some(RestoredFile { file_name, bytes }))
 }
 
+/// Read one required, digest-verified layer's RAW bytes by media type,
+/// without deserializing. Split out from [`read_required_layer`] so a caller
+/// that must inspect the raw JSON before it trusts a struct shape (see
+/// [`detect_legacy_shape`]) can do so without a second read or a second
+/// digest verification.
+fn read_required_layer_bytes(
+    layout: &OciLayout,
+    by_media_type: &BTreeMap<String, &Descriptor>,
+    media_type: &str,
+    layer_name: &str,
+) -> Result<Vec<u8>> {
+    let descriptor = by_media_type
+        .get(media_type)
+        .ok_or_else(|| missing_layer(layer_name))?;
+    read_verified_blob(layout, descriptor)
+}
+
 /// Read one required, digest-verified struct layer by media type and
 /// deserialize it.
 fn read_required_layer<T: serde::de::DeserializeOwned>(
@@ -234,11 +251,53 @@ fn read_required_layer<T: serde::de::DeserializeOwned>(
     media_type: &str,
     layer_name: &str,
 ) -> Result<T> {
-    let descriptor = by_media_type
-        .get(media_type)
-        .ok_or_else(|| missing_layer(layer_name))?;
-    let bytes = read_verified_blob(layout, descriptor)?;
+    let bytes = read_required_layer_bytes(layout, by_media_type, media_type, layer_name)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// The envelope key whose PRESENCE identifies the pre-0.2.0 layer SHAPE: in
+/// 0.1.x the binary's identity was a field inside the envelope, and in 0.2.0
+/// it moved onto its own OCI layer (D-08, D-10).
+const LEGACY_ENVELOPE_KEY: &str = "binary_ref";
+
+/// Verify that a raw envelope blob does NOT carry the superseded pre-0.2.0
+/// layer shape, i.e. that its top-level JSON object holds no
+/// [`LEGACY_ENVELOPE_KEY`] key.
+///
+/// This is SHAPE detection, not producer-version detection. The check is
+/// exactly "this envelope object holds a key named `binary_ref`" — it cannot
+/// and does not read a version marker, so ANY envelope carrying that
+/// extension key is refused regardless of who wrote it or when. Under D-10's
+/// blanket refusal that is the intended behaviour, and the error text is
+/// worded accordingly: it reports the shape that was found, never a claim
+/// about the producer.
+///
+/// Inspecting the RAW JSON is load-bearing rather than stylistic.
+/// [`ServerEnvelope`] carries no `deny_unknown_fields`, so `serde` would
+/// happily accept a 0.1.x envelope, DROP its `binary_ref` and hand back a
+/// structurally valid 0.2.0 struct whose binary identity had silently
+/// vanished. A deserialize error can therefore never be the signal.
+///
+/// Bytes that are not a JSON object at all are left alone here — that is the
+/// deserializer's error to report, and reporting it as a legacy shape would
+/// be a worse message.
+fn detect_legacy_shape(envelope_bytes: &[u8]) -> Result<()> {
+    let Ok(serde_json::Value::Object(envelope)) =
+        serde_json::from_slice::<serde_json::Value>(envelope_bytes)
+    else {
+        return Ok(());
+    };
+    if envelope.contains_key(LEGACY_ENVELOPE_KEY) {
+        return Err(PackageError::Layout {
+            reason: format!(
+                "the envelope layer carries the pre-0.2.0 layer shape (a '{LEGACY_ENVELOPE_KEY}' \
+                 key). The package format changed in 0.2.0, when the binary's identity moved off \
+                 the envelope and onto its own OCI layer; 0.2.0 does not read 0.1.x packages. \
+                 Repack the package with a 0.2.0 producer."
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Unpack a server package from `layout`, returning the typed struct, its
@@ -262,7 +321,8 @@ fn read_required_layer<T: serde::de::DeserializeOwned>(
 /// Returns [`PackageError::Layout`] if the layout is malformed (duplicate
 /// media type, missing required layer, both-or-neither binary layers, a
 /// binary reference with no digest, a named-file layer with no title
-/// annotation), [`PackageError::DigestMismatch`] if any blob has been
+/// annotation) or if the envelope carries the pre-0.2.0 layer shape
+/// ([`detect_legacy_shape`]), [`PackageError::DigestMismatch`] if any blob has been
 /// tampered with, or [`PackageError::Serialize`] if a verified layer fails to
 /// deserialize.
 ///
@@ -278,8 +338,14 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
 
     let binary = read_binary_mode(layout, &by_media_type)?;
 
-    let envelope: ServerEnvelope =
-        read_required_layer(layout, &by_media_type, MT_SERVER_ENVELOPE, "envelope")?;
+    // The envelope is read as RAW bytes and shape-checked BEFORE it is
+    // deserialized: `ServerEnvelope` has no `deny_unknown_fields`, so a
+    // pre-0.2.0 envelope would otherwise deserialize cleanly with its
+    // `binary_ref` silently dropped.
+    let envelope_bytes =
+        read_required_layer_bytes(layout, &by_media_type, MT_SERVER_ENVELOPE, "envelope")?;
+    detect_legacy_shape(&envelope_bytes)?;
+    let envelope: ServerEnvelope = serde_json::from_slice(&envelope_bytes)?;
 
     let package = ServerPackage {
         name: envelope.name,
