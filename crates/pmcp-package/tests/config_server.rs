@@ -12,7 +12,10 @@
 //! the crate's `#[cfg(test)]` fixtures, so this file exercises the same public
 //! API an external consumer has.
 
+use proptest::prelude::*;
+
 use pmcp_package::digest::ManifestDigest;
+use pmcp_package::error::{PackageError, Result};
 use pmcp_package::oci::media_types::{
     MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_OPENAPI_SPEC,
 };
@@ -554,4 +557,172 @@ fn renaming_only_the_spec_file_changes_the_manifest_digest() {
         "the file-name annotation lives on a LAYER descriptor, which is inside the manifest that \
          gets hashed (D-15) — renaming the spec changes the package's identity"
     );
+}
+
+// ---------------------------------------------------------------------
+// D-11: layer ORDER is not load-bearing — every read is keyed by media type
+// ---------------------------------------------------------------------
+
+/// Number of layers a fully-populated config-only package carries:
+/// binary-ref, envelope, deploy-descriptor, cedar-policy-set, tool-metadata,
+/// config-slots, config, spec.
+const FULL_LAYER_COUNT: usize = 8;
+
+/// Pack a fully-populated config-only package (both optional layers present,
+/// so the permutation exercises every media type) into a fresh layout.
+fn packed_full_package(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
+    let layout = OciLayout::create(dir).unwrap();
+    let digest = pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &layout,
+    )
+    .unwrap();
+    (layout, digest)
+}
+
+/// Rewrite `layout`'s single manifest so its `layers` array is `order`, and
+/// return the new manifest digest.
+///
+/// "Rewrite the manifest with the permuted order" is NOT implementable as an
+/// in-place edit, and getting that wrong produces a test that measures
+/// nothing. `OciLayout::write_blob` derives BOTH the blob path and the
+/// descriptor digest from the bytes, while `unpack_server`'s
+/// `read_the_one_manifest` digest-verifies the index descriptor's declared
+/// digest BEFORE it parses. So:
+///
+/// - overwrite the original blob path in place -> unpack dies at `verify`,
+///   never reaching the media-type lookup under test;
+/// - write permuted bytes without touching the index -> the index still
+///   points at the ORIGINAL manifest, so unpack reads the unpermuted order
+///   and the test passes vacuously.
+///
+/// The only correct shape is the five steps below: carry the index
+/// descriptor's annotations across by hand (`finalize_pack` sets them AFTER
+/// the digest is computed, so they cannot be recomputed), permute, serialize
+/// with the SAME canonicalizer `finalize_pack` uses, write a NEW
+/// content-addressed manifest blob, and REPLACE — never append — the index's
+/// single descriptor.
+fn rewrite_manifest_layers(layout: &OciLayout, order: &[usize]) -> Result<ManifestDigest> {
+    // 1. The existing index descriptor, and its hand-set annotations.
+    let mut index = layout.read_index()?;
+    let old_descriptor =
+        index
+            .manifests()
+            .first()
+            .cloned()
+            .ok_or_else(|| PackageError::Layout {
+                reason: "index.json carries no manifest to rewrite".to_string(),
+            })?;
+    let annotations = old_descriptor.annotations().clone();
+
+    // 2. Permute the layer vector.
+    let mut manifest = layout.read_manifest(&old_descriptor)?;
+    let layers = manifest.layers().clone();
+    let permuted: Vec<_> = order
+        .iter()
+        .map(|&i| {
+            layers.get(i).cloned().ok_or_else(|| PackageError::Layout {
+                reason: format!("permutation index {i} is out of range"),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    manifest.set_layers(permuted);
+
+    // 3. The SAME canonical form finalize_pack uses, so layer order is the
+    //    only difference from the original bytes.
+    let manifest_bytes = pmcp_package::canonicalize(&manifest)?;
+
+    // 4. A NEW content-addressed blob, re-annotated by hand.
+    let mut new_descriptor = layout.write_manifest(&manifest_bytes)?;
+    new_descriptor.set_annotations(annotations);
+    let digest = ManifestDigest::try_from(new_descriptor.digest())?;
+
+    // 5. REPLACE the single index entry — a push would make
+    //    read_the_one_manifest fail with "expected exactly one manifest",
+    //    which looks like a code bug rather than a broken test.
+    index.set_manifests(vec![new_descriptor]);
+    layout.write_index(&index)?;
+
+    Ok(digest)
+}
+
+#[test]
+fn the_permutation_helper_actually_rewrites_the_content_addressed_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, baseline_digest) = packed_full_package(dir.path());
+
+    // The identity permutation reproduces the original bytes exactly — proof
+    // the helper's canonical form matches finalize_pack's.
+    let identity: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    let identity_digest = rewrite_manifest_layers(&layout, &identity).unwrap();
+    assert_eq!(
+        identity_digest, baseline_digest,
+        "the identity permutation must round-trip to the SAME digest — a different one would mean \
+         the helper serializes differently from finalize_pack, so the property test would be \
+         measuring the helper rather than unpack_server"
+    );
+
+    // A real permutation must produce DIFFERENT manifest bytes; if it did
+    // not, the property test below would be a no-op.
+    let mut reversed: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    reversed.reverse();
+    let reversed_digest = rewrite_manifest_layers(&layout, &reversed).unwrap();
+    assert_ne!(
+        reversed_digest, baseline_digest,
+        "a non-identity permutation must yield a different manifest blob — otherwise the helper \
+         is a no-op and proves nothing"
+    );
+}
+
+#[test]
+fn a_reversed_layer_order_still_unpacks_to_the_same_server() {
+    let baseline_dir = tempfile::tempdir().unwrap();
+    let (baseline_layout, _) = packed_full_package(baseline_dir.path());
+    let baseline = unpack_server(&baseline_layout).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _) = packed_full_package(dir.path());
+    let mut reversed: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    reversed.reverse();
+    rewrite_manifest_layers(&layout, &reversed).unwrap();
+
+    assert_eq!(
+        unpack_server(&layout).unwrap(),
+        baseline,
+        "unpack_server resolves every layer by media type, so reversing the manifest's layer \
+         array cannot change what it yields"
+    );
+}
+
+proptest! {
+    /// PROPERTY (D-11, CLAUDE.md ALWAYS PROPERTY): for an ARBITRARY
+    /// permutation of the manifest's `layers` array, `unpack_server` yields an
+    /// EQUAL `UnpackedServer`. Layer position carries no meaning — every read
+    /// is keyed by media type — so a layout that only shuffles its layers is
+    /// the same package.
+    ///
+    /// The permutation goes through `rewrite_manifest_layers`, which performs
+    /// the full content-addressed rewrite; without it the manifest's
+    /// digest-verify-before-parse chain would either reject the layout or
+    /// leave the original manifest in place and prove nothing.
+    #[test]
+    fn any_layer_permutation_unpacks_to_an_equal_server(
+        seed in proptest::collection::vec(0u32..1000, FULL_LAYER_COUNT)
+    ) {
+        let baseline_dir = tempfile::tempdir().unwrap();
+        let (baseline_layout, _) = packed_full_package(baseline_dir.path());
+        let baseline = unpack_server(&baseline_layout).unwrap();
+
+        let mut order: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+        order.sort_by_key(|&i| seed[i]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let (layout, _) = packed_full_package(dir.path());
+        rewrite_manifest_layers(&layout, &order).unwrap();
+
+        prop_assert_eq!(unpack_server(&layout).unwrap(), baseline);
+    }
 }
