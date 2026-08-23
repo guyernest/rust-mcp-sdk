@@ -2337,11 +2337,11 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 120-03-PLAN.md — Slot vocabulary: `SlotType::Endpoint`/`AuthMode`, `ConfigSlot.config_key`, `required_slots` (wave 3)
+- [ ] 120-03-PLAN.md — Slot vocabulary: `SlotType::Endpoint`/`AuthMode`, `ConfigSlot.config_key` plus its repo-wide 43-literal source migration, `required_slots` (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 120-05-PLAN.md — Pack-time placeholder validation and the packed-manifest golden (wave 4)
+- [ ] 120-05-PLAN.md — `[[config_slots]]` declaration agreement (D-01 through the real API path), pack-time placeholder validation, the packed-manifest golden (wave 4)
 
 ### Phase 121: Local Round-Trip E2E
 
