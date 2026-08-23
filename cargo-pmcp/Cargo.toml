@@ -81,9 +81,10 @@ pmcp-agent = { version = "0.2", path = "../crates/pmcp-agent", features = ["open
 # `team dev --serve` path AND transitively enables `member-llm` (so `team dev
 # --llm` works with `http` alone — do NOT list `member-llm` explicitly).
 pmcp-team-servers = { version = "0.1", path = "../crates/pmcp-team-servers", features = ["runtime", "http"] }
-# Caret "0.1" exactly (CLI-04 / D-04b — a tripwire test in 110-05 asserts this
-# literal string; do NOT use `=0.1.0`).
-pmcp-package = { version = "0.1", path = "../crates/pmcp-package" }
+# Caret "0.2" exactly (CLI-04 / D-04b — `tests/pmcp_package_pin.rs` asserts this
+# literal string; do NOT use `=0.2.0` or a fully-qualified `0.2.0`). Moved off
+# the 0.1 line by the D-08/D-09 wire break in Phase 120.
+pmcp-package = { version = "0.2", path = "../crates/pmcp-package" }
 # CFN-renderer extraction, Task 7: the pmcp_run deploy target synthesizes its
 # CloudFormation template via this pure renderer instead of `npx cdk synth`
 # whenever `deploy/lib/stack.ts` is unmodified from the regenerated scaffold.

@@ -34,15 +34,24 @@ fn read_fixture(name: &str) -> Vec<u8> {
 // checked in. A change to ANY serialized field of a package kind — a removed
 // field (dropped on deserialize) or a defaulted-in new field — alters the
 // canonical bytes and therefore this digest, so the matching assertion below
-// FAILS CI. This is a real wire freeze for the 0.1.x line, NOT just
-// determinism: the day these must change is the day the format goes 0.2.0.
+// FAILS CI. This is a real wire freeze for the 0.2.x line, NOT just
+// determinism: the day these must change is the day the format breaks again.
+// Bump the version intentionally — do NOT silently repin.
+//
+// `EXPECTED_SERVER_DIGEST` moved once already, at the 0.1.x -> 0.2.0 break:
+// D-08 removed `ServerPackage.binary_ref` (which binary a package names is a
+// LAYER, not a struct field) and D-09 took that break deliberately rather than
+// carrying a dead field forward. That is the ONLY sanctioned reason this
+// constant has changed. The other three pinned constants below were untouched
+// by that break — their shapes did not change, so if any of them ever moves,
+// that is a real defect and not a repin.
 //
 // The `<kind>.canonical.json` snapshots asserted byte-equal via `canonicalize`
 // are the belt-and-suspenders second gate (catches a silent field add/remove
 // even in the theoretical case a digest were to collide).
 
 const EXPECTED_SERVER_DIGEST: &str =
-    "sha256:47de0265357cd4fe221c25d848fcc4414a037caf92b874995e03b75feef903a4";
+    "sha256:1d8a792e6f7dc7c4e965fdd65e246e7bca416a5adf8fdd9f1d2e7693273a9c77";
 const EXPECTED_WORKFLOW_DIGEST: &str =
     "sha256:ef8a7a08efd28f95128db481d5b8ba809516ef1097cbd8ded847ccf9de5aa7af";
 const EXPECTED_AGENT_DIGEST: &str =
@@ -77,7 +86,7 @@ fn server_fixture_digest_matches_pinned_wire_freeze_constant() {
     assert_eq!(
         manifest_digest(&server_fixture()).unwrap().as_str(),
         EXPECTED_SERVER_DIGEST,
-        "ServerPackage serialized shape changed — this is a wire-freeze break (bump 0.2.0 \
+        "ServerPackage serialized shape changed — this is a wire-freeze break (bump the version \
          intentionally, do not silently repin)"
     );
 }
@@ -87,7 +96,7 @@ fn workflow_fixture_digest_matches_pinned_wire_freeze_constant() {
     assert_eq!(
         manifest_digest(&workflow_fixture()).unwrap().as_str(),
         EXPECTED_WORKFLOW_DIGEST,
-        "WorkflowManifest serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
+        "WorkflowManifest serialized shape changed — wire-freeze break (bump the version intentionally)"
     );
 }
 
@@ -96,7 +105,7 @@ fn agent_fixture_digest_matches_pinned_wire_freeze_constant() {
     assert_eq!(
         manifest_digest(&agent_fixture()).unwrap().as_str(),
         EXPECTED_AGENT_DIGEST,
-        "AgentPackage serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
+        "AgentPackage serialized shape changed — wire-freeze break (bump the version intentionally)"
     );
 }
 
@@ -105,7 +114,7 @@ fn team_fixture_digest_matches_pinned_wire_freeze_constant() {
     assert_eq!(
         manifest_digest(&team_fixture()).unwrap().as_str(),
         EXPECTED_TEAM_DIGEST,
-        "TeamPackage serialized shape changed — wire-freeze break (bump 0.2.0 intentionally)"
+        "TeamPackage serialized shape changed — wire-freeze break (bump the version intentionally)"
     );
 }
 
