@@ -26,7 +26,7 @@ use crate::oci::media_types::{
     vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG,
     MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG,
     MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
-    MT_SERVER_TOOL_METADATA,
+    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::SingleLayerPackage;
 use crate::package::{AgentPackage, BinaryRef, ServerPackage, TeamPackage, WorkflowManifest};
@@ -68,6 +68,35 @@ pub(super) struct ServerEnvelope {
 /// Note that a bare-hex sidecar (`<64 hex chars>` with no prefix) is NOT a
 /// valid digest string — [`ManifestDigest::parse`] requires the `sha256:`
 /// prefix, so prepend it before parsing.
+///
+/// # Examples
+///
+/// Both arms, side by side — a self-contained package that carries its binary,
+/// and a Shape A pure-config package that only names one:
+///
+/// ```
+/// use pmcp_package::digest::ManifestDigest;
+/// use pmcp_package::oci::BinaryMode;
+///
+/// // Self-contained: the compiled bootstrap's bytes travel inside the package.
+/// let bootstrap: Vec<u8> = b"\x7fELF...compiled-bootstrap-bytes".to_vec();
+/// let embedded = BinaryMode::Embedded(&bootstrap);
+/// assert!(matches!(embedded, BinaryMode::Embedded(bytes) if bytes == bootstrap));
+///
+/// // Pure config: the package carries no bytes at all, only a pinned digest
+/// // the target environment resolves for itself.
+/// let referenced = BinaryMode::Referenced {
+///     digest: ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.0.0-aarch64"),
+///     media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
+/// };
+/// match referenced {
+///     BinaryMode::Referenced { digest, media_type } => {
+///         assert!(digest.as_str().starts_with("sha256:"));
+///         assert_eq!(media_type, "application/x-lambda-bootstrap; arch=arm64");
+///     },
+///     BinaryMode::Embedded(_) => unreachable!("constructed as Referenced"),
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub enum BinaryMode<'a> {
     /// The binary's bytes are embedded in the package as an
@@ -175,15 +204,91 @@ fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Des
 /// package has neither: they exist for the Shape A pure-config servers, whose
 /// entire identity is their config (plus, for OpenAPI, their spec).
 ///
+/// # The spec layer is OPTIONAL, and its absence is a declaration
+///
+/// Passing `spec: None` is the CALLER'S declaration that this server is
+/// curated-only — it mirrors `pmcp-openapi-server`'s `--spec: Option<PathBuf>`,
+/// where a server boots and serves its curated tools with no OpenAPI document
+/// at all. It is never a default that quietly drops an author's spec: when
+/// `spec` is `Some`, the bytes are always written to their own
+/// [`MT_SERVER_OPENAPI_SPEC`] layer, VERBATIM and unparsed, under the author's
+/// original file name. There is no absence marker (D-14) — an absent spec is
+/// simply an absent layer.
+///
+/// [`MT_SERVER_OPENAPI_SPEC`]: crate::oci::media_types::MT_SERVER_OPENAPI_SPEC
+///
 /// # Errors
 ///
-/// Returns [`PackageError::Layout`] if `spec` is `Some` (the spec layer is not
-/// wired yet — it is accepted and explicitly refused rather than silently
-/// discarded), if the `ImageManifest` fails to build, or if any blob/index
-/// write fails. Returns [`PackageError::Serialize`] if a layer fails to
-/// canonicalize.
+/// Returns [`PackageError::Layout`] if the `ImageManifest` fails to build or
+/// if any blob/index write fails. Returns [`PackageError::Serialize`] if a
+/// layer fails to canonicalize.
 ///
 /// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+///
+/// # Examples
+///
+/// Pack a Shape A pure-config server — a referenced binary plus the author's
+/// verbatim `config.toml` — and read the config back byte-for-byte:
+///
+/// ```
+/// use pmcp_package::digest::ManifestDigest;
+/// use pmcp_package::oci::{pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout};
+/// # use pmcp_package::package::*;
+/// # use std::collections::BTreeMap;
+/// # fn deploy() -> DeployDescriptor {
+/// #     DeployDescriptor {
+/// #         target: TargetSection { target_type: "pmcp-run".into(), version: "1.0.0".into() },
+/// #         metadata: None,
+/// #         aws: AwsSection { region: "us-east-1".into() },
+/// #         server: ServerSection {
+/// #             name: "london-tube".into(), memory_mb: Some(1024), timeout_seconds: 30,
+/// #             memory: None, cpu: None, ingress: None, allow_unauthenticated: None, binary: None,
+/// #         },
+/// #         environment: BTreeMap::new(),
+/// #         secrets: BTreeMap::new(),
+/// #         auth: AuthSection {
+/// #             enabled: false, provider: "none".into(), callback_urls: vec![],
+/// #             cognito: None, dcr: None, groups: None, scopes: None,
+/// #         },
+/// #         observability: ObservabilitySection {
+/// #             log_retention_days: 30, enable_xray: true, create_dashboard: true, alarms: None,
+/// #         },
+/// #         composition: None, assets: None, iam: None, gcp: None, layout: None,
+/// #     }
+/// # }
+/// let package = ServerPackage {
+///     name: "london-tube".to_string(),
+///     version: semver::Version::parse("1.0.0").unwrap(),
+///     digest: None,
+///     deploy: deploy(),
+///     policies: CedarPolicySet(vec![]),
+///     tools: vec![],
+///     config_slots: vec![],
+/// };
+///
+/// let dir = tempfile::tempdir().unwrap();
+/// let layout = OciLayout::create(dir.path()).unwrap();
+///
+/// let config_toml = b"name = \"london-tube\"\n";
+/// pack_server(
+///     &package,
+///     BinaryMode::Referenced {
+///         digest: ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.0.0"),
+///         media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
+///     },
+///     Some(ConfigFile { file_name: "london-tube.toml", bytes: config_toml }),
+///     // Curated-only: this server carries no OpenAPI spec.
+///     None,
+///     &layout,
+/// )
+/// .unwrap();
+///
+/// let unpacked = unpack_server(&layout).unwrap();
+/// let config = unpacked.config.unwrap();
+/// assert_eq!(config.file_name, "london-tube.toml");
+/// assert_eq!(config.bytes, config_toml);
+/// assert_eq!(unpacked.spec, None);
+/// ```
 pub fn pack_server(
     package: &ServerPackage,
     binary: BinaryMode<'_>,
@@ -191,17 +296,6 @@ pub fn pack_server(
     spec: Option<OpenApiSpecFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
-    if let Some(spec) = spec {
-        // Accepted in the signature so callers can be written once, but not
-        // yet wired — refuse loudly rather than dropping the author's bytes.
-        return Err(PackageError::Layout {
-            reason: format!(
-                "spec layer not yet supported (refusing to silently discard '{}')",
-                spec.file_name
-            ),
-        });
-    }
-
     let envelope = ServerEnvelope {
         name: package.name.clone(),
         version: package.version.clone(),
@@ -242,6 +336,19 @@ pub fn pack_server(
             MT_SERVER_CONFIG,
             config.file_name,
             config.bytes,
+        )?);
+    }
+
+    // The spec is written last so the push order stays deterministic. Its
+    // bytes go to the blob store RAW — never through `canonicalize` and never
+    // parsed: one media type carries both JSON and YAML documents, and the
+    // format is evident from the file-name annotation (D-16).
+    if let Some(spec) = spec {
+        layers.push(write_named_file_layer(
+            layout,
+            MT_SERVER_OPENAPI_SPEC,
+            spec.file_name,
+            spec.bytes,
         )?);
     }
 
@@ -346,7 +453,9 @@ fn finalize_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oci::media_types::{MT_EMPTY_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP};
+    use crate::oci::media_types::{
+        MT_EMPTY_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_OPENAPI_SPEC,
+    };
     use crate::oci::unpack::tests_support::sample_server_package;
 
     #[test]
@@ -404,12 +513,12 @@ mod tests {
     }
 
     #[test]
-    fn pack_server_refuses_a_spec_rather_than_silently_discarding_it() {
+    fn pack_server_writes_the_supplied_spec_as_its_own_annotated_layer() {
         let dir = tempfile::tempdir().unwrap();
         let layout = OciLayout::create(dir.path()).unwrap();
         let (package, bootstrap) = sample_server_package();
 
-        let err = pack_server(
+        pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
             None,
@@ -419,9 +528,51 @@ mod tests {
             }),
             &layout,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
+        let index = layout.read_index().unwrap();
+        let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+        let spec_layer = manifest
+            .layers()
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_SERVER_OPENAPI_SPEC)
+            .expect("a supplied spec must become its own layer");
+        assert_eq!(spec_layer.size(), b"openapi: 3.1.0".len() as u64);
+        assert_eq!(
+            spec_layer
+                .annotations()
+                .as_ref()
+                .and_then(|a| a.get(ANNOTATION_TITLE))
+                .map(String::as_str),
+            Some("openapi.yaml"),
+            "the author's file name must ride in the descriptor's title annotation"
+        );
+    }
+
+    #[test]
+    fn pack_server_writes_no_spec_layer_when_the_caller_supplies_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let (package, bootstrap) = sample_server_package();
+
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            &layout,
+        )
+        .unwrap();
+
+        let index = layout.read_index().unwrap();
+        let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+        assert!(
+            !manifest
+                .layers()
+                .iter()
+                .any(|l| l.media_type().to_string() == MT_SERVER_OPENAPI_SPEC),
+            "absence of a spec is the absence of the layer — never an absence marker (D-14)"
+        );
     }
 
     #[test]

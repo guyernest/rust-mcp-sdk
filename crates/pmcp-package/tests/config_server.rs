@@ -12,10 +12,15 @@
 //! the crate's `#[cfg(test)]` fixtures, so this file exercises the same public
 //! API an external consumer has.
 
+use proptest::prelude::*;
+
 use pmcp_package::digest::ManifestDigest;
-use pmcp_package::oci::media_types::{MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG};
+use pmcp_package::error::{PackageError, Result};
+use pmcp_package::oci::media_types::{
+    MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_OPENAPI_SPEC,
+};
 use pmcp_package::oci::{
-    pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, UnpackedBinary,
+    pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, UnpackedBinary,
 };
 use pmcp_package::package::{
     AssetsSection, AuthSection, AwsSection, CedarPolicySet, DeployDescriptor, ObservabilitySection,
@@ -366,4 +371,358 @@ fn a_binary_ref_layer_with_no_digest_is_rejected_at_unpack() {
         matches!(err, pmcp_package::PackageError::Layout { .. }),
         "an unpinned binary reference must be a Layout error, got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------
+// PKG-01: the OPTIONAL OpenAPI spec layer (D-14, D-15, D-16)
+// ---------------------------------------------------------------------
+
+/// The author's OpenAPI document, verbatim. Deliberately YAML with comments
+/// and irregular spacing: if pack ever parsed and re-emitted the spec, this
+/// content would not survive byte-for-byte.
+const SPEC_YAML: &[u8] = br#"# london-tube OpenAPI contract
+openapi: 3.1.0
+info:
+  title:   London Tube API
+  version: "1.0.0"
+paths: {}
+"#;
+
+const SPEC_FILE_NAME: &str = "london-tube-api.yaml";
+
+fn spec_file() -> OpenApiSpecFile<'static> {
+    OpenApiSpecFile {
+        file_name: SPEC_FILE_NAME,
+        bytes: SPEC_YAML,
+    }
+}
+
+fn layer_media_types(layout: &OciLayout) -> Vec<String> {
+    let index = layout.read_index().unwrap();
+    let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+    manifest
+        .layers()
+        .iter()
+        .map(|l| l.media_type().to_string())
+        .collect()
+}
+
+#[test]
+fn a_packed_spec_restores_its_bytes_verbatim_under_its_original_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &layout,
+    )
+    .unwrap();
+
+    let unpacked = unpack_server(&layout).unwrap();
+    let spec = unpacked
+        .spec
+        .expect("a package packed WITH a spec must unpack WITH a spec");
+
+    assert_eq!(
+        spec.bytes, SPEC_YAML,
+        "spec bytes must be byte-identical to what the author supplied — pack must never parse, \
+         reformat or re-emit them"
+    );
+    assert_eq!(
+        spec.file_name, SPEC_FILE_NAME,
+        "the author's original spec file name must survive the round trip"
+    );
+}
+
+#[test]
+fn a_package_packed_without_a_spec_carries_no_spec_layer_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        None,
+        &layout,
+    )
+    .unwrap();
+
+    let media_types = layer_media_types(&layout);
+    assert!(
+        !media_types.iter().any(|m| m == MT_SERVER_OPENAPI_SPEC),
+        "absence of a spec is the absence of the layer — never an absence marker: {media_types:?}"
+    );
+
+    let unpacked = unpack_server(&layout).unwrap();
+    assert_eq!(
+        unpacked.spec, None,
+        "a curated-only server (pmcp-openapi-server's `--spec: Option<PathBuf>`) must pack and \
+         unpack cleanly with no spec"
+    );
+}
+
+#[test]
+fn a_json_spec_round_trips_under_exactly_the_same_media_type_as_a_yaml_one() {
+    let json_spec = OpenApiSpecFile {
+        file_name: "api.json",
+        bytes: b"{}",
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(json_spec),
+        &layout,
+    )
+    .unwrap();
+
+    let unpacked = unpack_server(&layout).unwrap();
+    let spec = unpacked.spec.expect("the JSON spec layer must be present");
+    assert_eq!(spec.bytes, b"{}", "JSON spec bytes must survive verbatim");
+    assert_eq!(spec.file_name, "api.json");
+
+    let json_media_types = layer_media_types(&layout);
+    assert!(
+        json_media_types.iter().any(|m| m == MT_SERVER_OPENAPI_SPEC),
+        "a JSON spec uses the SAME media type as a YAML one — the format is evident from the \
+         file-name annotation, not from a second media type: {json_media_types:?}"
+    );
+
+    let yaml_dir = tempfile::tempdir().unwrap();
+    let yaml_layout = OciLayout::create(yaml_dir.path()).unwrap();
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &yaml_layout,
+    )
+    .unwrap();
+    let yaml_media_types = layer_media_types(&yaml_layout);
+
+    assert_eq!(
+        json_media_types
+            .iter()
+            .filter(|m| *m == MT_SERVER_OPENAPI_SPEC)
+            .count(),
+        yaml_media_types
+            .iter()
+            .filter(|m| *m == MT_SERVER_OPENAPI_SPEC)
+            .count(),
+        "one spec media type covers both formats"
+    );
+}
+
+#[test]
+fn renaming_only_the_spec_file_changes_the_manifest_digest() {
+    let package = config_server_package();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let layout_a = OciLayout::create(dir_a.path()).unwrap();
+    let digest_a = pack_server(
+        &package,
+        referenced_binary(),
+        Some(config_file()),
+        Some(OpenApiSpecFile {
+            file_name: "london-tube-api.yaml",
+            bytes: SPEC_YAML,
+        }),
+        &layout_a,
+    )
+    .unwrap();
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let layout_b = OciLayout::create(dir_b.path()).unwrap();
+    let digest_b = pack_server(
+        &package,
+        referenced_binary(),
+        Some(config_file()),
+        Some(OpenApiSpecFile {
+            file_name: "renamed-api.yaml",
+            bytes: SPEC_YAML,
+        }),
+        &layout_b,
+    )
+    .unwrap();
+
+    assert_ne!(
+        digest_a, digest_b,
+        "the file-name annotation lives on a LAYER descriptor, which is inside the manifest that \
+         gets hashed (D-15) — renaming the spec changes the package's identity"
+    );
+}
+
+// ---------------------------------------------------------------------
+// D-11: layer ORDER is not load-bearing — every read is keyed by media type
+// ---------------------------------------------------------------------
+
+/// Number of layers a fully-populated config-only package carries:
+/// binary-ref, envelope, deploy-descriptor, cedar-policy-set, tool-metadata,
+/// config-slots, config, spec.
+const FULL_LAYER_COUNT: usize = 8;
+
+/// Pack a fully-populated config-only package (both optional layers present,
+/// so the permutation exercises every media type) into a fresh layout.
+fn packed_full_package(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
+    let layout = OciLayout::create(dir).unwrap();
+    let digest = pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &layout,
+    )
+    .unwrap();
+    (layout, digest)
+}
+
+/// Rewrite `layout`'s single manifest so its `layers` array is `order`, and
+/// return the new manifest digest.
+///
+/// "Rewrite the manifest with the permuted order" is NOT implementable as an
+/// in-place edit, and getting that wrong produces a test that measures
+/// nothing. `OciLayout::write_blob` derives BOTH the blob path and the
+/// descriptor digest from the bytes, while `unpack_server`'s
+/// `read_the_one_manifest` digest-verifies the index descriptor's declared
+/// digest BEFORE it parses. So:
+///
+/// - overwrite the original blob path in place -> unpack dies at `verify`,
+///   never reaching the media-type lookup under test;
+/// - write permuted bytes without touching the index -> the index still
+///   points at the ORIGINAL manifest, so unpack reads the unpermuted order
+///   and the test passes vacuously.
+///
+/// The only correct shape is the five steps below: carry the index
+/// descriptor's annotations across by hand (`finalize_pack` sets them AFTER
+/// the digest is computed, so they cannot be recomputed), permute, serialize
+/// with the SAME canonicalizer `finalize_pack` uses, write a NEW
+/// content-addressed manifest blob, and REPLACE — never append — the index's
+/// single descriptor.
+fn rewrite_manifest_layers(layout: &OciLayout, order: &[usize]) -> Result<ManifestDigest> {
+    // 1. The existing index descriptor, and its hand-set annotations.
+    let mut index = layout.read_index()?;
+    let old_descriptor =
+        index
+            .manifests()
+            .first()
+            .cloned()
+            .ok_or_else(|| PackageError::Layout {
+                reason: "index.json carries no manifest to rewrite".to_string(),
+            })?;
+    let annotations = old_descriptor.annotations().clone();
+
+    // 2. Permute the layer vector.
+    let mut manifest = layout.read_manifest(&old_descriptor)?;
+    let layers = manifest.layers().clone();
+    let permuted: Vec<_> = order
+        .iter()
+        .map(|&i| {
+            layers.get(i).cloned().ok_or_else(|| PackageError::Layout {
+                reason: format!("permutation index {i} is out of range"),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    manifest.set_layers(permuted);
+
+    // 3. The SAME canonical form finalize_pack uses, so layer order is the
+    //    only difference from the original bytes.
+    let manifest_bytes = pmcp_package::canonicalize(&manifest)?;
+
+    // 4. A NEW content-addressed blob, re-annotated by hand.
+    let mut new_descriptor = layout.write_manifest(&manifest_bytes)?;
+    new_descriptor.set_annotations(annotations);
+    let digest = ManifestDigest::try_from(new_descriptor.digest())?;
+
+    // 5. REPLACE the single index entry — a push would make
+    //    read_the_one_manifest fail with "expected exactly one manifest",
+    //    which looks like a code bug rather than a broken test.
+    index.set_manifests(vec![new_descriptor]);
+    layout.write_index(&index)?;
+
+    Ok(digest)
+}
+
+#[test]
+fn the_permutation_helper_actually_rewrites_the_content_addressed_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, baseline_digest) = packed_full_package(dir.path());
+
+    // The identity permutation reproduces the original bytes exactly — proof
+    // the helper's canonical form matches finalize_pack's.
+    let identity: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    let identity_digest = rewrite_manifest_layers(&layout, &identity).unwrap();
+    assert_eq!(
+        identity_digest, baseline_digest,
+        "the identity permutation must round-trip to the SAME digest — a different one would mean \
+         the helper serializes differently from finalize_pack, so the property test would be \
+         measuring the helper rather than unpack_server"
+    );
+
+    // A real permutation must produce DIFFERENT manifest bytes; if it did
+    // not, the property test below would be a no-op.
+    let mut reversed: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    reversed.reverse();
+    let reversed_digest = rewrite_manifest_layers(&layout, &reversed).unwrap();
+    assert_ne!(
+        reversed_digest, baseline_digest,
+        "a non-identity permutation must yield a different manifest blob — otherwise the helper \
+         is a no-op and proves nothing"
+    );
+}
+
+#[test]
+fn a_reversed_layer_order_still_unpacks_to_the_same_server() {
+    let baseline_dir = tempfile::tempdir().unwrap();
+    let (baseline_layout, _) = packed_full_package(baseline_dir.path());
+    let baseline = unpack_server(&baseline_layout).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _) = packed_full_package(dir.path());
+    let mut reversed: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+    reversed.reverse();
+    rewrite_manifest_layers(&layout, &reversed).unwrap();
+
+    assert_eq!(
+        unpack_server(&layout).unwrap(),
+        baseline,
+        "unpack_server resolves every layer by media type, so reversing the manifest's layer \
+         array cannot change what it yields"
+    );
+}
+
+proptest! {
+    /// PROPERTY (D-11, CLAUDE.md ALWAYS PROPERTY): for an ARBITRARY
+    /// permutation of the manifest's `layers` array, `unpack_server` yields an
+    /// EQUAL `UnpackedServer`. Layer position carries no meaning — every read
+    /// is keyed by media type — so a layout that only shuffles its layers is
+    /// the same package.
+    ///
+    /// The permutation goes through `rewrite_manifest_layers`, which performs
+    /// the full content-addressed rewrite; without it the manifest's
+    /// digest-verify-before-parse chain would either reject the layout or
+    /// leave the original manifest in place and prove nothing.
+    #[test]
+    fn any_layer_permutation_unpacks_to_an_equal_server(
+        seed in proptest::collection::vec(0u32..1000, FULL_LAYER_COUNT)
+    ) {
+        let baseline_dir = tempfile::tempdir().unwrap();
+        let (baseline_layout, _) = packed_full_package(baseline_dir.path());
+        let baseline = unpack_server(&baseline_layout).unwrap();
+
+        let mut order: Vec<usize> = (0..FULL_LAYER_COUNT).collect();
+        order.sort_by_key(|&i| seed[i]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let (layout, _) = packed_full_package(dir.path());
+        rewrite_manifest_layers(&layout, &order).unwrap();
+
+        prop_assert_eq!(unpack_server(&layout).unwrap(), baseline);
+    }
 }
