@@ -62,11 +62,9 @@ mod tests {
 
     #[test]
     fn dedup_two_identical_secrets_into_one_entry() {
-        let a = ConfigSlot {
-            slot: SlotType::Secret {
-                name: "LICHESS_API_KEY".to_string(),
-            },
-        };
+        let a = ConfigSlot::new(SlotType::Secret {
+            name: "LICHESS_API_KEY".to_string(),
+        });
         let b = a.clone();
         let result = aggregate([&a, &b]).unwrap();
         assert_eq!(result, vec![a]);
@@ -74,18 +72,14 @@ mod tests {
 
     #[test]
     fn conflicting_tested_values_return_slot_conflict_error() {
-        let a = ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "anthropic".to_string(),
-            },
-        };
-        let b = ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "openai".to_string(),
-            },
-        };
+        let a = ConfigSlot::new(SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "anthropic".to_string(),
+        });
+        let b = ConfigSlot::new(SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "openai".to_string(),
+        });
         let err = aggregate([&a, &b]).unwrap_err();
         assert!(matches!(
                     err,
@@ -99,16 +93,12 @@ mod tests {
 
     #[test]
     fn preserves_all_distinct_conflict_free_slots() {
-        let a = ConfigSlot {
-            slot: SlotType::Secret {
-                name: "A".to_string(),
-            },
-        };
-        let b = ConfigSlot {
-            slot: SlotType::OauthClient {
-                name: "B".to_string(),
-            },
-        };
+        let a = ConfigSlot::new(SlotType::Secret {
+            name: "A".to_string(),
+        });
+        let b = ConfigSlot::new(SlotType::OauthClient {
+            name: "B".to_string(),
+        });
         let result = aggregate([&a, &b]).unwrap();
         assert_eq!(result.len(), 2);
     }
@@ -118,53 +108,37 @@ mod tests {
     /// exercises the full eight-variant space rather than a single-variant slice.
     fn one_slot_per_variant() -> Vec<ConfigSlot> {
         vec![
-            ConfigSlot {
-                slot: SlotType::LlmProvider {
-                    name: "primary-llm".to_string(),
-                    tested_value: "anthropic".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::Secret {
-                    name: "TFL_API_KEY".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::AuthMode {
-                    name: "backend.auth.type".to_string(),
-                    tested_value: "api_key".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::HumanRole {
-                    role: "approver".to_string(),
-                    description: "Approves budget overrides".to_string(),
-                    responsibilities: vec!["review".to_string()],
-                    channel_hints: vec!["slack".to_string()],
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::Endpoint {
-                    name: "backend.base_url".to_string(),
-                    tested_value: "https://api.tfl.gov.uk".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::OauthClient {
-                    name: "primary-oauth".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::BudgetOverride {
-                    name: "monthly-cap".to_string(),
-                    tested_value: "1000".to_string(),
-                },
-            },
-            ConfigSlot {
-                slot: SlotType::ChannelBinding {
-                    name: "notify-channel".to_string(),
-                },
-            },
+            ConfigSlot::new(SlotType::LlmProvider {
+                name: "primary-llm".to_string(),
+                tested_value: "anthropic".to_string(),
+            }),
+            ConfigSlot::new(SlotType::Secret {
+                name: "TFL_API_KEY".to_string(),
+            }),
+            ConfigSlot::new(SlotType::AuthMode {
+                name: "backend.auth.type".to_string(),
+                tested_value: "api_key".to_string(),
+            }),
+            ConfigSlot::new(SlotType::HumanRole {
+                role: "approver".to_string(),
+                description: "Approves budget overrides".to_string(),
+                responsibilities: vec!["review".to_string()],
+                channel_hints: vec!["slack".to_string()],
+            }),
+            ConfigSlot::new(SlotType::Endpoint {
+                name: "backend.base_url".to_string(),
+                tested_value: "https://api.tfl.gov.uk".to_string(),
+            }),
+            ConfigSlot::new(SlotType::OauthClient {
+                name: "primary-oauth".to_string(),
+            }),
+            ConfigSlot::new(SlotType::BudgetOverride {
+                name: "monthly-cap".to_string(),
+                tested_value: "1000".to_string(),
+            }),
+            ConfigSlot::new(SlotType::ChannelBinding {
+                name: "notify-channel".to_string(),
+            }),
         ]
     }
 
@@ -172,23 +146,17 @@ mod tests {
     /// identity-bearing one — all three survive, deduped, in `SlotType::key()` order.
     #[test]
     fn aggregates_secret_endpoint_and_auth_mode_into_deterministic_order() {
-        let secret = ConfigSlot {
-            slot: SlotType::Secret {
-                name: "TFL_API_KEY".to_string(),
-            },
-        };
-        let endpoint = ConfigSlot {
-            slot: SlotType::Endpoint {
-                name: "backend.base_url".to_string(),
-                tested_value: "https://api.tfl.gov.uk".to_string(),
-            },
-        };
-        let auth_mode = ConfigSlot {
-            slot: SlotType::AuthMode {
-                name: "backend.auth.type".to_string(),
-                tested_value: "api_key".to_string(),
-            },
-        };
+        let secret = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_API_KEY".to_string(),
+        });
+        let endpoint = ConfigSlot::new(SlotType::Endpoint {
+            name: "backend.base_url".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        });
+        let auth_mode = ConfigSlot::new(SlotType::AuthMode {
+            name: "backend.auth.type".to_string(),
+            tested_value: "api_key".to_string(),
+        });
 
         // Duplicated inputs must dedup rather than multiply.
         let result = aggregate([&secret, &endpoint, &auth_mode, &endpoint.clone()]).unwrap();

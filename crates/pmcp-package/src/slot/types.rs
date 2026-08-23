@@ -147,9 +147,81 @@ impl SlotType {
 
 /// A single declared config slot held by a package component. The one canonical "a component
 /// declares this slot" type — packages hold `Vec<ConfigSlot>`.
+///
+/// `#[non_exhaustive]`: construct with [`ConfigSlot::new`] and [`ConfigSlot::with_config_key`]
+/// rather than a struct literal. Adding `config_key` broke every struct literal in this
+/// repository; the attribute is what stops the NEXT field from doing it again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ConfigSlot {
+    /// The slot's typed declaration.
     pub slot: SlotType,
+    /// The dotted TOML path in the server's own `config.toml` that this slot fills — e.g.
+    /// `backend.base_url`, `backend.auth.query_params.app_key`, `backend.auth.type`.
+    ///
+    /// Distinct from the slot's `name`: for a [`SlotType::Secret`] the name is the
+    /// ENVIRONMENT VARIABLE name (`TFL_APP_KEY`), while `config_key` is the CONFIG PATH the
+    /// resolved value is written to. A slot that fills no config key (every agent/team slot
+    /// today) leaves this `None`. It is a path, never a value — no credential is
+    /// representable here.
+    ///
+    /// This is what plan 120-05's pack-time placeholder validation looks up, and what tells a
+    /// target environment WHERE to put the value it supplies.
+    ///
+    /// # Compatibility — both halves, because only stating one under-scopes the next change
+    ///
+    /// - **Serde/wire: ADDITIVE.** `#[serde(default)]` means slot JSON written before this
+    ///   field existed still deserializes (yielding `None`), and `skip_serializing_if` means
+    ///   nothing new is emitted for a `None`. No checked-in fixture byte and no pinned digest
+    ///   moves. `skip_serializing_if` is load-bearing here, not cosmetic.
+    /// - **Rust source: BREAKING.** `ConfigSlot` had exactly one field before this, so a
+    ///   second public field breaks every struct literal in the language, everywhere — 40
+    ///   construction sites across `pmcp-package`, `pmcp-agent`, `pmcp-team-servers`,
+    ///   `cargo-pmcp` and their examples and integration tests. A reader who takes "additive"
+    ///   at face value will under-scope the next field addition exactly as this one was
+    ///   originally under-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_key: Option<String>,
+}
+
+impl ConfigSlot {
+    /// A config slot that fills no config key — the shape every agent/team package slot takes.
+    ///
+    /// ```
+    /// use pmcp_package::{ConfigSlot, SlotType};
+    ///
+    /// let slot = ConfigSlot::new(SlotType::Secret {
+    ///     name: "TFL_APP_KEY".to_string(),
+    /// });
+    /// assert_eq!(slot.config_key, None);
+    /// // Nothing is emitted for a `None` config key, so existing fixtures stay byte-identical.
+    /// let json = serde_json::to_value(&slot).unwrap();
+    /// assert!(json.get("config_key").is_none());
+    /// ```
+    pub fn new(slot: SlotType) -> Self {
+        Self {
+            slot,
+            config_key: None,
+        }
+    }
+
+    /// Name the dotted TOML config path this slot fills.
+    ///
+    /// ```
+    /// use pmcp_package::{ConfigSlot, SlotType};
+    ///
+    /// let slot = ConfigSlot::new(SlotType::Endpoint {
+    ///     name: "backend.base_url".to_string(),
+    ///     tested_value: "https://api.tfl.gov.uk".to_string(),
+    /// })
+    /// .with_config_key("backend.base_url");
+    /// assert_eq!(slot.config_key.as_deref(), Some("backend.base_url"));
+    /// ```
+    #[must_use]
+    pub fn with_config_key(mut self, key: impl Into<String>) -> Self {
+        self.config_key = Some(key.into());
+        self
+    }
 }
 
 #[cfg(test)]
@@ -314,6 +386,50 @@ mod tests {
             tested_value: "api_key".to_string(),
         };
         assert_eq!(auth_mode.key(), ("auth_mode", "backend.auth.type"));
+    }
+
+    #[test]
+    fn config_slot_without_a_key_emits_no_config_key_field_at_all() {
+        let slot = ConfigSlot::new(SlotType::Secret {
+            name: "X".to_string(),
+        });
+        assert_eq!(slot.config_key, None);
+        let json = serde_json::to_value(&slot).unwrap();
+        // `skip_serializing_if` — the key is ABSENT, not `null`. This is what keeps the
+        // checked-in golden fixtures and all four pinned digests byte-identical.
+        assert!(json.get("config_key").is_none());
+        assert_eq!(
+            json,
+            serde_json::json!({"slot": {"type": "secret", "name": "X"}})
+        );
+    }
+
+    #[test]
+    fn config_slot_with_a_key_serializes_it_and_round_trips() {
+        let slot = ConfigSlot::new(SlotType::Endpoint {
+            name: "backend.base_url".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        })
+        .with_config_key("backend.base_url");
+        let json = serde_json::to_value(&slot).unwrap();
+        assert_eq!(json["config_key"], "backend.base_url");
+        let round: ConfigSlot = serde_json::from_value(json).unwrap();
+        assert_eq!(round, slot);
+    }
+
+    #[test]
+    fn legacy_config_slot_json_without_config_key_deserializes_to_none() {
+        // The exact shape written before the field existed (see
+        // tests/golden_fixtures/server_team_fs_v1.json).
+        let legacy = serde_json::json!({"slot": {"type": "secret", "name": "X"}});
+        let slot: ConfigSlot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(slot.config_key, None);
+        assert_eq!(
+            slot.slot,
+            SlotType::Secret {
+                name: "X".to_string()
+            }
+        );
     }
 
     #[test]

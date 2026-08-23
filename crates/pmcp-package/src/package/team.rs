@@ -53,14 +53,12 @@ impl HumanRole {
     /// (`SlotType::HumanRole`) — "human seats become human-role config
     /// slots".
     pub fn to_config_slot(&self) -> ConfigSlot {
-        ConfigSlot {
-            slot: SlotType::HumanRole {
-                role: self.role.clone(),
-                description: self.description.clone(),
-                responsibilities: self.responsibilities.clone(),
-                channel_hints: self.channel_hints.clone(),
-            },
-        }
+        ConfigSlot::new(SlotType::HumanRole {
+            role: self.role.clone(),
+            description: self.description.clone(),
+            responsibilities: self.responsibilities.clone(),
+            channel_hints: self.channel_hints.clone(),
+        })
     }
 }
 

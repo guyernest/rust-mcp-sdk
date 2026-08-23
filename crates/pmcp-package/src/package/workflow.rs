@@ -154,12 +154,10 @@ mod tests {
     }
 
     fn sample_slot() -> ConfigSlot {
-        ConfigSlot {
-            slot: crate::slot::SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "anthropic".to_string(),
-            },
-        }
+        ConfigSlot::new(crate::slot::SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "anthropic".to_string(),
+        })
     }
 
     #[test]

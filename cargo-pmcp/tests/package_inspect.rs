@@ -21,12 +21,10 @@ fn sample_agent_package() -> AgentPackage {
         name: "triage-agent".to_string(),
         version: semver::Version::new(1, 0, 0),
         instructions: "You triage incoming support tickets.".to_string(),
-        llm: ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "anthropic".to_string(),
-            },
-        },
+        llm: ConfigSlot::new(SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "anthropic".to_string(),
+        }),
         max_tokens: 4096,
         max_iterations: 25,
         connectors: vec![],

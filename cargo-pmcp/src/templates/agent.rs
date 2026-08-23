@@ -187,12 +187,10 @@ pub(crate) fn starter_package(name: &str) -> AgentPackage {
         name: name.to_string(),
         version: semver::Version::new(1, 0, 0),
         instructions: "You are a concise, helpful assistant. Use tools when helpful.".to_string(),
-        llm: ConfigSlot {
-            slot: SlotType::LlmProvider {
-                name: "primary-llm".to_string(),
-                tested_value: "llama3.2".to_string(),
-            },
-        },
+        llm: ConfigSlot::new(SlotType::LlmProvider {
+            name: "primary-llm".to_string(),
+            tested_value: "llama3.2".to_string(),
+        }),
         max_tokens: 100_000,
         max_iterations: 5,
         connectors: vec![],
