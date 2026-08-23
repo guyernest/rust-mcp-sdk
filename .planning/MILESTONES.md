@@ -1,5 +1,65 @@
 # Milestones
 
+## v2.5 MCP Spec 2026-07-28 (v2) Support (Shipped: 2026-08-22)
+
+**Phases completed:** 11 phases (112, 113, 113.1, 114, 115, 116, 117, 118, 118.1, 118.2, 119), 176 plans, 337 tasks
+**Published as:** pmcp v2.19.0 — PR #337, tag v2.19.0
+**Code changes:** 171 files, +59,749 / −2,586 (src/, crates/, cargo-pmcp/, examples/, tests/); 427 files and +159,043 lines including planning artifacts
+**Timeline:** 2026-07-22 scoping → 2026-08-20 merge (squash-merged as PR #337, so `main` carries 11 commits for the range)
+**Closeout type:** override_closeout
+
+**Delivered:** pmcp became a dual-version SDK — one server binary serves both MCP 2025-11-25 and
+2026-07-28 clients through per-request negotiation, with v2 as the strategic primary path and v1 as
+a cleanly severable compatibility layer. The milestone stayed additive throughout: a 2.x minor with
+no breaking change.
+
+**Key accomplishments:**
+
+1. **Version plumbing spine (Phase 112, VERS-01..09)** — `PROTOCOL_VERSION_2026_07_28`, an `Era` classifier, and `ProtocolContext`/`TraceContext` value types. One shared resolver resolves a per-request context ONCE at ingress and threads it through both native dispatch sites; handlers read era, client identity and W3C trace-context off `RequestHandlerExtra`. A centralized version-gated `error_codes` table replaced ~210 literal sites, and the streamable-HTTP transport now carries zero bare `-32xxx` literal.
+2. **Stateless HTTP + multi-round-trip elicitation (Phase 113, HTTP-01..08)** — `initialize`/`Mcp-Session-Id` removal path plus `InputRequiredResult`/`requestState`. The decisive call (D-113-D) was to read the era from the RAW request body rather than add `_meta` to five request types: the typed attempt worked but forced a MAJOR semver bump, so it was reverted in favour of a raw read needing zero public API change — which also collapsed two disagreeing era-detection paths into one and made `tools/list` a valid v2 request.
+3. **Tasks-as-extension migration (Phase 114, TASK-01..06)** — `tasks/list` removed, `tasks/update` added, server-directed task creation. The v1.x DynamoDB/Redis task-store investment survived as an API reshape only.
+4. **JSON Schema 2020-12 + caching hints (Phase 115, SCHM-*)** — `structuredContent` as any JSON value, `ttlMs`/`cacheScope`, and a position-aware traversal whose six subschema keywords are DERIVED from the pinned meta-schemas and held there by a source-text drift gate, after a hand-kept list silently omitted `dependencies`.
+5. **Auth hardening + v1 severability (Phases 116, 117)** — RFC 9207 `iss` validation, DCR `application_type`, the six SEPs; then a default-on `v1-compat` feature and a `full-v2` set that severs v1 at compile time through signature-identical paired modules, leaving exactly one call-site `#[cfg]` in a 2,941-line transport, with a CI severance gate that blocks merge.
+6. **Conformance against the official suite (Phases 118, 118.1, 118.2, CONF-*)** — the suite found nine real SDK gaps (G-1..G-9), all closed. `Content::Resource` now emits the spec shape in tool-result and prompt-message positions on both eras via a tolerant `#[serde(try_from)]` reader, while `ReadResourceResult.contents` stayed flat.
+7. **Docs in three shapes (Phase 119, DOCS-*)** — pmcp-book v2 migration chapter, README/CHANGELOG protocol-era rewrite, and course alignment, carried in from v2.4 Phase 111.
+
+**Security and correctness findings closed during the milestone** (each found by execution, not inspection): a `write_canonical` depth-64 marker that made two different `tools/call` bodies digest identically, letting a `requestState` minted for one be accepted on the other over live HTTP; an untagged `InputResponse` decoder that mis-typed elicitation answers as sampling and burned 16 resends before failing misleadingly; an unbounded `SseParser` line buffer (GAP-A) reachable by any peer streaming ordinary `data:` lines; and an MRTR round counter that was previously enforced only by the attacker.
+
+### Known Gaps
+
+- **UNAS-01** — SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}` support. Left deliberately UNASSIGNED at close with its evidence attached (the suite scenario, the four `sep-2243-server-*` check names, and the measured zero-hit SDK surface). Carried to v2.6; needs an explicit scoping decision before being folded into any phase.
+- 17 traceability rows (HTTP-01..08, CLNT-01/02/05, TASK-01..06) read `Implemented — pending final schema` although their checkboxes are `[x]` and Phase 119-01 recorded the spec as PUBLISHED-CONFIRMED. The status text is stale, not the implementation.
+
+### Known verification overrides
+
+**0 newly acknowledged, 461 open items carried forward unacknowledged** (0 carried from a prior close).
+
+This is an `override_closeout`. The pre-close audit reported 461 open items — 3 debug sessions,
+7 phases with incomplete UAT, 3 unresolved verification gaps, 5 incomplete quick tasks, and 443
+deferred items. **None were acknowledged**, deliberately, because acknowledgment could not be
+performed safely. Two gsd-tools defects were measured at close:
+
+1. **`audit-open --json` emits invalid JSON.** Deferred-item text containing embedded jq snippets
+   and Rust `Debug` output is not escaped (`\(`, `\.`, `\s`, `\|`, and `\\"` sequences that
+   terminate strings early). Neither `jq` nor Python can parse it; a one-pass repair, a
+   corrected-rule repair and a 4000-iteration parser-guided repair all failed to converge. The
+   documented acknowledge loop pipes this into `jq`, so every loop body would iterate zero times,
+   `ACK_FAILURES` would stay 0, and the close would have reported all 461 items acknowledged while
+   suppressing none.
+2. **Markdown table rows are parsed as deferred items.** Roughly 215 of the 443 are table rows —
+   e.g. `.planning/phases/113-.../deferred-items.md:324`, `| \`handle_post_fast_path\` | cognitive
+   **35** | cognitive **30** | **−5** |`, reported as an item with `|` rendered as ` — `. Since
+   `acknowledge --category deferred_items` matches `--text` against file content and rewrites the
+   matched span, mass acknowledgment would have hit `not_found`/`ambiguous` or spliced markers into
+   the middle of tables.
+
+The real debt is therefore smaller than 461 but is genuinely unresolved and remains visible to the
+next audit. The items that most warrant attention in v2.6: **Phase 78 `gaps_found`**, **Phase 107
+and Phase 77 `human_needed`**, and the 3 open debug sessions. Both gsd-tools defects should be
+reported upstream before the next milestone close.
+
+---
+
 ## v2.0 Roadmap: MCP Tasks for PMCP SDK (Backfilled: 2026-06-11)
 
 **Note:** Synthesized from archive snapshot by `/gsd:health --backfill`. Original completion date unknown.
