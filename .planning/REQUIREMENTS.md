@@ -20,9 +20,9 @@ Requirements for milestone v2.6. Each maps to exactly one roadmap phase.
 
 ### Package Portability (PKG)
 
-- [ ] **PKG-01**: A server with **no bespoke binary** can be packed. Vendor media types carry the server's own `config.toml` and its OpenAPI spec as layers, so a Shape A config-only server (`pmcp-openapi-server`) has a complete package identity. Today `pack_server` requires `bootstrap: &[u8]` and neither file has a layer type.
-- [ ] **PKG-02**: The binary is **dual-mode** — embedded (bootstrap bytes, for a new server or new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required; `BinaryRef` already has the right shape but nothing resolves it.
-- [ ] **PKG-03**: What is **baked** versus what is a **slot** is decided and documented. Working split: the OpenAPI spec is baked (it defines the tool surface — change it and it is a different package); endpoint, credentials and auth mode are slots filled at unpack.
+- [x] **PKG-01**: A server with **no bespoke binary** can be packed. Vendor media types carry the server's own `config.toml` and its OpenAPI spec as layers, so a Shape A config-only server (`pmcp-openapi-server`) has a complete package identity. Today `pack_server` requires `bootstrap: &[u8]` and neither file has a layer type.
+- [x] **PKG-02**: The binary is **dual-mode** — embedded (bootstrap bytes, for a new server or new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required; `BinaryRef` already has the right shape but nothing resolves it.
+- [x] **PKG-03**: What is **baked** versus what is a **slot** is decided and documented. Working split: the OpenAPI spec is baked (it defines the tool surface — change it and it is a different package); endpoint, credentials and auth mode are slots filled at unpack.
 - [ ] **PKG-04**: A package round-trips between environments with **tool-list parity** as the asserted property: pack in A → unpack in B → `detect_deviation` names exactly the slots B must fill → fill them → the served tool list matches A. Asserted on behaviour via the existing `parity_replay.rs`, never on manifest structure, so it survives the manifest refactors this milestone expects.
 
 ### Package Exchange (PKGX — contract-first, backend-dependent)
@@ -45,6 +45,7 @@ and their phase mapping are unchanged, but plans must not act on the stale text:
   workspace-**excluded** publishable crates — `crates/pmcp-package` carries its own `[workspace]` table so it is not a root member (measured: `cargo metadata --no-deps` lists 28 packages, `pmcp-package` not among them) —
   and (b) the version targets named at scoping are stale: `cargo-pmcp` is at 0.21.0 (not 0.19.0) and
   `pmcp-package` at 0.1.1.
+
 - **`cargo pmcp package` no longer has exactly one verb.** `cargo-pmcp/src/commands/package/mod.rs`
   enumerates five — `inspect | capture | show | import | approve` — and `import` is already taken by
   the remote workflow-manifest dry-run import. PKGX-02's `import` therefore collides with a shipped
@@ -85,15 +86,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PKG-01 | Phase 120 | Pending |
-| PKG-02 | Phase 120 | Pending |
-| PKG-03 | Phase 120 | Pending |
+| PKG-01 | Phase 120 | Complete |
+| PKG-02 | Phase 120 | Complete |
+| PKG-03 | Phase 120 | Complete |
 | PKG-04 | Phase 121 | Pending |
 | PKGX-01 | Phase 122 | Pending — parked on backend |
 | PKGX-02 | Phase 123 | Pending — parked on backend |
 | PKGR-01 | Phase 124 | Pending |
 
 **Coverage:**
+
 - v2.6 requirements: 7 total
 - Mapped to phases: 7
 - Unmapped: 0 ✓
