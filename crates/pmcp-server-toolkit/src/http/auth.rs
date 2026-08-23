@@ -32,6 +32,11 @@
 //! `pmcp_server_toolkit::http::auth::AuthConfig` rather than redefining it.
 
 use super::HttpConnectorError;
+// The `${VAR}` / `env:VAR` grammar lives in the backend-neutral `crate::env_ref`
+// module, NOT here: this module is `#[cfg(feature = "http")]`, so a chokepoint
+// defined here would exist only in `http` builds while `[backend].base_url`
+// resolution and `token_secret` need the same grammar in every build.
+use crate::env_ref::parse_env_ref;
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -485,28 +490,6 @@ impl HttpAuthProvider for OAuthPassthroughAuth {
 /// This constructor never fails today (returns `Ok`) — the fallible signature is
 /// reserved so a future variant requiring construction-time validation can error
 /// without a breaking change.
-/// The single brace/env-ref parse core shared by EVERY credential-resolution
-/// path (api_key, bearer token, basic password, oauth2 client_secret).
-///
-/// Returns `Some(var_name)` when `raw` is a secret REFERENCE — either the
-/// `"env:VAR"` or the `"${VAR}"` form — and `None` for a plain literal (which the
-/// caller uses verbatim). A malformed brace reference (e.g. `"${}"`) is treated
-/// as a reference to an empty name, i.e. `Some("")`, so the caller resolves it to
-/// the empty string (omission) rather than shipping the literal `${}`.
-///
-/// This consolidates the two brace parsers that previously existed (the inline
-/// `${`-strip in the old api_key resolver here and `expand_braced_var` in
-/// `crate::code_mode`): all credential resolution now flows through this one
-/// chokepoint so the env-ref discipline cannot drift per-variant.
-fn parse_env_ref(raw: &str) -> Option<&str> {
-    if let Some(v) = raw.strip_prefix("env:") {
-        Some(v)
-    } else {
-        // `${...}` → the inner name (possibly empty for the malformed `${}` form).
-        raw.strip_prefix("${").and_then(|s| s.strip_suffix('}'))
-    }
-}
-
 /// Resolve a single credential value, expanding a `${VAR}` or `env:VAR` reference
 /// from the process environment — the ONE chokepoint applied to every credential
 /// field (api_key, bearer `token`, basic `password`, oauth2 `client_secret`) as
@@ -1008,14 +991,11 @@ token = "abc"
         assert_eq!(resolve_secret_ref("${}"), "");
     }
 
-    #[test]
-    fn test_parse_env_ref_distinguishes_literal_from_reference() {
-        assert_eq!(parse_env_ref("env:FOO"), Some("FOO"));
-        assert_eq!(parse_env_ref("${FOO}"), Some("FOO"));
-        assert_eq!(parse_env_ref("${}"), Some("")); // malformed-but-a-reference
-        assert_eq!(parse_env_ref("plain"), None);
-        assert_eq!(parse_env_ref("${FOO"), None); // unterminated → literal
-    }
+    // NOTE: `test_parse_env_ref_distinguishes_literal_from_reference` moved with
+    // the function to `crate::env_ref` (Phase 120 Plan 04 Task 2) — the grammar
+    // is now defined and tested in one backend-neutral place. The resolution
+    // POLICY tests (empty-on-unset, omission) stay here, because that policy is
+    // credential-specific and deliberately differs from `base_url`'s.
 
     #[tokio::test]
     async fn test_bearer_resolves_braced_env_ref() {

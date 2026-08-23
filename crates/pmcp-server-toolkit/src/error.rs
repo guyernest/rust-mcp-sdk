@@ -77,6 +77,35 @@ pub enum ToolkitError {
     #[error("config validation failed: {0}")]
     Validation(#[from] ConfigValidationError),
 
+    /// `[backend].base_url` holds a `${VAR}` / `env:VAR` reference that could
+    /// not be resolved: the named environment variable is unset, or is set to
+    /// an empty / whitespace-only value.
+    ///
+    /// Filed HERE and NOT under [`ConfigValidationError`] deliberately (Phase
+    /// 120 Plan 04, cross-AI review LOW). `ConfigValidationError` is the
+    /// semantic validation surfaced by
+    /// [`crate::config::ServerConfig::validate`] — i.e. PARSE time. This lookup
+    /// happens at DISPATCH time, long after `validate()` returned `Ok` (the
+    /// literal `"${TFL_BASE_URL}"` is non-empty, so the emptiness rule passes).
+    /// Filing a runtime lookup failure under parse-time validation would make
+    /// that enum's own documentation false and would let a caller matching
+    /// `ToolkitError::Validation(..)` believe the config was malformed.
+    ///
+    /// # Security (T-120-17)
+    ///
+    /// The message names the FIELD and the environment-variable NAME only. It
+    /// MUST NOT echo a resolved URL, the config's contents, or any credential
+    /// substring.
+    #[error(
+        "[backend].base_url references environment variable '{var}', which is \
+         unset or empty (set it to the REST API root URL)"
+    )]
+    UnresolvedBaseUrlRef {
+        /// The environment-variable name the `base_url` reference points at.
+        /// Never the resolved value.
+        var: String,
+    },
+
     /// A governed-Excel workbook bundle failed to load + integrity-verify at
     /// boot (Phase 92, WBSV-08 fail-closed). Wraps a
     /// [`pmcp_workbook_runtime::BundleLoadError`] — a source read failure, a
@@ -159,4 +188,16 @@ pub enum ConfigValidationError {
          e.g. \"https://api.example.com\")"
     )]
     EmptyBackendBaseUrl,
+    /// Per Phase 120 Plan 04 (PKG-03): a `[[config_slots]]` entry at `index`
+    /// has an empty / whitespace-only `key` or `name`. A slot declaration whose
+    /// key names no config path — or whose name names no environment variable —
+    /// claims coverage it cannot deliver, and the package side would compare
+    /// against an empty string.
+    ///
+    /// The sibling "unrecognized `kind`" check is NOT here: `kind` is the
+    /// closed [`crate::config::ConfigSlotKind`] enum, so serde rejects an
+    /// unknown discriminator at PARSE time (naming the accepted set) before
+    /// `validate()` is ever called.
+    #[error("[[config_slots]] entry at index {0} has an empty key or name")]
+    EmptyConfigSlotField(usize),
 }
