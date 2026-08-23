@@ -34,6 +34,23 @@ Requirements for milestone v2.6. Each maps to exactly one roadmap phase.
 
 - [ ] **PKGR-01**: `pmcp-openapi-server` is added to CLAUDE.md's publish order. It is absent today (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`.
 
+**Measured at roadmap creation (2026-08-22) — two premises above have drifted; the requirements
+and their phase mapping are unchanged, but plans must not act on the stale text:**
+
+- **PKGR-01's premise is already partly closed on `main`.** `pmcp-openapi-server` is NOT at zero
+  occurrences: it holds slot 9b in CLAUDE.md's publish order, has a `cargo publish -p
+  pmcp-openapi-server` step in `.github/workflows/release.yml`, and `scripts/check-release-coverage.sh`
+  (wired into `.github/workflows/ci.yml:233`) machine-checks the workflow half. The residual work is
+  (a) the gate enumerates via `cargo metadata --no-deps` and so structurally cannot see
+  workspace-**excluded** publishable crates — `crates/pmcp-package` carries its own `[workspace]` table so it is not a root member (measured: `cargo metadata --no-deps` lists 28 packages, `pmcp-package` not among them) —
+  and (b) the version targets named at scoping are stale: `cargo-pmcp` is at 0.21.0 (not 0.19.0) and
+  `pmcp-package` at 0.1.1.
+- **`cargo pmcp package` no longer has exactly one verb.** `cargo-pmcp/src/commands/package/mod.rs`
+  enumerates five — `inspect | capture | show | import | approve` — and `import` is already taken by
+  the remote workflow-manifest dry-run import. PKGX-02's `import` therefore collides with a shipped
+  verb and needs an explicit resolution. The requirement itself is unaffected: none of the five packs
+  or unpacks an AI-Package.
+
 > **⚠ PKGX-01 and PKGX-02 cannot fully close inside this repo — by design, reaffirmed at milestone open (2026-08-22).** Both need pmcp.run backend work (package import, attestation issuance) that is still not confirmed as scheduled. They are written so the in-repo half is completable and offline-verifiable. If the backend work is scheduled mid-milestone, promote them from parked to blocking and add the live E2E leg.
 
 ## Future Requirements
@@ -83,4 +100,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-07-27 (milestone scoping)*
-*Last updated: 2026-08-22 after milestone v2.6 opened — staged requirements folded back from `.planning/v2.6-REQUIREMENTS-STAGED.md`; UNAS-01 moved to Future Requirements by explicit deferral*
+*Last updated: 2026-08-22 after the v2.6 roadmap was created — success criteria derived for Phases 120-124, coverage re-validated at 7/7, two drifted premises recorded as measured corrections (mapping unchanged); previously 2026-08-22 after milestone v2.6 opened — staged requirements folded back from `.planning/v2.6-REQUIREMENTS-STAGED.md`; UNAS-01 moved to Future Requirements by explicit deferral*

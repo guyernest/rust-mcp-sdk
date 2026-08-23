@@ -16,7 +16,7 @@
 - 🚧 **v2.3 Excel-as-Configuration MCP Servers (governed Excel CodeLanguage)** — Phases 91-96 (in progress)
 - 📋 **v2.4 Agents & Teams — SDK Extraction** — Phases 106-111 (planned)
 - ✅ **v2.5 MCP Spec 2026-07-28 (v2) Support** — Phases 112-119 (shipped 2026-08-22 as pmcp v2.19.0)
-- 📋 **v2.6 AI-Package Portability** — Phases 120-124 (scoped, not started)
+- 🚧 **v2.6 AI-Package Portability** — Phases 120-124 (in progress, opened 2026-08-22)
 
 ## Phases
 
@@ -792,7 +792,7 @@ Plans:
 - [x] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings (completed 2026-04-12)
 - [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
 
-## Phase Details — Current Milestone
+## Phase Details — v2.1 Milestone
 
 ### Phase 65: Examples Cleanup and Protocol Accuracy
 
@@ -946,7 +946,7 @@ Plans:
 - [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
-## Progress — Current Milestone
+## Progress — v2.1 Milestone
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -2246,6 +2246,12 @@ layout, `pack_server`/`unpack_server`, canonical digest + `verify`, and the conf
 that has *no bespoke binary*, any transport off the local disk, and any notion of attestation.
 `cargo pmcp package` today has exactly one verb: `inspect`.
 
+*Re-measured at milestone open (2026-08-22): that last sentence is now stale on `main` —*
+*`cargo-pmcp/src/commands/package/mod.rs` enumerates five verbs (`inspect | capture | show |`*
+*`import | approve`), and `import` is already taken by the remote workflow-manifest dry-run*
+*import. The gap this milestone closes is unchanged: none of the five packs or unpacks an*
+*AI-Package. See the Phase 123 reality check.*
+
 **Two decisions taken at milestone scoping (2026-07-27), both of which SHRINK the SDK's share:**
 
 1. **Attestation is pmcp.run-issued.** The GraphQL endpoint issues/attests a signature when a
@@ -2264,33 +2270,136 @@ GraphQL contract plus an offline blocking contract test, exactly the pattern
 `feat/package-remote-capture-show` already used for `capture-v1.graphql`, and go green when the
 backend ships. Phases 120-121 depend on nothing external and are where the durable value is.
 
-**Branch:** this milestone continues on a rebased `feat/package-remote-capture-show` (254 commits,
-31 behind `main`, **zero overlap** with `src/server/`, `src/shared/`, `src/types/` — so it does not
-collide with v2.5). That branch already gated its own release tag on an import E2E; this milestone
-is finishing what it deliberately left open, not starting fresh.
+**Branch:** this milestone continues on a rebased `feat/package-remote-capture-show` — **249 commits
+ahead of `main`, 20 behind** (re-measured 2026-08-22), **zero overlap** with `src/server/`,
+`src/shared/`, `src/types/`, so it does not collide with v2.5. That branch already gated its own
+release tag on an import E2E; this milestone is finishing what it deliberately left open, not
+starting fresh.
 
 **Non-goals:** signing keys or PKI in the SDK (decision 1); an ECR client in the CLI (decision 2);
 changing `LATEST_PROTOCOL_VERSION` (that is a v2.5 concern and stays pinned); refactoring the
 manifest schema for elegance — the schema is expected to churn, so the E2E is the asset, not the API.
 
+Byte-for-byte round-tripping of the package is also a non-goal — tool-list parity is the property
+that matters; byte identity would break on every manifest revision without indicating a real
+regression.
+
+**Decisions taken at milestone open (2026-08-22)** — settled, not open:
+
+1. **Scope taken as scoped.** Phases 120-124, their names and their goals are fixed as written at
+   the 2026-07-27 scoping pass. No re-derivation, no renumbering, no added phase.
+2. **Phases 122 and 123 stay PARKED / contract-first.** A vendored contract plus an offline blocking
+   contract test only — **no live E2E leg this milestone**. Every success criterion for both phases
+   is achievable entirely offline, inside this repo, with the pmcp.run backend unavailable.
+3. **UNAS-01 (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is deferred again** and gets no phase —
+   there is no Phase 125. It stays in Future Requirements, unassigned, with its measurement attached.
+4. **Work continues on a rebased `feat/package-remote-capture-show`**, not a fresh branch off `main`.
+
 - [ ] **Phase 120: Config-Server Packaging** — `pack_server` currently demands `bootstrap: &[u8]`, so a config-only server cannot be expressed. Add vendor media types for the server's own `config.toml` and its OpenAPI spec as layers, and make the binary **dual-mode**: embedded (bootstrap bytes, for a new server or a new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required. Decide and document what is *baked* versus what is a *slot* — the working split is that the spec is baked (it defines the tool surface; change it and it is a different package) while endpoint, credentials and auth mode are slots.
 - [ ] **Phase 121: Local Round-Trip E2E** — the regression net, and the piece that needs no backend. Using the London Tube fixture already in `crates/pmcp-openapi-server/tests/fixtures/`: pack in env A → unpack in env B → `detect_deviation` names **exactly** the slots B must fill → fill them → assert **tool-list parity** with A via the existing `parity_replay.rs`. Parity is the property; byte round-tripping is not. This test must survive an arbitrary number of manifest-shape refactors, so assert on behaviour, not on manifest structure.
 - [ ] **Phase 122: Attestation Carriage** *(contract-first, parked on backend)* — a layer to hold a pmcp.run-issued attestation and a verification path against pmcp.run's identity. No signing, no crypto dependency. Vendor the attestation contract from the live platform and write the offline blocking contract test; the live half activates when the backend issues attestations.
 - [ ] **Phase 123: Export/Import Verbs** *(contract-first, parked on backend)* — `cargo pmcp package pack | unpack | export | import`, resolving environments through `configure`'s existing resolver and reusing the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam (`PMCP_API_URL`, token cache + TTL) rather than inventing a second API path. `pack`/`unpack` are local and can land immediately; `export`/`import` are contract-first.
-- [ ] **Phase 124: Release & Publish Order** — `pmcp-openapi-server` is **absent from CLAUDE.md's publish order** (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`. Add it, publish `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0, and record the ordering constraint that `pmcp-package` precedes `pmcp-agent` and `cargo-pmcp`.
+- [ ] **Phase 124: Release & Publish Order** — `pmcp-openapi-server` is **absent from CLAUDE.md's publish order** (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`. Add it, publish `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0, and record the ordering constraint that `pmcp-package` precedes `pmcp-agent` and `cargo-pmcp`. *(Re-measured 2026-08-22: the absence was closed on `main` — slot 9b in CLAUDE.md plus a `release.yml` step and the `release-coverage` CI gate. Two residual gaps remain; see the Phase 124 reality check.)*
 
-## Progress — v2.6 Milestone (AI-Package Portability)
+## Phase Details — Current Milestone
+
+*Milestone **v2.6 AI-Package Portability** — Phases 120-124, opened 2026-08-22. Requirement text and
+the authoritative traceability table live in `.planning/REQUIREMENTS.md`. Phases 120-124 were scoped
+on 2026-07-27 at the v2.5 close and taken as scoped at the open; the success criteria below are the
+piece that scoping did not produce.*
+
+### Phase 120: Config-Server Packaging
+
+**Goal**: A server whose entire identity is a `config.toml` plus an OpenAPI spec has a complete package identity — vendor media types carry both as layers, the binary is dual-mode (embedded bootstrap bytes, or a `BinaryRef { digest, media_type }` resolved in the target environment), and the baked-versus-slot split is decided, documented and machine-checkable. Today `pack_server` (`crates/pmcp-package/src/oci/pack.rs:51`) takes `bootstrap: &[u8]` as a required positional parameter, so a config-only server is literally unrepresentable.
+**Depends on**: Nothing (first phase of the milestone; runs together with Phase 121)
+**Requirements**: PKG-01, PKG-02, PKG-03
+**Success Criteria** (what must be TRUE):
+
+  1. A `pmcp-openapi-server` package built from `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` + `london-tube-api.yaml` packs to a local OCI layout with **no bootstrap layer at all** — the manifest carries a `config.toml` layer and an OpenAPI-spec layer under new `application/vnd.pmcp.*` vendor media types (siblings of `MT_SERVER_BOOTSTRAP` in `crates/pmcp-package/src/oci/media_types.rs`), and `unpack_server` restores both files byte-identically (PKG-01)
+  2. Both binary modes round-trip: an **embedded** package carries bootstrap bytes as today, and a **referenced** package carries only `BinaryRef { digest, media_type }` (`crates/pmcp-package/src/package/server.rs:361`) with no bootstrap blob in the layout. Unpacking a referenced package in an environment that does not hold the blob reports the digest that must be resolved rather than failing with a missing-layer error, and a caller cannot mistake a referenced package for one that has bytes (PKG-02)
+  3. The baked-versus-slot split is enforced, not merely written down: changing one byte of `london-tube-api.yaml` changes the package's canonical manifest digest and `digest::verify` (`crates/pmcp-package/src/digest/verify.rs:28`) rejects the stale digest — while endpoint, credentials and auth mode surface as `ConfigSlot`s that `classify` (`crates/pmcp-package/src/slot/classification.rs:24`) sorts and `aggregate` (`crates/pmcp-package/src/slot/aggregate.rs:23`) returns, with no spec-derived slot among them (PKG-03)
+  4. A golden fixture pins the config-only package kind's canonical digest under `crates/pmcp-package/tests/golden_fixtures/`, so a later change to the layer set, layer order or media-type strings fails `crates/pmcp-package/tests/digest_stability.rs` instead of silently shipping a package the previously published CLI cannot read (PKG-01, PKG-02)
+
+**Plans**: TBD
+
+### Phase 121: Local Round-Trip E2E
+
+**Goal**: The regression net — and the piece that needs no backend. A package moves between two environments and the property asserted is **tool-list parity**: pack in A, unpack in B, `detect_deviation` names exactly the slots B must fill, fill them, and B serves the same tools as A. It is written to survive an arbitrary number of manifest-shape refactors, because the E2E is the asset this milestone leaves behind, not the manifest API.
+**Depends on**: Phase 120 (needs the config-only package shape and the referenced-binary mode)
+**Requirements**: PKG-04
+**Success Criteria** (what must be TRUE):
+
+  1. A round-trip test packs the london-tube server in a simulated environment A and unpacks it in a distinct environment B — separate OCI layouts, separate temp dirs, different endpoint/credential/auth-mode values, no shared process state — and runs fully offline against a `wiremock` backend with no live network, exactly as `crates/pmcp-openapi-server/tests/parity_replay.rs` already does (PKG-04)
+  2. In environment B, `detect_deviation` (`crates/pmcp-package/src/slot/deviation.rs:28`) names **exactly** the slots B must fill — asserted as set equality against an explicit expected list, so a slot added later that B is never told about turns the test red rather than being silently defaulted (PKG-04)
+  3. Once those named slots are filled, the environment-B binary serves a tool list set-equal to environment A's, and `london-tube-scenarios.yaml` replays green through `mcp-tester`'s `ScenarioExecutor` with per-step gating — the same harness `parity_replay.rs` uses, so parity is asserted on served behaviour (PKG-04)
+  4. The test is proven insensitive to manifest shape and sensitive to real regressions, both directions exercised: adding a field to `ServerPackage` leaves it green, while dropping a tool from B's served surface or leaving a named slot unfilled turns it red. It contains no assertion on manifest field names, layer ordering or digest values (PKG-04)
+
+**Plans**: TBD
+
+### Phase 122: Attestation Carriage *(contract-first — PARKED on the pmcp.run backend)*
+
+**Goal**: A package can carry a **pmcp.run-issued** attestation and a verification path exists against pmcp.run's identity. The SDK's job is carriage and verification only — no signing, no crypto dependency added to `pmcp-package`, and `digest::verify` stays an integrity check rather than becoming a signature check. The in-repo half is a vendored contract plus an offline blocking contract test; the live issuance leg activates only if the backend is scheduled.
+**Depends on**: Phase 120 (layer + vendor-media-type machinery); runs in parallel with Phase 123
+**Requirements**: PKGX-01
+**Parked**: yes — the critical path (attestation issuance on version promotion) is pmcp.run backend work outside this repo. Every criterion below is achievable offline with the backend unavailable.
+**Success Criteria** (what must be TRUE — all offline, in this repo, backend unavailable):
+
+  1. An attestation contract is vendored at `contracts/pmcp-run/attestation-v1.graphql`, a sibling of the existing `contracts/pmcp-run/capture-v1.graphql`, and an offline **blocking** contract test in `cargo-pmcp/tests/` validates the CLI's attestation operations against it with `apollo_compiler` — no network, no pmcp.run credentials, running in the default `cargo test` gate exactly like `cargo-pmcp/tests/package_capture_contract.rs` (PKGX-01)
+  2. `pmcp-package` carries an attestation as an **opaque** layer under an `application/vnd.pmcp.*` media type: a package with an attestation and one without both round-trip through `pack_server`/`unpack_server`, and the crate never deserializes or interprets the attestation bytes (PKGX-01)
+  3. `cargo pmcp package inspect` renders an attestation's presence, its subject digest and its issuer when one is carried, and reports the package as unattested when none is — driven entirely by fixtures, with no network call on any path (PKGX-01)
+  4. The no-crypto boundary is machine-checked rather than stated: a dependency tripwire test (the `const + include_str! + assert` pattern `cargo-pmcp/tests/pmcp_package_pin.rs` already uses for version pins) fails if a signing or crypto crate enters `pmcp-package`'s dependency tree (scoping Decision 1)
+  5. The parked boundary is explicit and reversible in one step: the live issuance/verification leg exists as an `#[ignore]`d, env-gated test that names exactly what the backend must ship — the `parity_live_tfl` / `PMCP_OPENAPI_LIVE_TEST=1` double-gate pattern — so promoting this phase from parked to blocking is removing a gate, not writing a new test (PKGX-01)
+
+**Plans**: TBD
+
+### Phase 123: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
+
+**Goal**: `cargo pmcp package` grows the portability verbs — `pack` and `unpack` are local and land immediately; `export` and `import` resolve their environment through `configure`'s existing resolver and reuse the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam rather than inventing a second API path, and are contract-first against the platform's import contract.
+**Depends on**: Phase 120 (the pack/unpack package shape); runs in parallel with Phase 122
+**Requirements**: PKGX-02
+**Parked**: partially — `pack`/`unpack` are unblocked and land this milestone; `export`/`import` are contract-first, their live leg parked on pmcp.run package import.
+**Reality check (measured 2026-08-22)**: the scoping line "`cargo pmcp package` today has exactly one verb: `inspect`" is stale. `cargo-pmcp/src/commands/package/mod.rs` on `main` enumerates **five** — `inspect | capture | show | import | approve` — and `import` is already taken by the remote *workflow-manifest dry-run* import (`cargo-pmcp/src/commands/package/import.rs`). The AI-Package import verb therefore collides with an existing, shipped verb, and this phase must resolve that explicitly.
+**Success Criteria** (what must be TRUE — all offline, in this repo, backend unavailable):
+
+  1. `cargo pmcp package pack` and `cargo pmcp package unpack` work fully offline against a local directory — `pack` produces an OCI layout from a `pmcp-openapi-server` `config.toml` + spec, `unpack` restores it and prints the slots the target environment must fill — and both appear in `cargo pmcp package --help`, asserted by `cargo-pmcp/tests/verb_help.rs` (PKGX-02)
+  2. The collision with the existing remote `package import` verb is resolved by an explicit, documented choice, the resolution is visible in `--help`, and no already-shipped verb silently changes meaning; `verb_help.rs` pins the complete post-change verb list so a later rename cannot slip through (PKGX-02)
+  3. The export/import path resolves its environment through `configure`'s existing resolver and the `pmcp_run` seam — `get_api_base_url()`'s `PMCP_API_URL` precedence (`cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs:114`) and the TTL'd, endpoint-keyed config cache (`auth.rs:198`) — with **no second API path**: no new base-URL environment variable and no second token cache, checkable by grep over `cargo-pmcp/src/` (PKGX-02)
+  4. The platform half is contract-first and offline-blocking: the export/import operations are validated against a vendored SDL under `contracts/pmcp-run/` by a test in the default `cargo test` gate, and invoking `export`/`import` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error (PKGX-02)
+
+**Plans**: TBD
+
+### Phase 124: Release & Publish Order
+
+**Goal**: What this milestone builds actually ships. The publish ledger names every crate it must, the machine-checked half of that ledger covers the crate this milestone bumps, and the version pins between `pmcp-package` and `cargo-pmcp` move together so the CLI can never ship pinned to a package version it cannot read.
+**Depends on**: Phases 120-123 (publishes what they land)
+**Requirements**: PKGR-01
+**Reality check (measured 2026-08-22)**: PKGR-01's premise — "`pmcp-openapi-server` is absent from CLAUDE.md's publish order (zero occurrences)" — was true at scoping and is **no longer true on `main`**. The crate holds slot 9b in CLAUDE.md, has a publish step in `.github/workflows/release.yml`, and `scripts/check-release-coverage.sh` (wired into `.github/workflows/ci.yml:233`) machine-checks the workflow half. Two residual gaps are this phase's real work: (a) the gate enumerates crates via `cargo metadata --no-deps`, so it structurally cannot see workspace-**excluded** publishable crates — and `crates/pmcp-package`, the crate this milestone bumps, carries its own `[workspace]` table (`crates/pmcp-package/Cargo.toml:6`) so it is not a root member at all — measured: `cargo metadata --no-deps` lists 28 packages and `pmcp-package` is not among them; (b) the version numbers named at scoping are stale — `cargo-pmcp` is at 0.21.0 (not 0.19.0) and `pmcp-package` at 0.1.1.
+**Success Criteria** (what must be TRUE):
+
+  1. On the milestone branch — 249 commits divergent from `main`, so this is re-verified rather than assumed — `./scripts/check-release-coverage.sh` exits 0 and `pmcp-openapi-server` appears in both CLAUDE.md's publish order and `.github/workflows/release.yml` (PKGR-01)
+  2. The coverage gate is extended to workspace-excluded publishable crates so `crates/pmcp-package` is covered, and deleting its `cargo publish --manifest-path crates/pmcp-package/Cargo.toml` step from `release.yml` makes the gate fail — demonstrated by running it, not asserted in prose (PKGR-01)
+  3. `pmcp-package` ships a new version carrying the Phase 120 layer and media-type additions, and `cargo-pmcp`'s caret pin plus the `cargo-pmcp/tests/pmcp_package_pin.rs` tripwire move in the same change, so the CLI cannot ship pinned to a `pmcp-package` version that cannot read the packages it writes. Targets are the next bump from HEAD, not the stale 0.2.0 / 0.19.0 pair named at scoping (PKGR-01)
+  4. CLAUDE.md's publish order and `release.yml`'s step order agree that `pmcp-package` precedes `pmcp-cfn-renderer`, `pmcp-agent` and `cargo-pmcp`, with the constraint stated in the ledger rather than left implicit in step ordering (PKGR-01)
+
+**Plans**: TBD
+
+## Progress — Current Milestone
+
+*Milestone **v2.6 AI-Package Portability** — Phases 120-124, opened 2026-08-22.*
 
 **Execution order:** 120 → 121 first and together (no external dependency, and 121 is the regression
 net every later refactor leans on) → 122 and 123 in parallel, both contract-first → 124 last.
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 120. Config-Server Packaging | 0/TBD | Not started | - |
-| 121. Local Round-Trip E2E | 0/TBD | Not started | - |
-| 122. Attestation Carriage | 0/TBD | Not started | - |
-| 123. Export/Import Verbs | 0/TBD | Not started | - |
-| 124. Release & Publish Order | 0/TBD | Not started | - |
+**Requirement coverage:** 7 of 7 v2.6 requirements mapped to exactly one phase each, 0 unmapped, 0
+duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
+
+| Phase | Requirements | Plans Complete | Status | Completed |
+|-------|--------------|----------------|--------|-----------|
+| 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 0/TBD | Not started | - |
+| 121. Local Round-Trip E2E | PKG-04 | 0/TBD | Not started | - |
+| 122. Attestation Carriage *(parked)* | PKGX-01 | 0/TBD | Not started | - |
+| 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
+| 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
 > capabilities — package import and attestation issuance — that were not confirmed as scheduled at
