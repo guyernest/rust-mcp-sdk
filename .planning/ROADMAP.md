@@ -2323,7 +2323,7 @@ piece that scoping did not produce.*
   3. The baked-versus-slot split is enforced, not merely written down: changing one byte of `london-tube-api.yaml` changes the package's canonical manifest digest and `digest::verify` (`crates/pmcp-package/src/digest/verify.rs:28`) rejects the stale digest — while endpoint, credentials and auth mode surface as `ConfigSlot`s that `classify` (`crates/pmcp-package/src/slot/classification.rs:24`) sorts and `aggregate` (`crates/pmcp-package/src/slot/aggregate.rs:23`) returns, with no spec-derived slot among them (PKG-03)
   4. A golden fixture pins the config-only package kind's canonical digest under `crates/pmcp-package/tests/golden_fixtures/`, so a later change to the layer set, layer order or media-type strings fails `crates/pmcp-package/tests/digest_stability.rs` instead of silently shipping a package the previously published CLI cannot read (PKG-01, PKG-02)
 
-**Plans**: 4/5 plans executed (4 waves)
+**Plans**: 5/5 plans executed (4 waves)
 
 Plans:
 **Wave 1**
@@ -2341,7 +2341,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 120-05-PLAN.md — `[[config_slots]]` declaration agreement (D-01 through the real API path), pack-time placeholder validation, the packed-manifest golden (wave 4)
+- [x] 120-05-PLAN.md — `[[config_slots]]` declaration agreement (D-01 through the real API path), pack-time placeholder validation, the packed-manifest golden (wave 4)
 
 ### Phase 121: Local Round-Trip E2E
 
@@ -2416,7 +2416,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 
 | Phase | Requirements | Plans Complete | Status | Completed |
 |-------|--------------|----------------|--------|-----------|
-| 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 4/5 | In Progress|  |
+| 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | In Progress|  |
 | 121. Local Round-Trip E2E | PKG-04 | 0/TBD | Not started | - |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 0/TBD | Not started | - |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
