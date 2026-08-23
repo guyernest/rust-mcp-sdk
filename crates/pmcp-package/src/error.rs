@@ -72,6 +72,16 @@ pub enum PackageError {
     /// `oci-layout`, missing `index.json`, missing referenced blob, etc.).
     #[error("OCI layout error: {reason}")]
     Layout { reason: String },
+
+    /// A server config declared or supplied a config slot that violates the
+    /// package's slot contract (an undeclared key, a missing required key, a
+    /// key whose shape does not match its declared slot type).
+    ///
+    /// `key` names the offending config KEY and `reason` describes the
+    /// violation. Neither ever carries the key's VALUE — a config slot may
+    /// name a secret, and an error message is the wrong place for one.
+    #[error("config slot violation on '{key}': {reason}")]
+    ConfigSlotViolation { key: String, reason: String },
 }
 
 #[cfg(test)]

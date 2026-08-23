@@ -58,7 +58,8 @@ pub use digest::{canonicalize, manifest_digest, verify, ManifestDigest};
 pub use error::{PackageError, Result};
 pub use oci::{
     pack_agent, pack_server, pack_team, pack_workflow, unpack_agent, unpack_server, unpack_team,
-    unpack_workflow, OciLayout,
+    unpack_workflow, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, RestoredFile,
+    UnpackedBinary, UnpackedServer,
 };
 pub use package::{
     AgentPackage, CedarPolicySet, DeployDescriptor, ServerPackage, TeamPackage, WorkflowManifest,

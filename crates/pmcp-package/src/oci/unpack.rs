@@ -10,19 +10,27 @@
 //! 3. Deserialize each verified layer back to its typed struct
 //!    (`deny_unknown_fields` on `DeployDescriptor` enforces).
 //!
-//! Layer order mirrors [`super::pack`]'s push order exactly: for a
-//! `ServerPackage`, `[bootstrap, envelope, deploy, cedar, tools,
-//! config_slots]`; for `AgentPackage`/`TeamPackage`/`WorkflowManifest`, a
-//! single layer. The bootstrap layer is returned as raw bytes — it is never
-//! deserialized.
+//! A `ServerPackage`'s layers are located by MEDIA TYPE, never by position:
+//! the config and spec layers are optional and the binary layer is one of two
+//! mutually exclusive media types, so no positional contract can hold. A
+//! `ServerPackage` layout is indexed once by [`index_layers`] and every read
+//! goes through that index. `AgentPackage`/`TeamPackage`/`WorkflowManifest`
+//! each remain a single layer. The embedded bootstrap layer is returned as raw
+//! bytes — it is never deserialized.
 
 use crate::digest::{verify, ManifestDigest};
 use crate::error::{PackageError, Result};
 use crate::oci::layout::OciLayout;
+use crate::oci::media_types::{
+    MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG,
+    MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
+    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
+};
 use crate::oci::pack::ServerEnvelope;
 use crate::oci::SingleLayerPackage;
-use crate::package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
-use oci_spec::image::{Descriptor, ImageManifest};
+use crate::package::{AgentPackage, BinaryRef, ServerPackage, TeamPackage, WorkflowManifest};
+use oci_spec::image::{Descriptor, ImageManifest, ANNOTATION_TITLE};
+use std::collections::BTreeMap;
 
 /// Read+verify a blob's bytes given its `Descriptor`: convert the
 /// Descriptor's OCI digest into a [`ManifestDigest`] (the validated
@@ -69,56 +77,241 @@ fn missing_layer(name: &str) -> PackageError {
     }
 }
 
-/// Unpack a `ServerPackage` from `layout`, returning the typed struct AND
-/// the bootstrap binary's raw bytes (never inlined on the struct itself).
-pub fn unpack_server(layout: &OciLayout) -> Result<(ServerPackage, Vec<u8>)> {
+/// The binary a packed server names — the unpack-side mirror of
+/// [`crate::oci::pack::BinaryMode`]. Exactly one arm is produced per package.
+///
+/// [`UnpackedBinary::Referenced`] deliberately has NO field holding binary
+/// bytes (D-06/D-07): unpacking a referenced package is a local, offline
+/// operation that never resolves, looks up, substitutes or falls back to a
+/// locally present blob. The same package therefore unpacks to the same shape
+/// in every environment; resolving the digest to actual bytes is the target
+/// environment's job, not this crate's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnpackedBinary {
+    /// The package embedded its binary; these are its exact bytes.
+    Embedded(Vec<u8>),
+    /// The package referenced a binary it does not carry.
+    Referenced {
+        /// Content digest of the binary the target environment must resolve.
+        digest: ManifestDigest,
+        /// Descriptive media-type hint recorded at pack time.
+        media_type: String,
+    },
+}
+
+/// A verbatim vendor-content file restored from a layer, under the original
+/// file name the author packed it with.
+///
+/// `file_name` comes from the layer descriptor's
+/// `org.opencontainers.image.title` annotation, which is ATTACKER-CONTROLLED
+/// input from an untrusted layout. It is returned as DATA only: this crate
+/// never writes to disk using it and never builds a path from it. A caller
+/// that does write these bytes out is responsible for validating the name
+/// against its own destination directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredFile {
+    /// The file's original name, e.g. `london-tube.toml`.
+    pub file_name: String,
+    /// The file's exact bytes, byte-identical to what was packed.
+    pub bytes: Vec<u8>,
+}
+
+/// Everything a packed server layout yields: the typed package, its binary
+/// (embedded bytes or a reference), and its optional verbatim config and spec
+/// files.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnpackedServer {
+    /// The typed `ServerPackage` reassembled from the envelope + typed layers.
+    pub package: ServerPackage,
+    /// The package's one binary layer, in whichever of the two shapes it had.
+    pub binary: UnpackedBinary,
+    /// The author's config file, if the package carried one.
+    pub config: Option<RestoredFile>,
+    /// The OpenAPI spec file, if the package carried one.
+    pub spec: Option<RestoredFile>,
+}
+
+/// Index a manifest's layers by media type so every read is keyed by WHAT a
+/// layer is rather than WHERE it sits (D-11).
+///
+/// A duplicate media type is rejected with [`PackageError::Layout`] naming the
+/// duplicated type — never last-wins. Silently keeping one of two layers with
+/// the same media type would let a crafted layout shadow the real config,
+/// deploy descriptor or binary reference with an attacker's.
+fn index_layers(manifest: &ImageManifest) -> Result<BTreeMap<String, &Descriptor>> {
+    let mut index: BTreeMap<String, &Descriptor> = BTreeMap::new();
+    for layer in manifest.layers() {
+        let media_type = layer.media_type().to_string();
+        if index.insert(media_type.clone(), layer).is_some() {
+            return Err(PackageError::Layout {
+                reason: format!("manifest carries more than one '{media_type}' layer"),
+            });
+        }
+    }
+    Ok(index)
+}
+
+/// Read the package's ONE binary layer, enforcing exactly-one-of: a package
+/// carrying both an embedded bootstrap and a binary reference, or neither, is
+/// a malformed layout.
+///
+/// The "reference has a digest" check is scoped to the WIRE decode on purpose.
+/// [`BinaryRef::digest`] is `Option<ManifestDigest>` for wire tolerance, so a
+/// crafted layer can decode to `None` — that is the only place a missing
+/// digest can appear, and it is rejected here so the target environment is
+/// never handed an instruction to run an unpinned binary. The API type
+/// [`crate::oci::pack::BinaryMode::Referenced`]'s `digest` is a non-optional,
+/// already-validated [`ManifestDigest`] whose only constructors enforce
+/// `sha256:<64-hex>`, so an empty digest is unconstructible there and a
+/// second check on it would be dead code.
+fn read_binary_mode(
+    layout: &OciLayout,
+    by_media_type: &BTreeMap<String, &Descriptor>,
+) -> Result<UnpackedBinary> {
+    let bootstrap = by_media_type.get(MT_SERVER_BOOTSTRAP);
+    let binary_ref = by_media_type.get(MT_SERVER_BINARY_REF);
+
+    match (bootstrap, binary_ref) {
+        (Some(_), Some(_)) => Err(PackageError::Layout {
+            reason: "manifest carries BOTH an embedded bootstrap layer and a binary-ref layer \
+                 (exactly one is required)"
+                .to_string(),
+        }),
+        (None, None) => Err(missing_layer("bootstrap or binary-ref")),
+        (Some(descriptor), None) => {
+            // The bootstrap layer stays raw bytes — it is NEVER deserialized.
+            Ok(UnpackedBinary::Embedded(read_verified_blob(
+                layout, descriptor,
+            )?))
+        },
+        (None, Some(descriptor)) => {
+            let bytes = read_verified_blob(layout, descriptor)?;
+            let wire: BinaryRef = serde_json::from_slice(&bytes)?;
+            let digest = wire.digest.ok_or_else(|| PackageError::Layout {
+                reason: "binary-ref layer carries no digest".to_string(),
+            })?;
+            Ok(UnpackedBinary::Referenced {
+                digest,
+                media_type: wire.media_type,
+            })
+        },
+    }
+}
+
+/// Read a verbatim vendor-content layer back into a [`RestoredFile`], taking
+/// the original file name from the descriptor's `org.opencontainers.image.title`
+/// annotation. Returns `Ok(None)` when the layer is absent — both the config
+/// and the spec layer are optional.
+///
+/// A layer present without that annotation is a malformed layout: the file
+/// name is part of what was packed, and inventing a substitute would silently
+/// rename the author's file.
+fn read_named_file_layer(
+    layout: &OciLayout,
+    descriptor: Option<&&Descriptor>,
+    layer_name: &str,
+) -> Result<Option<RestoredFile>> {
+    let Some(descriptor) = descriptor else {
+        return Ok(None);
+    };
+    let bytes = read_verified_blob(layout, descriptor)?;
+    let file_name = descriptor
+        .annotations()
+        .as_ref()
+        .and_then(|a| a.get(ANNOTATION_TITLE))
+        .ok_or_else(|| PackageError::Layout {
+            reason: format!("the '{layer_name}' layer has no '{ANNOTATION_TITLE}' annotation"),
+        })?
+        .clone();
+    Ok(Some(RestoredFile { file_name, bytes }))
+}
+
+/// Read one required, digest-verified struct layer by media type and
+/// deserialize it.
+fn read_required_layer<T: serde::de::DeserializeOwned>(
+    layout: &OciLayout,
+    by_media_type: &BTreeMap<String, &Descriptor>,
+    media_type: &str,
+    layer_name: &str,
+) -> Result<T> {
+    let descriptor = by_media_type
+        .get(media_type)
+        .ok_or_else(|| missing_layer(layer_name))?;
+    let bytes = read_verified_blob(layout, descriptor)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Unpack a server package from `layout`, returning the typed struct, its
+/// binary (embedded bytes or a reference) and its optional verbatim config and
+/// spec files.
+///
+/// # Errors
+///
+/// Returns [`PackageError::Layout`] if the layout is malformed (duplicate
+/// media type, missing required layer, both-or-neither binary layers, a
+/// binary reference with no digest, a named-file layer with no title
+/// annotation), [`PackageError::DigestMismatch`] if any blob has been
+/// tampered with, or [`PackageError::Serialize`] if a verified layer fails to
+/// deserialize.
+///
+/// [`PackageError::DigestMismatch`]: crate::error::PackageError::DigestMismatch
+/// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
     let manifest = read_the_one_manifest(layout)?;
     verify_config_blob(layout, &manifest)?;
+    // Keyed by WHAT each layer is, never by where it sits: the config and spec
+    // layers are optional and the binary layer is one of two media types, so a
+    // positional read would be reading a different layer than it names.
+    let by_media_type = index_layers(&manifest)?;
 
-    let layers = manifest.layers();
-    let bootstrap_descriptor = layers.first().ok_or_else(|| missing_layer("bootstrap"))?;
-    let envelope_descriptor = layers.get(1).ok_or_else(|| missing_layer("envelope"))?;
-    let deploy_descriptor = layers
-        .get(2)
-        .ok_or_else(|| missing_layer("deploy-descriptor"))?;
-    let cedar_descriptor = layers
-        .get(3)
-        .ok_or_else(|| missing_layer("cedar-policy-set"))?;
-    let tools_descriptor = layers
-        .get(4)
-        .ok_or_else(|| missing_layer("tool-metadata"))?;
-    let config_slots_descriptor = layers.get(5).ok_or_else(|| missing_layer("config-slots"))?;
+    let binary = read_binary_mode(layout, &by_media_type)?;
 
-    // The bootstrap layer stays raw bytes — it is NEVER deserialized.
-    let bootstrap_bytes = read_verified_blob(layout, bootstrap_descriptor)?;
-
-    let envelope_bytes = read_verified_blob(layout, envelope_descriptor)?;
-    let envelope: ServerEnvelope = serde_json::from_slice(&envelope_bytes)?;
-
-    let deploy_bytes = read_verified_blob(layout, deploy_descriptor)?;
-    let deploy = serde_json::from_slice(&deploy_bytes)?;
-
-    let cedar_bytes = read_verified_blob(layout, cedar_descriptor)?;
-    let policies = serde_json::from_slice(&cedar_bytes)?;
-
-    let tools_bytes = read_verified_blob(layout, tools_descriptor)?;
-    let tools = serde_json::from_slice(&tools_bytes)?;
-
-    let config_slots_bytes = read_verified_blob(layout, config_slots_descriptor)?;
-    let config_slots = serde_json::from_slice(&config_slots_bytes)?;
+    let envelope: ServerEnvelope =
+        read_required_layer(layout, &by_media_type, MT_SERVER_ENVELOPE, "envelope")?;
 
     let package = ServerPackage {
         name: envelope.name,
         version: envelope.version,
         digest: envelope.digest,
-        binary_ref: envelope.binary_ref,
-        deploy,
-        policies,
-        tools,
-        config_slots,
+        deploy: read_required_layer(
+            layout,
+            &by_media_type,
+            MT_SERVER_DEPLOY_DESCRIPTOR,
+            "deploy-descriptor",
+        )?,
+        policies: read_required_layer(
+            layout,
+            &by_media_type,
+            MT_SERVER_CEDAR_POLICY_SET,
+            "cedar-policy-set",
+        )?,
+        tools: read_required_layer(
+            layout,
+            &by_media_type,
+            MT_SERVER_TOOL_METADATA,
+            "tool-metadata",
+        )?,
+        config_slots: read_required_layer(
+            layout,
+            &by_media_type,
+            MT_SERVER_CONFIG_SLOTS,
+            "config-slots",
+        )?,
     };
 
-    Ok((package, bootstrap_bytes))
+    let config = read_named_file_layer(layout, by_media_type.get(MT_SERVER_CONFIG), "config")?;
+    let spec = read_named_file_layer(
+        layout,
+        by_media_type.get(MT_SERVER_OPENAPI_SPEC),
+        "openapi-spec",
+    )?;
+
+    Ok(UnpackedServer {
+        package,
+        binary,
+        config,
+        spec,
+    })
 }
 
 /// Unpack any single-layer package (agent/team/workflow) from `layout`: verify
@@ -161,9 +354,9 @@ pub(crate) mod tests_support {
     use crate::digest::ManifestDigest;
     use crate::package::Provenance;
     use crate::package::{
-        AgentPackage, AssetsSection, AuthSection, AwsSection, BinaryRef, CedarPolicy,
-        CedarPolicySet, DeployDescriptor, HumanRole, ServerPackage, ServerSection, TargetSection,
-        TeamLimits, TeamMember, TeamPackage, TeamRole, ToolMetadata, WorkflowManifest,
+        AgentPackage, AssetsSection, AuthSection, AwsSection, CedarPolicy, CedarPolicySet,
+        DeployDescriptor, HumanRole, ServerPackage, ServerSection, TargetSection, TeamLimits,
+        TeamMember, TeamPackage, TeamRole, ToolMetadata, WorkflowManifest,
     };
     use crate::reference::{ComponentRef, ComponentType, PinnedRef};
     use crate::slot::{ConfigSlot, SlotType};
@@ -225,10 +418,6 @@ pub(crate) mod tests_support {
             name: "team-fs".to_string(),
             version: semver::Version::parse("1.0.0").unwrap(),
             digest: None,
-            binary_ref: BinaryRef {
-                digest: None,
-                media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
-            },
             deploy: minimal_deploy_descriptor(),
             policies: CedarPolicySet(vec![CedarPolicy {
                 id: "p1".to_string(),
@@ -366,7 +555,7 @@ mod tests {
         sample_agent_package, sample_server_package, sample_team_package, sample_workflow_manifest,
     };
     use super::*;
-    use crate::oci::pack::{pack_agent, pack_server, pack_team, pack_workflow};
+    use crate::oci::pack::{pack_agent, pack_server, pack_team, pack_workflow, BinaryMode};
 
     #[test]
     fn server_pack_then_unpack_round_trips_losslessly_including_bootstrap_bytes() {
@@ -374,11 +563,59 @@ mod tests {
         let layout = OciLayout::create(dir.path()).unwrap();
         let (package, bootstrap) = sample_server_package();
 
-        pack_server(&package, &bootstrap, &layout).unwrap();
-        let (unpacked, unpacked_bootstrap) = unpack_server(&layout).unwrap();
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            &layout,
+        )
+        .unwrap();
+        let unpacked = unpack_server(&layout).unwrap();
 
-        assert_eq!(unpacked, package);
-        assert_eq!(unpacked_bootstrap, bootstrap);
+        assert_eq!(unpacked.package, package);
+        assert_eq!(unpacked.binary, UnpackedBinary::Embedded(bootstrap));
+        assert_eq!(unpacked.config, None);
+        assert_eq!(unpacked.spec, None);
+    }
+
+    #[test]
+    fn a_duplicated_layer_media_type_is_rejected_rather_than_last_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let (package, bootstrap) = sample_server_package();
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            &layout,
+        )
+        .unwrap();
+
+        // Duplicate the envelope layer descriptor, simulating a crafted
+        // layout that tries to shadow a real layer with a second one.
+        let index = layout.read_index().unwrap();
+        let mut manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+        let mut layers = manifest.layers().clone();
+        let envelope = layers
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_SERVER_ENVELOPE)
+            .unwrap()
+            .clone();
+        layers.push(envelope);
+        manifest.set_layers(layers);
+        let bytes = crate::digest::canonicalize(&manifest).unwrap();
+        let new_descriptor = layout.write_manifest(&bytes).unwrap();
+        let new_index = oci_spec::image::ImageIndexBuilder::default()
+            .schema_version(oci_spec::image::SCHEMA_VERSION)
+            .manifests(vec![new_descriptor])
+            .build()
+            .unwrap();
+        layout.write_index(&new_index).unwrap();
+
+        let err = unpack_server(&layout).unwrap_err();
+        assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
     }
 
     #[test]
@@ -422,14 +659,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let layout = OciLayout::create(dir.path()).unwrap();
         let (package, bootstrap) = sample_server_package();
-        pack_server(&package, &bootstrap, &layout).unwrap();
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            &layout,
+        )
+        .unwrap();
 
         // Flip a single byte in the bootstrap blob's file on disk — the
         // file's name (content-addressed by the ORIGINAL digest) does not
         // change, only its contents.
         let index = layout.read_index().unwrap();
         let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
-        let bootstrap_descriptor = &manifest.layers()[0];
+        let bootstrap_descriptor = manifest
+            .layers()
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_SERVER_BOOTSTRAP)
+            .unwrap();
         let hex = bootstrap_descriptor.digest().digest();
         let blob_path = dir.path().join("blobs").join("sha256").join(hex);
         let mut bytes = std::fs::read(&blob_path).unwrap();

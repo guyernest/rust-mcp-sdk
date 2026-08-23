@@ -22,12 +22,18 @@
 //!   scaffold's OWN `Cargo.toml` and asserts the `pmcp-agent` dep stays on the
 //!   generated major.minor line, DERIVED from `PMCP_AGENT_VERSION`.
 //!
-//! Two-level pin tripwire (D-05, Research Open-Q1 → ship both levels):
+//! Pin tripwires (D-05, Research Open-Q1 → ship every level):
 //! 1. INTERNAL drift-guard — [`PMCP_AGENT_VERSION`] must equal the workspace
 //!    `crates/pmcp-agent` `[package] version` (unit test below), so the emitted
 //!    pin cannot silently drift from the released crate.
 //! 2. IN-SCAFFOLD tripwire — the emitted `tests/pin.rs` asserts the generated
 //!    project's own pin against its major.minor line.
+//! 3. INTERNAL drift-guard for [`PMCP_PACKAGE_VERSION_REQ`] against the
+//!    workspace `crates/pmcp-package` major.minor line (Phase 120). Level 1
+//!    existed for `pmcp-agent` but nothing covered `pmcp-package`, so the
+//!    emitted requirement sat on the superseded line through a version bump —
+//!    invisible to `cargo build`, since the workspace resolves via its own
+//!    manifests and never compiles what this template writes.
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -41,6 +47,18 @@ use pmcp_package::{AgentPackage, ConfigSlot, SlotType};
 /// hardcoded pin cannot silently drift from the released crate (D-05) —
 /// mirroring the `workbook_server::PMCP_VERSION` drift guard.
 const PMCP_AGENT_VERSION: &str = "0.2.0";
+
+/// The `pmcp-package` version REQUIREMENT the emitted `Cargo.toml` declares —
+/// a caret major.minor line, not a full version.
+///
+/// This is a THIRD version emitter, invisible to `cargo build`: the workspace
+/// resolves green while every project scaffolded by `cargo pmcp agent new`
+/// requests whatever this string says. Phase 120 found it still on `"0.1"`
+/// after `pmcp-package` had gone 0.2.0, which would have shipped a scaffold
+/// that fails to compile against the published crate. Naming it here means the
+/// emitter below and its assertion test read the SAME constant, so the next
+/// bump is one edit rather than two that can drift apart.
+const PMCP_PACKAGE_VERSION_REQ: &str = "0.2";
 
 /// Emit the files of a single runnable agent crate into `dir`.
 pub fn generate(dir: &Path, name: &str) -> Result<()> {
@@ -70,7 +88,7 @@ edition = "2021"
 
 [dependencies]
 pmcp-agent = {{ version = "{PMCP_AGENT_VERSION}", features = ["openai-compat"] }}
-pmcp-package = "0.1"
+pmcp-package = "{PMCP_PACKAGE_VERSION_REQ}"
 tokio = {{ version = "1", features = ["full"] }}
 serde_json = "1"
 anyhow = "1"
@@ -264,6 +282,44 @@ mod tests {
     /// The workspace `crates/pmcp-agent/Cargo.toml` (for the version-drift guard).
     const AGENT_CARGO_TOML: &str = include_str!("../../../crates/pmcp-agent/Cargo.toml");
 
+    /// The workspace `crates/pmcp-package/Cargo.toml` (for the version-drift
+    /// guard on the scaffold's `pmcp-package` requirement).
+    const PACKAGE_CARGO_TOML: &str = include_str!("../../../crates/pmcp-package/Cargo.toml");
+
+    /// Read a crate's `[package] version` out of its manifest text.
+    fn package_version(manifest: &str, crate_name: &str) -> String {
+        let parsed: toml::Value = toml::from_str(manifest)
+            .unwrap_or_else(|e| panic!("parse {crate_name} Cargo.toml: {e}"));
+        parsed
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("{crate_name} Cargo.toml has [package] version"))
+            .to_string()
+    }
+
+    #[test]
+    fn emitted_package_requirement_matches_workspace_major_minor_line() {
+        // Phase 120: the scaffold's `pmcp-package` requirement is a THIRD
+        // version emitter that `cargo build` cannot see — the workspace
+        // resolves green while every scaffolded project requests whatever this
+        // constant says. It sat on "0.1" after pmcp-package went 0.2.0, which
+        // would have shipped a scaffold that fails to compile against the
+        // published crate. This guard is what makes that a red test rather
+        // than a discovery four phases later.
+        let version = package_version(PACKAGE_CARGO_TOML, "pmcp-package");
+        let mut parts = version.split('.');
+        let major = parts.next().unwrap_or("0");
+        let minor = parts.next().unwrap_or("0");
+        let expected = format!("{major}.{minor}");
+        assert_eq!(
+            PMCP_PACKAGE_VERSION_REQ, expected,
+            "the scaffold's pmcp-package requirement `{PMCP_PACKAGE_VERSION_REQ}` drifted from \
+             the workspace crate version `{version}` — bump PMCP_PACKAGE_VERSION_REQ in \
+             templates/agent.rs"
+        );
+    }
+
     #[test]
     fn emitted_agent_version_matches_workspace_pin() {
         // D-05: the hardcoded PMCP_AGENT_VERSION must not drift from the workspace
@@ -335,10 +391,14 @@ mod tests {
         let agent_dep = format!(
             r#"pmcp-agent = {{ version = "{PMCP_AGENT_VERSION}", features = ["openai-compat"] }}"#
         );
+        // Built from PMCP_PACKAGE_VERSION_REQ for the same reason: a literal
+        // here is a second copy of the pin that can silently drift from the
+        // emitter it is meant to be checking.
+        let package_dep = format!(r#"pmcp-package = "{PMCP_PACKAGE_VERSION_REQ}""#);
 
         for token in [
             agent_dep.as_str(),
-            r#"pmcp-package = "0.1""#,
+            package_dep.as_str(),
             r#"tokio = { version = "1", features = ["full"] }"#,
             "serde_json =",
             "anyhow =",

@@ -116,9 +116,9 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
             }
         },
         PackageKind::Server => {
-            let (pkg, _bootstrap) = unpack_server(layout).context("unpack server package")?;
+            let unpacked = unpack_server(layout).context("unpack server package")?;
             if output {
-                render_server(&pkg);
+                render_server(&unpacked.package);
             }
         },
         PackageKind::Workflow => {

@@ -19,8 +19,13 @@ pub mod pack;
 pub mod unpack;
 
 pub use layout::OciLayout;
-pub use pack::{pack_agent, pack_server, pack_team, pack_workflow};
-pub use unpack::{unpack_agent, unpack_server, unpack_team, unpack_workflow};
+pub use pack::{
+    pack_agent, pack_server, pack_team, pack_workflow, BinaryMode, ConfigFile, OpenApiSpecFile,
+};
+pub use unpack::{
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, UnpackedBinary,
+    UnpackedServer,
+};
 
 use crate::oci::media_types::{
     ARTIFACT_TYPE_AGENT, ARTIFACT_TYPE_TEAM, ARTIFACT_TYPE_WORKFLOW, MT_AGENT_CONFIG,
