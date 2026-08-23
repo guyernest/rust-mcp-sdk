@@ -6,6 +6,8 @@
 //! the registry push/pull can consume these exact `oci_spec::image`
 //! types with zero translation.
 //!
+//! - [`config_validation`] — pack-time validation of a config server's
+//!   `[[config_slots]]` declaration block against the package's slot list.
 //! - [`media_types`] — vendor media-type constants per layer + the standard
 //!   OCI empty-config blob constants.
 //! - [`layout`] — [`OciLayout`], the local Image Layout directory
@@ -13,11 +15,15 @@
 //! - [`pack`] — `pack_server`/`pack_agent`/`pack_team`/`pack_workflow`.
 //! - [`unpack`] — `unpack_server`/`unpack_agent`/`unpack_team`/`unpack_workflow`.
 
+pub mod config_validation;
 pub mod layout;
 pub mod media_types;
 pub mod pack;
 pub mod unpack;
 
+pub use config_validation::{
+    parse_declared_config_slots, validate_config_slot_agreement, DeclaredConfigSlot,
+};
 pub use layout::OciLayout;
 pub use pack::{
     pack_agent, pack_server, pack_team, pack_workflow, BinaryMode, ConfigFile, OpenApiSpecFile,

@@ -37,10 +37,18 @@ const CONFIG_TOML: &[u8] = br#"# london-tube MCP server
 name    = "london-tube"
 version = "1.0.0"
 
+[[config_slots]]
+key = "backend.api_key"
+kind = "secret"
+name = "TFL_API_KEY"
+
 [backend]
 kind = "openapi"
 # a trailing comment, and irregular   spacing
 base_url = "https://api.tfl.gov.uk"
+# A slot-declared credential key: it holds an environment REFERENCE, never a
+# resolved literal, which is exactly what `pack_server` now enforces.
+api_key = "${TFL_API_KEY}"
 "#;
 
 const CONFIG_FILE_NAME: &str = "london-tube.toml";
@@ -107,9 +115,13 @@ fn config_server_package() -> ServerPackage {
             description: "Current status of every tube line".to_string(),
             annotations: Some(serde_json::json!({ "read_only_hint": true })),
         }],
+        // Agrees exactly with CONFIG_TOML's single `[[config_slots]]` entry —
+        // `pack_server` compares the two and refuses a package that claims a
+        // slot its shipped config does not declare (or vice versa).
         config_slots: vec![ConfigSlot::new(SlotType::Secret {
             name: "TFL_API_KEY".to_string(),
-        })],
+        })
+        .with_config_key("backend.api_key")],
     }
 }
 
@@ -723,4 +735,211 @@ proptest! {
 
         prop_assert_eq!(unpack_server(&layout).unwrap(), baseline);
     }
+}
+
+// =====================================================================
+// Plan 120-05 Task 1 — the config's `[[config_slots]]` block is the
+// SOURCE OF TRUTH that `pack_server` reads and enforces (D-01).
+//
+// These exercise the agreement gate through the REAL public API path
+// (`pack_server`), not through a unit call — that path is what D-01's
+// "pack reads them" claims, and before this it was true of no code.
+// =====================================================================
+
+/// Pack `package` with `config_bytes` into a fresh layout, returning the result.
+fn pack_with_config(
+    package: &ServerPackage,
+    config_bytes: &'static [u8],
+    dir: &std::path::Path,
+) -> Result<ManifestDigest> {
+    let layout = OciLayout::create(dir).unwrap();
+    pack_server(
+        package,
+        referenced_binary(),
+        Some(ConfigFile {
+            file_name: CONFIG_FILE_NAME,
+            bytes: config_bytes,
+        }),
+        None,
+        &layout,
+    )
+}
+
+fn config_slot_violation(err: PackageError) -> (String, String) {
+    match err {
+        PackageError::ConfigSlotViolation { key, reason } => (key, reason),
+        other => panic!("expected ConfigSlotViolation, got: {other}"),
+    }
+}
+
+/// Test 3: agreement holds — the fixture package and its config describe the
+/// same slot set, so the pack succeeds through the real API.
+#[test]
+fn pack_server_accepts_a_package_whose_slots_agree_with_its_shipped_config() {
+    let dir = tempfile::tempdir().unwrap();
+    pack_with_config(&config_server_package(), CONFIG_TOML, dir.path())
+        .expect("agreeing declarations and package slots must pack");
+}
+
+/// Test 4: a declaration in the TOML with no matching package slot is refused,
+/// naming the key. This is the "the config declares a slot the package forgot"
+/// direction — an environment-specific value would otherwise be baked while the
+/// package still looked slot-complete.
+#[test]
+fn pack_server_refuses_a_declaration_the_package_does_not_carry() {
+    const EXTRA_DECLARATION: &[u8] = br#"name = "london-tube"
+
+[[config_slots]]
+key = "backend.api_key"
+kind = "secret"
+name = "TFL_API_KEY"
+
+[[config_slots]]
+key = "backend.base_url"
+kind = "endpoint"
+name = "TFL_BASE_URL"
+tested_value = "https://api.tfl.gov.uk"
+
+[backend]
+api_key = "${TFL_API_KEY}"
+base_url = "${TFL_BASE_URL}"
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&config_server_package(), EXTRA_DECLARATION, dir.path())
+        .expect_err("a declared slot the package omits must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.base_url");
+    assert!(reason.contains("absent from the package"), "was: {reason}");
+}
+
+/// Test 5: the opposite direction — a package inventing a slot its shipped
+/// config never declares. The cross-AI review called this one out specifically.
+#[test]
+fn pack_server_refuses_a_package_slot_the_shipped_config_never_declares() {
+    let mut package = config_server_package();
+    package.config_slots.push(
+        ConfigSlot::new(SlotType::Endpoint {
+            name: "TFL_BASE_URL".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        })
+        .with_config_key("backend.base_url"),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&package, CONFIG_TOML, dir.path())
+        .expect_err("an invented package slot must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.base_url");
+    assert!(reason.contains("absent from the config"), "was: {reason}");
+}
+
+/// Test 6: same key on both sides, different KIND.
+#[test]
+fn pack_server_refuses_a_kind_disagreement_naming_both_kinds() {
+    let mut package = config_server_package();
+    package.config_slots = vec![ConfigSlot::new(SlotType::Endpoint {
+        name: "TFL_API_KEY".to_string(),
+        tested_value: "https://api.tfl.gov.uk".to_string(),
+    })
+    .with_config_key("backend.api_key")];
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&package, CONFIG_TOML, dir.path())
+        .expect_err("a kind disagreement must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.api_key");
+    assert!(reason.contains("secret"), "was: {reason}");
+    assert!(reason.contains("endpoint"), "was: {reason}");
+}
+
+/// Test 7: same key and kind, different `name`.
+#[test]
+fn pack_server_refuses_a_name_disagreement_without_echoing_either_name() {
+    let mut package = config_server_package();
+    package.config_slots = vec![ConfigSlot::new(SlotType::Secret {
+        name: "SENTINEL_DISAGREEING_NAME".to_string(),
+    })
+    .with_config_key("backend.api_key")];
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&package, CONFIG_TOML, dir.path())
+        .expect_err("a name disagreement must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.api_key");
+    assert!(reason.contains("`name`"), "was: {reason}");
+    assert!(
+        !reason.contains("SENTINEL_DISAGREEING_NAME"),
+        "the error names the FIELD, never the values; was: {reason}"
+    );
+}
+
+/// Test 7b: same key, kind and name, different `tested_value`.
+#[test]
+fn pack_server_refuses_a_tested_value_disagreement_without_echoing_either_value() {
+    const ENDPOINT_ONLY: &[u8] = br#"[[config_slots]]
+key = "backend.base_url"
+kind = "endpoint"
+name = "TFL_BASE_URL"
+tested_value = "https://api.tfl.gov.uk"
+
+[backend]
+base_url = "${TFL_BASE_URL}"
+"#;
+    let mut package = config_server_package();
+    package.config_slots = vec![ConfigSlot::new(SlotType::Endpoint {
+        name: "TFL_BASE_URL".to_string(),
+        tested_value: "https://sentinel.invalid/untested".to_string(),
+    })
+    .with_config_key("backend.base_url")];
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&package, ENDPOINT_ONLY, dir.path())
+        .expect_err("a tested_value disagreement must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.base_url");
+    assert!(reason.contains("`tested_value`"), "was: {reason}");
+    assert!(
+        !reason.contains("sentinel.invalid"),
+        "the error names the FIELD, never the values; was: {reason}"
+    );
+}
+
+/// Test 8: with `config: None` no parsing and no agreement check happen at all.
+/// The pre-existing embedded shape — a package carrying an undeclared `Secret`
+/// slot and no config document — still packs exactly as it always did. This is
+/// the regression that would otherwise break every earlier server-package test.
+#[test]
+fn an_embedded_package_with_an_undeclared_slot_still_packs_because_no_config_is_present() {
+    let mut package = config_server_package();
+    // No config_key at all, and nothing declares it — legal, because there is
+    // no config document for a declaration to live in.
+    package.config_slots = vec![ConfigSlot::new(SlotType::Secret {
+        name: "TFL_API_KEY".to_string(),
+    })];
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    let bootstrap = b"fake-bootstrap-bytes".to_vec();
+    pack_server(
+        &package,
+        BinaryMode::Embedded(&bootstrap),
+        None,
+        None,
+        &layout,
+    )
+    .expect("a config-less package must skip config-slot validation entirely");
+    assert_eq!(unpack_server(&layout).unwrap().package, package);
+}
+
+/// Test 9 (parse-side): an unknown `kind` in the shipped config is refused by
+/// `pack_server` — `pmcp-package` re-validates the vocabulary rather than
+/// trusting that the bytes came through the toolkit's `ServerConfig`.
+#[test]
+fn pack_server_refuses_a_config_declaring_an_unknown_slot_kind() {
+    const BAD_KIND: &[u8] = br#"[[config_slots]]
+key = "backend.api_key"
+kind = "endpont"
+name = "TFL_API_KEY"
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(&config_server_package(), BAD_KIND, dir.path())
+        .expect_err("an unknown kind must be refused at pack time");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.api_key");
+    assert!(reason.contains("auth_mode"), "was: {reason}");
 }

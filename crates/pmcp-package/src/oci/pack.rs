@@ -21,6 +21,7 @@
 
 use crate::digest::{canonicalize, ManifestDigest};
 use crate::error::{PackageError, Result};
+use crate::oci::config_validation::{parse_declared_config_slots, validate_config_slot_agreement};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
     vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG,
@@ -223,7 +224,15 @@ fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Des
 /// if any blob/index write fails. Returns [`PackageError::Serialize`] if a
 /// layer fails to canonicalize.
 ///
+/// When `config` is `Some`, returns [`PackageError::ConfigSlotViolation`]
+/// BEFORE writing anything if the config's `[[config_slots]]` declaration block
+/// disagrees with `package.config_slots` in either direction (D-01: the shipped
+/// config is the source of truth), or if a slot-declared value key holds a
+/// resolved literal rather than a `${VAR}` / `env:VAR` reference (D-04). See
+/// [`crate::oci::config_validation`].
+///
 /// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+/// [`PackageError::ConfigSlotViolation`]: crate::error::PackageError::ConfigSlotViolation
 ///
 /// # Examples
 ///
@@ -296,6 +305,19 @@ pub fn pack_server(
     spec: Option<OpenApiSpecFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
+    // Pre-write gates. Both run BEFORE the first `write_blob` below, so a
+    // rejected pack adds neither a blob nor an index entry — which is what
+    // makes "a resolved secret never travels in a layer" a property of the
+    // filesystem and not merely of the return value.
+    //
+    // They run only when a config file is present: an embedded, pre-built
+    // package has no config document to read declarations out of, and every
+    // pre-0.2 server package is exactly that shape.
+    if let Some(config) = config {
+        let declared = parse_declared_config_slots(config.bytes)?;
+        validate_config_slot_agreement(&declared, &package.config_slots)?;
+    }
+
     let envelope = ServerEnvelope {
         name: package.name.clone(),
         version: package.version.clone(),
