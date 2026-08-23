@@ -18,6 +18,9 @@
 //!    `app_key=dummy` query param (proving the api_key query-param auth AND that
 //!    `${TFL_APP_KEY}` resolved to `dummy`, never the literal `${...}`), then
 //!    replays `london-tube-scenarios.yaml` through `mcp-tester`, gating per-step.
+//!    The fixture is copied VERBATIM and pointed at wiremock through the
+//!    `${TFL_BASE_URL}` endpoint slot (PKG-03) — the same mechanism a real
+//!    deployment uses — rather than by string-replacing a baked `base_url`.
 //! 3. `parity_live_tfl` (`#[ignore]`) — the same scenarios against the REAL
 //!    `https://api.tfl.gov.uk`, double-gated on `PMCP_OPENAPI_LIVE_TEST=1` +
 //!    a real `TFL_APP_KEY`.
@@ -53,6 +56,73 @@ fn examples_dir() -> std::path::PathBuf {
 /// resource URIs + the `start_code_mode` prompt. Asserting it in one place keeps
 /// the two configs from drifting apart on the showcase surface. `label` names the
 /// config under test so a failure points at the right file.
+/// PKG-03: BOTH london-tube copies declare exactly the same three config slots
+/// — the endpoint, the api-key credential and the auth mode — and hold the
+/// `${TFL_BASE_URL}` endpoint placeholder rather than a baked literal.
+///
+/// Asserting it in one helper is what keeps the fixture and the pointable
+/// example from drifting apart: a future edit that silently drops the block from
+/// either copy, or re-bakes the endpoint, fails here rather than at pack time.
+fn assert_london_tube_config_slots(cfg: &ServerConfig, config_text: &str, label: &str) {
+    use pmcp_server_toolkit::config::ConfigSlotKind;
+
+    assert_eq!(
+        cfg.config_slots.len(),
+        3,
+        "{label} declares exactly three PKG-03 config slots: {:?}",
+        cfg.config_slots
+    );
+
+    let endpoint = cfg
+        .config_slots
+        .iter()
+        .find(|s| s.key == "backend.base_url")
+        .unwrap_or_else(|| panic!("{label} declares the backend.base_url endpoint slot"));
+    assert_eq!(endpoint.kind, ConfigSlotKind::Endpoint);
+    assert_eq!(endpoint.name, "TFL_BASE_URL");
+    assert_eq!(
+        endpoint.tested_value.as_deref(),
+        Some("https://api.tfl.gov.uk"),
+        "{label} records the tested endpoint as DATA, not as a baked base_url"
+    );
+
+    let secret = cfg
+        .config_slots
+        .iter()
+        .find(|s| s.key == "backend.auth.query_params.app_key")
+        .unwrap_or_else(|| panic!("{label} declares the app_key credential slot"));
+    assert_eq!(secret.kind, ConfigSlotKind::Secret);
+    assert_eq!(secret.name, "TFL_APP_KEY");
+    assert!(
+        secret.tested_value.is_none(),
+        "{label}'s identity-bearing slot structurally carries no tested_value"
+    );
+
+    let auth_mode = cfg
+        .config_slots
+        .iter()
+        .find(|s| s.key == "backend.auth.type")
+        .unwrap_or_else(|| panic!("{label} declares the auth-mode slot"));
+    assert_eq!(auth_mode.kind, ConfigSlotKind::AuthMode);
+    assert_eq!(auth_mode.tested_value.as_deref(), Some("api_key"));
+
+    // D-04: the endpoint travels as a placeholder, so the package digest is
+    // environment-independent. The resolved literal must NOT sit on a
+    // `base_url` assignment (it survives only as the slot's tested_value).
+    let backend = cfg
+        .backend
+        .as_ref()
+        .unwrap_or_else(|| panic!("{label} has a [backend] section"));
+    assert_eq!(
+        backend.base_url, "${TFL_BASE_URL}",
+        "{label} holds the endpoint PLACEHOLDER, not a baked literal"
+    );
+    assert!(
+        !config_text.contains(r#"base_url = "https://api.tfl.gov.uk""#),
+        "{label} must not re-bake the endpoint onto a base_url assignment"
+    );
+}
+
 fn assert_london_tube_code_mode_surface(cfg: &ServerConfig, label: &str) {
     let resource_uris: Vec<&str> = cfg.resources.iter().map(|r| r.uri.as_str()).collect();
     for uri in [
@@ -92,6 +162,9 @@ fn pointable_example_config_parses_and_validates() {
         config_text.contains("${TFL_APP_KEY}"),
         "pointable example keeps the ${{TFL_APP_KEY}} placeholder (no real key)"
     );
+    // PKG-03: the same three declared slots + the ${TFL_BASE_URL} endpoint
+    // placeholder as the fixture — the two copies move together.
+    assert_london_tube_config_slots(&cfg, &config_text, "pointable example");
 }
 
 /// Fixture-validity (Task 1): the vendored config + spec parse, and the expected
@@ -121,6 +194,10 @@ fn london_tube_fixture() {
     // (1a/1b) The enriched showcase ships all three Code Mode context resources
     // and the start_code_mode prompt (shared surface — see helper).
     assert_london_tube_code_mode_surface(&cfg, "enriched fixture");
+
+    // (1a') PKG-03: the three declared config slots + the ${TFL_BASE_URL}
+    // endpoint placeholder. A future edit that drops the block fails HERE.
+    assert_london_tube_config_slots(&cfg, &config_text, "enriched fixture");
 
     // (1c) cost_hint VALUE check: get-tube-status parses to the allowed "low" value
     // (not a mere presence check — proves the cost_hint enum string parsed).
@@ -210,20 +287,6 @@ async fn mount_london_tube(server: &MockServer) {
         .await;
 }
 
-/// Build a temp `london-tube.toml` from the vendored fixture with its
-/// `[backend] base_url` overridden to point at the wiremock server. String
-/// replacement keeps the rest of the fixture (auth, tools, code_mode) byte-identical.
-fn temp_config_pointing_at(backend_url: &str) -> String {
-    const REFERENCE_BASE_URL: &str = r#"base_url = "https://api.tfl.gov.uk""#;
-    let reference = std::fs::read_to_string(fixtures_dir().join("london-tube.toml"))
-        .expect("read london-tube.toml");
-    assert!(
-        reference.contains(REFERENCE_BASE_URL),
-        "london-tube.toml must contain the base_url line to override"
-    );
-    reference.replace(REFERENCE_BASE_URL, &format!("base_url = \"{backend_url}\""))
-}
-
 /// OAPI-08 / D-04 — the binding parity assertion, OFFLINE via wiremock.
 ///
 /// Drives the REAL binary pipeline ([`run_serving`]) against a wiremock backend
@@ -242,11 +305,18 @@ async fn london_tube_parity_through_real_binary_path() {
     let backend = MockServer::start().await;
     mount_london_tube(&backend).await;
 
-    // (2) Temp config: the vendored london-tube.toml with base_url → wiremock.
+    // (2) Point the fixture at wiremock through the ENDPOINT SLOT (PKG-03), not
+    // through string surgery over a baked literal. `base_url` is
+    // `${TFL_BASE_URL}` in the committed fixture, so the config is copied
+    // VERBATIM and the environment supplies the endpoint — exactly the
+    // mechanism a real deployment uses. Both variables resolve at dispatch
+    // time, so both must be set before `run_serving` assembles the server.
+    std::env::set_var("TFL_BASE_URL", backend.uri());
+
     let tmp = tempfile::tempdir().expect("create tempdir");
     let config_path = tmp.path().join("london-tube.toml");
-    std::fs::write(&config_path, temp_config_pointing_at(&backend.uri()))
-        .expect("write temp london-tube.toml");
+    std::fs::copy(fixtures_dir().join("london-tube.toml"), &config_path)
+        .expect("copy london-tube.toml");
 
     // (3) The REAL binary path: programmatic Args → run_serving (NO --spec; the
     // reference instance ships none — D-03 curated path). Ephemeral loopback port.
@@ -378,7 +448,12 @@ async fn parity_live_tfl() {
         return;
     }
 
-    // Use the vendored fixture VERBATIM — base_url stays https://api.tfl.gov.uk.
+    // Use the vendored fixture VERBATIM. Its `base_url` is the
+    // `${TFL_BASE_URL}` endpoint slot (PKG-03), so the LIVE path supplies the
+    // real TfL endpoint through the environment — the same mechanism the
+    // offline replay uses to supply wiremock's.
+    std::env::set_var("TFL_BASE_URL", "https://api.tfl.gov.uk");
+
     let tmp = tempfile::tempdir().expect("create tempdir");
     let config_path = tmp.path().join("london-tube.toml");
     std::fs::copy(fixtures_dir().join("london-tube.toml"), &config_path)
