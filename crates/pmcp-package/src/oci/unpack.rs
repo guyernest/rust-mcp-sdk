@@ -245,6 +245,18 @@ fn read_required_layer<T: serde::de::DeserializeOwned>(
 /// binary (embedded bytes or a reference) and its optional verbatim config and
 /// spec files.
 ///
+/// # `spec: None` means the package carried no spec
+///
+/// The spec layer is OPTIONAL. A `None` here is not a decoding default and not
+/// a lossy read: it means the manifest's media-type index holds no
+/// [`MT_SERVER_OPENAPI_SPEC`] entry, i.e. the author packed a curated-only
+/// server — the packaging mirror of `pmcp-openapi-server`'s
+/// `--spec: Option<PathBuf>`. There is no absence marker to distinguish
+/// "no spec" from "spec dropped" (D-14) because `pack_server` never drops a
+/// supplied spec: `Some` in, layer written; `None` in, no layer.
+///
+/// [`MT_SERVER_OPENAPI_SPEC`]: crate::oci::media_types::MT_SERVER_OPENAPI_SPEC
+///
 /// # Errors
 ///
 /// Returns [`PackageError::Layout`] if the layout is malformed (duplicate

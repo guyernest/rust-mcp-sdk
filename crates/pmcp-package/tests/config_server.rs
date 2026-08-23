@@ -13,9 +13,11 @@
 //! API an external consumer has.
 
 use pmcp_package::digest::ManifestDigest;
-use pmcp_package::oci::media_types::{MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG};
+use pmcp_package::oci::media_types::{
+    MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_OPENAPI_SPEC,
+};
 use pmcp_package::oci::{
-    pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, UnpackedBinary,
+    pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, UnpackedBinary,
 };
 use pmcp_package::package::{
     AssetsSection, AuthSection, AwsSection, CedarPolicySet, DeployDescriptor, ObservabilitySection,
@@ -365,5 +367,191 @@ fn a_binary_ref_layer_with_no_digest_is_rejected_at_unpack() {
     assert!(
         matches!(err, pmcp_package::PackageError::Layout { .. }),
         "an unpinned binary reference must be a Layout error, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// PKG-01: the OPTIONAL OpenAPI spec layer (D-14, D-15, D-16)
+// ---------------------------------------------------------------------
+
+/// The author's OpenAPI document, verbatim. Deliberately YAML with comments
+/// and irregular spacing: if pack ever parsed and re-emitted the spec, this
+/// content would not survive byte-for-byte.
+const SPEC_YAML: &[u8] = br#"# london-tube OpenAPI contract
+openapi: 3.1.0
+info:
+  title:   London Tube API
+  version: "1.0.0"
+paths: {}
+"#;
+
+const SPEC_FILE_NAME: &str = "london-tube-api.yaml";
+
+fn spec_file() -> OpenApiSpecFile<'static> {
+    OpenApiSpecFile {
+        file_name: SPEC_FILE_NAME,
+        bytes: SPEC_YAML,
+    }
+}
+
+fn layer_media_types(layout: &OciLayout) -> Vec<String> {
+    let index = layout.read_index().unwrap();
+    let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+    manifest
+        .layers()
+        .iter()
+        .map(|l| l.media_type().to_string())
+        .collect()
+}
+
+#[test]
+fn a_packed_spec_restores_its_bytes_verbatim_under_its_original_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &layout,
+    )
+    .unwrap();
+
+    let unpacked = unpack_server(&layout).unwrap();
+    let spec = unpacked
+        .spec
+        .expect("a package packed WITH a spec must unpack WITH a spec");
+
+    assert_eq!(
+        spec.bytes, SPEC_YAML,
+        "spec bytes must be byte-identical to what the author supplied — pack must never parse, \
+         reformat or re-emit them"
+    );
+    assert_eq!(
+        spec.file_name, SPEC_FILE_NAME,
+        "the author's original spec file name must survive the round trip"
+    );
+}
+
+#[test]
+fn a_package_packed_without_a_spec_carries_no_spec_layer_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        None,
+        &layout,
+    )
+    .unwrap();
+
+    let media_types = layer_media_types(&layout);
+    assert!(
+        !media_types.iter().any(|m| m == MT_SERVER_OPENAPI_SPEC),
+        "absence of a spec is the absence of the layer — never an absence marker: {media_types:?}"
+    );
+
+    let unpacked = unpack_server(&layout).unwrap();
+    assert_eq!(
+        unpacked.spec, None,
+        "a curated-only server (pmcp-openapi-server's `--spec: Option<PathBuf>`) must pack and \
+         unpack cleanly with no spec"
+    );
+}
+
+#[test]
+fn a_json_spec_round_trips_under_exactly_the_same_media_type_as_a_yaml_one() {
+    let json_spec = OpenApiSpecFile {
+        file_name: "api.json",
+        bytes: b"{}",
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(json_spec),
+        &layout,
+    )
+    .unwrap();
+
+    let unpacked = unpack_server(&layout).unwrap();
+    let spec = unpacked.spec.expect("the JSON spec layer must be present");
+    assert_eq!(spec.bytes, b"{}", "JSON spec bytes must survive verbatim");
+    assert_eq!(spec.file_name, "api.json");
+
+    let json_media_types = layer_media_types(&layout);
+    assert!(
+        json_media_types.iter().any(|m| m == MT_SERVER_OPENAPI_SPEC),
+        "a JSON spec uses the SAME media type as a YAML one — the format is evident from the \
+         file-name annotation, not from a second media type: {json_media_types:?}"
+    );
+
+    let yaml_dir = tempfile::tempdir().unwrap();
+    let yaml_layout = OciLayout::create(yaml_dir.path()).unwrap();
+    pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(config_file()),
+        Some(spec_file()),
+        &yaml_layout,
+    )
+    .unwrap();
+    let yaml_media_types = layer_media_types(&yaml_layout);
+
+    assert_eq!(
+        json_media_types
+            .iter()
+            .filter(|m| *m == MT_SERVER_OPENAPI_SPEC)
+            .count(),
+        yaml_media_types
+            .iter()
+            .filter(|m| *m == MT_SERVER_OPENAPI_SPEC)
+            .count(),
+        "one spec media type covers both formats"
+    );
+}
+
+#[test]
+fn renaming_only_the_spec_file_changes_the_manifest_digest() {
+    let package = config_server_package();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let layout_a = OciLayout::create(dir_a.path()).unwrap();
+    let digest_a = pack_server(
+        &package,
+        referenced_binary(),
+        Some(config_file()),
+        Some(OpenApiSpecFile {
+            file_name: "london-tube-api.yaml",
+            bytes: SPEC_YAML,
+        }),
+        &layout_a,
+    )
+    .unwrap();
+
+    let dir_b = tempfile::tempdir().unwrap();
+    let layout_b = OciLayout::create(dir_b.path()).unwrap();
+    let digest_b = pack_server(
+        &package,
+        referenced_binary(),
+        Some(config_file()),
+        Some(OpenApiSpecFile {
+            file_name: "renamed-api.yaml",
+            bytes: SPEC_YAML,
+        }),
+        &layout_b,
+    )
+    .unwrap();
+
+    assert_ne!(
+        digest_a, digest_b,
+        "the file-name annotation lives on a LAYER descriptor, which is inside the manifest that \
+         gets hashed (D-15) — renaming the spec changes the package's identity"
     );
 }

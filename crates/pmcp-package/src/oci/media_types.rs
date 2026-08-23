@@ -23,7 +23,12 @@
 //!   server, its spec file ([`MT_SERVER_OPENAPI_SPEC`]). Both carry raw
 //!   author bytes (never re-derived from a parsed struct) and record the
 //!   original file name in their descriptor's
-//!   `org.opencontainers.image.title` annotation.
+//!   `org.opencontainers.image.title` annotation. Either may be absent, and
+//!   absence is exactly the layer NOT being in the manifest — there is no
+//!   absence marker (D-14). An absent [`MT_SERVER_OPENAPI_SPEC`] layer is the
+//!   author's declaration of a curated-only server, mirroring
+//!   `pmcp-openapi-server`'s `--spec: Option<PathBuf>`, never a silent drop of
+//!   a spec that was supplied.
 //! - Layers are located at unpack time by MEDIA TYPE, never by position — the
 //!   optional layers make any positional contract false.
 //! - `AgentPackage`/`TeamPackage`/`WorkflowManifest` each pack as a SINGLE
