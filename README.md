@@ -61,7 +61,11 @@ cargo install pmcp-openapi-server
 # Curated configs ship with the crate — e.g. a London Tube (api_key) showcase and
 # a Microsoft-Graph / Excel "Contoso" (oauth_passthrough) example. These talk to a
 # live backend, so supply any required credential per the example's comments.
-pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
+#
+# `base_url` is a SLOT, not a baked literal, so the endpoint comes from the
+# environment too — the same package moves between environments unchanged.
+TFL_BASE_URL=https://api.tfl.gov.uk TFL_APP_KEY=<your-key> \
+  pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
 ```
 
 **Excel workbook — a governed spreadsheet, served as one MCP tool per output table** (no `config.toml`, no schema; the single input is a compiled `bundle@version` directory). Author inputs and outputs as named Excel **Tables** and each output table becomes its own well-named, well-typed MCP tool with a DAG-derived input schema:
