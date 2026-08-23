@@ -7,9 +7,15 @@
 //!   value is not representable in this type at all. This is a compile-time absence, not a
 //!   runtime check that could be forgotten: the strongest form of "secrets never travel"
 //!   (§12 permanent non-goal) a Rust type system can offer.
-//! - **Behavior-relevant** (`LlmProvider`, `BudgetOverride`) carry the `tested_value` that
-//!   was exercised when the package was tested, so a later proposed binding can be compared
-//!   against it (see `deviation::detect_deviation`).
+//! - **Behavior-relevant** (`LlmProvider`, `BudgetOverride`, `Endpoint`, `AuthMode`) carry
+//!   the `tested_value` that was exercised when the package was tested, so a later proposed
+//!   binding can be compared against it (see `deviation::detect_deviation`). Swapping the
+//!   backend a config server talks to, or the scheme it authenticates with, changes what the
+//!   served tools DO — so both belong here rather than in the identity-bearing family.
+//!
+//! Note what is deliberately absent: there is no variant naming the OpenAPI spec. The spec
+//! determines the served tool surface, so it is BAKED into the package and can only ever
+//! move the package digest — it is never a slot a target environment fills in at unpack.
 
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +77,29 @@ pub enum SlotType {
         /// The budget-override value exercised when the package was tested.
         tested_value: String,
     },
+    /// A named backend-endpoint slot, carrying the `tested_value` (e.g.
+    /// `"https://api.tfl.gov.uk"`) that was exercised when the package was tested.
+    /// Behavior-relevant: pointing a config server at a different backend changes what its
+    /// tools return, which is a real behavioral change and not an identity swap. Carries a
+    /// URL, never a credential.
+    Endpoint {
+        /// The slot's declared name.
+        name: String,
+        /// The endpoint value exercised when the package was tested.
+        tested_value: String,
+    },
+    /// A named authentication-mode slot, carrying the `tested_value` (e.g. `"api_key"`,
+    /// `"bearer"`) that was exercised when the package was tested. Behavior-relevant: the
+    /// auth SCHEME determines how requests are formed, so changing it is a behavioral
+    /// change. CRITICAL: this is the scheme discriminator only — the credential itself is a
+    /// separate identity-bearing `Secret` slot, and no resolved secret value is
+    /// representable here.
+    AuthMode {
+        /// The slot's declared name.
+        name: String,
+        /// The auth-mode discriminator exercised when the package was tested.
+        tested_value: String,
+    },
 }
 
 impl SlotType {
@@ -85,16 +114,33 @@ impl SlotType {
             SlotType::HumanRole { role, .. } => ("human_role", role.as_str()),
             SlotType::LlmProvider { name, .. } => ("llm_provider", name.as_str()),
             SlotType::BudgetOverride { name, .. } => ("budget_override", name.as_str()),
+            SlotType::Endpoint { name, .. } => ("endpoint", name.as_str()),
+            SlotType::AuthMode { name, .. } => ("auth_mode", name.as_str()),
         }
     }
 
     /// The `tested_value` carried by a behavior-relevant variant, or `None` for an
     /// identity-bearing variant (which has no such field at all).
+    ///
+    /// This match is EXHAUSTIVE by design — there is deliberately no catch-all arm. A
+    /// catch-all would make every future variant default to `None`, which
+    /// [`classify`](crate::slot::classification::classify) reads as `IdentityBearing`, which
+    /// in turn makes [`detect_deviation`](crate::slot::deviation::detect_deviation)
+    /// short-circuit and never fire for it. That failure mode leaves every existing test
+    /// green, so it is prevented structurally: with the arms enumerated, adding a variant
+    /// without deciding its family is a compile error.
     pub fn tested_value(&self) -> Option<&str> {
         match self {
+            // Identity-bearing: these variants have no `tested_value` field at all.
+            SlotType::Secret { .. }
+            | SlotType::OauthClient { .. }
+            | SlotType::ChannelBinding { .. }
+            | SlotType::HumanRole { .. } => None,
+            // Behavior-relevant: each carries the value exercised when the package was tested.
             SlotType::LlmProvider { tested_value, .. }
-            | SlotType::BudgetOverride { tested_value, .. } => Some(tested_value.as_str()),
-            _ => None,
+            | SlotType::BudgetOverride { tested_value, .. }
+            | SlotType::Endpoint { tested_value, .. }
+            | SlotType::AuthMode { tested_value, .. } => Some(tested_value.as_str()),
         }
     }
 }
@@ -226,5 +272,61 @@ mod tests {
             tested_value: "anthropic".to_string(),
         };
         assert_eq!(slot.tested_value(), Some("anthropic"));
+    }
+
+    #[test]
+    fn endpoint_round_trips_with_tested_value() {
+        let slot = SlotType::Endpoint {
+            name: "backend.base_url".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        };
+        let json = serde_json::to_value(&slot).unwrap();
+        assert_eq!(json["type"], "endpoint");
+        assert_eq!(json["name"], "backend.base_url");
+        assert_eq!(json["tested_value"], "https://api.tfl.gov.uk");
+        let round: SlotType = serde_json::from_value(json).unwrap();
+        assert_eq!(round, slot);
+    }
+
+    #[test]
+    fn auth_mode_round_trips_with_tested_value() {
+        let slot = SlotType::AuthMode {
+            name: "backend.auth.type".to_string(),
+            tested_value: "api_key".to_string(),
+        };
+        let json = serde_json::to_value(&slot).unwrap();
+        assert_eq!(json["type"], "auth_mode");
+        assert_eq!(json["name"], "backend.auth.type");
+        assert_eq!(json["tested_value"], "api_key");
+        let round: SlotType = serde_json::from_value(json).unwrap();
+        assert_eq!(round, slot);
+    }
+
+    #[test]
+    fn key_uses_endpoint_and_auth_mode_discriminators() {
+        let endpoint = SlotType::Endpoint {
+            name: "backend.base_url".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        };
+        assert_eq!(endpoint.key(), ("endpoint", "backend.base_url"));
+        let auth_mode = SlotType::AuthMode {
+            name: "backend.auth.type".to_string(),
+            tested_value: "api_key".to_string(),
+        };
+        assert_eq!(auth_mode.key(), ("auth_mode", "backend.auth.type"));
+    }
+
+    #[test]
+    fn tested_value_is_some_for_the_two_new_behavior_relevant_variants() {
+        let endpoint = SlotType::Endpoint {
+            name: "backend.base_url".to_string(),
+            tested_value: "https://api.tfl.gov.uk".to_string(),
+        };
+        assert_eq!(endpoint.tested_value(), Some("https://api.tfl.gov.uk"));
+        let auth_mode = SlotType::AuthMode {
+            name: "backend.auth.type".to_string(),
+            tested_value: "api_key".to_string(),
+        };
+        assert_eq!(auth_mode.tested_value(), Some("api_key"));
     }
 }
