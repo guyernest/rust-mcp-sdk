@@ -1,23 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.5
-milestone_name: MCP Spec 2026-07-28 (v2) Support (Phases 112-119)
-status: Awaiting next milestone
-stopped_at: Milestone v2.5 archived (override_closeout)
-last_updated: "2026-08-23T01:37:21.600Z"
+milestone: v2.6
+milestone_name: AI-Package Portability
+status: planning
+last_updated: "2026-08-23T01:51:08.683Z"
 last_activity: 2026-08-22
-last_activity_desc: Milestone v2.5 completed and archived
-state_head: 85564b44d029f2c25da8b74e2a8be36dc5e974d0
 progress:
-  total_phases: 11
-  completed_phases: 11
-  total_plans: 176
-  completed_plans: 176
-  percent: 100
-current_phase: null
-current_phase_name: null
-next_milestone: v2.6
-next_milestone_name: AI-Package Portability (Phases 120-124)
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -33,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-08-22 after v2.5) · .planning/ROADMAP.m
 
 ## Current Position
 
-Phase: Milestone v2.5 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-22 — Milestone v2.5 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-22 — Milestone v2.6 started
 
 ## v2.5 Phase Plan (8 phases, 38 requirements)
 

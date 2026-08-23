@@ -77,12 +77,43 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-_None — v2.5 shipped. The v2.6 AI-Package Portability requirements (PKG-01..04, PKGX-01/02, PKGR-01, plus the UNAS-01 carry-forward) are staged in `.planning/v2.6-REQUIREMENTS-STAGED.md` and become Active when `/gsd-new-milestone` opens v2.6._
+<!-- Milestone v2.6 AI-Package Portability. Full text with traceability in .planning/REQUIREMENTS.md. -->
 
-## Current Milestone: none — between milestones
+- [ ] **PKG-01**: A server with no bespoke binary can be packed — vendor media types carry the server's own `config.toml` and its OpenAPI spec as layers
+- [ ] **PKG-02**: The binary is dual-mode — embedded (bootstrap bytes) or referenced (`BinaryRef { digest, media_type }`) resolved in the target environment
+- [ ] **PKG-03**: What is baked versus what is a slot is decided and documented (spec baked; endpoint, credentials and auth mode are slots)
+- [ ] **PKG-04**: A package round-trips between environments with tool-list parity as the asserted property, on behaviour via `parity_replay.rs`
+- [ ] **PKGX-01**: A package carries a pmcp.run-issued attestation and verifies against pmcp.run's identity — carriage and verification only, no crypto dependency *(contract-first; parked on backend)*
+- [ ] **PKGX-02**: `cargo pmcp package pack | unpack | export | import` resolving environments through `configure`'s resolver and the existing `pmcp_run/{graphql,auth}.rs` seam *(`pack`/`unpack` land now; `export`/`import` contract-first, parked on backend)*
+- [ ] **PKGR-01**: `pmcp-openapi-server` added to CLAUDE.md's publish order
 
-v2.5 shipped 2026-08-22. The next milestone, **v2.6 AI-Package Portability (Phases 120-124)**, is
-already scoped in ROADMAP.md and its requirements are staged; it has not been opened.
+## Current Milestone: v2.6 AI-Package Portability
+
+**Goal:** Make an AI-Package genuinely portable between pmcp.run environments — build a server from
+configuration only, test and attest it in one AWS account/region, export it, and import it into
+another with the target environment told exactly what it must supply. The proving case is
+`pmcp-openapi-server`: a Shape A pure-config binary whose entire identity is a `config.toml` plus an
+OpenAPI spec.
+
+**Target features:**
+- Config-server packaging — vendor media types for `config.toml` + OpenAPI spec as layers, dual-mode binary (embedded bootstrap or referenced `BinaryRef`), documented baked-vs-slot split (Phase 120)
+- Local round-trip E2E asserting tool-list parity on behaviour, never on manifest structure — the regression net every later refactor leans on (Phase 121)
+- Attestation carriage and verification for a pmcp.run-issued attestation; no signing, no crypto dependency (Phase 122, contract-first)
+- `cargo pmcp package pack | unpack | export | import` verbs reusing the existing pmcp.run GraphQL/auth seam rather than a second API path (Phase 123, contract-first)
+- Release hygiene — `pmcp-openapi-server` into the publish ledger; `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0 (Phase 124)
+
+**Scoping decisions taken at milestone open (2026-08-22):**
+- Phases 122/123 stay **parked** — vendored contract plus offline blocking contract test only. The
+  live E2E leg activates when the pmcp.run backend work (package import, attestation issuance) is
+  scheduled. PKGX-01/02 therefore cannot fully close inside this repo, by design.
+- UNAS-01 (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) **deferred again** — stays in Future
+  Requirements, unassigned, out of the v2.6 roadmap.
+- Work continues on a **rebased `feat/package-remote-capture-show`** (249 commits ahead of `main`,
+  20 behind; zero overlap with `src/server/`, `src/shared/`, `src/types/`).
+
+**Non-goals:** signing keys or PKI in the SDK; an ECR client in the CLI (`oci-client` is not added,
+`oci-spec` types stay); changing `LATEST_PROTOCOL_VERSION`; refactoring the manifest schema for
+elegance — the schema is expected to churn, so the E2E is the asset, not the API.
 
 ### Future
 
@@ -241,4 +272,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-22 after v2.5 milestone — **Milestone v2.5 (MCP Spec 2026-07-28 v2 Support) COMPLETE and archived**: 11 phases / 176 plans, all verification `passed`, published as pmcp v2.19.0 (PR #337, tag v2.19.0). pmcp is now a dual-version SDK — one binary serving both MCP 2025-11-25 and 2026-07-28 via per-request negotiation, v2 primary (stateless, Tasks-as-extension, JSON Schema 2020-12) and v1 cleanly severable at compile time. Nine official-suite conformance gaps closed. Closed as an override_closeout with 461 audit items recorded as open debt rather than acknowledged (two gsd-tools defects made acknowledgment unsafe — see MILESTONES.md). v2.6 (AI-Package Portability, Phases 120-124) scoped in ROADMAP.md with requirements staged in `.planning/v2.6-REQUIREMENTS-STAGED.md`, not yet opened; previously 2026-07-22 — Milestone v2.5 started: dual-version stack per the 2026-07-22 impact assessment (stateless core, Tasks-as-extension, JSON Schema 2020-12, auth SEPs, official conformance suite); v2.4 phases 106–110 moved to Validated (published as pmcp 2.17.0), v2.4 Phase 111 docs folded into v2.5 scope; previously 2026-07-19 — Phase 109 complete (Team Reference Servers: `pmcp-team-servers` one feature-flagged crate with dev-grade team-fs/mem-mcp/approval-mcp/team-mcp reference servers + additive pmcp-core namespaced `_meta` enablement + in-process "small team, one process" runtime + exportable wire-level conformance harness matching PKG-03 fixtures; TEAM-01..06 done, 7/7 must-haves re-verified after one `pmcp/http` feature-flag gap-closure fix; WR-01/WR-02 tracked as non-blocking follow-ups); previously 2026-07-18 — Phase 107 complete (Contracts & Package Format: pmcp-package adopted as workspace-excluded crate + wire-frozen via pinned-digest golden fixtures, team-server tool contracts as provable-contracts YAML; PKG-01/03 done, PKG-02 pending release-tag publish; WR-01/WR-02 review findings fixed; 3/3 must-haves verified); previously 2026-07-17 — Milestone v2.4 (Agents & Teams — SDK Extraction) started; design doc `docs/design/agents-teams-sdk-extraction-plan.md` approved incl. §6 recommendations; previously 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*
+*Last updated: 2026-08-22 after milestone v2.6 (AI-Package Portability) opened — pre-scoped from the v2.5 close (2026-07-27 scoping); staged requirements folded back into REQUIREMENTS.md as PKG-01..04 / PKGX-01/02 / PKGR-01; four opening decisions recorded: scope taken as scoped, Phases 122/123 stay parked contract-first, UNAS-01 (SEP-2243) deferred again unassigned, work continues on a rebased `feat/package-remote-capture-show`; previously 2026-08-22 after v2.5 milestone — **Milestone v2.5 (MCP Spec 2026-07-28 v2 Support) COMPLETE and archived**: 11 phases / 176 plans, all verification `passed`, published as pmcp v2.19.0 (PR #337, tag v2.19.0). pmcp is now a dual-version SDK — one binary serving both MCP 2025-11-25 and 2026-07-28 via per-request negotiation, v2 primary (stateless, Tasks-as-extension, JSON Schema 2020-12) and v1 cleanly severable at compile time. Nine official-suite conformance gaps closed. Closed as an override_closeout with 461 audit items recorded as open debt rather than acknowledged (two gsd-tools defects made acknowledgment unsafe — see MILESTONES.md). v2.6 (AI-Package Portability, Phases 120-124) scoped in ROADMAP.md with requirements staged in `.planning/v2.6-REQUIREMENTS-STAGED.md`, not yet opened; previously 2026-07-22 — Milestone v2.5 started: dual-version stack per the 2026-07-22 impact assessment (stateless core, Tasks-as-extension, JSON Schema 2020-12, auth SEPs, official conformance suite); v2.4 phases 106–110 moved to Validated (published as pmcp 2.17.0), v2.4 Phase 111 docs folded into v2.5 scope; previously 2026-07-19 — Phase 109 complete (Team Reference Servers: `pmcp-team-servers` one feature-flagged crate with dev-grade team-fs/mem-mcp/approval-mcp/team-mcp reference servers + additive pmcp-core namespaced `_meta` enablement + in-process "small team, one process" runtime + exportable wire-level conformance harness matching PKG-03 fixtures; TEAM-01..06 done, 7/7 must-haves re-verified after one `pmcp/http` feature-flag gap-closure fix; WR-01/WR-02 tracked as non-blocking follow-ups); previously 2026-07-18 — Phase 107 complete (Contracts & Package Format: pmcp-package adopted as workspace-excluded crate + wire-frozen via pinned-digest golden fixtures, team-server tool contracts as provable-contracts YAML; PKG-01/03 done, PKG-02 pending release-tag publish; WR-01/WR-02 review findings fixed; 3/3 must-haves verified); previously 2026-07-17 — Milestone v2.4 (Agents & Teams — SDK Extraction) started; design doc `docs/design/agents-teams-sdk-extraction-plan.md` approved incl. §6 recommendations; previously 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*
