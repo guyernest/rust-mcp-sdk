@@ -159,4 +159,16 @@ pub enum ConfigValidationError {
          e.g. \"https://api.example.com\")"
     )]
     EmptyBackendBaseUrl,
+    /// Per Phase 120 Plan 04 (PKG-03): a `[[config_slots]]` entry at `index`
+    /// has an empty / whitespace-only `key` or `name`. A slot declaration whose
+    /// key names no config path — or whose name names no environment variable —
+    /// claims coverage it cannot deliver, and the package side would compare
+    /// against an empty string.
+    ///
+    /// The sibling "unrecognized `kind`" check is NOT here: `kind` is the
+    /// closed [`crate::config::ConfigSlotKind`] enum, so serde rejects an
+    /// unknown discriminator at PARSE time (naming the accepted set) before
+    /// `validate()` is ever called.
+    #[error("[[config_slots]] entry at index {0} has an empty key or name")]
+    EmptyConfigSlotField(usize),
 }

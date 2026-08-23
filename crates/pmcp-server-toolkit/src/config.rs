@@ -132,6 +132,16 @@ pub struct ServerConfig {
     #[serde(default)]
     pub tools: Vec<ToolDecl>,
 
+    /// `[[config_slots]]` — declared config slots the TARGET environment must
+    /// fill (PKG-03). Additive per the REF-01 superset invariant: a config
+    /// omitting the block parses to an empty vec.
+    ///
+    /// Deliberately NOT gated on the `http` feature — a SQL or workbook Shape A
+    /// server declares slots too, and gating it would make the field vanish in
+    /// the toolkit's own default build.
+    #[serde(default)]
+    pub config_slots: Vec<ConfigSlotDecl>,
+
     /// `[[prompts]]` — declarative prompt surface.
     #[serde(default)]
     pub prompts: Vec<PromptDecl>,
@@ -222,7 +232,11 @@ impl ServerConfig {
     /// 4. No `[[tools]]` entry mixes tool kinds (`sql` / `path`+`method` /
     ///    `script`) — D-01 / T-90-02-04.
     /// 5. Every `[[database.tables]]` entry has a non-empty `name`.
-    /// 6. When a `[backend]` block is present (`http` feature), its `base_url`
+    /// 6. Every `[[config_slots]]` entry has a non-empty `key` AND `name`
+    ///    (PKG-03). The entry's `kind` needs no rule here — it is the closed
+    ///    [`ConfigSlotKind`] enum, so serde rejects an unknown discriminator at
+    ///    parse time, before `validate()` is called.
+    /// 7. When a `[backend]` block is present (`http` feature), its `base_url`
     ///    is non-empty (trimmed) — GAP 3 / WR-02. Absent on no-http builds.
     ///
     /// # Errors
@@ -250,6 +264,17 @@ impl ServerConfig {
         for (i, table) in self.database.tables.iter().enumerate() {
             if table.name.trim().is_empty() {
                 return Err(ConfigValidationError::EmptyTableName(i));
+            }
+        }
+        // PKG-03 (Phase 120 Plan 04): a declared slot must actually name a
+        // config path AND a variable. An empty `key`/`name` claims coverage the
+        // declaration cannot deliver. Deliberately NOT a completeness
+        // heuristic — a "this literal looks secret, so a slot is missing" check
+        // would flag the london-tube fixture's guarded dev `token_secret`, and
+        // a check that cries wolf is worse than none.
+        for (i, slot) in self.config_slots.iter().enumerate() {
+            if slot.key.trim().is_empty() || slot.name.trim().is_empty() {
+                return Err(ConfigValidationError::EmptyConfigSlotField(i));
             }
         }
         // Phase 90 gap-closure (GAP 3 / WR-02): when a `[backend]` block is
@@ -567,6 +592,91 @@ pub struct SharedPolicyStoreSection {
     /// `"PermitAllSelects"`, `"ForbidAllDeletes"`).
     #[serde(default)]
     pub templates: Vec<String>,
+}
+
+// -----------------------------------------------------------------------------
+// [[config_slots]]
+// -----------------------------------------------------------------------------
+
+/// The kind of a declared `[[config_slots]]` entry — a CLOSED vocabulary.
+///
+/// Deliberately an enum rather than a free `String`. A free string lets a typo
+/// (`kind = "endpont"`) parse cleanly, survive
+/// [`ServerConfig::validate`], and fail only at package time when it maps to no
+/// slot type — the failure surfacing two crates away from its cause. As a closed
+/// enum, an unrecognized discriminator is a serde parse error naming the
+/// accepted set, and a fourth kind becomes a deliberate addition here rather
+/// than a silent pass-through.
+///
+/// # Why this type is toolkit-LOCAL
+///
+/// The three `snake_case` discriminators (`endpoint`, `secret`, `auth_mode`)
+/// are deliberately the same strings the `pmcp-package` slot-type discriminator
+/// uses for the corresponding variants, so a packaging tool can compare a
+/// declaration against a package slot **without either crate depending on the
+/// other**. The toolkit must NOT depend on `pmcp-package`: that crate is the
+/// workspace-excluded leaf, and a toolkit dependency on it inverts the layering.
+/// The agreement is enforced by the package side re-parsing the SAME config
+/// bytes, not by a shared type.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigSlotKind {
+    /// A network endpoint the target environment must supply (e.g. the backend
+    /// API root). Behaviour-relevant: its `tested_value` records the endpoint
+    /// the package was tested against.
+    #[default]
+    Endpoint,
+    /// A named secret the target environment must supply (e.g. an API key).
+    /// Identity-bearing: it structurally carries no `tested_value`.
+    Secret,
+    /// The backend authentication MODE. Structural rather than value-bearing:
+    /// the auth-mode key is a serde tag, so no `${VAR}` placeholder form of it
+    /// can deserialize — the baked literal IS the default and deviation
+    /// surfaces through slot classification, not through a placeholder.
+    AuthMode,
+}
+
+/// Single `[[config_slots]]` entry — a config value the TARGET environment must
+/// fill for this server to run.
+///
+/// A Shape A server's whole identity is its config, so "what must the operator
+/// supply?" has to be declarable IN that config rather than discovered by
+/// grepping for `${...}`. This block is that declaration: it names the config
+/// path, the kind of thing it is, and the value exercised when the server was
+/// tested.
+///
+/// Additive per the REF-01 superset invariant — a config omitting the block
+/// parses to an empty [`ServerConfig::config_slots`]. Strict-parse discipline
+/// (D-13) applies: `#[serde(deny_unknown_fields)]` rejects a typo'd inner key.
+///
+/// # Example
+///
+/// ```toml
+/// [[config_slots]]
+/// key = "backend.base_url"
+/// kind = "endpoint"
+/// name = "TFL_BASE_URL"
+/// tested_value = "https://api.tfl.gov.uk"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSlotDecl {
+    /// The dotted TOML path this slot fills, e.g. `backend.base_url`,
+    /// `backend.auth.query_params.app_key`, `backend.auth.type`.
+    #[serde(default)]
+    pub key: String,
+    /// The slot kind ([`ConfigSlotKind`] — a closed vocabulary). REQUIRED: an
+    /// entry omitting `kind` is a parse error, because a defaulted kind would
+    /// silently mis-classify the slot.
+    pub kind: ConfigSlotKind,
+    /// The slot's declared name — for a `secret`, the environment-variable
+    /// name; for an `endpoint`, the variable the `${VAR}` placeholder reads.
+    #[serde(default)]
+    pub name: String,
+    /// The value exercised when the server was tested. `None` for
+    /// identity-bearing slots (a secret), which structurally carry no value.
+    #[serde(default)]
+    pub tested_value: Option<String>,
 }
 
 // -----------------------------------------------------------------------------
