@@ -238,12 +238,23 @@ mod server_layout {
         MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CONFIG, MT_SERVER_ENVELOPE,
     };
     use pmcp_package::{
-        pack_server, unpack_server, BinaryMode, CedarPolicySet, ConfigFile, OciLayout,
+        pack_server, unpack_server, BinaryMode, CedarPolicySet, ConfigFile, ConfigSlot, OciLayout,
         ServerPackage,
     };
 
     const REFERENCED_MEDIA_TYPE: &str = "application/x-lambda-bootstrap; arch=arm64";
-    const CONFIG_TOML: &[u8] = b"name = \"london-tube\"\n";
+    /// The config bytes packed alongside the golden server fixture. It declares
+    /// the ONE slot that fixture carries, because `pack_server` now requires the
+    /// shipped config's `[[config_slots]]` block and the package's slot list to
+    /// agree (D-01) and requires a slot-declared credential key to hold an
+    /// environment reference rather than a literal (D-04).
+    const CONFIG_TOML: &[u8] = b"name = \"london-tube\"\n\n\
+        [[config_slots]]\n\
+        key = \"backend.api_key\"\n\
+        kind = \"secret\"\n\
+        name = \"LICHESS_API_KEY\"\n\n\
+        [backend]\n\
+        api_key = \"${LICHESS_API_KEY}\"\n";
 
     /// A minimal, well-formed `ServerPackage`, built from the tracked golden
     /// fixture so the deploy/policy/tool sections stay realistic.
@@ -272,8 +283,19 @@ mod server_layout {
     /// a fresh layout.
     fn packed_config_only(dir: &std::path::Path) -> OciLayout {
         let layout = OciLayout::create(dir).unwrap();
+        // The golden fixture's lone `Secret` slot carries no `config_key` (it is
+        // an embedded-package slot). Packing it WITH a config file makes it a
+        // config-server slot, so it must name the config path it fills — that is
+        // the D-04 rule this helper's package now satisfies. `server_package()`
+        // itself is left untouched for the `config: None` call sites.
+        let mut package = server_package();
+        package.config_slots = package
+            .config_slots
+            .into_iter()
+            .map(|slot| ConfigSlot::new(slot.slot).with_config_key("backend.api_key"))
+            .collect();
         pack_server(
-            &server_package(),
+            &package,
             referenced_binary(),
             Some(config_file()),
             None,
