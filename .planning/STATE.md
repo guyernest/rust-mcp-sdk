@@ -17,12 +17,12 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-22 after v2.5) · .planning/ROADMAP.md (v2.5 collapsed; **v2.6 AI-Package Portability, Phases 120-124** is the next milestone) · .planning/MILESTONES.md (v2.5 record incl. the override_closeout rationale) · .planning/milestones/v2.5-{ROADMAP,REQUIREMENTS}.md (archived detail) · .planning/v2.6-REQUIREMENTS-STAGED.md (PKG-01..04, PKGX-01/02, PKGR-01 + the UNAS-01 carry-forward, awaiting `/gsd-new-milestone`)
+See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning/ROADMAP.md (`## v2.6 AI-Package Portability (Phases 120-124)` + `## Phase Details — Current Milestone`) · .planning/REQUIREMENTS.md (7 v2.6 requirements, 7/7 mapped) · .planning/MILESTONES.md (v2.5 record incl. the override_closeout rationale) · .planning/milestones/v2.5-{ROADMAP,REQUIREMENTS}.md (archived detail) · .planning/milestones/v2.5-phases/ (101 archived phase dirs)
 
-> `.planning/REQUIREMENTS.md` was removed at the v2.5 close, as designed — a fresh one is created when v2.6 opens. Its v2.5 content lives in the archive above; its v2.6 content is in the staged file above.
+> `.planning/v2.6-REQUIREMENTS-STAGED.md` was consumed and removed when v2.6 opened — its content is now `.planning/REQUIREMENTS.md`. Do not look for it.
 
-**Core value:** One pmcp server binary transparently serves both MCP 2025-11-25 and 2026-07-28 clients via per-request negotiation — v2 as the strategic primary path (stateless/Lambda-first, Tasks, MCP Apps), v1 as a cleanly severable compatibility layer. Delivered additively in v2.5 (2.x minor, no breaking change).
-**Current focus:** none — between milestones. Next: `/gsd-new-milestone` to open v2.6.
+**Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
+**Current focus:** Milestone v2.6 open, no phase started. Next: `/gsd-discuss-phase 120`.
 
 ## Current Position
 
@@ -31,24 +31,21 @@ Plan: —
 Status: Defining requirements
 Last activity: 2026-08-22 — Milestone v2.6 started
 
-## v2.5 Phase Plan (8 phases, 38 requirements)
+## v2.6 Phase Plan (5 phases, 7 requirements)
 
 | Phase | Name | Goal | Reqs | Depends on |
 |-------|------|------|------|------------|
-| 112 | Version Plumbing Spine | `ProtocolContext` resolved once at ingress + threaded through dispatch; v2 opt-in (LATEST stays 2025-11-25); discover/extensions/headers/`resultType`/trace-context/error-code table | VERS-01..09 (9) | none (keystone) |
-| 113 | Stateless HTTP + MRTR | Handshake-free/session-free v2 on the `stateless()` branch; MRTR end-to-end; `subscriptions/listen`; no SSE resumability + id-replay test; pmcp `Client` speaks v2 | HTTP-01..05, CLNT-01, CLNT-02 (7) | 112 |
-| 114 | Tasks Extension Migration | extensions-map negotiation, `tasks/update`, `tasks/list` era-gated off on v2, `resultType:"task"`, fail-closed owner-binding; backends unchanged | TASK-01..06 (6) | 112 (+113 identity pattern) |
-| 115 | JSON Schema 2020-12 + Caching | jsonschema 0.48 Draft 2020-12 pinned; any-JSON `structuredContent` on v2; additive `ttlMs`/`cacheScope` | SCHM-01..03 (3) | 112 (parallel) |
-| 116 | Auth Hardening SEPs | RFC 9207 `iss` (strict v2/lenient v1), DCR `application_type`, issuer-keyed creds + 3 clarifications; no new crates | AUTH-01..03 (3) | 112 (parallel) |
-| 117 | Agents, Tester & v1 Severability | `pmcp-agent` + `mcp-tester` on v2; v1 machinery severable + sunset policy; v2 path de-baggaged | CLNT-03, CLNT-04, SMPL-01, SMPL-02 (4) | 113, 114 |
-| 118 | Conformance | official `@modelcontextprotocol/conformance` in CI over HTTP; Phase-109 Rust harness gains v2 fixtures (v1 green); deprecated caps verified under v2 | CONF-01..03 (3) | 112-117 |
-| 119 | Documentation — Three Shapes + v2 Migration | Agents & Teams three-shapes (carried from v2.4 P111); v2 migration guide + dual-version story; runnable stateless-v2 + v2-client examples | DOCS-04..06 (3) | 112-118 |
+| 120 | Config-Server Packaging | Config-only server has a complete package identity: `config.toml` + OpenAPI spec as vendor-media-type layers; dual-mode binary (embedded bootstrap or `BinaryRef`); baked-vs-slot split machine-checkable | PKG-01..03 (3) | none (keystone) |
+| 121 | Local Round-Trip E2E | pack A → unpack B → `detect_deviation` names exactly B's slots → fill → tool-list parity via `parity_replay.rs`. Offline, manifest-shape-insensitive — the regression net later phases lean on | PKG-04 (1) | 120 |
+| 122 | Attestation Carriage *(PARKED)* | Opaque attestation layer + vendored `attestation-v1.graphql` + offline blocking contract test + machine-checked no-crypto boundary. Live issuance leg is an `#[ignore]`d env-gated test | PKGX-01 (1) | 120 (∥ 123) |
+| 123 | Export/Import Verbs *(PARKED)* | `pack`/`unpack` land now; `export`/`import` contract-first on the existing `pmcp_run/{graphql,auth}.rs` seam. Must resolve the collision with the shipped `package import` verb | PKGX-02 (1) | 120 (∥ 122) |
+| 124 | Release & Publish Order | Coverage gate extended to workspace-excluded publishable crates (it cannot see `pmcp-package` today); `pmcp-package` + `cargo-pmcp` pins move together | PKGR-01 (1) | 120-123 |
 
-**Execution order:** 112 first and alone → {113, 115, 116} parallelize once the spine lands → 114 sequenced close after 113 (shared stateless-identity/owner-binding pattern) → 117 (needs 113 Client + 114 Tasks) → 118 conformance (validates the union) → 119 docs.
+**Execution order:** 120 → 121 first and together → 122 ∥ 123 (both contract-first) → 124 last.
 
-**Final-spec checkpoint (2026-07-28, six days out):** wire-exact work (error-code values, `requestState` shape, caching-hint field names) sequenced after final publication. VERS-06 error-code table is structure-first, values-from-final-schema.json only. Open verification item (research): the `-32002`→`-32602` rename direction MUST be re-verified against the final schema before touching the frozen `-32002` task-pending code — cross-cuts Phases 112 and 114.
+**Parked, by design:** Phases 122/123 cannot fully close in this repo — they need pmcp.run backend work (package import, attestation issuance) not confirmed as scheduled. Reaffirmed at the v2.6 open (2026-08-22). Promote to blocking and add the live E2E leg if the backend is scheduled.
 
-**Dependency/zero-deps note (research HIGH confidence):** no new runtime crates — only `jsonschema` 0.46→0.48 for Draft 2020-12; Node.js LTS 22.x is CI-only for the conformance suite. Milestone stays additive (2.x minor); `cargo semver-checks`/`cargo public-api` should gate every phase, not just the last (Pitfall 5 — accidental 3.0).
+**Deferred at the open:** UNAS-01 (SEP-2243 `x-mcp-header`) gets no phase — see Future Requirements.
 
 ## Accumulated Context
 
