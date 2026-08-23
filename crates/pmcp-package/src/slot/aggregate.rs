@@ -15,6 +15,11 @@ use crate::slot::types::ConfigSlot;
 /// `(kind, name)` slot (see `SlotType::key`), in stable deterministic order.
 ///
 /// - Two components declaring a byte-equal slot dedup silently into one entry.
+/// - Two components declaring the SAME slot (same kind+name) with DIFFERENT
+///   `config_key`s return `Err(PackageError::ConfigSlotViolation)` — silently
+///   keeping whichever arrived first would make the aggregated output (and any
+///   digest or pack-time agreement check over it) depend on input order, and
+///   could drop a declared config path.
 /// - Two components declaring the SAME behavior-relevant slot (same kind+name) with
 ///   DIFFERENT `tested_value`s return `Err(PackageError::SlotConflict)` — silently
 ///   discarding one tested value would mask a real behavioral difference.
@@ -29,6 +34,21 @@ pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<
         match map.entry(key) {
             Entry::Vacant(e) => {
                 e.insert(slot.clone());
+            },
+            // Same (kind, name) but a DIFFERENT config_key: erroring is the only
+            // order-independent outcome. First-wins here would silently discard a
+            // declared config path — and WHICH path survived would depend on which
+            // component was walked first, violating this module's permutation-
+            // stability contract. (Checked before the byte-equal dedup arm can
+            // never fire for it: equal ConfigSlots have equal config_keys.)
+            Entry::Occupied(e) if e.get().config_key != slot.config_key => {
+                return Err(PackageError::ConfigSlotViolation {
+                    key: key.1.to_string(),
+                    reason: "declared with two different `config_key` values by different \
+                             components; one slot fills one config path, so this must be \
+                             reconciled rather than silently resolved by input order"
+                        .to_string(),
+                });
             },
             // Byte-equal declaration — pure dedup, keep the one already present.
             Entry::Occupied(e) if e.get().slot == slot.slot => {},
@@ -89,6 +109,60 @@ mod tests {
         ..
                     } if tested == "anthropic" && proposed == "openai"
                ));
+    }
+
+    #[test]
+    fn same_slot_with_two_different_config_keys_errors_in_either_order() {
+        // Phase 120 regression: dedup used to compare only the SlotType, so two
+        // slots identical except for `config_key` deduped FIRST-WINS — the
+        // surviving config path depended on input order, violating the
+        // permutation-stability contract the module doc states.
+        let keyed = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_APP_KEY".to_string(),
+        })
+        .with_config_key("backend.auth.query_params.app_key");
+        let rekeyed = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_APP_KEY".to_string(),
+        })
+        .with_config_key("backend.auth.headers.x-api-key");
+
+        for pair in [[&keyed, &rekeyed], [&rekeyed, &keyed]] {
+            let err = aggregate(pair).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    PackageError::ConfigSlotViolation { key, .. } if key == "TFL_APP_KEY"
+                ),
+                "differing config_keys must be a ConfigSlotViolation naming the slot, got: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn same_slot_keyed_and_unkeyed_errors_rather_than_first_wins() {
+        let keyed = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_APP_KEY".to_string(),
+        })
+        .with_config_key("backend.auth.query_params.app_key");
+        let unkeyed = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_APP_KEY".to_string(),
+        });
+
+        // Whichever order the components are walked in, the outcome is the same
+        // error — never a silent choice of "keyed" or "unkeyed".
+        assert!(aggregate([&keyed, &unkeyed]).is_err());
+        assert!(aggregate([&unkeyed, &keyed]).is_err());
+    }
+
+    #[test]
+    fn identical_slots_with_the_same_config_key_still_dedup() {
+        let a = ConfigSlot::new(SlotType::Secret {
+            name: "TFL_APP_KEY".to_string(),
+        })
+        .with_config_key("backend.auth.query_params.app_key");
+        let b = a.clone();
+        let result = aggregate([&a, &b]).unwrap();
+        assert_eq!(result, vec![a]);
     }
 
     #[test]
