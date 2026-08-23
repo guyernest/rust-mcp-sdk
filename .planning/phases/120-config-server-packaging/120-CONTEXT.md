@@ -205,6 +205,30 @@ pre-decide them. The planner should resolve them, or the researcher should surfa
 3. **How `london-tube.toml`'s `base_url = "https://api.tfl.gov.uk"` literal becomes a `${VAR}`
    placeholder** without breaking `parity_replay.rs`, which is an existing green offline test.
 
+### Planning amendments (user decisions, 2026-08-22, post-research)
+
+Research (120-RESEARCH.md) found two of the locked decisions unimplementable as written; the
+user resolved both before planning:
+
+- **D-17:** D-04's pack-time `${VAR}` placeholder validation is **scoped to value slots**
+  (endpoint, credentials). The auth-mode key is **exempt as structural**: the toolkit's
+  `AuthConfig` is `#[serde(tag = "type")]`, so `type = "${AUTH_MODE}"` is an unparseable
+  unknown-variant error — no placeholder form of that key can exist. AuthMode remains a declared
+  `ConfigSlot` (PKG-03's three slots are unchanged); its baked value is the default, and
+  deviation surfaces through slot classification rather than a placeholder. Rejected: custom
+  placeholder parsing before serde tag dispatch (invasive change to a published crate), and
+  dropping the auth-mode slot (violates PKG-03 as written). — **Reversibility:** reversible
+  (tightening validation later to more slot kinds is additive).
+- **D-18:** Phase scope **expands to two waves**. Wave 1: `pmcp-package` packaging work.
+  Wave 2: **additive `pmcp-server-toolkit` changes** so criterion 3 is demonstrable end-to-end
+  against the real server — `ServerConfig` accepts a `[[config_slots]]` block (today
+  `deny_unknown_fields` makes it a fatal parse error), `base_url` gains `${VAR}` expansion
+  (today only auth credentials and `code_mode.token_secret` expand), and
+  `parity_replay.rs` (which asserts the literal `base_url = "https://api.tfl.gov.uk"`) stays
+  green. Rejected: pmcp-package-only scope with a synthetic fixture-copy demonstration. —
+  **Reversibility:** costly — the `[[config_slots]]` schema becomes part of the toolkit's
+  published config surface.
+
 </decisions>
 
 <canonical_refs>
