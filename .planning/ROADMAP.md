@@ -2357,7 +2357,21 @@ Plans:
   3. Once those named slots are filled, the environment-B binary serves a tool list set-equal to environment A's, and `london-tube-scenarios.yaml` replays green through `mcp-tester`'s `ScenarioExecutor` with per-step gating — the same harness `parity_replay.rs` uses, so parity is asserted on served behaviour (PKG-04)
   4. The test is proven insensitive to manifest shape and sensitive to real regressions, both directions exercised: adding a field to `ServerPackage` leaves it green, while dropping a tool from B's served surface or leaving a named slot unfilled turns it red. It contains no assertion on manifest field names, layer ordering or digest values (PKG-04)
 
-**Plans**: TBD
+**Plans**: 3 plans (3 waves, strictly sequential)
+
+Plans:
+
+**Wave 1**
+
+- [ ] 121-01-PLAN.md — Regression net first: `pmcp-package` dev-dep + pin tripwire (D-01/D-03), the `test-openapi-server` Makefile gate with a nonzero-test-count guard (D-13), and the `tests/common/` helper lift with `mount_london_tube` parameterized by credential (D-02/D-12)
+
+**Wave 2** *(blocked on Wave 1 — consumes the lifted helpers)*
+
+- [ ] 121-02-PLAN.md — TRACER + positive E2E: pack in A, move the OCI layout to a distinct B, unpack, serve both, compare `(name, inputSchema)` surfaces (D-07/D-10/D-11); `required_slots` set-equality against the hardcoded literal and `detect_deviation`'s drift role (D-04/D-06); scenario replay green in B with per-step gating
+
+**Wave 3** *(blocked on Wave 2 — same file)*
+
+- [ ] 121-03-PLAN.md — SC4 both directions: negative tests over a deliberately-degraded environment B (D-08), the D-09 structural guard with a nonzero-lines-scanned floor, and the stale `detect_deviation` rustdoc correction
 
 ### Phase 122: Attestation Carriage *(contract-first — PARKED on the pmcp.run backend)*
 
