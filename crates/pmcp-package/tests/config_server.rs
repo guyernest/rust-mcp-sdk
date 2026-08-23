@@ -22,11 +22,12 @@ use pmcp_package::oci::media_types::{
 use pmcp_package::oci::{
     pack_server, unpack_server, BinaryMode, ConfigFile, OciLayout, OpenApiSpecFile, UnpackedBinary,
 };
+use pmcp_package::oci::{parse_declared_config_slots, DeclaredConfigSlot};
 use pmcp_package::package::{
     AssetsSection, AuthSection, AwsSection, CedarPolicySet, DeployDescriptor, ObservabilitySection,
     ServerPackage, ServerSection, TargetSection, ToolMetadata,
 };
-use pmcp_package::slot::{ConfigSlot, SlotType};
+use pmcp_package::slot::{aggregate, classify, required_slots, ConfigSlot, SlotClass, SlotType};
 use std::collections::BTreeMap;
 
 /// The author's `config.toml`, verbatim — the bytes a Shape A server's whole
@@ -1062,4 +1063,309 @@ type = "api_key"
     let dir = tempfile::tempdir().unwrap();
     pack_with_config(&package, AUTH_MODE_CONFIG, dir.path())
         .expect("the structural auth-mode key is exempt from the placeholder rule (D-17)");
+}
+
+// =====================================================================
+// Plan 120-05 Task 3 — the REAL london-tube fixture pair, vendored with a
+// drift guard, packed for real, and asserted against PKG-03 criterion 3.
+//
+// Vendored rather than reached across with `include_str!` because
+// `crates/pmcp-openapi-server/Cargo.toml` has `exclude = [... "tests/" ...]`:
+// a published `pmcp-package` tarball cannot see another crate's excluded
+// test directory. The copy is only trustworthy with the guard below.
+// =====================================================================
+
+const LONDON_TUBE_FIXTURE_DIR: &str = "config_server_london_tube_v1";
+const LONDON_TUBE_CONFIG_NAME: &str = "london-tube.toml";
+const LONDON_TUBE_SPEC_NAME: &str = "london-tube-api.yaml";
+
+/// The vendored copy under this crate's `tests/golden_fixtures/`.
+fn vendored_fixture(name: &str) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden_fixtures")
+        .join(LONDON_TUBE_FIXTURE_DIR)
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read fixture {path:?}: {e}"))
+}
+
+/// The sibling crate directory the fixtures were copied FROM.
+fn openapi_server_crate_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../pmcp-openapi-server")
+}
+
+/// The vendored copies must stay byte-identical to their sources, or the
+/// digest this crate pins is a digest of a config the real server no longer
+/// boots from (T-120-23).
+///
+/// Gated on the sibling CRATE DIRECTORY, not on the individual files: an
+/// absent crate directory means a published tarball, where there is nothing to
+/// compare against. A PRESENT crate directory with a MISSING source file means
+/// the source moved — that must FAIL, not skip.
+#[test]
+fn the_vendored_london_tube_fixtures_have_not_drifted_from_their_sources() {
+    let crate_dir = openapi_server_crate_dir();
+    if !crate_dir.is_dir() {
+        println!(
+            "skipping drift guard: sibling crate {crate_dir:?} is absent (published-tarball build)"
+        );
+        return;
+    }
+    let source_dir = crate_dir.join("tests").join("fixtures");
+    for name in [LONDON_TUBE_CONFIG_NAME, LONDON_TUBE_SPEC_NAME] {
+        let source_path = source_dir.join(name);
+        let source = std::fs::read(&source_path).unwrap_or_else(|e| {
+            panic!(
+                "the sibling crate exists but its fixture {source_path:?} is missing ({e}) — the \
+                 source moved; update the vendored copy and this path rather than skipping"
+            )
+        });
+        assert_eq!(
+            vendored_fixture(name),
+            source,
+            "the vendored copy of {name} has DRIFTED from \
+             crates/pmcp-openapi-server/tests/fixtures/{name}; re-copy it, because pmcp-package \
+             must pack the same bytes the real server boots from"
+        );
+    }
+}
+
+/// Map one parsed `[[config_slots]]` declaration onto the package slot it
+/// describes. Deriving the package's slots from the config's own declarations
+/// is the point: hand-writing them would make the test agree with itself
+/// rather than with the config, so a fixture whose declaration block was
+/// edited or deleted would still pass.
+fn slot_from_declaration(declaration: &DeclaredConfigSlot) -> ConfigSlot {
+    let tested = || {
+        declaration.tested_value.clone().unwrap_or_else(|| {
+            panic!(
+                "a {} declaration must carry a tested_value",
+                declaration.kind
+            )
+        })
+    };
+    let slot = match declaration.kind.as_str() {
+        "endpoint" => SlotType::Endpoint {
+            name: declaration.name.clone(),
+            tested_value: tested(),
+        },
+        "secret" => SlotType::Secret {
+            name: declaration.name.clone(),
+        },
+        "auth_mode" => SlotType::AuthMode {
+            name: declaration.name.clone(),
+            tested_value: tested(),
+        },
+        unexpected => panic!("the fixture declared an unexpected slot kind: {unexpected}"),
+    };
+    ConfigSlot::new(slot).with_config_key(declaration.key.as_str())
+}
+
+/// The real-fixture `ServerPackage`: same deploy/tool metadata as the inline
+/// fixture, but with `config_slots` DERIVED from the fixture's own declaration
+/// block rather than hand-written.
+fn london_tube_package(config_bytes: &[u8]) -> ServerPackage {
+    let declared = parse_declared_config_slots(config_bytes)
+        .expect("the real fixture's declaration block must parse");
+    let mut package = config_server_package();
+    package.config_slots = declared.iter().map(slot_from_declaration).collect();
+    package
+}
+
+/// Pack the real fixture pair (config + spec) into `dir`.
+fn pack_london_tube(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
+    let config_bytes = vendored_fixture(LONDON_TUBE_CONFIG_NAME);
+    let spec_bytes = vendored_fixture(LONDON_TUBE_SPEC_NAME);
+    let package = london_tube_package(&config_bytes);
+    let layout = OciLayout::create(dir).unwrap();
+    let digest = pack_server(
+        &package,
+        referenced_binary(),
+        Some(ConfigFile {
+            file_name: LONDON_TUBE_CONFIG_NAME,
+            bytes: &config_bytes,
+        }),
+        Some(OpenApiSpecFile {
+            file_name: LONDON_TUBE_SPEC_NAME,
+            bytes: &spec_bytes,
+        }),
+        &layout,
+    )
+    .expect("the real london-tube fixture must pack as a config-only package");
+    (layout, digest)
+}
+
+/// The proving case: the real config the reference OpenAPI server boots from,
+/// with its three declared slots and its `${TFL_BASE_URL}` endpoint
+/// placeholder, packs as a config-only package with no bootstrap layer. Both
+/// gates run against it — a fixture that regressed to a literal endpoint, or
+/// whose declaration block drifted from what the package claims, fails here.
+#[test]
+fn the_real_london_tube_fixture_packs_as_a_config_only_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _) = pack_london_tube(dir.path());
+
+    let media_types = layer_media_types(&layout);
+    assert!(
+        !media_types.iter().any(|mt| mt == MT_SERVER_BOOTSTRAP),
+        "a pure-config package carries no bootstrap layer; layers were: {media_types:?}"
+    );
+    assert!(
+        media_types.iter().any(|mt| mt == MT_SERVER_CONFIG),
+        "the config layer must be present; layers were: {media_types:?}"
+    );
+    assert!(
+        media_types.iter().any(|mt| mt == MT_SERVER_OPENAPI_SPEC),
+        "the spec layer must be present; layers were: {media_types:?}"
+    );
+
+    let unpacked = unpack_server(&layout).unwrap();
+    assert_eq!(
+        unpacked.config.unwrap().bytes,
+        vendored_fixture(LONDON_TUBE_CONFIG_NAME),
+        "the author's config bytes must survive the round trip verbatim"
+    );
+}
+
+/// The concrete divergence the cross-AI review described, asserted against the
+/// PROVING fixture rather than a synthetic one: drop one `[[config_slots]]`
+/// entry from a copy of the real config, pack with the unmodified three-slot
+/// package, and the removed key is named.
+#[test]
+fn dropping_one_declaration_from_the_real_fixture_is_refused_naming_that_key() {
+    const REMOVED_KEY: &str = "backend.auth.query_params.app_key";
+    let config_bytes = vendored_fixture(LONDON_TUBE_CONFIG_NAME);
+    let package = london_tube_package(&config_bytes);
+    assert_eq!(package.config_slots.len(), 3);
+
+    let mutilated = remove_declaration_block(&config_bytes, REMOVED_KEY);
+    assert_ne!(
+        mutilated, config_bytes,
+        "the removal must actually change the bytes"
+    );
+    assert_eq!(
+        parse_declared_config_slots(&mutilated).unwrap().len(),
+        2,
+        "exactly one declaration must have been removed"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    let err = pack_server(
+        &package,
+        referenced_binary(),
+        Some(ConfigFile {
+            file_name: LONDON_TUBE_CONFIG_NAME,
+            bytes: &mutilated,
+        }),
+        None,
+        &layout,
+    )
+    .expect_err("a package claiming a slot the shipped config no longer declares must be refused");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, REMOVED_KEY);
+    assert!(reason.contains("absent from the config"), "was: {reason}");
+}
+
+/// Remove the `[[config_slots]]` block whose `key = "<config_key>"`, by line
+/// range: back to the preceding `[[config_slots]]` header, forward to the next
+/// line opening a new table.
+fn remove_declaration_block(config_bytes: &[u8], config_key: &str) -> Vec<u8> {
+    let text = std::str::from_utf8(config_bytes).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let key_line = format!("key = \"{config_key}\"");
+    let at = lines
+        .iter()
+        .position(|line| line.trim() == key_line)
+        .unwrap_or_else(|| panic!("the fixture must declare {config_key}"));
+    let start = lines[..at]
+        .iter()
+        .rposition(|line| line.trim() == "[[config_slots]]")
+        .expect("the key line must sit inside a [[config_slots]] block");
+    let end = lines[at..]
+        .iter()
+        .position(|line| line.trim_start().starts_with('['))
+        .map_or(lines.len(), |offset| at + offset);
+
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    kept.extend_from_slice(&lines[..start]);
+    kept.extend_from_slice(&lines[end..]);
+    let mut out = kept.join("\n");
+    out.push('\n');
+    out.into_bytes()
+}
+
+/// PKG-03 criterion 3: the endpoint, credential and auth-mode slots surface as
+/// `ConfigSlot`s with the right families, aggregate deterministically, and NO
+/// slot among them derives from the OpenAPI spec — the spec is baked, never a
+/// slot a target environment fills in.
+#[test]
+fn the_real_fixtures_three_slots_classify_aggregate_and_carry_no_spec_derived_slot() {
+    let config_bytes = vendored_fixture(LONDON_TUBE_CONFIG_NAME);
+    let package = london_tube_package(&config_bytes);
+    assert_eq!(package.config_slots.len(), 3);
+
+    // --- classify: two behaviour-relevant, one identity-bearing ----------
+    for slot in &package.config_slots {
+        let (kind, _) = slot.slot.key();
+        let expected = match kind {
+            "endpoint" | "auth_mode" => SlotClass::BehaviorRelevant,
+            "secret" => SlotClass::IdentityBearing,
+            other => panic!("unexpected kind {other}"),
+        };
+        assert_eq!(
+            classify(&slot.slot),
+            expected,
+            "slot {kind} classified into the wrong family"
+        );
+    }
+
+    // --- aggregate: exactly three, deterministically ordered -------------
+    let aggregated = aggregate(&package.config_slots).unwrap();
+    assert_eq!(aggregated.len(), 3);
+    let ordered: Vec<&str> = aggregated.iter().map(|slot| slot.slot.key().0).collect();
+    assert_eq!(
+        ordered,
+        vec!["auth_mode", "endpoint", "secret"],
+        "aggregation order must be deterministic"
+    );
+    let reversed: Vec<ConfigSlot> = package.config_slots.iter().rev().cloned().collect();
+    assert_eq!(
+        aggregate(&reversed).unwrap(),
+        aggregated,
+        "aggregation must not depend on input order"
+    );
+
+    // --- no spec-derived slot --------------------------------------------
+    let kinds: std::collections::BTreeSet<&str> =
+        aggregated.iter().map(|slot| slot.slot.key().0).collect();
+    assert_eq!(
+        kinds,
+        ["auth_mode", "endpoint", "secret"].into_iter().collect(),
+        "the three slots are exactly endpoint/secret/auth_mode"
+    );
+    for slot in &aggregated {
+        let (kind, name) = slot.slot.key();
+        for token in ["spec", "openapi", "yaml", LONDON_TUBE_SPEC_NAME] {
+            assert!(
+                !kind.contains(token) && !name.contains(token),
+                "no slot may derive from the OpenAPI spec — the spec is BAKED and can only move \
+                 the package digest; offending slot: {kind}/{name}"
+            );
+        }
+    }
+
+    // --- required_slots returns BOTH families, which detect_deviation cannot
+    let required = required_slots(&package.config_slots);
+    assert_eq!(required.len(), 3);
+    assert!(
+        required
+            .iter()
+            .any(|r| r.class == SlotClass::IdentityBearing),
+        "the credential must appear in the inventory a target environment must fill"
+    );
+    assert!(
+        required.iter().all(|r| r.config_key.is_some()),
+        "every config-server slot names the config path it fills"
+    );
 }
