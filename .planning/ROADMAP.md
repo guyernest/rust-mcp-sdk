@@ -2288,11 +2288,14 @@ regression.
 
 1. **Scope taken as scoped.** Phases 120-124, their names and their goals are fixed as written at
    the 2026-07-27 scoping pass. No re-derivation, no renumbering, no added phase.
+
 2. **Phases 122 and 123 stay PARKED / contract-first.** A vendored contract plus an offline blocking
    contract test only — **no live E2E leg this milestone**. Every success criterion for both phases
    is achievable entirely offline, inside this repo, with the pmcp.run backend unavailable.
+
 3. **UNAS-01 (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is deferred again** and gets no phase —
    there is no Phase 125. It stays in Future Requirements, unassigned, with its measurement attached.
+
 4. **Work continues on a rebased `feat/package-remote-capture-show`**, not a fresh branch off `main`.
 
 - [ ] **Phase 120: Config-Server Packaging** — `pack_server` currently demands `bootstrap: &[u8]`, so a config-only server cannot be expressed. Add vendor media types for the server's own `config.toml` and its OpenAPI spec as layers, and make the binary **dual-mode**: embedded (bootstrap bytes, for a new server or a new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required. Decide and document what is *baked* versus what is a *slot* — the working split is that the spec is baked (it defines the tool surface; change it and it is a different package) while endpoint, credentials and auth mode are slots.
@@ -2323,10 +2326,21 @@ piece that scoping did not produce.*
 **Plans**: 5 plans (4 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 120-01-PLAN.md — Tracer: config-only pack/unpack end-to-end, plus the one-way 0.2.0 wire break (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 120-02-PLAN.md — Optional OpenAPI spec layer, 0.1.x refusal, media-type index hardening (wave 2)
 - [ ] 120-04-PLAN.md — Toolkit `[[config_slots]]` + `base_url` `${VAR}` expansion + the london-tube proving fixture (wave 2, parallel with 120-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 120-03-PLAN.md — Slot vocabulary: `SlotType::Endpoint`/`AuthMode`, `ConfigSlot.config_key`, `required_slots` (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 120-05-PLAN.md — Pack-time placeholder validation and the packed-manifest golden (wave 4)
 
 ### Phase 121: Local Round-Trip E2E

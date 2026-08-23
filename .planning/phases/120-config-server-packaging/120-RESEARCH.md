@@ -753,27 +753,30 @@ fn config_only_server_packed_manifest_digest_matches_pinned_wire_freeze_constant
 | A4 | The recommended carve-out for Pitfall 4 (exempt `AuthMode` from D-04's placeholder rule) matches user intent. CONTEXT.md calls the auth-mode key "structural", which supports it, but D-04's text is unqualified. | Pitfall 4 | Planning against the wrong reading produces an unimplementable task. **Confirm with the user.** |
 | A5 | Phase 121's `parity_replay.rs` reuse is unaffected by rewriting `temp_config_pointing_at` to use an env var. Only lines 216-225 and 248 were read in detail; the scenario YAML was not. | Pitfall 3 | A scenario step may assert on the backend URL; would surface immediately as a test failure, not silently. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 These are CONTEXT.md's three "Open for planning" items, now answered with evidence.
+All four (including the extra scope question research surfaced) are RESOLVED — recommendations
+were carried into the plans as PR-01 (plan 01), the no-completeness-check decision, the base_url
+expansion tasks (plan 04), and the two-wave split (CONTEXT.md amendment D-18).
 
 1. **Where the referenced runtime digest comes from at pack time.**
    - What we know: `pmcp-package` cannot derive it — milestone Decision 2 forbids an OCI registry client, and the deploy descriptor has **no** digest field (`ServerSection.binary: Option<String>` at `package/server.rs:107` is documented at `:88` as a "google-cloud-run-target-only extra", a binary *name*, not a digest). Meanwhile `cargo-pmcp` **already produces exactly this value**: `aws_lambda/artifact.rs` fetches prebuilt Shape A binaries (`pmcp-sql-server` / `pmcp-openapi-server` / `pmcp-workbook-server`) from GitHub release assets with a `.sha256` sidecar, and `sha256_hex` (`artifact.rs:330-337`) computes it via `pmcp_package::digest::ManifestDigest::from_bytes`.
    - What's unclear: nothing material.
-   - **Recommendation:** `BinaryMode::Referenced { digest: ManifestDigest, media_type: String }` takes the digest **verbatim from the caller, non-optional**. `pmcp-package` treats it as opaque. Document that the canonical producer is the release-asset checksum and that the bare-hex sidecar must be prefixed `sha256:` to become a `ManifestDigest`.
+   - RESOLVED: **Recommendation:** `BinaryMode::Referenced { digest: ManifestDigest, media_type: String }` takes the digest **verbatim from the caller, non-optional**. `pmcp-package` treats it as opaque. Document that the canonical producer is the release-asset checksum and that the bare-hex sidecar must be prefixed `sha256:` to become a `ManifestDigest`.
 
 2. **Whether `[[config_slots]]` needs a completeness check.**
    - What we know: D-04 catches the inverse (declared slot holding a literal). Nothing catches an undeclared environment-specific literal. A structural heuristic is possible but the fixture shows why it is unreliable: `base_url` is a bare literal that *should* be a slot, `token_secret = "london-tube-parity-dev-secret-32bytes"` is a bare literal that is **deliberately** inline and guarded by `allow_inline_token_secret_for_dev = true` (`london-tube.toml:214-220`) — a naive "literal that looks secret ⇒ missing slot" check would flag it.
    - What's unclear: whether the milestone wants a heuristic at all.
-   - **Recommendation:** do **not** add a completeness check in Phase 120. Instead make the *absence* visible: have `required_slots` (D-03) render into `cargo pmcp package inspect` output in Phase 123, so an author sees "this package declares 2 slots" and notices the third is missing. A heuristic that cries wolf on the dev token_secret is worse than none.
+   - RESOLVED: **Recommendation:** do **not** add a completeness check in Phase 120. Instead make the *absence* visible: have `required_slots` (D-03) render into `cargo pmcp package inspect` output in Phase 123, so an author sees "this package declares 2 slots" and notices the third is missing. A heuristic that cries wolf on the dev token_secret is worse than none.
 
 3. **How `base_url` becomes a `${VAR}` placeholder without breaking `parity_replay.rs`.**
    - What we know: fully answered in Pitfall 3. Two blockers (no `base_url` expansion; a literal-matching `assert!` at `parity_replay.rs:220-223`), plus the second config copy at `examples/london-tube.toml:32`.
-   - **Recommendation:** add `${VAR}`/`env:VAR` expansion for `base_url` in `pmcp-server-toolkit` reusing `resolve_credential`'s semantics, then replace `temp_config_pointing_at`'s string surgery with `std::env::set_var("TFL_BASE_URL", backend.uri())`. Net: the test gets *shorter*.
+   - RESOLVED: **Recommendation:** add `${VAR}`/`env:VAR` expansion for `base_url` in `pmcp-server-toolkit` reusing `resolve_credential`'s semantics, then replace `temp_config_pointing_at`'s string surgery with `std::env::set_var("TFL_BASE_URL", backend.uri())`. Net: the test gets *shorter*.
 
 **One additional open question research surfaced, not in CONTEXT.md:**
 
-4. **Does the phase change one crate or two?** CONTEXT.md's canonical-refs scope the work to `pmcp-package` and list `pmcp-openapi-server` only as "the proving case". Pitfalls 2 and 3 show that criterion 3 cannot be honestly demonstrated without additive changes to `pmcp-server-toolkit`. **Recommendation:** plan two waves (see Primary recommendation) and make the toolkit changes explicit tasks rather than incidental edits.
+4. **Does the phase change one crate or two?** CONTEXT.md's canonical-refs scope the work to `pmcp-package` and list `pmcp-openapi-server` only as "the proving case". Pitfalls 2 and 3 show that criterion 3 cannot be honestly demonstrated without additive changes to `pmcp-server-toolkit`. RESOLVED: **Recommendation:** plan two waves (see Primary recommendation) and make the toolkit changes explicit tasks rather than incidental edits.
 
 ## Environment Availability
 
