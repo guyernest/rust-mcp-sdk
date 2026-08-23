@@ -943,3 +943,123 @@ name = "TFL_API_KEY"
     assert_eq!(key, "backend.api_key");
     assert!(reason.contains("auth_mode"), "was: {reason}");
 }
+
+// =====================================================================
+// Plan 120-05 Task 2 — D-04 placeholder validation, through the real
+// `pack_server` path, and the "a rejected pack writes NOTHING" property.
+// =====================================================================
+
+/// The distinctive literal a failing fixture bakes in. Its ABSENCE from the
+/// error message is what proves the validator never echoes a config value —
+/// asserted, not inspected.
+const SENTINEL_CREDENTIAL: &str = "sentinel-leaked-credential";
+
+/// A config whose slot-declared credential key holds a RESOLVED literal — the
+/// exact shape D-04 exists to refuse.
+const CONFIG_WITH_BAKED_CREDENTIAL: &[u8] = br#"name = "london-tube"
+
+[[config_slots]]
+key = "backend.api_key"
+kind = "secret"
+name = "TFL_API_KEY"
+
+[backend]
+api_key = "sentinel-leaked-credential"
+"#;
+
+/// Every file currently in the layout's `blobs/sha256/` directory, sorted.
+fn blob_file_names(root: &std::path::Path) -> Vec<String> {
+    let blobs = root.join("blobs").join("sha256");
+    let mut names: Vec<String> = std::fs::read_dir(&blobs)
+        .unwrap_or_else(|e| panic!("blobs dir {blobs:?} must exist after create: {e}"))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Test 2/3: a slot-declared value key holding a resolved literal is refused by
+/// `pack_server`, and the error names the key WITHOUT echoing the literal.
+#[test]
+fn pack_server_refuses_a_config_that_bakes_a_slot_declared_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = pack_with_config(
+        &config_server_package(),
+        CONFIG_WITH_BAKED_CREDENTIAL,
+        dir.path(),
+    )
+    .expect_err("a resolved credential at a slot-declared key must not pack");
+    let (key, reason) = config_slot_violation(err);
+    assert_eq!(key, "backend.api_key");
+    assert!(reason.contains("resolved literal"), "was: {reason}");
+    assert!(
+        !reason.contains(SENTINEL_CREDENTIAL),
+        "the message must never carry the value it rejected; was: {reason}"
+    );
+}
+
+/// Test 9 (the precise form): a rejected pack leaves the layout in its
+/// post-`create` state and NOTHING more.
+///
+/// Asserting only "the index holds no manifest" would miss leaked config bytes
+/// sitting in `blobs/sha256/` — and leaked config bytes are the exact thing
+/// this validation exists to prevent. `OciLayout::create` already writes
+/// `oci-layout`, an empty `index.json` and the blobs directory, so "no layout
+/// behind" was never literally true; the checkable claim is that the blob file
+/// SET is unchanged.
+#[test]
+fn a_rejected_pack_adds_neither_a_blob_nor_an_index_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    let before = blob_file_names(dir.path());
+
+    let err = pack_server(
+        &config_server_package(),
+        referenced_binary(),
+        Some(ConfigFile {
+            file_name: CONFIG_FILE_NAME,
+            bytes: CONFIG_WITH_BAKED_CREDENTIAL,
+        }),
+        None,
+        &layout,
+    )
+    .expect_err("the baked credential must abort the pack");
+    assert!(matches!(err, PackageError::ConfigSlotViolation { .. }));
+
+    assert_eq!(
+        blob_file_names(dir.path()),
+        before,
+        "a rejected pack must not write a single blob — a leaked config layer here would be \
+         the very disclosure the validation exists to prevent"
+    );
+    assert!(
+        layout.read_index().unwrap().manifests().is_empty(),
+        "a rejected pack must not record a manifest in the index"
+    );
+}
+
+/// The auth-mode carve-out (D-17) holds through the real pack path: a
+/// slot-declared auth-mode key holding a baked literal packs successfully,
+/// because `AuthConfig` is internally tagged and no placeholder form of that
+/// key can deserialize at all.
+#[test]
+fn pack_server_accepts_a_slot_declared_auth_mode_key_holding_a_literal() {
+    const AUTH_MODE_CONFIG: &[u8] = br#"[[config_slots]]
+key = "backend.auth.type"
+kind = "auth_mode"
+name = "backend-auth-mode"
+tested_value = "api_key"
+
+[backend.auth]
+type = "api_key"
+"#;
+    let mut package = config_server_package();
+    package.config_slots = vec![ConfigSlot::new(SlotType::AuthMode {
+        name: "backend-auth-mode".to_string(),
+        tested_value: "api_key".to_string(),
+    })
+    .with_config_key("backend.auth.type")];
+    let dir = tempfile::tempdir().unwrap();
+    pack_with_config(&package, AUTH_MODE_CONFIG, dir.path())
+        .expect("the structural auth-mode key is exempt from the placeholder rule (D-17)");
+}

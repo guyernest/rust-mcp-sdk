@@ -21,7 +21,9 @@
 
 use crate::digest::{canonicalize, ManifestDigest};
 use crate::error::{PackageError, Result};
-use crate::oci::config_validation::{parse_declared_config_slots, validate_config_slot_agreement};
+use crate::oci::config_validation::{
+    parse_declared_config_slots, validate_config_slot_agreement, validate_config_slot_placeholders,
+};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
     vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG,
@@ -316,6 +318,7 @@ pub fn pack_server(
     if let Some(config) = config {
         let declared = parse_declared_config_slots(config.bytes)?;
         validate_config_slot_agreement(&declared, &package.config_slots)?;
+        validate_config_slot_placeholders(config.bytes, &package.config_slots)?;
     }
 
     let envelope = ServerEnvelope {

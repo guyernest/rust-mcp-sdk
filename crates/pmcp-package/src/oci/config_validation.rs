@@ -34,7 +34,7 @@
 //! that was violated.
 
 use crate::error::{PackageError, Result};
-use crate::slot::ConfigSlot;
+use crate::slot::{ConfigSlot, SlotType};
 use std::collections::BTreeMap;
 
 /// The closed `kind` vocabulary a `[[config_slots]]` entry may declare. These
@@ -390,10 +390,242 @@ fn package_fact_map(package_slots: &[ConfigSlot]) -> Result<BTreeMap<&str, SlotF
     Ok(map)
 }
 
+// =======================================================================
+// D-04 (as amended by D-17): a slot-declared VALUE key must hold an
+// environment reference, never a resolved literal.
+// =======================================================================
+
+/// Require every slot-declared VALUE key in `config_bytes` to hold an
+/// environment reference (`${VAR}` or `env:VAR`) rather than a resolved
+/// literal, so no resolved secret or environment-specific endpoint can travel
+/// inside a packed layer (D-04, T-120-20).
+///
+/// # The slot split is THREE-way and exhaustive
+///
+/// The rule is written as a `match` over [`SlotType`] with NO catch-all arm, so
+/// a future variant is a compile error until someone decides which arm it
+/// belongs in:
+///
+/// - **Value slots — [`SlotType::Endpoint`] and [`SlotType::Secret`].** Subject
+///   to the placeholder rule. When a config file is present, a `config_key` of
+///   `None` on one of these is itself a violation: a packable config server
+///   whose endpoint or credential slot does not say WHERE it lives cannot be
+///   validated by pack and cannot tell a target environment where to write.
+/// - **Structural — [`SlotType::AuthMode`].** Exempt (D-17). The toolkit's
+///   `AuthConfig` is internally tagged (`#[serde(tag = "type")]`), so a
+///   reference-shaped value at that key fails serde's variant dispatch before
+///   any resolution could happen — there is no placeholder form of that key
+///   that both parses and defers, which makes the baked literal the only legal
+///   content. Deviation on it surfaces through slot classification instead.
+/// - **Not config-value slots — [`SlotType::OauthClient`],
+///   [`SlotType::ChannelBinding`], [`SlotType::HumanRole`],
+///   [`SlotType::LlmProvider`], [`SlotType::BudgetOverride`].** With
+///   `config_key: None`, skipped. With a `config_key`, a violation: declaring a
+///   TOML path for a slot kind that fills none is a defect, and silently
+///   ignoring it would let a package claim a coverage it does not have.
+///   ([`SlotType::HumanRole`] has no simple value field at all.)
+///
+/// Callers reach this through [`pack_server`](crate::oci::pack_server), which
+/// runs it before writing any blob. It is public so a CLI can pre-check a
+/// config before building a package at all.
+///
+/// # Errors
+///
+/// Returns [`PackageError::ConfigSlotViolation`] naming the offending config
+/// key. The offending VALUE is never echoed — it may be the exact resolved
+/// secret the rule exists to keep out of a layer.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_package::{validate_config_slot_placeholders, ConfigSlot, SlotType};
+///
+/// let slots = vec![ConfigSlot::new(SlotType::Secret {
+///     name: "TFL_APP_KEY".to_string(),
+/// })
+/// .with_config_key("backend.auth.app_key")];
+///
+/// // Accepted: the credential key defers to the environment.
+/// let deferred = b"[backend.auth]\napp_key = \"${TFL_APP_KEY}\"\n";
+/// assert!(validate_config_slot_placeholders(deferred, &slots).is_ok());
+///
+/// // Refused: the credential was resolved into the file that is about to be
+/// // packed. The error names the key and never the value.
+/// let baked = b"[backend.auth]\napp_key = \"a-real-credential\"\n";
+/// let err = validate_config_slot_placeholders(baked, &slots).unwrap_err();
+/// assert!(err.to_string().contains("backend.auth.app_key"));
+/// assert!(!err.to_string().contains("a-real-credential"));
+/// ```
+pub fn validate_config_slot_placeholders(config_bytes: &[u8], slots: &[ConfigSlot]) -> Result<()> {
+    let document = parse_document(config_bytes)?;
+    for slot in slots {
+        check_slot_placeholder(&document, slot)?;
+    }
+    Ok(())
+}
+
+/// The per-slot half of [`validate_config_slot_placeholders`] — the exhaustive
+/// three-way match itself, split out so the public function stays a loop.
+fn check_slot_placeholder(document: &toml::Value, slot: &ConfigSlot) -> Result<()> {
+    match &slot.slot {
+        // --- Value slots: subject to the placeholder rule -----------------
+        SlotType::Endpoint { name, .. } | SlotType::Secret { name } => {
+            let Some(config_key) = slot.config_key.as_deref() else {
+                return Err(violation(
+                    name,
+                    "a value slot (endpoint or secret) on a package that ships a config file \
+                     must name the config key it fills — without one, pack cannot validate it \
+                     and a target environment cannot be told where to write",
+                ));
+            };
+            let value = resolve_dotted_key(document, config_key)?;
+            let toml::Value::String(raw) = value else {
+                return Err(violation(
+                    config_key,
+                    "a slot-declared value key must hold a string; this key holds a non-string \
+                     TOML value, which no environment reference can be expressed as",
+                ));
+            };
+            if is_env_reference(raw) {
+                Ok(())
+            } else {
+                Err(violation(
+                    config_key,
+                    "holds a resolved literal; a slot-declared value key must hold an \
+                     environment reference (`${VAR}` or `env:VAR`) so the resolved value never \
+                     travels inside a packed layer",
+                ))
+            }
+        },
+        // --- Structural: exempt (D-17) ------------------------------------
+        SlotType::AuthMode { .. } => Ok(()),
+        // --- Not config-value slots ---------------------------------------
+        SlotType::OauthClient { .. }
+        | SlotType::ChannelBinding { .. }
+        | SlotType::HumanRole { .. }
+        | SlotType::LlmProvider { .. }
+        | SlotType::BudgetOverride { .. } => match slot.config_key.as_deref() {
+            None => Ok(()),
+            Some(config_key) => Err(violation(
+                config_key,
+                "this slot kind has no config-value semantics, so it cannot fill a TOML config \
+                 key; only endpoint and secret slots address a config value, and auth_mode is \
+                 structural",
+            )),
+        },
+    }
+}
+
+/// Resolve a dotted `config_key` against a parsed config document.
+///
+/// # Grammar
+///
+/// A `config_key` is one or more `.`-separated components. Each component must
+/// be a non-empty TOML **bare key** — ASCII letters, digits, `_` and `-` — and
+/// every component except the last must address a TOML **table**.
+///
+/// Deliberately OUT OF SCOPE, and REJECTED rather than mis-resolved:
+/// array indexing (`tools[0].path`), and TOML quoted keys — which means a TOML
+/// key whose literal name contains a dot is unaddressable by this grammar.
+/// Saying so in an error is honest where silently splitting on the dot is not.
+///
+/// # Errors
+///
+/// Returns [`PackageError::ConfigSlotViolation`] naming the key and the rule it
+/// broke: an empty key, an empty component (a leading dot, a trailing dot or a
+/// doubled dot), a component that is not a bare key, a path traversing a
+/// non-table, or a path that resolves to nothing. None of these silently
+/// resolves to "absent, therefore fine".
+fn resolve_dotted_key<'a>(document: &'a toml::Value, config_key: &str) -> Result<&'a toml::Value> {
+    if config_key.is_empty() {
+        return Err(violation(
+            config_key,
+            "config key is empty; the grammar is one or more dot-separated non-empty TOML bare keys",
+        ));
+    }
+    let mut current = document;
+    for component in config_key.split('.') {
+        if component.is_empty() {
+            return Err(violation(
+                config_key,
+                "config key has an empty path component (a leading dot, a trailing dot or a \
+                 doubled dot); the grammar is dot-separated non-empty TOML bare keys",
+            ));
+        }
+        if !is_bare_key(component) {
+            return Err(violation(
+                config_key,
+                "config key has a component that is not a TOML bare key (A-Z a-z 0-9 _ -); \
+                 quoted keys and array indexing are out of scope, so a TOML key whose literal \
+                 name contains a dot is unaddressable by this grammar",
+            ));
+        }
+        let table = current.as_table().ok_or_else(|| {
+            violation(
+                config_key,
+                "config key traverses a value that is not a table; the grammar addresses TOML \
+                 tables only",
+            )
+        })?;
+        current = table.get(component).ok_or_else(|| {
+            violation(
+                config_key,
+                "config key resolves to nothing in the packed config — a slot declaration \
+                 pointing at no key is a defect, not a pass",
+            )
+        })?;
+    }
+    Ok(current)
+}
+
+/// Whether `component` is a TOML bare key (non-emptiness is checked by the
+/// caller, which reports it as its own distinct rule).
+fn is_bare_key(component: &str) -> bool {
+    component
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Whether `raw` is an environment REFERENCE rather than a resolved literal.
+///
+/// Recognises exactly two forms: an `env:` prefix with a non-empty remainder,
+/// and a `${` … `}` wrapper with a non-empty inner name. Everything else — a
+/// bare literal, an unterminated brace, text after the closing brace, the
+/// malformed empty-name forms `${}` and `env:` — is a literal as far as this
+/// rule is concerned, because none of them names a variable a target
+/// environment could supply.
+///
+/// # A deliberate duplication, kept honest by a table
+///
+/// The crate that OWNS this grammar is `pmcp-server-toolkit`
+/// (`src/env_ref.rs::parse_env_ref`). It is duplicated here rather than shared
+/// because neither crate may depend on the other: `pmcp-package` is the
+/// workspace-excluded leaf, and a toolkit dependency on it inverts the
+/// layering. A silent divergence would be a real bug — a config that packs
+/// cleanly and then fails to resolve at boot, or one the runtime resolves being
+/// refused at pack — so the two implementations are held to a shared
+/// accept/reject table, `tests/golden_fixtures/env_ref_grammar_v1.tsv`,
+/// asserted from BOTH crates. A row one side disagrees with fails a test in
+/// whichever crate is wrong.
+///
+/// Note the two implementations differ in SHAPE, not in verdict:
+/// `parse_env_ref` returns `Some("")` for `${}` / `env:` (its caller resolves
+/// an empty name to omission), while this predicate answers `false` for both
+/// because an empty name is not something a package can ask an environment to
+/// fill. The table encodes that correspondence explicitly rather than papering
+/// over it.
+fn is_env_reference(raw: &str) -> bool {
+    if let Some(rest) = raw.strip_prefix("env:") {
+        return !rest.is_empty();
+    }
+    raw.strip_prefix("${")
+        .and_then(|inner| inner.strip_suffix('}'))
+        .is_some_and(|name| !name.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::SlotType;
     use proptest::prelude::*;
 
     /// The REAL config the reference OpenAPI server boots from, vendored
@@ -726,6 +958,293 @@ name = "TFL_BASE_URL"
             text in "\\PC{0,200}"
         ) {
             let _ = parse_declared_config_slots(text.as_bytes());
+        }
+    }
+
+    // ===================================================================
+    // Task 2 — D-04 placeholder validation, scoped by the exhaustive
+    // three-way slot split (D-17).
+    // ===================================================================
+
+    /// A distinctive value that must never appear in an error message. If it
+    /// does, the validator is echoing config content and a real credential
+    /// would leak the same way.
+    const SENTINEL_CREDENTIAL: &str = "sentinel-leaked-credential";
+    const SENTINEL_ENDPOINT: &str = "https://sentinel.invalid/leaked";
+
+    fn assert_names_key_without_echoing(err: PackageError, key: &str, forbidden: &str) {
+        let message = err.to_string();
+        assert!(
+            message.contains(key),
+            "the error must name the config key; message was: {message}"
+        );
+        assert!(
+            !message.contains(forbidden),
+            "the error must NOT echo the offending value; message was: {message}"
+        );
+    }
+
+    // --- Test 1: an environment reference at a value key packs ------------
+
+    #[test]
+    fn an_endpoint_slot_over_an_environment_reference_is_accepted() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap();
+    }
+
+    #[test]
+    fn the_env_colon_reference_form_is_accepted_too() {
+        let config = b"[backend]\nbase_url = \"env:TFL_BASE_URL\"\n";
+        validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap();
+    }
+
+    // --- Test 2: an endpoint holding a resolved literal is refused --------
+
+    #[test]
+    fn an_endpoint_slot_over_a_resolved_literal_is_refused_without_echoing_it() {
+        let config = format!("[backend]\nbase_url = \"{SENTINEL_ENDPOINT}\"\n");
+        let err =
+            validate_config_slot_placeholders(config.as_bytes(), &[endpoint_slot()]).unwrap_err();
+        assert_names_key_without_echoing(err, "backend.base_url", SENTINEL_ENDPOINT);
+    }
+
+    // --- Test 3: a credential holding a resolved literal is refused -------
+
+    #[test]
+    fn a_secret_slot_over_a_resolved_literal_is_refused_without_echoing_it() {
+        let config = format!("[backend.auth.query_params]\napp_key = \"{SENTINEL_CREDENTIAL}\"\n");
+        let err =
+            validate_config_slot_placeholders(config.as_bytes(), &[secret_slot()]).unwrap_err();
+        assert_names_key_without_echoing(
+            err,
+            "backend.auth.query_params.app_key",
+            SENTINEL_CREDENTIAL,
+        );
+    }
+
+    // --- Test 4: the auth-mode key is structurally exempt (D-17) ----------
+
+    #[test]
+    fn an_auth_mode_slot_over_a_baked_literal_is_accepted_because_it_is_structural() {
+        // `AuthConfig` is internally tagged, so no placeholder form of this key
+        // deserializes at all — the literal IS the only legal content.
+        let config = b"[backend.auth]\ntype = \"api_key\"\n";
+        validate_config_slot_placeholders(config, &[auth_mode_slot()]).unwrap();
+    }
+
+    // --- Test 5: config_key is conditional, not unconditionally skipped ---
+
+    #[test]
+    fn a_value_slot_with_no_config_key_is_a_violation_when_a_config_is_present() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        for slot in [
+            ConfigSlot::new(SlotType::Secret {
+                name: "TFL_APP_KEY".to_string(),
+            }),
+            ConfigSlot::new(SlotType::Endpoint {
+                name: "TFL_BASE_URL".to_string(),
+                tested_value: "https://api.tfl.gov.uk".to_string(),
+            }),
+        ] {
+            let err =
+                validate_config_slot_placeholders(config, std::slice::from_ref(&slot)).unwrap_err();
+            let (key, reason) = expect_violation(err);
+            assert_eq!(key, slot.slot.key().1);
+            assert!(reason.contains("must name the config key"), "was: {reason}");
+        }
+    }
+
+    #[test]
+    fn a_non_config_slot_kind_with_no_config_key_is_skipped_not_rejected() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        let slots = vec![
+            ConfigSlot::new(SlotType::LlmProvider {
+                name: "primary".to_string(),
+                tested_value: "anthropic".to_string(),
+            }),
+            ConfigSlot::new(SlotType::BudgetOverride {
+                name: "cap".to_string(),
+                tested_value: "10".to_string(),
+            }),
+            ConfigSlot::new(SlotType::OauthClient {
+                name: "client".to_string(),
+            }),
+            ConfigSlot::new(SlotType::ChannelBinding {
+                name: "notify".to_string(),
+            }),
+            ConfigSlot::new(SlotType::HumanRole {
+                role: "approver".to_string(),
+                description: "approves".to_string(),
+                responsibilities: vec![],
+                channel_hints: vec![],
+            }),
+        ];
+        validate_config_slot_placeholders(config, &slots).unwrap();
+    }
+
+    // --- Test 6: a non-config variant that DOES carry a config_key --------
+
+    #[test]
+    fn a_non_config_slot_kind_carrying_a_config_key_is_a_violation() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        let cases = [
+            ConfigSlot::new(SlotType::LlmProvider {
+                name: "primary".to_string(),
+                tested_value: "anthropic".to_string(),
+            })
+            .with_config_key("backend.base_url"),
+            ConfigSlot::new(SlotType::HumanRole {
+                role: "approver".to_string(),
+                description: "approves".to_string(),
+                responsibilities: vec![],
+                channel_hints: vec![],
+            })
+            .with_config_key("backend.base_url"),
+            ConfigSlot::new(SlotType::BudgetOverride {
+                name: "cap".to_string(),
+                tested_value: "10".to_string(),
+            })
+            .with_config_key("backend.base_url"),
+            ConfigSlot::new(SlotType::OauthClient {
+                name: "client".to_string(),
+            })
+            .with_config_key("backend.base_url"),
+            ConfigSlot::new(SlotType::ChannelBinding {
+                name: "notify".to_string(),
+            })
+            .with_config_key("backend.base_url"),
+        ];
+        for slot in cases {
+            let err =
+                validate_config_slot_placeholders(config, std::slice::from_ref(&slot)).unwrap_err();
+            let (key, reason) = expect_violation(err);
+            assert_eq!(key, "backend.base_url");
+            assert!(
+                reason.contains("no config-value semantics"),
+                "was: {reason}"
+            );
+        }
+    }
+
+    // --- Test 7: a config_key naming nothing is a defect ------------------
+
+    #[test]
+    fn a_config_key_that_resolves_to_nothing_is_a_violation() {
+        let config = b"[backend]\nother = \"x\"\n";
+        let (key, reason) = expect_violation(
+            validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap_err(),
+        );
+        assert_eq!(key, "backend.base_url");
+        assert!(reason.contains("resolves to nothing"), "was: {reason}");
+    }
+
+    // --- Test 8: the config_key grammar, stated and enforced --------------
+
+    #[test]
+    fn every_malformed_config_key_is_a_named_violation_not_a_silent_pass() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        let cases: [(&str, &str); 6] = [
+            ("", "is empty"),
+            (".", "empty path component"),
+            (".backend", "empty path component"),
+            ("backend.", "empty path component"),
+            ("backend..base_url", "empty path component"),
+            ("backend.base_url.inner", "not a table"),
+        ];
+        for (config_key, expected_rule) in cases {
+            let slot = ConfigSlot::new(SlotType::Endpoint {
+                name: "TFL_BASE_URL".to_string(),
+                tested_value: "https://api.tfl.gov.uk".to_string(),
+            })
+            .with_config_key(config_key);
+            let (key, reason) =
+                expect_violation(validate_config_slot_placeholders(config, &[slot]).unwrap_err());
+            assert_eq!(key, config_key, "the error must name the offending key");
+            assert!(
+                reason.contains(expected_rule),
+                "key {config_key:?} must state which rule it broke; was: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_quoted_or_indexed_config_key_is_rejected_rather_than_mis_resolved() {
+        let config = b"[backend]\nbase_url = \"${TFL_BASE_URL}\"\n";
+        for config_key in ["backend.\"base.url\"", "tools[0].path"] {
+            let slot = ConfigSlot::new(SlotType::Endpoint {
+                name: "N".to_string(),
+                tested_value: "v".to_string(),
+            })
+            .with_config_key(config_key);
+            let (_, reason) =
+                expect_violation(validate_config_slot_placeholders(config, &[slot]).unwrap_err());
+            assert!(reason.contains("bare key"), "was: {reason}");
+        }
+    }
+
+    #[test]
+    fn a_value_slot_key_addressing_a_non_string_is_a_violation() {
+        let config = b"[backend]\nbase_url = 7\n";
+        let (key, reason) = expect_violation(
+            validate_config_slot_placeholders(config, &[endpoint_slot()]).unwrap_err(),
+        );
+        assert_eq!(key, "backend.base_url");
+        assert!(reason.contains("must hold a string"), "was: {reason}");
+    }
+
+    // --- The env-reference grammar itself ---------------------------------
+
+    #[test]
+    fn is_env_reference_recognises_exactly_the_two_reference_forms() {
+        assert!(is_env_reference("${TFL_BASE_URL}"));
+        assert!(is_env_reference("env:TFL_BASE_URL"));
+        // Malformed empty-name forms name no variable, so they are not
+        // references a target environment could fill.
+        assert!(!is_env_reference("${}"));
+        assert!(!is_env_reference("env:"));
+        // Unterminated, trailing text, plain literals, whitespace-wrapped.
+        assert!(!is_env_reference("${TFL_BASE_URL"));
+        assert!(!is_env_reference("${TFL_BASE_URL}-suffix"));
+        assert!(!is_env_reference("https://api.tfl.gov.uk"));
+        assert!(!is_env_reference(""));
+        assert!(!is_env_reference("  ${TFL_BASE_URL}  "));
+    }
+
+    // --- The real fixture passes both gates -------------------------------
+
+    #[test]
+    fn the_real_fixture_passes_placeholder_validation_for_all_three_slots() {
+        validate_config_slot_placeholders(LONDON_TUBE_TOML, &london_tube_package_slots()).unwrap();
+    }
+
+    // --- Test 11: never-panic property (the FUZZ leg) ---------------------
+
+    proptest! {
+        /// FUZZ (CLAUDE.md ALWAYS): `pmcp-package` is workspace-excluded with its
+        /// own `[workspace]` table, so a `cargo fuzz` target would need a second
+        /// fuzz workspace outside every gate that runs today. A `proptest`
+        /// never-panic property over the same newly-promoted TOML parse boundary
+        /// buys the same guarantee INSIDE `make pmcp-package-gate`.
+        #[test]
+        fn validate_config_slot_placeholders_never_panics(
+            bytes in proptest::collection::vec(any::<u8>(), 0..512),
+            config_key in "\\PC{0,40}"
+        ) {
+            let slot = ConfigSlot::new(SlotType::Secret { name: "N".to_string() })
+                .with_config_key(config_key);
+            // Total on both axes: arbitrary config bytes (including non-UTF-8)
+            // and arbitrary config keys (empty, dot-only, deeply dotted).
+            let _ = validate_config_slot_placeholders(&bytes, &[slot]);
+        }
+
+        #[test]
+        fn resolve_dotted_key_never_panics_on_arbitrary_dotted_keys(
+            config_key in "[.a-zA-Z0-9_-]{0,40}"
+        ) {
+            let document: toml::Value =
+                toml::from_str("[backend]\nbase_url = \"${X}\"\n[backend.auth]\ntype = \"t\"\n")
+                    .unwrap();
+            let _ = resolve_dotted_key(&document, &config_key);
         }
     }
 }
