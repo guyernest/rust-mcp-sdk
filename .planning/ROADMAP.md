@@ -2358,7 +2358,7 @@ Plans:
   3. Once those named slots are filled, the environment-B binary serves a tool list set-equal to environment A's, and `london-tube-scenarios.yaml` replays green through `mcp-tester`'s `ScenarioExecutor` with per-step gating — the same harness `parity_replay.rs` uses, so parity is asserted on served behaviour (PKG-04)
   4. The test is proven insensitive to manifest shape and sensitive to real regressions, both directions exercised: adding a field to `ServerPackage` leaves it green, while dropping a tool from B's served surface or leaving a named slot unfilled turns it red. It contains no assertion on manifest field names, layer ordering or digest values (PKG-04)
 
-**Plans**: 2/3 plans executed (3 waves, strictly sequential)
+**Plans**: 3/3 plans executed (3 waves, strictly sequential)
 
 Plans:
 
@@ -2372,7 +2372,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 — same file)*
 
-- [ ] 121-03-PLAN.md — SC4 both directions: negative tests over a deliberately-degraded environment B (D-08), the D-09 structural guard with a nonzero-lines-scanned floor, and the stale `detect_deviation` rustdoc correction
+- [x] 121-03-PLAN.md — SC4 both directions: negative tests over a deliberately-degraded environment B (D-08), the D-09 structural guard with a nonzero-lines-scanned floor, and the stale `detect_deviation` rustdoc correction
 
 ### Phase 122: Attestation Carriage *(contract-first — PARKED on the pmcp.run backend)*
 
@@ -2434,7 +2434,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | Phase | Requirements | Plans Complete | Status | Completed |
 |-------|--------------|----------------|--------|-----------|
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | In Progress|  |
-| 121. Local Round-Trip E2E | PKG-04 | 2/3 | In Progress|  |
+| 121. Local Round-Trip E2E | PKG-04 | 3/3 | In Progress|  |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 0/TBD | Not started | - |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
