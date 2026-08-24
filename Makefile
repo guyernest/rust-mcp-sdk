@@ -294,6 +294,94 @@ test-cargo-pmcp:
 	fi; \
 	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
 
+# Proof that `test-openapi-server`'s per-binary count guard is SENSITIVE, not
+# merely present.
+#
+# Phase 121 review finding CR-02 was a guard that shipped with no demonstration
+# of its own sensitivity and nothing that re-proved it, so it stayed green for a
+# year over a check that could be satisfied by a compiler warning. Fixing only
+# the pattern would repeat that shape one level up. This target is the
+# re-proving.
+#
+# It feeds five synthetic cargo-output fixtures through
+# `scripts/named-test-binary-count.awk` — the SAME file the gate below reads,
+# not a copy of its logic. That single source is what makes a green self-test
+# evidence about the gate rather than evidence about a re-implementation that
+# has drifted from it.
+#
+# The fixtures are transcribed from real measured cargo output, including the
+# leading whitespace on the target line and the trailing fields of the result
+# line. No cargo, no network, no compilation: sub-second, so it can sit in front
+# of the gate on every run.
+#
+# The five cases, and what each one pins (comments cannot live inside the
+# recipe: its lines are backslash-joined into a single shell command, where a
+# `#` would swallow everything after it):
+#
+#   real            -> 8   the green control: a target line, then 8 passed.
+#   all_ignored     -> 0   THE CR-02 REGRESSION FIXTURE. Also the fixture a
+#                          `running N tests` check would WRONGLY PASS: an
+#                          all-#[ignore]d suite prints `running 1 test` while
+#                          passing nothing. Only the result line's passed count
+#                          reports 0 here.
+#   cfg_empty       -> 0   a `#![cfg]`-emptied file: `running 0 tests`.
+#   diagnostic_only -> -1  CR-02 POINT 2 — the shape the old substring check
+#                          ACCEPTED: a rustc diagnostic naming
+#                          `tests/roundtrip_e2e.rs`, plus an unrelated lib
+#                          unittests block, and no target line for the wanted
+#                          binary at all.
+#   truncated       -> -2  a target line with no result line after it.
+.PHONY: test-openapi-server-guard-selftest
+test-openapi-server-guard-selftest:
+	@echo "$(BLUE)Self-testing the named-test-binary count extractor...$(NC)"
+	@fail=0; \
+	check() { \
+		fixture="$$1"; expected="$$2"; text="$$3"; \
+		actual=$$(printf '%s\n' "$$text" | awk -v want="tests/roundtrip_e2e.rs" -f scripts/named-test-binary-count.awk); \
+		if [ "$$actual" != "$$expected" ]; then \
+			echo "$(RED)✗ guard self-test fixture '$$fixture': expected $$expected, actual $$actual$(NC)"; \
+			fail=1; \
+		fi; \
+	}; \
+	real=$$(printf '%s\n' \
+		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
+		'' \
+		'running 8 tests' \
+		'' \
+		'test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s'); \
+	check real 8 "$$real"; \
+	all_ignored=$$(printf '%s\n' \
+		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
+		'' \
+		'running 1 test' \
+		'test roundtrip_smoke ... ignored' \
+		'' \
+		'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s'); \
+	check all_ignored 0 "$$all_ignored"; \
+	cfg_empty=$$(printf '%s\n' \
+		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
+		'' \
+		'running 0 tests' \
+		'' \
+		'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'); \
+	check cfg_empty 0 "$$cfg_empty"; \
+	diagnostic_only=$$(printf '%s\n' \
+		'warning: unused import: std::env' \
+		'   --> tests/roundtrip_e2e.rs:123:5' \
+		'     Running unittests src/lib.rs (target/debug/deps/pmcp_openapi_server-2f0a1c9d4b6e8a13)' \
+		'' \
+		'running 14 tests' \
+		'' \
+		'test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s'); \
+	check diagnostic_only -1 "$$diagnostic_only"; \
+	truncated=$$(printf '%s\n' \
+		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
+		'' \
+		'running 8 tests'); \
+	check truncated -2 "$$truncated"; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	echo "$(GREEN)✓ count extractor self-test passed: real=8, all_ignored=0, cfg_empty=0, diagnostic_only=-1, truncated=-2$(NC)"
+
 # The GATE's reach into `crates/pmcp-openapi-server/tests/`, mirroring
 # test-tester and test-cargo-pmcp.
 #
@@ -349,7 +437,7 @@ test-cargo-pmcp:
 # run concurrently. `parity_replay.rs`'s own module doc already prescribes
 # single-threaded execution for exactly that reason.
 .PHONY: test-openapi-server
-test-openapi-server:
+test-openapi-server: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running pmcp-openapi-server's own tests...$(NC)"
 	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-openapi-server -- --test-threads=1 2>&1); \
 	status=$$?; \
