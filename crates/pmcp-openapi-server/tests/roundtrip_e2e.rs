@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use mcp_tester::report::TestStatus;
 use mcp_tester::{ScenarioExecutor, ServerTester, TestScenario};
-use pmcp_openapi_server::{run_serving, Args};
+use pmcp_openapi_server::{run_serving, Args, DispatchError, RunError};
 use pmcp_package::oci::{
     pack_server, parse_declared_config_slots, unpack_server, BinaryMode, ConfigFile,
     DeclaredConfigSlot, OciLayout, UnpackedServer,
@@ -61,13 +61,14 @@ use pmcp_package::package::{
 };
 use pmcp_package::slot::{detect_deviation, required_slots, ConfigSlot, SlotClass, SlotType};
 use pmcp_package::ManifestDigest;
+use pmcp_server_toolkit::ToolkitError;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use wiremock::MockServer;
 
 mod common;
 
-use common::{fixtures_dir, mount_london_tube, tfl_env_lock, DUMMY_APP_KEY};
+use common::{fixtures_dir, mount_london_tube, tfl_env_lock, EnvVarGuard, DUMMY_APP_KEY};
 
 // ---------------------------------------------------------------------
 // Constants
@@ -1103,4 +1104,295 @@ async fn roundtrip_scenarios_replay_green_in_env_b() {
 
     // Bounded shutdown — no leaked spawned server.
     handle_b.abort();
+}
+
+// =====================================================================
+// SC4-red — the round trip is SENSITIVE to a real regression (D-08)
+//
+// One negative case per required failure mode, following the two-part
+// assertion discipline of `crates/pmcp-package/tests/negative.rs:27-63`:
+// assert the SPECIFIC error variant, THEN assert the `Display` message
+// names the degraded identifier. Asserting only that a result is an error
+// would pass when it failed for an unrelated reason — the same weakness
+// that disqualified `#[should_panic]`, which catches ANY panic from ANY
+// cause and so passes green on an unrelated failure (D-08). NO test in
+// this file uses a panic-catching test ATTRIBUTE.
+//
+// Both negatives degrade only an IN-MEMORY snapshot or the process
+// environment. Neither touches a checked-in fixture.
+// =====================================================================
+
+/// The tool the missing-tool negative REMOVES from environment B's captured
+/// surface.
+///
+/// Named ONCE, in a constant read by BOTH the degradation and the assertion,
+/// so the two cannot drift apart: a test that removed one tool and asserted
+/// on another would go green for the wrong reason the day the surface changed.
+const DEGRADED_MISSING_TOOL: &str = "get-tube-status";
+
+/// SC4-red — dropping ONE named tool from environment B's served surface makes
+/// [`compare_tool_surfaces`] return `Err`, and the error NAMES that tool.
+///
+/// # Why BOTH sides come from ONE real capture
+///
+/// The surface is captured from a REAL environment B — the restored config,
+/// served through the real binary path, against B's own backend under B's own
+/// credential — so the comparison bites on genuinely served data rather than on
+/// a hand-written literal. Both arguments are then built from THAT capture: the
+/// full one as environment A's side, the same one minus [`DEGRADED_MISSING_TOOL`]
+/// as B's degraded side. That is deliberate, and it is the stronger shape:
+/// it makes the degradation the SOLE variable between the two arguments by
+/// construction. Capturing twice would admit a second possible source of
+/// difference into a test whose entire purpose is to attribute the reported
+/// mismatch to one named tool. That A's and B's independently-captured surfaces
+/// really are set-equal is a DIFFERENT claim, proven separately by
+/// [`roundtrip_tool_surface_parity`].
+///
+/// The comparison routes through [`compare_tool_surfaces`] — the SAME helper the
+/// positive path uses. If it did not, this red direction would prove nothing
+/// about the green one.
+// Why (clippy::await_holding_lock): see `roundtrip_tool_surface_parity` — the
+// endpoint and credential are read once, at assembly time, from the
+// process-global environment, so the guard must outlive the awaited
+// `run_serving`.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn degraded_env_b_missing_tool_is_reported() {
+    let _env_lock = tfl_env_lock();
+
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    // A REAL environment B: its own backend, its own credential, the config the
+    // unpack restored.
+    let backend_b = MockServer::start().await;
+    mount_london_tube(&backend_b, ENV_B_APP_KEY).await;
+    let b_uri = backend_b.uri();
+
+    let (bound_b, handle_b) =
+        serve_environment(&round_trip.restored_config_path, &b_uri, ENV_B_APP_KEY).await;
+    let mut tester_b = new_tester(bound_b);
+    // Each `ServerTester` carries its OWN session state, and `list_tools`
+    // refuses to run on an uninitialized one. `serve_environment`'s readiness
+    // probe initializes a DIFFERENT, throwaway tester, so this one must
+    // initialize for itself — exactly as `roundtrip_tool_surface_parity` does.
+    assert_eq!(
+        tester_b.test_initialize().await.status,
+        TestStatus::Passed,
+        "environment B's server must answer MCP initialize"
+    );
+    let full = capture_tool_surface(&mut tester_b, "environment B").await;
+    handle_b.abort();
+
+    // The PRECONDITION, not a check on the degradation: the tool about to be
+    // removed must actually be there to remove. Deliberately phrased over
+    // `full` rather than over the removal's arithmetic — a length check would
+    // fire FIRST if the degradation were ever made a no-op, masking the
+    // `expect_err` below, which is the assertion that must carry the inversion
+    // proof.
+    assert!(
+        full.iter().any(|(name, _)| name == DEGRADED_MISSING_TOOL),
+        "environment B must serve '{DEGRADED_MISSING_TOOL}' before it can be \
+         removed; served={:?}",
+        full.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+
+    // ---- the degradation ----
+    let degraded: Vec<(String, serde_json::Value)> = full
+        .iter()
+        .filter(|(name, _)| name != DEGRADED_MISSING_TOOL)
+        .cloned()
+        .collect();
+
+    let mismatch = compare_tool_surfaces(&full, &degraded).expect_err(
+        "dropping a tool from environment B's served surface must be REPORTED \
+         — a comparison that tolerates it is a round trip nobody has ever seen \
+         fail (PKG-04 / SC4-red)",
+    );
+
+    // (a) the SPECIFIC variant, with the tool name bound and compared. A bare
+    //     `is_err()` would also pass on a duplicate-name precondition failure
+    //     or a schema difference — three reasons unrelated to a dropped tool.
+    assert!(
+        matches!(&mismatch, SurfaceMismatch::MissingFromB { tool } if tool == DEGRADED_MISSING_TOOL),
+        "expected MissingFromB naming '{DEGRADED_MISSING_TOOL}', got {mismatch:?}"
+    );
+    // (b) the Display message NAMES the degraded identifier, so the failure a
+    //     human reads points at the tool that actually went missing.
+    assert!(
+        // This trailing comment deliberately names a deny-listed token —
+        // `digest` — from INSIDE an assertion span, and plan 121-03's
+        // structural guard stays green: proof that its sanitizer strips
+        // comments WITHIN spans, not merely whole comment lines.
+        mismatch.to_string().contains(DEGRADED_MISSING_TOOL),
+        "the mismatch message must NAME the missing tool; message was: {mismatch}"
+    );
+}
+
+/// SC4-red — standing environment B up with its ENDPOINT slot left unfilled
+/// fails assembly with the FULL nested error shape, down to the variable name.
+///
+/// # Why the whole nesting is written out
+///
+/// `RunError::Dispatch(_)` alone is TOO LOOSE for D-08. That arm also covers a
+/// missing `[backend]` section ([`DispatchError::MissingBackend`]), an
+/// auth-provider construction failure ([`DispatchError::Auth`]) and a connector
+/// construction failure ([`DispatchError::Connector`]) — so a loose test would
+/// pass for three reasons that have nothing to do with an unfilled slot. The
+/// three links of the chain are
+/// `crates/pmcp-server-toolkit/src/config.rs:562` ->
+/// `crates/pmcp-openapi-server/src/dispatch.rs:73` ->
+/// `crates/pmcp-openapi-server/src/lib.rs:73`, and all three are named in the
+/// pattern with the inner `var` bound and compared.
+///
+/// # Why the environment mutation is RAII and not a trailing line
+///
+/// `TFL_BASE_URL` is removed through [`EnvVarGuard`], whose `Drop` restores the
+/// prior value even when an earlier assertion panics. A trailing restore line at
+/// the end of the body is SKIPPED the moment anything above it fails, and the
+/// unset variable then leaks into every later test in this binary — a green run
+/// against an absent endpoint. This repo already solved that at
+/// `crates/pmcp-openapi-server/src/dispatch.rs:163`. The guard and
+/// [`tfl_env_lock`] solve two DIFFERENT problems and are held together: the lock
+/// stops a CONCURRENT test interleaving its writes, the guard stops SEQUENTIAL
+/// leakage.
+// Why (clippy::await_holding_lock): the environment is read once, at assembly
+// time, inside the awaited `run_serving` — so the lock must still be held when
+// that await completes.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn degraded_env_b_unfilled_slot_is_reported() {
+    let _env_lock = tfl_env_lock();
+
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    // The CREDENTIAL stays filled — exactly ONE slot is degraded. `dispatch`
+    // builds the outgoing auth provider (`src/dispatch.rs:129`) BEFORE it
+    // resolves the endpoint (`:142`), so unsetting both would risk failing at
+    // `DispatchError::Auth` and the nested pattern below would never be reached.
+    let _app_key_guard = EnvVarGuard::set("TFL_APP_KEY", ENV_B_APP_KEY);
+    // ---- the degradation: the endpoint slot is left UNFILLED ----
+    let _base_url_guard = EnvVarGuard::unset("TFL_BASE_URL");
+
+    let args = Args {
+        config: round_trip.restored_config_path.clone(),
+        spec: None,
+        http: "127.0.0.1:0".to_string(),
+    };
+    let err = run_serving(&args).await.expect_err(
+        "environment B must REFUSE to assemble while its endpoint slot is \
+         unfilled — assembling anyway would serve a nonsense URL (PKG-04 / \
+         SC4-red)",
+    );
+
+    // (a) the FULL nested shape. `match` rather than `matches!` because the
+    //     inner `var` has to be BOUND to be compared; the explicit `_` arm is
+    //     required because `RunError`, `DispatchError` and `ToolkitError` are
+    //     each `#[non_exhaustive]` at the enum level.
+    match &err {
+        RunError::Dispatch(DispatchError::UnresolvedBaseUrl(
+            ToolkitError::UnresolvedBaseUrlRef { var },
+        )) => {
+            assert_eq!(
+                var, "TFL_BASE_URL",
+                "the error must name the UNFILLED slot's variable, not some \
+                 other unresolved reference"
+            );
+        },
+        other => panic!(
+            "expected RunError::Dispatch(DispatchError::UnresolvedBaseUrl(\
+             ToolkitError::UnresolvedBaseUrlRef {{ .. }})), got {other:?}"
+        ),
+    }
+    // (b) the Display message NAMES the slot the target environment failed to
+    //     fill — the actionable half.
+    assert!(
+        err.to_string().contains("TFL_BASE_URL"),
+        "the error message must name the unfilled slot; message was: {err}"
+    );
+
+    // NO trailing restore line here, deliberately. Both guards above restore on
+    // drop, INCLUDING when any assertion in this body panics — see this
+    // function's doc comment and `env_var_guard_restores_prior_state_including_on_panic`.
+}
+
+/// The environment variable the RAII-restoration proof mutates.
+///
+/// It is UNIQUE to this test — no other test in this crate reads or writes it —
+/// and that uniqueness is what stands in for a lock. This test deliberately
+/// takes no [`tfl_env_lock`] and touches no `TFL_*` variable, so it cannot
+/// perturb the endpoint or credential any other test in this binary depends on.
+const GUARD_PROBE_VAR: &str = "PMCP_ROUNDTRIP_E2E_GUARD_PROBE";
+
+/// The RAII proof the unfilled-slot negative's isolation rests on:
+/// [`EnvVarGuard`] restores the prior state in BOTH directions, even after the
+/// guarded body panics.
+///
+/// Modelled on `crates/pmcp-server-toolkit/tests/base_url_expansion.rs:161`.
+///
+/// # This is NOT the panic-catching shape D-08 rejects — do not delete it as one
+///
+/// D-08 rejects the panic-catching test ATTRIBUTE because it passes green on any
+/// panic from any cause, so a test wearing it can fail for a reason unrelated to
+/// the property it names. Here the panic is DELIBERATELY RAISED by this test's
+/// own closure, and it is not the thing under scrutiny at all: it is the
+/// PRECONDITION for the assertion that follows it, which is about the state the
+/// guard restored AFTERWARDS. `catch_unwind` is the only way to reach that
+/// post-condition, and the panic's cause is fixed by this test rather than
+/// accepted from anywhere.
+#[test]
+fn env_var_guard_restores_prior_state_including_on_panic() {
+    // (a) previously UNSET -> restored to UNSET after a panicking body. The
+    //     OUTER guard establishes the precondition and itself restores whatever
+    //     this binary's environment held before the test.
+    {
+        let _outer = EnvVarGuard::unset(GUARD_PROBE_VAR);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _inner = EnvVarGuard::set(GUARD_PROBE_VAR, "set-by-the-inner-guard");
+            assert_eq!(
+                std::env::var(GUARD_PROBE_VAR).as_deref(),
+                Ok("set-by-the-inner-guard")
+            );
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert!(
+            std::env::var(GUARD_PROBE_VAR).is_err(),
+            "a previously-UNSET variable must be restored to unset even after a \
+             panic — a trailing restore line would have been skipped here, and \
+             the variable would leak into every later test in this binary"
+        );
+    }
+
+    // (b) previously SET -> restored to the OLD value after a panicking body. A
+    //     `Drop` that only removed would turn a previously-set variable into an
+    //     unset one, which is a DIFFERENT leak rather than a fix — so both
+    //     directions are asserted.
+    {
+        let _outer = EnvVarGuard::set(GUARD_PROBE_VAR, "the-original-value");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _inner = EnvVarGuard::set(GUARD_PROBE_VAR, "the-overridden-value");
+            assert_eq!(
+                std::env::var(GUARD_PROBE_VAR).as_deref(),
+                Ok("the-overridden-value")
+            );
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert_eq!(
+            std::env::var(GUARD_PROBE_VAR).as_deref(),
+            Ok("the-original-value"),
+            "a previously-SET variable must be restored to its OLD value even \
+             after a panic"
+        );
+    }
+
+    // Both outer guards have dropped: the process environment is exactly as this
+    // test found it. Every mutation above went through the guard — there is no
+    // bare `set_var` in this function.
 }
