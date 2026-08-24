@@ -59,7 +59,7 @@ use pmcp_package::package::{
     AssetsSection, AuthSection, AwsSection, CedarPolicySet, DeployDescriptor, ObservabilitySection,
     ServerPackage, ServerSection, TargetSection, ToolMetadata,
 };
-use pmcp_package::slot::{ConfigSlot, SlotType};
+use pmcp_package::slot::{detect_deviation, required_slots, ConfigSlot, SlotClass, SlotType};
 use pmcp_package::ManifestDigest;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
@@ -771,4 +771,216 @@ async fn roundtrip_tool_surface_parity() {
         !round_trip.unpacked.package.config_slots.is_empty(),
         "the unpacked package must carry the config slots B has to fill"
     );
+}
+
+// ---------------------------------------------------------------------
+// SC2a — what environment B must fill, against a literal nothing produced
+// ---------------------------------------------------------------------
+
+/// One expected slot, keyed on `(kind, name)` — the same `(kind, name)` tuple
+/// [`SlotType::key`] returns.
+type SlotKey = (String, String);
+/// What the expected map holds per key: the family and the dotted config path.
+type SlotFact = (SlotClass, Option<String>);
+
+/// The three slots the london-tube package requires, TRANSCRIBED BY HAND from
+/// `crates/pmcp-openapi-server/tests/fixtures/london-tube.toml` lines 55-73.
+///
+/// # This literal must NEVER be derived (D-06)
+///
+/// Not from the packed package, not from the fixture parse, not from anything
+/// else under test. Deriving the expected set from the same package it is
+/// compared against is a tautology that can pass while measuring nothing — this
+/// milestone has already shipped that shape twice. A slot added to
+/// `london-tube.toml` later MUST turn this test RED until someone consciously
+/// updates this function. That is SC2's stated intent, not a maintenance burden
+/// to engineer away.
+///
+/// # The auth-mode entry is the trap (RESEARCH CF-7)
+///
+/// [`SlotType::key`] is `(kind, name)`, and the auth-mode slot's NAME is
+/// `backend-auth-mode` while its CONFIG KEY is `backend.auth.type`. BOTH
+/// `required_slots`' own doctest (`slot/required.rs:71`) and its in-crate test
+/// helper (`slot/required.rs:121-127`) put the DOTTED spelling in the name
+/// position. Copying either produces a literal that can never match, and the
+/// failure reads like a slot-enumeration bug rather than the transcription
+/// error it is.
+fn expected_required_slots() -> BTreeMap<SlotKey, SlotFact> {
+    BTreeMap::from([
+        (
+            ("auth_mode".to_string(), "backend-auth-mode".to_string()),
+            (
+                SlotClass::BehaviorRelevant,
+                Some("backend.auth.type".to_string()),
+            ),
+        ),
+        (
+            ("endpoint".to_string(), "TFL_BASE_URL".to_string()),
+            (
+                SlotClass::BehaviorRelevant,
+                Some("backend.base_url".to_string()),
+            ),
+        ),
+        (
+            ("secret".to_string(), "TFL_APP_KEY".to_string()),
+            (
+                SlotClass::IdentityBearing,
+                Some("backend.auth.query_params.app_key".to_string()),
+            ),
+        ),
+    ])
+}
+
+/// Project `required_slots`' output into the expected map's shape.
+///
+/// The `BTreeMap` projection is DELIBERATE. `required_slots` already sorts by
+/// `(kind, name)` (`slot/required.rs:96`), so a direct vector comparison would
+/// be order-sensitive BY ACCIDENT — it would pass because of an incidental sort
+/// order rather than because the two SETS are equal, which is what SC2 says.
+/// A set of `RequiredSlot` itself is not available: it derives neither `Hash`
+/// nor `Ord` (`slot/required.rs:20`).
+fn project_required_slots(slots: &[ConfigSlot]) -> BTreeMap<SlotKey, SlotFact> {
+    // `aggregate()` is deliberately NOT called here, and its absence is not an
+    // oversight. `aggregate` dedups by `(kind, name)` and errors on divergent
+    // `config_key`/`tested_value`. The london-tube package has exactly ONE
+    // component and THREE DISTINCT slots, so over this set `aggregate` is an
+    // identity function with no possible collision — the call would be pure
+    // decoration and the set-equality assertion below would pass identically
+    // with or without it. Manufacturing a use for it to justify the function
+    // would be scope creep (121-CONTEXT.md lists it under Deferred Ideas).
+    required_slots(slots)
+        .iter()
+        .map(|r| {
+            let (kind, name) = r.slot.key();
+            (
+                (kind.to_string(), name.to_string()),
+                (r.class, r.config_key.clone()),
+            )
+        })
+        .collect()
+}
+
+/// SC2a (D-04 / D-06) — `required_slots` over the UNPACKED package names exactly
+/// the three slots environment B must fill, against a hardcoded literal nothing
+/// under test produced.
+#[test]
+fn roundtrip_required_slots_match_expected_literal() {
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    let actual = project_required_slots(&round_trip.unpacked.package.config_slots);
+    let expected = expected_required_slots();
+
+    // The cheap floor first: a map comparison that BOTH sides got wrong the
+    // same way is the residual risk, and an explicit length assertion against
+    // the literal three catches it.
+    assert_eq!(
+        actual.len(),
+        3,
+        "the london-tube package requires exactly three slots; got {actual:#?}"
+    );
+    assert_eq!(
+        actual, expected,
+        "required_slots must name exactly the slots environment B has to fill \
+         (PKG-04 / SC2a). If this went red because a slot was ADDED to \
+         tests/fixtures/london-tube.toml, that is the test working as designed \
+         — update expected_required_slots() consciously (D-06)."
+    );
+}
+
+// ---------------------------------------------------------------------
+// SC2b — detect_deviation's DRIFT role, and what it structurally cannot see
+// ---------------------------------------------------------------------
+
+/// SC2b (D-04) — `detect_deviation` reports environment B's endpoint drift, and
+/// is structurally unable to name the credential.
+///
+/// The contrast is the point. `detect_deviation` short-circuits on
+/// identity-bearing slots (`slot/deviation.rs:29-33`), so it can NEVER name
+/// `TFL_APP_KEY` — which is the single most important thing environment B must
+/// supply. That is exactly why SC2's set-equality assertion is routed through
+/// `required_slots` and not through this function (D-04 / D-05, ROADMAP
+/// corrected in commit `91dd3978`).
+#[tokio::test]
+async fn roundtrip_endpoint_drift_is_reported() {
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+    let slots = &round_trip.unpacked.package.config_slots;
+
+    // Environment B's real endpoint. No env var is written and nothing is
+    // served here, so this test takes no `tfl_env_lock`.
+    let backend_b = MockServer::start().await;
+    let b_uri = backend_b.uri();
+
+    // ---- the endpoint DOES drift ----
+    let packed_endpoint = slots
+        .iter()
+        .find(|s| s.slot.key().0 == "endpoint")
+        .expect("the unpacked package declares the endpoint slot");
+    let packed_tested = packed_endpoint
+        .slot
+        .tested_value()
+        .expect("a behavior-relevant slot carries its tested value")
+        .to_string();
+    assert_ne!(
+        packed_tested, b_uri,
+        "environment B must propose an endpoint DIFFERENT from the packed \
+         tested value, or there is no drift to detect"
+    );
+
+    // `with_tested_value` is the canonical builder for a proposed slot from a
+    // resolved value (`slot/types.rs:157`).
+    let proposed = packed_endpoint
+        .slot
+        .with_tested_value(&b_uri)
+        .expect("a behavior-relevant slot can carry a proposed value");
+    let deviation = detect_deviation(&packed_endpoint.slot, &proposed)
+        .expect("environment B's endpoint differs from the packed tested value");
+    assert_eq!(
+        deviation.tested, packed_tested,
+        "the deviation reports the value the package was TESTED against"
+    );
+    assert_eq!(
+        deviation.proposed, b_uri,
+        "the deviation reports environment B's PROPOSED endpoint"
+    );
+
+    // ---- the credential structurally CANNOT drift ----
+    let packed_secret = slots
+        .iter()
+        .find(|s| s.slot.key().0 == "secret")
+        .expect("the unpacked package declares the credential slot");
+
+    // There is no proposed-value builder for it at all: an identity-bearing
+    // variant has no `tested_value` field to replace.
+    assert!(
+        packed_secret.slot.with_tested_value("anything").is_none(),
+        "an identity-bearing slot has no tested value to propose — no resolved \
+         credential is representable in the type"
+    );
+
+    // The STRONG form of the contrast: two DIFFERENT credentials still yield
+    // `None`. Pairing a slot against a clone of ITSELF would prove nothing —
+    // equal behavior-relevant slots also return `None`, so that test would pass
+    // even if the identity-bearing short-circuit did not exist
+    // (`slot/required.rs:162-167` makes the same point).
+    let rotated = SlotType::Secret {
+        name: "TFL_APP_KEY_ROTATED".to_string(),
+    };
+    assert!(
+        detect_deviation(&packed_secret.slot, &rotated).is_none(),
+        "detect_deviation is structurally incapable of naming a credential \
+         slot — which is why required_slots, not detect_deviation, carries \
+         SC2's set-equality assertion (D-04)"
+    );
+    assert!(
+        detect_deviation(&rotated, &packed_secret.slot).is_none(),
+        "the identity-bearing short-circuit holds in both directions"
+    );
+
+    // Nothing above printed or asserted on a resolved credential VALUE — only
+    // slot names and config keys. `SlotType::Secret` carries no value by
+    // construction, so following the types keeps this safe (T-121-02-02).
 }
