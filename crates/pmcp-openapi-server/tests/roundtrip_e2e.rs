@@ -49,7 +49,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mcp_tester::report::TestStatus;
-use mcp_tester::ServerTester;
+use mcp_tester::{ScenarioExecutor, ServerTester, TestScenario};
 use pmcp_openapi_server::{run_serving, Args};
 use pmcp_package::oci::{
     pack_server, parse_declared_config_slots, unpack_server, BinaryMode, ConfigFile,
@@ -983,4 +983,124 @@ async fn roundtrip_endpoint_drift_is_reported() {
     // Nothing above printed or asserted on a resolved credential VALUE — only
     // slot names and config keys. `SlotType::Secret` carries no value by
     // construction, so following the types keeps this safe (T-121-02-02).
+}
+
+// ---------------------------------------------------------------------
+// SC3b — the checked-in parity contract replays green in environment B
+// ---------------------------------------------------------------------
+
+/// SC3b — `london-tube-scenarios.yaml` replays green against the ENVIRONMENT B
+/// binary, every step gated individually, hitting B's own backend under B's own
+/// credential.
+///
+/// This is the phase's ONLY home for the recorded-backend-request assertions.
+/// `roundtrip_tool_surface_parity` only LISTS tools and therefore cannot produce
+/// a backend request at all, so the assertions were RELOCATED here rather than
+/// weakened there.
+// Why (clippy::await_holding_lock): see `roundtrip_tool_surface_parity` — the
+// guard must outlive the awaited `run_serving` assembly, because the endpoint
+// and credential are read once, at assembly time, from the process-global
+// environment.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn roundtrip_scenarios_replay_green_in_env_b() {
+    // ONE acquisition, held for the whole body.
+    let _env_lock = tfl_env_lock();
+
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    // Environment B: its OWN backend, under its OWN credential. If
+    // `mount_london_tube` were still hardcoded to environment A's key, every
+    // one of B's backend calls would 404 and the per-step gate below would go
+    // red — which is precisely RESEARCH CF-6, and precisely why the helper is
+    // parameterized.
+    let backend_b = MockServer::start().await;
+    mount_london_tube(&backend_b, ENV_B_APP_KEY).await;
+    let b_uri = backend_b.uri();
+
+    // B serves the config the UNPACK restored, never a copy of the fixture.
+    let (bound_b, handle_b) =
+        serve_environment(&round_trip.restored_config_path, &b_uri, ENV_B_APP_KEY).await;
+
+    let mut tester = new_tester(bound_b);
+    assert_eq!(
+        tester.test_initialize().await.status,
+        TestStatus::Passed,
+        "environment B's server must answer MCP initialize before the replay"
+    );
+
+    let scenario = TestScenario::from_file(fixtures_dir().join("london-tube-scenarios.yaml"))
+        .expect("load the checked-in london-tube parity contract");
+    let mut exec = ScenarioExecutor::new(&mut tester, true /* detailed */);
+    let result = exec
+        .execute(scenario)
+        .await
+        .expect("scenario execution must complete without a harness error");
+
+    // THE FLOOR COMES FIRST. An empty or unparsed scenario yields an EMPTY
+    // step-result vector, which makes the `failed.is_empty()` gate below
+    // trivially true — the test would pass having replayed nothing. The floor is
+    // a STRICT INEQUALITY against zero, deliberately NOT an equality against the
+    // six steps the YAML currently has: pinning six would couple this test to the
+    // contract file and break on a legitimate scenario addition.
+    assert!(
+        result.steps_total > 0,
+        "the scenario contract must contain at least one step — an empty step \
+         list makes the per-step gate below vacuously true"
+    );
+
+    // PER-STEP GATE: every step passes its OWN assertions, gated on
+    // `step_results[i].success` (the per-step truth) rather than an aggregate.
+    let failed: Vec<_> = result
+        .step_results
+        .iter()
+        .filter(|s| !s.success)
+        .map(|s| (&s.step_name, &s.error))
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "every london-tube parity step must pass against the ENVIRONMENT B \
+         binary. {}/{} completed; failed={failed:#?}",
+        result.steps_completed,
+        result.steps_total,
+    );
+
+    // THE ORDERING BELOW IS LOAD-BEARING AND MUST NOT BE REVERSED OR COLLAPSED.
+    // A `for` loop over an EMPTY list executes zero iterations and succeeds, so
+    // the credential-placeholder check further down is VACUOUSLY TRUE unless it
+    // is preceded by this non-emptiness assertion — it would read as a passing
+    // security assertion while measuring nothing.
+    let recorded = backend_b
+        .received_requests()
+        .await
+        .expect("wiremock records requests");
+    assert!(
+        !recorded.is_empty(),
+        "the replay's tool calls must have REACHED environment B's backend at \
+         least once — an empty recorded-request list means the scenario was a \
+         no-op and every per-request assertion below would be vacuous"
+    );
+
+    for req in &recorded {
+        let full = req.url.to_string();
+        // B's OWN credential, not A's. This is the assertion that would have
+        // caught a `mount_london_tube` left hardcoded to environment A's key.
+        assert!(
+            full.contains(&format!("app_key={ENV_B_APP_KEY}")),
+            "every backend request must carry environment B's RESOLVED \
+             credential (api_key query-param auth, D-04): {full}"
+        );
+        // The unexpanded placeholder must never reach the wire, in either its
+        // raw or its percent-encoded form (T-121-02-03 / T-90-07-04).
+        assert!(
+            !full.contains("%24%7BTFL_APP_KEY%7D") && !full.contains("${TFL_APP_KEY}"),
+            "the literal ${{TFL_APP_KEY}} placeholder must NEVER reach the wire \
+             — it must be RESOLVED: {full}"
+        );
+    }
+
+    // Bounded shutdown — no leaked spawned server.
+    handle_b.abort();
 }
