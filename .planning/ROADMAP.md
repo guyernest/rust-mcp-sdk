@@ -2354,16 +2354,17 @@ Plans:
   2. In environment B, `required_slots` (`crates/pmcp-package/src/slot/required.rs:85`) names **exactly** the slots B must fill — asserted as set equality against an explicit hardcoded expected list, so a slot added later that B is never told about turns the test red rather than being silently defaulted. Separately, once B fills its endpoint with a value differing from A's tested value, `detect_deviation` (`crates/pmcp-package/src/slot/deviation.rs:28`) must report that drift (PKG-04)
 
      > **Corrected 2026-08-23 (Phase 121 discussion, D-04/D-05).** This criterion previously routed the set-equality assertion through `detect_deviation`, which structurally cannot satisfy it: that function compares one already-known `(tested, proposed)` pair and short-circuits on identity-bearing slots, so it can never name the `TFL_APP_KEY` credential. The london-tube fixture has three slots (endpoint + auth_mode behavior-relevant, secret identity-bearing), so the original wording would have asserted a 2-slot set where the truth is 3 — silently omitting the credential, the most important thing environment B must supply. `required_slots` is the enumerator; its own doctest already states *"The credential IS enumerated here — `detect_deviation` could never name it."* Both functions are exercised, each for what it actually does.
+
   3. Once those named slots are filled, the environment-B binary serves a tool list set-equal to environment A's, and `london-tube-scenarios.yaml` replays green through `mcp-tester`'s `ScenarioExecutor` with per-step gating — the same harness `parity_replay.rs` uses, so parity is asserted on served behaviour (PKG-04)
   4. The test is proven insensitive to manifest shape and sensitive to real regressions, both directions exercised: adding a field to `ServerPackage` leaves it green, while dropping a tool from B's served surface or leaving a named slot unfilled turns it red. It contains no assertion on manifest field names, layer ordering or digest values (PKG-04)
 
-**Plans**: 3 plans (3 waves, strictly sequential)
+**Plans**: 1/3 plans executed (3 waves, strictly sequential)
 
 Plans:
 
 **Wave 1**
 
-- [ ] 121-01-PLAN.md — Regression net first: `pmcp-package` dev-dep + pin tripwire (D-01/D-03), the `test-openapi-server` Makefile gate with a nonzero-test-count guard (D-13), and the `tests/common/` helper lift with `mount_london_tube` parameterized by credential (D-02/D-12)
+- [x] 121-01-PLAN.md — Regression net first: `pmcp-package` dev-dep + pin tripwire (D-01/D-03), the `test-openapi-server` Makefile gate with a nonzero-test-count guard (D-13), and the `tests/common/` helper lift with `mount_london_tube` parameterized by credential (D-02/D-12)
 
 **Wave 2** *(blocked on Wave 1 — consumes the lifted helpers)*
 
@@ -2433,7 +2434,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | Phase | Requirements | Plans Complete | Status | Completed |
 |-------|--------------|----------------|--------|-----------|
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | In Progress|  |
-| 121. Local Round-Trip E2E | PKG-04 | 0/TBD | Not started | - |
+| 121. Local Round-Trip E2E | PKG-04 | 1/3 | In Progress|  |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 0/TBD | Not started | - |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
