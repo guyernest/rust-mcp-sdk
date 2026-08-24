@@ -74,15 +74,39 @@ url = "2.5"
 # simulated environment A and unpacks it in a distinct environment B, so it needs
 # the AI-Package format crate. It lives here (not in `pmcp-package`) because this
 # crate's dev-deps already carry `mcp-tester`, `wiremock`, `tempfile` AND the
-# served binary itself. The version requirement is the BARE CARET `0.2` — not
-# `=0.2.0`, not `0.2.0` — and that exact string is asserted verbatim by
-# `tests/pmcp_package_pin.rs` (D-03), so a silent 0.2 -> 0.3 drift fails loudly
-# rather than resolving to a version the round-trip E2E was never written against.
+# served binary itself.
+#
+# This entry is DELIBERATELY PATH-ONLY — do not add a version key (Phase 121
+# CR-01). Cargo strips a `[dev-dependencies]` entry from the published manifest
+# ONLY when it carries no version requirement; an entry that carries one is
+# retained, and `cargo publish` must then resolve it against crates.io at
+# manifest-prep time. `crates/pmcp-package` is workspace-EXCLUDED and publishes
+# from `.github/workflows/release.yml:440` via `--manifest-path`, roughly 100
+# steps AFTER this crate publishes at `release.yml:339` — so that lookup cannot
+# succeed, and the publish step's fallback (which tolerates only "already
+# exists") kills the whole release job. Measured: with a requirement present,
+# `cargo package --no-verify` on this manifest exits 101 with "failed to select
+# a version for the requirement" / "candidate versions found which didn't match:
+# 0.1.1, 0.1.0"; path-only, it exits 0 and the generated manifest in the produced
+# `.crate` contains no `pmcp-package` entry at all.
+#
+# The `exclude` list above does NOT save a versioned entry: the failure happens
+# while preparing the manifest, and excluding `tests/` removes the CONSUMERS of
+# this dev-dep, not the manifest entry itself.
+#
+# D-03's drift guarantee did not go away — it moved. `tests/pmcp_package_pin.rs`
+# now asserts (a) that this entry stays path-only, and (b) that
+# `crates/pmcp-package/Cargo.toml`'s own version field stays on the 0.2 line,
+# i.e. the crate this path dep actually resolves to. That is strictly stronger
+# than asserting a requirement string, because a path dep never consults the
+# registry a requirement would have constrained.
+#
 # `crates/pmcp-package` is workspace-EXCLUDED, so this is a path dep into a
 # standalone workspace (precedents: `crates/pmcp-agent/Cargo.toml:18`,
 # `cargo-pmcp/Cargo.toml:87` — both in `[dependencies]`; this is the first in
-# `[dev-dependencies]`).
-pmcp-package = { version = "0.2", path = "../pmcp-package" }
+# `[dev-dependencies]`, and the first in-repo consumer placed BEFORE
+# `release.yml:440`).
+pmcp-package = { path = "../pmcp-package" }
 # Why (Phase 121 D-03): the pin tripwire parses THIS manifest with a real TOML
 # parser rather than grepping its text, so a reformat or a comment cannot fool it.
 # Pinned on the 1.x line because that is the ROOT-workspace line — root
