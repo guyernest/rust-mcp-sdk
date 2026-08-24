@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use mcp_tester::report::TestStatus;
 use mcp_tester::{ScenarioExecutor, ServerTester, TestScenario};
-use pmcp_openapi_server::{run_serving, Args};
+use pmcp_openapi_server::{run_serving, Args, DispatchError, RunError};
 use pmcp_package::oci::{
     pack_server, parse_declared_config_slots, unpack_server, BinaryMode, ConfigFile,
     DeclaredConfigSlot, OciLayout, UnpackedServer,
@@ -61,13 +61,14 @@ use pmcp_package::package::{
 };
 use pmcp_package::slot::{detect_deviation, required_slots, ConfigSlot, SlotClass, SlotType};
 use pmcp_package::ManifestDigest;
+use pmcp_server_toolkit::ToolkitError;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use wiremock::MockServer;
 
 mod common;
 
-use common::{fixtures_dir, mount_london_tube, tfl_env_lock, DUMMY_APP_KEY};
+use common::{fixtures_dir, mount_london_tube, tfl_env_lock, EnvVarGuard, DUMMY_APP_KEY};
 
 // ---------------------------------------------------------------------
 // Constants
@@ -1103,4 +1104,654 @@ async fn roundtrip_scenarios_replay_green_in_env_b() {
 
     // Bounded shutdown — no leaked spawned server.
     handle_b.abort();
+}
+
+// =====================================================================
+// SC4-red — the round trip is SENSITIVE to a real regression (D-08)
+//
+// One negative case per required failure mode, following the two-part
+// assertion discipline of `crates/pmcp-package/tests/negative.rs:27-63`:
+// assert the SPECIFIC error variant, THEN assert the `Display` message
+// names the degraded identifier. Asserting only that a result is an error
+// would pass when it failed for an unrelated reason — the same weakness
+// that disqualified `#[should_panic]`, which catches ANY panic from ANY
+// cause and so passes green on an unrelated failure (D-08). NO test in
+// this file uses a panic-catching test ATTRIBUTE.
+//
+// Both negatives degrade only an IN-MEMORY snapshot or the process
+// environment. Neither touches a checked-in fixture.
+// =====================================================================
+
+/// The tool the missing-tool negative REMOVES from environment B's captured
+/// surface.
+///
+/// Named ONCE, in a constant read by BOTH the degradation and the assertion,
+/// so the two cannot drift apart: a test that removed one tool and asserted
+/// on another would go green for the wrong reason the day the surface changed.
+const DEGRADED_MISSING_TOOL: &str = "get-tube-status";
+
+/// SC4-red — dropping ONE named tool from environment B's served surface makes
+/// [`compare_tool_surfaces`] return `Err`, and the error NAMES that tool.
+///
+/// # Why BOTH sides come from ONE real capture
+///
+/// The surface is captured from a REAL environment B — the restored config,
+/// served through the real binary path, against B's own backend under B's own
+/// credential — so the comparison bites on genuinely served data rather than on
+/// a hand-written literal. Both arguments are then built from THAT capture: the
+/// full one as environment A's side, the same one minus [`DEGRADED_MISSING_TOOL`]
+/// as B's degraded side. That is deliberate, and it is the stronger shape:
+/// it makes the degradation the SOLE variable between the two arguments by
+/// construction. Capturing twice would admit a second possible source of
+/// difference into a test whose entire purpose is to attribute the reported
+/// mismatch to one named tool. That A's and B's independently-captured surfaces
+/// really are set-equal is a DIFFERENT claim, proven separately by
+/// [`roundtrip_tool_surface_parity`].
+///
+/// The comparison routes through [`compare_tool_surfaces`] — the SAME helper the
+/// positive path uses. If it did not, this red direction would prove nothing
+/// about the green one.
+// Why (clippy::await_holding_lock): see `roundtrip_tool_surface_parity` — the
+// endpoint and credential are read once, at assembly time, from the
+// process-global environment, so the guard must outlive the awaited
+// `run_serving`.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn degraded_env_b_missing_tool_is_reported() {
+    let _env_lock = tfl_env_lock();
+
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    // A REAL environment B: its own backend, its own credential, the config the
+    // unpack restored.
+    let backend_b = MockServer::start().await;
+    mount_london_tube(&backend_b, ENV_B_APP_KEY).await;
+    let b_uri = backend_b.uri();
+
+    let (bound_b, handle_b) =
+        serve_environment(&round_trip.restored_config_path, &b_uri, ENV_B_APP_KEY).await;
+    let mut tester_b = new_tester(bound_b);
+    // Each `ServerTester` carries its OWN session state, and `list_tools`
+    // refuses to run on an uninitialized one. `serve_environment`'s readiness
+    // probe initializes a DIFFERENT, throwaway tester, so this one must
+    // initialize for itself — exactly as `roundtrip_tool_surface_parity` does.
+    assert_eq!(
+        tester_b.test_initialize().await.status,
+        TestStatus::Passed,
+        "environment B's server must answer MCP initialize"
+    );
+    let full = capture_tool_surface(&mut tester_b, "environment B").await;
+    handle_b.abort();
+
+    // The PRECONDITION, not a check on the degradation: the tool about to be
+    // removed must actually be there to remove. Deliberately phrased over
+    // `full` rather than over the removal's arithmetic — a length check would
+    // fire FIRST if the degradation were ever made a no-op, masking the
+    // `expect_err` below, which is the assertion that must carry the inversion
+    // proof.
+    assert!(
+        full.iter().any(|(name, _)| name == DEGRADED_MISSING_TOOL),
+        "environment B must serve '{DEGRADED_MISSING_TOOL}' before it can be \
+         removed; served={:?}",
+        full.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+
+    // ---- the degradation ----
+    let degraded: Vec<(String, serde_json::Value)> = full
+        .iter()
+        .filter(|(name, _)| name != DEGRADED_MISSING_TOOL)
+        .cloned()
+        .collect();
+
+    let mismatch = compare_tool_surfaces(&full, &degraded).expect_err(
+        "dropping a tool from environment B's served surface must be REPORTED \
+         — a comparison that tolerates it is a round trip nobody has ever seen \
+         fail (PKG-04 / SC4-red)",
+    );
+
+    // (a) the SPECIFIC variant, with the tool name bound and compared. A bare
+    //     `is_err()` would also pass on a duplicate-name precondition failure
+    //     or a schema difference — three reasons unrelated to a dropped tool.
+    assert!(
+        matches!(&mismatch, SurfaceMismatch::MissingFromB { tool } if tool == DEGRADED_MISSING_TOOL),
+        "expected MissingFromB naming '{DEGRADED_MISSING_TOOL}', got {mismatch:?}"
+    );
+    // (b) the Display message NAMES the degraded identifier, so the failure a
+    //     human reads points at the tool that actually went missing.
+    assert!(
+        // This trailing comment deliberately names a deny-listed token —
+        // `digest` — from INSIDE an assertion span, and plan 121-03's
+        // structural guard stays green: proof that its sanitizer strips
+        // comments WITHIN spans, not merely whole comment lines.
+        mismatch.to_string().contains(DEGRADED_MISSING_TOOL),
+        "the mismatch message must NAME the missing tool; message was: {mismatch}"
+    );
+}
+
+/// SC4-red — standing environment B up with its ENDPOINT slot left unfilled
+/// fails assembly with the FULL nested error shape, down to the variable name.
+///
+/// # Why the whole nesting is written out
+///
+/// `RunError::Dispatch(_)` alone is TOO LOOSE for D-08. That arm also covers a
+/// missing `[backend]` section ([`DispatchError::MissingBackend`]), an
+/// auth-provider construction failure ([`DispatchError::Auth`]) and a connector
+/// construction failure ([`DispatchError::Connector`]) — so a loose test would
+/// pass for three reasons that have nothing to do with an unfilled slot. The
+/// three links of the chain are
+/// `crates/pmcp-server-toolkit/src/config.rs:562` ->
+/// `crates/pmcp-openapi-server/src/dispatch.rs:73` ->
+/// `crates/pmcp-openapi-server/src/lib.rs:73`, and all three are named in the
+/// pattern with the inner `var` bound and compared.
+///
+/// # Why the environment mutation is RAII and not a trailing line
+///
+/// `TFL_BASE_URL` is removed through [`EnvVarGuard`], whose `Drop` restores the
+/// prior value even when an earlier assertion panics. A trailing restore line at
+/// the end of the body is SKIPPED the moment anything above it fails, and the
+/// unset variable then leaks into every later test in this binary — a green run
+/// against an absent endpoint. This repo already solved that at
+/// `crates/pmcp-openapi-server/src/dispatch.rs:163`. The guard and
+/// [`tfl_env_lock`] solve two DIFFERENT problems and are held together: the lock
+/// stops a CONCURRENT test interleaving its writes, the guard stops SEQUENTIAL
+/// leakage.
+// Why (clippy::await_holding_lock): the environment is read once, at assembly
+// time, inside the awaited `run_serving` — so the lock must still be held when
+// that await completes.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn degraded_env_b_unfilled_slot_is_reported() {
+    let _env_lock = tfl_env_lock();
+
+    let config_bytes = std::fs::read(fixtures_dir().join(LONDON_TUBE_CONFIG_NAME))
+        .expect("read the vendored london-tube.toml");
+    let round_trip = pack_a_and_move_to_b(&config_bytes);
+
+    // The CREDENTIAL stays filled — exactly ONE slot is degraded. `dispatch`
+    // builds the outgoing auth provider (`src/dispatch.rs:129`) BEFORE it
+    // resolves the endpoint (`:142`), so unsetting both would risk failing at
+    // `DispatchError::Auth` and the nested pattern below would never be reached.
+    let _app_key_guard = EnvVarGuard::set("TFL_APP_KEY", ENV_B_APP_KEY);
+    // ---- the degradation: the endpoint slot is left UNFILLED ----
+    let _base_url_guard = EnvVarGuard::unset("TFL_BASE_URL");
+
+    let args = Args {
+        config: round_trip.restored_config_path.clone(),
+        spec: None,
+        http: "127.0.0.1:0".to_string(),
+    };
+    let err = run_serving(&args).await.expect_err(
+        "environment B must REFUSE to assemble while its endpoint slot is \
+         unfilled — assembling anyway would serve a nonsense URL (PKG-04 / \
+         SC4-red)",
+    );
+
+    // (a) the FULL nested shape. `match` rather than `matches!` because the
+    //     inner `var` has to be BOUND to be compared; the explicit `_` arm is
+    //     required because `RunError`, `DispatchError` and `ToolkitError` are
+    //     each `#[non_exhaustive]` at the enum level.
+    match &err {
+        RunError::Dispatch(DispatchError::UnresolvedBaseUrl(
+            ToolkitError::UnresolvedBaseUrlRef { var },
+        )) => {
+            assert_eq!(
+                var, "TFL_BASE_URL",
+                "the error must name the UNFILLED slot's variable, not some \
+                 other unresolved reference"
+            );
+        },
+        other => panic!(
+            "expected RunError::Dispatch(DispatchError::UnresolvedBaseUrl(\
+             ToolkitError::UnresolvedBaseUrlRef {{ .. }})), got {other:?}"
+        ),
+    }
+    // (b) the Display message NAMES the slot the target environment failed to
+    //     fill — the actionable half.
+    assert!(
+        err.to_string().contains("TFL_BASE_URL"),
+        "the error message must name the unfilled slot; message was: {err}"
+    );
+
+    // NO trailing restore line here, deliberately. Both guards above restore on
+    // drop, INCLUDING when any assertion in this body panics — see this
+    // function's doc comment and `env_var_guard_restores_prior_state_including_on_panic`.
+}
+
+/// The environment variable the RAII-restoration proof mutates.
+///
+/// It is UNIQUE to this test — no other test in this crate reads or writes it —
+/// and that uniqueness is what stands in for a lock. This test deliberately
+/// takes no [`tfl_env_lock`] and touches no `TFL_*` variable, so it cannot
+/// perturb the endpoint or credential any other test in this binary depends on.
+const GUARD_PROBE_VAR: &str = "PMCP_ROUNDTRIP_E2E_GUARD_PROBE";
+
+/// The RAII proof the unfilled-slot negative's isolation rests on:
+/// [`EnvVarGuard`] restores the prior state in BOTH directions, even after the
+/// guarded body panics.
+///
+/// Modelled on `crates/pmcp-server-toolkit/tests/base_url_expansion.rs:161`.
+///
+/// # This is NOT the panic-catching shape D-08 rejects — do not delete it as one
+///
+/// D-08 rejects the panic-catching test ATTRIBUTE because it passes green on any
+/// panic from any cause, so a test wearing it can fail for a reason unrelated to
+/// the property it names. Here the panic is DELIBERATELY RAISED by this test's
+/// own closure, and it is not the thing under scrutiny at all: it is the
+/// PRECONDITION for the assertion that follows it, which is about the state the
+/// guard restored AFTERWARDS. `catch_unwind` is the only way to reach that
+/// post-condition, and the panic's cause is fixed by this test rather than
+/// accepted from anywhere.
+#[test]
+fn env_var_guard_restores_prior_state_including_on_panic() {
+    // (a) previously UNSET -> restored to UNSET after a panicking body. The
+    //     OUTER guard establishes the precondition and itself restores whatever
+    //     this binary's environment held before the test.
+    {
+        let _outer = EnvVarGuard::unset(GUARD_PROBE_VAR);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _inner = EnvVarGuard::set(GUARD_PROBE_VAR, "set-by-the-inner-guard");
+            assert_eq!(
+                std::env::var(GUARD_PROBE_VAR).as_deref(),
+                Ok("set-by-the-inner-guard")
+            );
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert!(
+            std::env::var(GUARD_PROBE_VAR).is_err(),
+            "a previously-UNSET variable must be restored to unset even after a \
+             panic — a trailing restore line would have been skipped here, and \
+             the variable would leak into every later test in this binary"
+        );
+    }
+
+    // (b) previously SET -> restored to the OLD value after a panicking body. A
+    //     `Drop` that only removed would turn a previously-set variable into an
+    //     unset one, which is a DIFFERENT leak rather than a fix — so both
+    //     directions are asserted.
+    {
+        let _outer = EnvVarGuard::set(GUARD_PROBE_VAR, "the-original-value");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _inner = EnvVarGuard::set(GUARD_PROBE_VAR, "the-overridden-value");
+            assert_eq!(
+                std::env::var(GUARD_PROBE_VAR).as_deref(),
+                Ok("the-overridden-value")
+            );
+            panic!("deliberate panic inside the guarded scope");
+        }))
+        .is_err();
+        assert!(panicked, "the guarded body must have panicked");
+        assert_eq!(
+            std::env::var(GUARD_PROBE_VAR).as_deref(),
+            Ok("the-original-value"),
+            "a previously-SET variable must be restored to its OLD value even \
+             after a panic"
+        );
+    }
+
+    // Both outer guards have dropped: the process environment is exactly as this
+    // test found it. Every mutation above went through the guard — there is no
+    // bare `set_var` in this function.
+}
+
+// =====================================================================
+// SC4-green — this file is INSENSITIVE to manifest shape (D-09)
+//
+// A structural guard that machine-checks SC4's "contains no assertion on
+// manifest structure" clause instead of trusting review, in the same
+// spirit as `scripts/lint-plan-verify-commands.sh`.
+// =====================================================================
+
+/// This file's own source, embedded at compile time.
+///
+/// `include_str!`'s argument resolves relative to the file CONTAINING the macro,
+/// so this names the very file it appears in with no runtime path join and no
+/// manifest-directory lookup to get wrong — the same mechanism the sibling
+/// tripwire `cargo-pmcp/tests/pmcp_package_pin.rs:35` uses.
+const THIS_FILE: &str = include_str!("roundtrip_e2e.rs");
+
+/// The tokens no assertion in this file may contain, each traceable to SC4's own
+/// wording: "manifest field names, layer ordering, digest values".
+///
+/// Kept as DATA in a named constant so it reads as a list a human can extend,
+/// rather than as a regular expression nobody wants to touch. Note that the
+/// literals below are string literals, so the scanner's own sanitizer strips
+/// them from this declaration — the deny-list cannot trip itself.
+const MANIFEST_SHAPE_DENY_LIST: [&str; 12] = [
+    // the word for a content hash, and its algorithm-prefixed form
+    "digest",
+    "sha256:",
+    // indexed accessors into the manifest and layer collections (ordering)
+    "manifests()[",
+    "layers()[",
+    // the layer accessor itself
+    "layers()",
+    // the media-type field, both spellings
+    "media_type",
+    "mediaType",
+    // the artifact-type field, both spellings
+    "artifact_type",
+    "artifactType",
+    // the blob- and index-read accessors
+    "read_blob",
+    "read_index",
+    // the annotations field
+    "annotations",
+];
+
+/// The number of assertion SPANS the guard must complete before its findings
+/// mean anything.
+///
+/// MEASURED, not picked. The measurement was taken by running this very guard
+/// against this very file on 2026-08-24, with the floor temporarily raised so
+/// the assertion would report the real number:
+///
+/// - **measured span count: 42**
+/// - **floor: 32** — the measurement less a margin of 10, i.e. 23.8% below it,
+///   which is just inside the "no more than a quarter" bound and comfortably
+///   above the absolute minimum of 10.
+///
+/// BOTH numbers are written down on purpose. A floor with no stated derivation
+/// gives the next person nothing to re-derive it from, so unrelated assertion
+/// refactoring drifts the real count and the floor silently becomes either
+/// meaningless or an obstacle. Re-measure the same way and re-apply the same
+/// margin rather than nudging this number to make a run go green.
+const MANIFEST_SHAPE_GUARD_SPAN_FLOOR: usize = 32;
+
+/// Hard cap on the number of lines one assertion span may cover.
+///
+/// A scanner that ABANDONS an unbalanced span is a scanner that an unusual
+/// formatting choice can switch off, so reaching the cap does not drop the span:
+/// it ends it here, keeps what was accumulated, and counts it.
+const SPAN_LINE_CAP: usize = 40;
+
+/// The six macro-start tokens that open an assertion span.
+const ASSERTION_MACROS: [&str; 6] = [
+    "assert!",
+    "assert_eq!",
+    "assert_ne!",
+    "debug_assert!",
+    "debug_assert_eq!",
+    "debug_assert_ne!",
+];
+
+/// One complete assertion invocation: delimiter-balanced, possibly multi-line.
+struct AssertionSpan {
+    /// 1-based line number the span starts on.
+    start_line: usize,
+    /// How many source lines the span covers.
+    line_count: usize,
+    /// The span's accumulated SANITIZED text (string contents and comments
+    /// already removed).
+    text: String,
+}
+
+/// True when a `//` line comment starts at `i`.
+fn starts_line_comment(chars: &[char], i: usize) -> bool {
+    chars[i] == '/' && chars.get(i + 1) == Some(&'/')
+}
+
+/// Index just past the closing `"` of a string whose CONTENT starts at `from`,
+/// honouring `\` escapes; `None` when the line ends while still inside it (this
+/// repo's assertion messages are routinely `\`-continued across lines).
+fn close_string(chars: &[char], from: usize) -> Option<usize> {
+    let mut j = from;
+    while j < chars.len() {
+        match chars[j] {
+            '\\' => j += 2,
+            '"' => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+    None
+}
+
+/// Index just past a char literal starting at `i`, or `None` for a lifetime.
+///
+/// Char literals must be skipped for the SAME reason string contents must be:
+/// this very file writes `'('` and `'"'` as char literals in the scanner below,
+/// and counting those as delimiters — or reading that `'"'` as the start of a
+/// string — would corrupt the scan of the file the guard is reading.
+fn skip_char_literal(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != '\'' {
+        return None;
+    }
+    if chars.get(i + 1) == Some(&'\\') {
+        let mut j = i + 2;
+        while j < chars.len() {
+            if chars[j] == '\'' {
+                return Some(j + 1);
+            }
+            j += 1;
+        }
+        return None;
+    }
+    // `'x'` — exactly one character then a closing quote. Anything else is a
+    // lifetime (`'static`, `'a`) and is emitted as ordinary code.
+    if chars.get(i + 2) == Some(&'\'') {
+        Some(i + 3)
+    } else {
+        None
+    }
+}
+
+/// Index just past a raw string literal (`r"…"`, `r#"…"#`, …) starting at `i`.
+fn skip_raw_string(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != 'r' {
+        return None;
+    }
+    // An `r` that is the tail of an identifier (`for`, `.iter`) is not a prefix.
+    if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+        return None;
+    }
+    let mut j = i + 1;
+    let mut hashes = 0usize;
+    while chars.get(j) == Some(&'#') {
+        hashes += 1;
+        j += 1;
+    }
+    if chars.get(j) != Some(&'"') {
+        return None;
+    }
+    j += 1;
+    while j < chars.len() {
+        if chars[j] == '"' && (1..=hashes).all(|k| chars.get(j + k) == Some(&'#')) {
+            return Some(j + 1 + hashes);
+        }
+        j += 1;
+    }
+    Some(chars.len())
+}
+
+/// Sanitize ONE line, given whether the previous line ended inside a string.
+/// Returns the scanning copy plus whether this line ends inside a string.
+fn sanitize_line(line: &str, in_string: bool) -> (String, bool) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    if in_string {
+        match close_string(&chars, 0) {
+            Some(next) => i = next,
+            None => return (String::new(), true),
+        }
+    }
+    while i < chars.len() {
+        if starts_line_comment(&chars, i) {
+            break;
+        }
+        if let Some(next) = skip_raw_string(&chars, i) {
+            i = next;
+            continue;
+        }
+        if let Some(next) = skip_char_literal(&chars, i) {
+            i = next;
+            continue;
+        }
+        if chars[i] == '"' {
+            match close_string(&chars, i + 1) {
+                Some(next) => i = next,
+                None => return (out, true),
+            }
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    (out, false)
+}
+
+/// Sanitize the whole source, carrying string state ACROSS lines.
+fn sanitize_source(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_string = false;
+    for line in source.lines() {
+        let (sanitized, still_in_string) = sanitize_line(line, in_string);
+        out.push(sanitized);
+        in_string = still_in_string;
+    }
+    out
+}
+
+/// Net change in `(`/`[`/`{` nesting depth contributed by one SANITIZED line.
+fn delimiter_delta(sanitized: &str) -> i32 {
+    let mut delta = 0;
+    for c in sanitized.chars() {
+        match c {
+            '(' | '[' | '{' => delta += 1,
+            ')' | ']' | '}' => delta -= 1,
+            _ => {},
+        }
+    }
+    delta
+}
+
+/// Accumulate one span from `start` until its delimiters balance (or the cap).
+///
+/// The depth counter is what carries state ACROSS lines — it is the difference
+/// between this scanner and the per-line scan it must not be.
+fn accumulate_span(lines: &[String], start: usize) -> AssertionSpan {
+    let mut text = String::new();
+    let mut depth = 0i32;
+    let mut line_count = 0usize;
+    while start + line_count < lines.len() && line_count < SPAN_LINE_CAP {
+        let line = &lines[start + line_count];
+        text.push_str(line);
+        text.push('\n');
+        depth += delimiter_delta(line);
+        line_count += 1;
+        if depth <= 0 {
+            break;
+        }
+    }
+    AssertionSpan {
+        start_line: start + 1,
+        line_count,
+        text,
+    }
+}
+
+/// Every complete assertion span in `source`.
+fn scan_assertion_spans(source: &str) -> Vec<AssertionSpan> {
+    let lines = sanitize_source(source);
+    let mut spans = Vec::new();
+    let mut idx = 0;
+    while idx < lines.len() {
+        if !ASSERTION_MACROS.iter().any(|m| lines[idx].contains(m)) {
+            idx += 1;
+            continue;
+        }
+        let span = accumulate_span(&lines, idx);
+        idx += span.line_count;
+        spans.push(span);
+    }
+    spans
+}
+
+/// SC4-green (D-09) — this file asserts NOTHING about the package's on-disk
+/// representation: no manifest field name, no layer ordering, no digest value.
+///
+/// # What it scans, and why SPANS rather than lines
+///
+/// It reads its own source through [`THIS_FILE`] and examines whole,
+/// delimiter-balanced assertion SPANS. A per-line scan — read only lines that
+/// contain an assertion keyword — cannot see a forbidden token sitting on a
+/// CONTINUATION line, and `cargo fmt --all -- --check` is an acceptance
+/// criterion of every task in this phase, so rustfmt ACTIVELY PRODUCES that
+/// shape by splitting long assertion invocations. The multiline form is the
+/// normal case in this repo, not an edge case.
+///
+/// # Why the text is sanitized first
+///
+/// A guard that scanned raw text would SELF-SATISFY: this file's own module
+/// header and this doc comment name the shapes being forbidden, in prose,
+/// because a rule that cannot be explained beside itself gets switched off
+/// within a week. Comment text and string-literal CONTENTS are therefore
+/// stripped before both the delimiter counting and the deny-list matching.
+/// Stripping strings is not cosmetic either — assertion messages here routinely
+/// contain unbalanced parentheses, and a naive counter would never see such a
+/// span close.
+///
+/// # Two standing self-checks
+///
+/// A floor on the number of completed spans, so the guard fails rather than
+/// passes when it scans nothing (a renamed file, an over-tight filter); and a
+/// multiline-coverage check asserting span-covered lines exceed the span count,
+/// which is false if and only if the scanner has collapsed back to per-line
+/// behaviour.
+///
+/// # This is a REGRESSION LINT, not a semantic proof
+///
+/// It matches LEXICAL TOKENS. An aliased binding, a helper function, or a field
+/// reached through a differently-named accessor can still couple this file to
+/// manifest shape without using any listed token. Reviewer attention therefore
+/// remains part of SC4-green, and this lint is not a substitute for it. Claiming
+/// otherwise in this header is how a guard earns deletion the first time it is
+/// inconvenient.
+#[test]
+fn roundtrip_e2e_asserts_nothing_about_manifest_shape() {
+    let spans = scan_assertion_spans(THIS_FILE);
+
+    // (1) The guard must actually be reaching the file.
+    assert!(
+        spans.len() >= MANIFEST_SHAPE_GUARD_SPAN_FLOOR,
+        "the manifest-shape guard IS NOT REACHING THE FILE: it completed only \
+         {} assertion spans, below the floor of {}. Something upstream of the \
+         deny-list check is broken — a renamed file, an over-tight span-start \
+         filter, or an include_str! pointing somewhere unexpected — and the \
+         guard would otherwise pass having examined nothing.",
+        spans.len(),
+        MANIFEST_SHAPE_GUARD_SPAN_FLOOR
+    );
+
+    // (2) The scanner must still be accumulating ACROSS lines.
+    let covered_lines: usize = spans.iter().map(|s| s.line_count).sum();
+    assert!(
+        covered_lines > spans.len(),
+        "the span scanner COLLAPSED TO SINGLE LINES ({covered_lines} covered \
+         lines across {} spans): every span ended on its own start line, which \
+         means the cross-line accumulator stopped working and THE MULTILINE \
+         BYPASS IS BACK — a forbidden token on a rustfmt-produced continuation \
+         line would no longer be examined.",
+        spans.len()
+    );
+
+    // (3) The check itself.
+    for span in &spans {
+        for token in MANIFEST_SHAPE_DENY_LIST {
+            assert!(
+                !span.text.contains(token),
+                "this file asserts on the package's ON-DISK REPRESENTATION: the \
+                 forbidden token '{token}' appears in the assertion span \
+                 starting at line {}. Every assertion here must be on SERVED \
+                 BEHAVIOUR — the round trip has to survive an arbitrary number \
+                 of manifest-shape refactors (PKG-04 / SC4-green, D-09). \
+                 span:\n{}",
+                span.start_line,
+                span.text
+            );
+        }
+    }
 }
