@@ -339,7 +339,7 @@ test-openapi-server:
 		echo "$(RED)✗ pmcp-openapi-server reported 0 tests — the gate is not reaching this crate$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="parity_replay pmcp_package_pin"; \
+	REQUIRED_TEST_BINARIES="parity_replay pmcp_package_pin roundtrip_e2e"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		if ! echo "$$out" | grep -q "tests/$$b\.rs"; then \
 			echo "$(RED)✗ required test binary '$$b' did not run — a nonzero total ($$ran) does not prove a NAMED suite ran$(NC)"; \
