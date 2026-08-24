@@ -70,3 +70,77 @@ NOT fixed here: plan 121-03's `files_modified` is `roundtrip_e2e.rs` and
 workspace-EXCLUDED crate, and editing it would widen this plan's artifact list
 for zero PKG-04 benefit. A one-paragraph fix for whoever is next in that file;
 it changes no behaviour.
+
+---
+
+# Deferred during GAP-CLOSURE planning (plans 121-04 / 121-05, 2026-08-24)
+
+`121-VERIFICATION.md` recorded 2 BLOCKER gaps (CR-01, CR-02) plus 10 WARNING and 4 INFO
+findings. Only the two BLOCKERs were planned — they are the only findings that falsify a
+must_have. The WARNINGs below are real and correctly diagnosed, but none falsifies a ROADMAP
+success criterion or a plan must_have as literally stated, and none is in a file plans 121-04
+or 121-05 edit. Expanding a gap-closure plan to reach one would widen its declared artifact
+list for zero PKG-04 benefit — the same reasoning as D1/D2/D3 above.
+
+## D4. WR-01 — the "STRONG form" contrast comment overclaims (`roundtrip_e2e.rs`)
+
+`roundtrip_endpoint_drift_is_reported`'s identity-bearing contrast comment claims more than the
+assertion proves: there are three independent reasons `detect_deviation` returns `None` for two
+different secrets, and only one of them is the short-circuit under test. **Doc accuracy, not a
+false test result** — the assertion itself is correct and SC2 is verified. A one-paragraph
+comment fix for whoever is next in that file.
+
+## D5. WR-04 — the SC4 structural guard does not handle `/* */` block comments
+
+The delimiter-balanced assertion-span scanner in `roundtrip_e2e_asserts_nothing_about_manifest_shape`
+can self-blind if a future block comment contains an unpaired `"`. Confirmed by the verifier that
+no block comment in today's file does, so the guard is compliant NOW. A future edit could silently
+defeat it. Future-robustness gap in a currently-green guard.
+
+## D6. WR-05 — the SC4 structural guard scans only the six `assert*!` macros
+
+It does not scan `panic!` or `.expect(...)` call sites, so a deny-listed manifest-shape token
+introduced through one of those would pass. Confirmed by the verifier that no such site currently
+carries a deny-listed token. Same class as D5: real future-robustness gap, not a present defect.
+
+## D7. WR-07 — `handle_a.abort()` is a request, not an awaited guarantee
+
+`roundtrip_e2e.rs` aborts environment A's server task without awaiting the join handle, so A's
+teardown is not ordered with respect to B's startup. Has never produced a false result because A
+and B bind separate ephemeral ports (D-12) and run sequentially (D-10).
+
+## D8. WR-08 — single-threaded safety is enforced only by the Makefile, not in-binary
+
+The process-global `TFL_BASE_URL` / `TFL_APP_KEY` writes are safe only because
+`Makefile:333` passes `--test-threads=1`. Nothing inside the test binary enforces it, so a direct
+`cargo test -p pmcp-openapi-server` without the flag could interleave env-var writes. Plan 121-05
+explicitly does NOT fix this and lists dropping `--test-threads=1` as a prohibition; the durable
+fix is an in-binary serialization guard (a shared mutex, or the existing `tfl_env_lock` extended
+to cover the round-trip tests). Flagged as edge-probe row 7 (`concurrency`) in both gap-closure
+plans.
+
+## D9. WR-09 — `serve_environment` never restores `TFL_*` after itself
+
+It relies on being the last writer in a serialized binary. `EnvVarGuard` exists in
+`tests/common/mod.rs` and is already used correctly by the 121-03 negative tests; routing
+`serve_environment`'s writes through it would close this. Same root as D8.
+
+## D10. INFO — `cargo package -p pmcp-openapi-server` fails locally on `pmcp-server-toolkit ^0.1.2`
+
+Measured at gap-closure plan time: a local `cargo package -p pmcp-openapi-server --no-verify
+--allow-dirty` fails with `failed to select a version for the requirement pmcp-server-toolkit =
+"^0.1.2"` (`candidate versions found which didn't match: 0.1.1, 0.1.0`). This is **NOT a defect**
+— `pmcp-server-toolkit` publishes at an earlier `release.yml` step, so 0.1.2 exists by the time
+`pmcp-openapi-server` publishes. Recorded here because it masks every later requirement (cargo
+reports the first unresolvable one and stops), which is why plan 121-04 Task 1 uses an isolated
+de-versioned manifest copy instead of a bare dry-run. A future release engineer should not
+mistake this for a regression.
+
+## D11. Cross-reference — `scripts/check-release-coverage.sh` remains blind to workspace-excluded crates
+
+`scripts/check-release-coverage.sh:14-16` records that root `cargo metadata --no-deps` cannot see
+`pmcp-package` (its own `[workspace]` table), so no machine check covers its publish step or its
+position in the order. CR-01 is a direct consequence: the ordering constraint it violated is
+enforced by hand-maintained CLAUDE.md prose only. Plan 121-04 Task 3 writes the specific
+constraint into the ledger at both ends but does NOT extend the check — **Phase 124 (PKGR-01)
+already owns closing that blind spot** and this is not Phase 121's to take.

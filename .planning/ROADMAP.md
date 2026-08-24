@@ -2358,7 +2358,7 @@ Plans:
   3. Once those named slots are filled, the environment-B binary serves a tool list set-equal to environment A's, and `london-tube-scenarios.yaml` replays green through `mcp-tester`'s `ScenarioExecutor` with per-step gating — the same harness `parity_replay.rs` uses, so parity is asserted on served behaviour (PKG-04)
   4. The test is proven insensitive to manifest shape and sensitive to real regressions, both directions exercised: adding a field to `ServerPackage` leaves it green, while dropping a tool from B's served surface or leaving a named slot unfilled turns it red. It contains no assertion on manifest field names, layer ordering or digest values (PKG-04)
 
-**Plans**: 3/3 plans executed (3 waves, strictly sequential)
+**Plans**: 3/5 plans executed (3 sequential waves executed; 2 gap-closure plans added 2026-08-24, both wave 1, parallel)
 
 Plans:
 
@@ -2373,6 +2373,11 @@ Plans:
 **Wave 3** *(blocked on Wave 2 — same file)*
 
 - [x] 121-03-PLAN.md — SC4 both directions: negative tests over a deliberately-degraded environment B (D-08), the D-09 structural guard with a nonzero-lines-scanned floor, and the stale `detect_deviation` rustdoc correction
+
+**Gap closure** *(added 2026-08-24 from `121-VERIFICATION.md` — all 4 success criteria VERIFIED; these close the 2 code-review BLOCKERs in the infrastructure that gates the deliverable. Both are wave 1 and run in parallel: disjoint `files_modified`, no shared state.)*
+
+- [ ] 121-04-PLAN.md — CR-01: the `pmcp-package` dev-dep drops its `version` key (path-only), so `cargo publish -p pmcp-openapi-server` at `release.yml:339` no longer requires an unpublished `pmcp-package 0.2.0`; the pin tripwire is re-pointed at the publish-safe shape plus the resolved crate's own 0.2 line, and the constraint is written into CLAUDE.md's publish ledger. `release.yml` order is deliberately NOT changed.
+- [ ] 121-05-PLAN.md — CR-02: the `REQUIRED_TEST_BINARIES` guard reads each binary's `test result:` passed count anchored to its `Running tests/<name>.rs` line via a single `scripts/named-test-binary-count.awk` extractor, with a five-fixture self-test chained into the same gate and a red/green demonstration against a real zero-test binary.
 
 ### Phase 122: Attestation Carriage *(contract-first — PARKED on the pmcp.run backend)*
 
