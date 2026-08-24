@@ -294,6 +294,60 @@ test-cargo-pmcp:
 	fi; \
 	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
 
+# The GATE's reach into `crates/pmcp-openapi-server/tests/`, mirroring
+# test-tester and test-cargo-pmcp.
+#
+# Nothing in this repo executed that directory before Phase 121, measured three
+# ways: `test-integration` is `cargo test --test '*'` with NO `-p`, so it
+# resolves to the root `pmcp` package (Makefile:241-243); CI's `test` job is
+# root-scoped (ci.yml:733); and `org-gate-checks.yml`'s `workspace-test` runs
+# `--lib --bins`, which excludes `tests/` entirely (org-gate-checks.yml:73).
+# `parity_replay.rs` sat in that hole for its whole life, and PKG-04's
+# deliverable is a REGRESSION NET — a regression net that no gate runs is not a
+# regression net. Because CI's `quality-gate` job runs `make quality-gate` and
+# IS in `gate.needs`, chaining this into `test-all` makes it merge-blocking
+# without promoting `workspace-test`, which ci.yml D-15 deliberately defers.
+#
+# The count assertion is not ceremony. The failure this target exists to
+# prevent is "the gate does not reach this crate", and a run that selects zero
+# tests EXITS 0 — reproducing exactly that hole while looking green.
+#
+# The named-binary assertion closes the count guard's OWN blind spot: a nonzero
+# SUM proves the PACKAGE ran, not that any particular integration binary ran.
+# `cargo test -p` also sums unit, binary and doctest results, so a suite that
+# stopped being compiled — a renamed file, a `tests/` entry that silently
+# stopped being a target — leaves the total comfortably nonzero while its own
+# truths go unexecuted. `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase
+# 121: plan 121-02 Task 1 adds `roundtrip_e2e` when that binary first exists. A
+# name added BEFORE its binary exists turns this gate red for every commit in
+# between.
+#
+# `-- --test-threads=1` is REQUIRED here and is the one deviation from both
+# precedents: this crate's tests mutate the process-global `TFL_BASE_URL` and
+# `TFL_APP_KEY` environment variables and bind ephemeral ports, so they cannot
+# run concurrently. `parity_replay.rs`'s own module doc already prescribes
+# single-threaded execution for exactly that reason.
+.PHONY: test-openapi-server
+test-openapi-server:
+	@echo "$(BLUE)Running pmcp-openapi-server's own tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-openapi-server -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-openapi-server reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="parity_replay pmcp_package_pin"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		if ! echo "$$out" | grep -q "tests/$$b\.rs"; then \
+			echo "$(RED)✗ required test binary '$$b' did not run — a nonzero total ($$ran) does not prove a NAMED suite ran$(NC)"; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "$(GREEN)✓ pmcp-openapi-server tests passed ($$ran tests)$(NC)"
+
 .PHONY: test-doc
 test-doc:
 	@echo "$(BLUE)Running doctests...$(NC)"
@@ -574,7 +628,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-openapi-server
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)
