@@ -1,21 +1,54 @@
-//! `pmcp-package` version-pin tripwire (PKG-04 / D-03), Phase 121 Plan 01.
+//! `pmcp-package` dev-dep tripwire (PKG-04 / D-03), Phase 121 Plan 01,
+//! re-pointed by Plan 04 to close CR-01.
 //!
-//! `pmcp-openapi-server` MUST pin `pmcp-package` at the caret `"0.2"` string
-//! (NOT `=0.2.0`, NOT `0.2.0`) so the PKG-04 round-trip E2E keeps resolving
-//! against the 0.2 line it was written against. This test parses
-//! `pmcp-openapi-server`'s OWN `Cargo.toml` and asserts the exact
-//! version-req string, mirroring the `const + include_str! + assert_eq!`
-//! drift-test pattern used by `cargo-pmcp/tests/pmcp_package_pin.rs`.
+//! Two things are enforced here:
+//!
+//! 1. **Publish safety** (`pmcp_package_dev_dep_is_path_only`) — this crate's
+//!    `[dev-dependencies].pmcp-package` entry must be the table form carrying a
+//!    `path` and **no** version requirement.
+//! 2. **The D-03 drift guarantee** (`pmcp_package_resolved_crate_is_on_the_0_2_line`)
+//!    — `crates/pmcp-package`'s own `[package].version` must stay on the 0.2
+//!    line, i.e. the crate the path dep actually resolves to is the one the
+//!    round-trip E2E was written against.
+//!
+//! # Why there is no version requirement to assert any more
+//!
+//! Cargo strips a `[dev-dependencies]` entry from the published manifest ONLY
+//! when it carries no version requirement. An entry that carries one is
+//! retained, and `cargo publish` must resolve it against crates.io while
+//! preparing the manifest. `pmcp-package` is workspace-EXCLUDED and publishes
+//! from `.github/workflows/release.yml:440`, roughly 100 steps AFTER
+//! `pmcp-openapi-server` publishes at `release.yml:339` — so that lookup cannot
+//! succeed, and the publish step's fallback (which tolerates only
+//! `already exists` in the output) fails the whole release job. That is CR-01.
+//!
+//! Re-adding a version requirement to make this file "assert a pin again" is
+//! therefore the one change it exists to prevent. Test 1 is the guard.
+//!
+//! # Where D-03's guarantee went
+//!
+//! D-03 asked that a silent 0.2 -> 0.3 drift fail loudly rather than resolve to
+//! a version the E2E was never written against. That guarantee moved from the
+//! requirement STRING to the RESOLVED CRATE, and got stronger in the move: a
+//! caret requirement only constrains what would be accepted from a registry,
+//! but a path dep never consults the registry at all. Asserting
+//! `crates/pmcp-package`'s own version is a statement about what the E2E
+//! genuinely compiled against; asserting a caret string was a statement about a
+//! lookup that never happens.
 //!
 //! # What this tripwire does NOT cover
 //!
 //! It checks exactly ONE `pmcp-package` version emitter: this crate's own
-//! `[dev-dependencies]` entry. It is deliberately narrow, and a reader must not
-//! assume one file guards every in-repo pin:
+//! `[dev-dependencies]` entry, plus the sibling crate it resolves to. It is
+//! deliberately narrow, and a reader must not assume one file guards every
+//! in-repo pin:
 //!
 //! - `cargo-pmcp`'s own `[dependencies].pmcp-package` entry is covered by the
 //!   SIBLING tripwire at `cargo-pmcp/tests/pmcp_package_pin.rs`. This file
-//!   cannot see it, and that file cannot see this one.
+//!   cannot see it, and that file cannot see this one. Note that the sibling
+//!   still asserts a caret requirement string, correctly: `cargo-pmcp`
+//!   publishes AFTER `pmcp-package` in the release order, so a version
+//!   requirement there is safe where one here is not.
 //! - `cargo-pmcp/src/templates/agent.rs` EMITS a `pmcp-package` dependency line
 //!   into every project created by `cargo pmcp agent new`. A stale requirement
 //!   there is invisible to `cargo build` — the workspace resolves green while
@@ -39,50 +72,86 @@
 /// `crates/pmcp-openapi-server/Cargo.toml`).
 const OPENAPI_SERVER_CARGO_TOML: &str = include_str!("../Cargo.toml");
 
-/// The exact version-requirement string `pmcp-openapi-server` must declare.
-const EXPECTED_PIN: &str = "0.2";
+/// The manifest of the crate the path dep actually resolves to, embedded at
+/// compile time (`../../pmcp-package/Cargo.toml` is resolved relative to THIS
+/// test file: `crates/pmcp-openapi-server/tests/` -> `crates/pmcp-package/`).
+const PMCP_PACKAGE_CARGO_TOML: &str = include_str!("../../pmcp-package/Cargo.toml");
 
-/// Extract the version-requirement string for an entry in the named dependency
-/// table, handling BOTH the `name = "x.y"` shorthand and the
-/// `name = { version = "x.y", .. }` table form (this crate uses the table form
-/// with a `path`).
-///
-/// `table` is a parameter rather than a hardcoded `"dependencies"` because this
-/// crate declares `pmcp-package` under `[dev-dependencies]`. Every panic and
-/// assert message below names the table actually read, so a future misuse
-/// reports the table it looked in instead of implying `[dependencies]`.
-fn dependency_version_req(manifest: &toml::Value, table: &str, name: &str) -> String {
-    let dep = manifest
-        .get(table)
-        .and_then(|d| d.get(name))
-        .unwrap_or_else(|| panic!("pmcp-openapi-server Cargo.toml has no [{table}].{name}"));
-    match dep {
-        // `pmcp-package = "0.2"` shorthand.
-        toml::Value::String(s) => s.clone(),
-        // `pmcp-package = { version = "0.2", path = "..." }` table form.
-        toml::Value::Table(_) => dep
-            .get("version")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| panic!("[{table}].{name} table has no `version` key"))
-            .to_string(),
-        other => panic!("[{table}].{name} has unexpected shape: {other:?}"),
-    }
-}
+/// The major.minor line the round-trip E2E was written against.
+const EXPECTED_VERSION_LINE: &str = "0.2.";
 
-/// PKG-04 / D-03: the `pmcp-package` pin must be exactly the caret `"0.2"`.
+/// The path this crate's `pmcp-package` dev-dep must point at.
+const EXPECTED_DEP_PATH: &str = "../pmcp-package";
+
+/// CR-01: the `pmcp-package` dev-dep must be path-only, with no version
+/// requirement of any kind.
 ///
-/// The caret matters. `=0.2.0` would refuse every later 0.2.x patch, and a
-/// fully-qualified `0.2.0` reads like an exact pin to a human even though Cargo
-/// treats it as a caret — both forms are rejected here so the manifest says
-/// what it means.
+/// The table form is required because the string shorthand
+/// (`pmcp-package = "0.2"`) IS a bare version requirement by definition — there
+/// is no shorthand that expresses a path.
 #[test]
-fn pmcp_package_pin_is_the_expected_caret_line() {
+fn pmcp_package_dev_dep_is_path_only() {
     let manifest: toml::Value =
         toml::from_str(OPENAPI_SERVER_CARGO_TOML).expect("parse pmcp-openapi-server Cargo.toml");
-    let req = dependency_version_req(&manifest, "dev-dependencies", "pmcp-package");
+
+    let dep = manifest
+        .get("dev-dependencies")
+        .and_then(|table| table.get("pmcp-package"))
+        .expect("pmcp-openapi-server Cargo.toml has no [dev-dependencies].pmcp-package");
+
+    let table = dep.as_table().unwrap_or_else(|| {
+        panic!(
+            "[dev-dependencies].pmcp-package must be the table form \
+             `{{ path = \"{EXPECTED_DEP_PATH}\" }}`, found {dep:?}. The string shorthand IS a \
+             bare version requirement, which is exactly the shape CR-01 forbids."
+        )
+    });
+
+    let path = table
+        .get("path")
+        .and_then(toml::Value::as_str)
+        .expect("[dev-dependencies].pmcp-package must carry a `path` key (it is a path dep)");
     assert_eq!(
-        req, EXPECTED_PIN,
-        "pmcp-package pin in [dev-dependencies] must be the caret \"{EXPECTED_PIN}\" \
-         (PKG-04 / D-03); do NOT use `=0.2.0` or a fully-qualified `0.2.0`"
+        path, EXPECTED_DEP_PATH,
+        "[dev-dependencies].pmcp-package must point at the in-repo sibling crate"
+    );
+
+    assert!(
+        table.get("version").is_none(),
+        "[dev-dependencies].pmcp-package must NOT carry a `version` key (CR-01). Cargo strips a \
+         dev-dep from the published manifest only when it has no version requirement; one that \
+         has a requirement is retained, and `cargo publish -p pmcp-openapi-server` must then \
+         resolve it against crates.io while preparing the manifest. pmcp-openapi-server \
+         publishes at release.yml:339 and pmcp-package at release.yml:440, ~100 steps later, so \
+         that lookup cannot succeed — and the step's fallback tolerates only \"already exists\", \
+         so the whole release job dies. The `exclude` list does not save it: the failure is at \
+         manifest-prep time, and excluding tests/ removes the consumers, not the manifest entry."
+    );
+}
+
+/// PKG-04 / D-03: the crate this path dep resolves to must stay on the 0.2 line.
+///
+/// This replaces the former caret-requirement assertion. A path dep has no
+/// version requirement left to refuse a drifting sibling, so the sibling's own
+/// version field is the only thing that can still carry the guarantee.
+#[test]
+fn pmcp_package_resolved_crate_is_on_the_0_2_line() {
+    let manifest: toml::Value =
+        toml::from_str(PMCP_PACKAGE_CARGO_TOML).expect("parse pmcp-package Cargo.toml");
+
+    let version = manifest
+        .get("package")
+        .and_then(|package| package.get("version"))
+        .and_then(toml::Value::as_str)
+        .expect("crates/pmcp-package/Cargo.toml has no [package].version");
+
+    assert!(
+        version.starts_with(EXPECTED_VERSION_LINE),
+        "crates/pmcp-package is at version {version}, off the expected \
+         {EXPECTED_VERSION_LINE}x line (PKG-04 / D-03). roundtrip_e2e.rs was written against the \
+         0.2 pmcp-package slot and package APIs, and this is a PATH dependency — there is no \
+         version requirement left to refuse a drifting sibling, so the E2E would silently \
+         compile against whatever the sibling became. Move the E2E to the new line deliberately, \
+         then update this constant."
     );
 }

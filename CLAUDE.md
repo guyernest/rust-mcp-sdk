@@ -240,6 +240,27 @@ make test-integration   # Integration tests
    while being absent from this list, so a release would have silently skipped it. It is the
    proving case for the v2.6 AI-Package portability milestone (PKG-01: a server whose entire
    identity is its config plus its spec).
+
+   **Path-only `pmcp-package` dev-dep constraint (Phase 121 CR-01, 2026-08-24).**
+   This crate publishes HERE, ahead of `pmcp-package` at item 13, so any
+   dependency it declares on `pmcp-package` — **including a `[dev-dependencies]`
+   entry** — must be **path-only**, carrying no version key. Cargo strips a
+   dev-dep from the published manifest only when it carries no version
+   requirement; one that carries a requirement is retained and must resolve
+   against crates.io while `cargo publish` prepares the manifest, which cannot
+   succeed at this point in the order (measured: exit 101, "failed to select a
+   version for the requirement `pmcp-package = \"^0.2\"`"). The `exclude` list
+   does not save it — the failure is at manifest-prep time, and excluding
+   `tests/` removes the consumers, not the manifest entry. Enforced by
+   `crates/pmcp-openapi-server/tests/pmcp_package_pin.rs`
+   (`pmcp_package_dev_dep_is_path_only`), which runs inside `make quality-gate`
+   through `test-openapi-server`. Discovered when this crate became the first
+   in-repo `pmcp-package` consumer placed BEFORE `release.yml:440` — every other
+   pin (`pmcp-agent`, `pmcp-team-servers`, `pmcp-cfn-renderer`, `cargo-pmcp`)
+   sits after it. `scripts/check-release-coverage.sh` cannot catch this class: it
+   checks only that a publish STEP exists per crate, and is blind to
+   workspace-excluded crates besides.
+
 10. `mcp-tester` (depends on pmcp)
 11. `mcp-preview` (depends on widget-utils)
 12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
@@ -253,6 +274,10 @@ make test-integration   # Integration tests
    hence its slot here just ahead of item 14. It remains an experimental 0.x leaf:
    a failure here must not gate the core SDK release, and it still publishes late
    in the overall order (after the core SDK and toolkit trees).
+   Cross-reference (Phase 121 CR-01): because `pmcp-package` publishes HERE, any
+   crate publishing EARLIER in this list must declare it **path-only** with no
+   version key — see item 9b (`pmcp-openapi-server`) for the mechanism and the
+   test that enforces it.
 13a. `pmcp-cfn-renderer` (the pure `DeployDescriptor -> CloudFormation` template
    renderer crate at `crates/pmcp-cfn-renderer/`, CFN-renderer extraction). Depends
    on `pmcp-package = "0.2"` (item 13), so it must publish AFTER `pmcp-package`
