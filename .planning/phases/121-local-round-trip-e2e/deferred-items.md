@@ -46,3 +46,27 @@ Deliberately NOT collapsed: plan 121-01 D-02 names only `parity_replay.rs`'s
 helpers, and widening a costly-reversibility extraction to a second currently-green
 file buys no PKG-04 benefit. A later simplify pass should switch
 `contoso_m365_parity.rs` to `mod common;` and delete the two local copies.
+
+## D3. `SlotClass`'s own doc comment is stale in the SAME way `detect_deviation`'s was (found: 121-03 Task 3)
+
+Plan 121-03 Task 3 corrected `detect_deviation`'s rustdoc, which claimed the
+function fires only for the `LlmProvider` / `BudgetOverride` variants. While
+confirming the evidence in `classify`, the identical staleness turned up ONE
+level up, on the enum the corrected doc now delegates to:
+
+`crates/pmcp-package/src/slot/classification.rs:12-14` — `SlotClass`'s
+`BehaviorRelevant` variant doc reads *"`LlmProvider` / `BudgetOverride` — carries
+a `tested_value`"*. Phase 120 made `Endpoint` and `AuthMode` behavior-relevant
+too, so this enumeration is incomplete for the same reason and by the same
+change. (`IdentityBearing`'s list is still accurate.)
+
+**The code is correct; only the doc is wrong** — `classify` derives the family
+from the single predicate `slot.tested_value().is_some()`
+(`classification.rs:25-29`) and contains no variant list, which is precisely what
+the corrected `detect_deviation` doc now says.
+
+NOT fixed here: plan 121-03's `files_modified` is `roundtrip_e2e.rs` and
+`deviation.rs` only. `classification.rs` is a third file in a
+workspace-EXCLUDED crate, and editing it would widen this plan's artifact list
+for zero PKG-04 benefit. A one-paragraph fix for whoever is next in that file;
+it changes no behaviour.
