@@ -312,15 +312,36 @@ test-cargo-pmcp:
 # prevent is "the gate does not reach this crate", and a run that selects zero
 # tests EXITS 0 — reproducing exactly that hole while looking green.
 #
-# The named-binary assertion closes the count guard's OWN blind spot: a nonzero
-# SUM proves the PACKAGE ran, not that any particular integration binary ran.
-# `cargo test -p` also sums unit, binary and doctest results, so a suite that
-# stopped being compiled — a renamed file, a `tests/` entry that silently
-# stopped being a target — leaves the total comfortably nonzero while its own
-# truths go unexecuted. `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase
-# 121: plan 121-02 Task 1 adds `roundtrip_e2e` when that binary first exists. A
-# name added BEFORE its binary exists turns this gate red for every commit in
-# between.
+# The named-binary assertion exists because a nonzero SUM proves the PACKAGE
+# ran, not that any particular integration binary ran. `cargo test -p` also sums
+# unit, binary and doctest results, so a suite that stopped being compiled — a
+# renamed file, a `tests/` entry that silently stopped being a target — leaves
+# the total comfortably nonzero while its own truths go unexecuted.
+#
+# WHAT IT ACTUALLY CHECKS, precisely: for each name, the PASSED count (field 4)
+# of the FIRST `test result:` line that FOLLOWS that binary's
+# `Running tests/<name>.rs` target line. The extraction lives in
+# `scripts/named-test-binary-count.awk` — one file, read by both this gate and
+# `test-openapi-server-guard-selftest`, so the gate and the proof of the gate
+# cannot drift.
+#
+# Two things this does NOT do, both deliberate (phase 121 review finding CR-02,
+# which this replaced):
+#
+#   - It does NOT ask whether `tests/<name>.rs` appears somewhere in the output.
+#     Cargo prints that target line for binaries that execute nothing, and rustc
+#     repeats the path in every diagnostic for that file. This target sets no
+#     `-D warnings`, so a warning alone satisfied the old substring check.
+#   - It does NOT gate on the `running N tests` line. MEASURED here: a single
+#     `#[test] #[ignore]` binary prints `running 1 test` alongside
+#     `test result: ok. 0 passed; 0 failed; 1 ignored`. An ignore sweep would
+#     pass a nonzero-`running` check while executing nothing; only the passed
+#     count reports 0.
+#
+# `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase 121: plan 121-02 Task 1
+# adds `roundtrip_e2e` when that binary first exists. A name added BEFORE its
+# binary exists turns this gate red for every commit in between. Removing a name
+# to quiet a red gate deletes the proof instead of fixing it.
 #
 # `-- --test-threads=1` is REQUIRED here and is the one deviation from both
 # precedents: this crate's tests mutate the process-global `TFL_BASE_URL` and
@@ -341,10 +362,23 @@ test-openapi-server:
 	fi; \
 	REQUIRED_TEST_BINARIES="parity_replay pmcp_package_pin roundtrip_e2e"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
-		if ! echo "$$out" | grep -q "tests/$$b\.rs"; then \
-			echo "$(RED)✗ required test binary '$$b' did not run — a nonzero total ($$ran) does not prove a NAMED suite ran$(NC)"; \
-			exit 1; \
-		fi; \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		''|-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line. Likeliest causes: the file was renamed, or that tests/ entry stopped being a target.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it — truncated output or an aborted harness. This gate refuses to pass on output it cannot read.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests. A #[cfg] gate turned false, an #[ignore] sweep landed, or the test module was renamed away. The summed total ($$ran) stays nonzero from the other suites and the lib tests, so the count guard above CANNOT catch this. This is the regression net PKG-04 exists to keep running — restore the tests, do not relax this guard.$(NC)"; \
+			exit 1;; \
+		*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor emitted an unparseable value ('$$n'). Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
 	done; \
 	echo "$(GREEN)✓ pmcp-openapi-server tests passed ($$ran tests)$(NC)"
 
