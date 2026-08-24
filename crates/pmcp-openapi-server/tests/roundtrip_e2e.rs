@@ -1396,3 +1396,362 @@ fn env_var_guard_restores_prior_state_including_on_panic() {
     // test found it. Every mutation above went through the guard — there is no
     // bare `set_var` in this function.
 }
+
+// =====================================================================
+// SC4-green — this file is INSENSITIVE to manifest shape (D-09)
+//
+// A structural guard that machine-checks SC4's "contains no assertion on
+// manifest structure" clause instead of trusting review, in the same
+// spirit as `scripts/lint-plan-verify-commands.sh`.
+// =====================================================================
+
+/// This file's own source, embedded at compile time.
+///
+/// `include_str!`'s argument resolves relative to the file CONTAINING the macro,
+/// so this names the very file it appears in with no runtime path join and no
+/// manifest-directory lookup to get wrong — the same mechanism the sibling
+/// tripwire `cargo-pmcp/tests/pmcp_package_pin.rs:35` uses.
+const THIS_FILE: &str = include_str!("roundtrip_e2e.rs");
+
+/// The tokens no assertion in this file may contain, each traceable to SC4's own
+/// wording: "manifest field names, layer ordering, digest values".
+///
+/// Kept as DATA in a named constant so it reads as a list a human can extend,
+/// rather than as a regular expression nobody wants to touch. Note that the
+/// literals below are string literals, so the scanner's own sanitizer strips
+/// them from this declaration — the deny-list cannot trip itself.
+const MANIFEST_SHAPE_DENY_LIST: [&str; 12] = [
+    // the word for a content hash, and its algorithm-prefixed form
+    "digest",
+    "sha256:",
+    // indexed accessors into the manifest and layer collections (ordering)
+    "manifests()[",
+    "layers()[",
+    // the layer accessor itself
+    "layers()",
+    // the media-type field, both spellings
+    "media_type",
+    "mediaType",
+    // the artifact-type field, both spellings
+    "artifact_type",
+    "artifactType",
+    // the blob- and index-read accessors
+    "read_blob",
+    "read_index",
+    // the annotations field
+    "annotations",
+];
+
+/// The number of assertion SPANS the guard must complete before its findings
+/// mean anything.
+///
+/// MEASURED, not picked. The measurement was taken by running this very guard
+/// against this very file on 2026-08-24, with the floor temporarily raised so
+/// the assertion would report the real number:
+///
+/// - **measured span count: 42**
+/// - **floor: 32** — the measurement less a margin of 10, i.e. 23.8% below it,
+///   which is just inside the "no more than a quarter" bound and comfortably
+///   above the absolute minimum of 10.
+///
+/// BOTH numbers are written down on purpose. A floor with no stated derivation
+/// gives the next person nothing to re-derive it from, so unrelated assertion
+/// refactoring drifts the real count and the floor silently becomes either
+/// meaningless or an obstacle. Re-measure the same way and re-apply the same
+/// margin rather than nudging this number to make a run go green.
+const MANIFEST_SHAPE_GUARD_SPAN_FLOOR: usize = 32;
+
+/// Hard cap on the number of lines one assertion span may cover.
+///
+/// A scanner that ABANDONS an unbalanced span is a scanner that an unusual
+/// formatting choice can switch off, so reaching the cap does not drop the span:
+/// it ends it here, keeps what was accumulated, and counts it.
+const SPAN_LINE_CAP: usize = 40;
+
+/// The six macro-start tokens that open an assertion span.
+const ASSERTION_MACROS: [&str; 6] = [
+    "assert!",
+    "assert_eq!",
+    "assert_ne!",
+    "debug_assert!",
+    "debug_assert_eq!",
+    "debug_assert_ne!",
+];
+
+/// One complete assertion invocation: delimiter-balanced, possibly multi-line.
+struct AssertionSpan {
+    /// 1-based line number the span starts on.
+    start_line: usize,
+    /// How many source lines the span covers.
+    line_count: usize,
+    /// The span's accumulated SANITIZED text (string contents and comments
+    /// already removed).
+    text: String,
+}
+
+/// True when a `//` line comment starts at `i`.
+fn starts_line_comment(chars: &[char], i: usize) -> bool {
+    chars[i] == '/' && chars.get(i + 1) == Some(&'/')
+}
+
+/// Index just past the closing `"` of a string whose CONTENT starts at `from`,
+/// honouring `\` escapes; `None` when the line ends while still inside it (this
+/// repo's assertion messages are routinely `\`-continued across lines).
+fn close_string(chars: &[char], from: usize) -> Option<usize> {
+    let mut j = from;
+    while j < chars.len() {
+        match chars[j] {
+            '\\' => j += 2,
+            '"' => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+    None
+}
+
+/// Index just past a char literal starting at `i`, or `None` for a lifetime.
+///
+/// Char literals must be skipped for the SAME reason string contents must be:
+/// this very file writes `'('` and `'"'` as char literals in the scanner below,
+/// and counting those as delimiters — or reading that `'"'` as the start of a
+/// string — would corrupt the scan of the file the guard is reading.
+fn skip_char_literal(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != '\'' {
+        return None;
+    }
+    if chars.get(i + 1) == Some(&'\\') {
+        let mut j = i + 2;
+        while j < chars.len() {
+            if chars[j] == '\'' {
+                return Some(j + 1);
+            }
+            j += 1;
+        }
+        return None;
+    }
+    // `'x'` — exactly one character then a closing quote. Anything else is a
+    // lifetime (`'static`, `'a`) and is emitted as ordinary code.
+    if chars.get(i + 2) == Some(&'\'') {
+        Some(i + 3)
+    } else {
+        None
+    }
+}
+
+/// Index just past a raw string literal (`r"…"`, `r#"…"#`, …) starting at `i`.
+fn skip_raw_string(chars: &[char], i: usize) -> Option<usize> {
+    if chars[i] != 'r' {
+        return None;
+    }
+    // An `r` that is the tail of an identifier (`for`, `.iter`) is not a prefix.
+    if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+        return None;
+    }
+    let mut j = i + 1;
+    let mut hashes = 0usize;
+    while chars.get(j) == Some(&'#') {
+        hashes += 1;
+        j += 1;
+    }
+    if chars.get(j) != Some(&'"') {
+        return None;
+    }
+    j += 1;
+    while j < chars.len() {
+        if chars[j] == '"' && (1..=hashes).all(|k| chars.get(j + k) == Some(&'#')) {
+            return Some(j + 1 + hashes);
+        }
+        j += 1;
+    }
+    Some(chars.len())
+}
+
+/// Sanitize ONE line, given whether the previous line ended inside a string.
+/// Returns the scanning copy plus whether this line ends inside a string.
+fn sanitize_line(line: &str, in_string: bool) -> (String, bool) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    if in_string {
+        match close_string(&chars, 0) {
+            Some(next) => i = next,
+            None => return (String::new(), true),
+        }
+    }
+    while i < chars.len() {
+        if starts_line_comment(&chars, i) {
+            break;
+        }
+        if let Some(next) = skip_raw_string(&chars, i) {
+            i = next;
+            continue;
+        }
+        if let Some(next) = skip_char_literal(&chars, i) {
+            i = next;
+            continue;
+        }
+        if chars[i] == '"' {
+            match close_string(&chars, i + 1) {
+                Some(next) => i = next,
+                None => return (out, true),
+            }
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    (out, false)
+}
+
+/// Sanitize the whole source, carrying string state ACROSS lines.
+fn sanitize_source(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_string = false;
+    for line in source.lines() {
+        let (sanitized, still_in_string) = sanitize_line(line, in_string);
+        out.push(sanitized);
+        in_string = still_in_string;
+    }
+    out
+}
+
+/// Net change in `(`/`[`/`{` nesting depth contributed by one SANITIZED line.
+fn delimiter_delta(sanitized: &str) -> i32 {
+    let mut delta = 0;
+    for c in sanitized.chars() {
+        match c {
+            '(' | '[' | '{' => delta += 1,
+            ')' | ']' | '}' => delta -= 1,
+            _ => {},
+        }
+    }
+    delta
+}
+
+/// Accumulate one span from `start` until its delimiters balance (or the cap).
+///
+/// The depth counter is what carries state ACROSS lines — it is the difference
+/// between this scanner and the per-line scan it must not be.
+fn accumulate_span(lines: &[String], start: usize) -> AssertionSpan {
+    let mut text = String::new();
+    let mut depth = 0i32;
+    let mut line_count = 0usize;
+    while start + line_count < lines.len() && line_count < SPAN_LINE_CAP {
+        let line = &lines[start + line_count];
+        text.push_str(line);
+        text.push('\n');
+        depth += delimiter_delta(line);
+        line_count += 1;
+        if depth <= 0 {
+            break;
+        }
+    }
+    AssertionSpan {
+        start_line: start + 1,
+        line_count,
+        text,
+    }
+}
+
+/// Every complete assertion span in `source`.
+fn scan_assertion_spans(source: &str) -> Vec<AssertionSpan> {
+    let lines = sanitize_source(source);
+    let mut spans = Vec::new();
+    let mut idx = 0;
+    while idx < lines.len() {
+        if !ASSERTION_MACROS.iter().any(|m| lines[idx].contains(m)) {
+            idx += 1;
+            continue;
+        }
+        let span = accumulate_span(&lines, idx);
+        idx += span.line_count;
+        spans.push(span);
+    }
+    spans
+}
+
+/// SC4-green (D-09) — this file asserts NOTHING about the package's on-disk
+/// representation: no manifest field name, no layer ordering, no digest value.
+///
+/// # What it scans, and why SPANS rather than lines
+///
+/// It reads its own source through [`THIS_FILE`] and examines whole,
+/// delimiter-balanced assertion SPANS. A per-line scan — read only lines that
+/// contain an assertion keyword — cannot see a forbidden token sitting on a
+/// CONTINUATION line, and `cargo fmt --all -- --check` is an acceptance
+/// criterion of every task in this phase, so rustfmt ACTIVELY PRODUCES that
+/// shape by splitting long assertion invocations. The multiline form is the
+/// normal case in this repo, not an edge case.
+///
+/// # Why the text is sanitized first
+///
+/// A guard that scanned raw text would SELF-SATISFY: this file's own module
+/// header and this doc comment name the shapes being forbidden, in prose,
+/// because a rule that cannot be explained beside itself gets switched off
+/// within a week. Comment text and string-literal CONTENTS are therefore
+/// stripped before both the delimiter counting and the deny-list matching.
+/// Stripping strings is not cosmetic either — assertion messages here routinely
+/// contain unbalanced parentheses, and a naive counter would never see such a
+/// span close.
+///
+/// # Two standing self-checks
+///
+/// A floor on the number of completed spans, so the guard fails rather than
+/// passes when it scans nothing (a renamed file, an over-tight filter); and a
+/// multiline-coverage check asserting span-covered lines exceed the span count,
+/// which is false if and only if the scanner has collapsed back to per-line
+/// behaviour.
+///
+/// # This is a REGRESSION LINT, not a semantic proof
+///
+/// It matches LEXICAL TOKENS. An aliased binding, a helper function, or a field
+/// reached through a differently-named accessor can still couple this file to
+/// manifest shape without using any listed token. Reviewer attention therefore
+/// remains part of SC4-green, and this lint is not a substitute for it. Claiming
+/// otherwise in this header is how a guard earns deletion the first time it is
+/// inconvenient.
+#[test]
+fn roundtrip_e2e_asserts_nothing_about_manifest_shape() {
+    let spans = scan_assertion_spans(THIS_FILE);
+
+    // (1) The guard must actually be reaching the file.
+    assert!(
+        spans.len() >= MANIFEST_SHAPE_GUARD_SPAN_FLOOR,
+        "the manifest-shape guard IS NOT REACHING THE FILE: it completed only \
+         {} assertion spans, below the floor of {}. Something upstream of the \
+         deny-list check is broken — a renamed file, an over-tight span-start \
+         filter, or an include_str! pointing somewhere unexpected — and the \
+         guard would otherwise pass having examined nothing.",
+        spans.len(),
+        MANIFEST_SHAPE_GUARD_SPAN_FLOOR
+    );
+
+    // (2) The scanner must still be accumulating ACROSS lines.
+    let covered_lines: usize = spans.iter().map(|s| s.line_count).sum();
+    assert!(
+        covered_lines > spans.len(),
+        "the span scanner COLLAPSED TO SINGLE LINES ({covered_lines} covered \
+         lines across {} spans): every span ended on its own start line, which \
+         means the cross-line accumulator stopped working and THE MULTILINE \
+         BYPASS IS BACK — a forbidden token on a rustfmt-produced continuation \
+         line would no longer be examined.",
+        spans.len()
+    );
+
+    // (3) The check itself.
+    for span in &spans {
+        for token in MANIFEST_SHAPE_DENY_LIST {
+            assert!(
+                !span.text.contains(token),
+                "this file asserts on the package's ON-DISK REPRESENTATION: the \
+                 forbidden token '{token}' appears in the assertion span \
+                 starting at line {}. Every assertion here must be on SERVED \
+                 BEHAVIOUR — the round trip has to survive an arbitrary number \
+                 of manifest-shape refactors (PKG-04 / SC4-green, D-09). \
+                 span:\n{}",
+                span.start_line,
+                span.text
+            );
+        }
+    }
+}
