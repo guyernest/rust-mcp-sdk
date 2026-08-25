@@ -1198,6 +1198,111 @@ purity-check:
 	done
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
 
+# Phase 122 (D-12 / D-13, PKGX-01): the NO-CRYPTO boundary for `pmcp-package`.
+#
+# A SIBLING list of PURITY_CRATES, deliberately NOT a member of it. The
+# purity-check Layer 2 loop enforces that every PURITY_CRATES member's [bans]
+# list is BYTE-IDENTICAL ("must stay in lockstep"); those crates ban Excel
+# readers, and this is an entirely different boundary — an ALLOWLIST rather than
+# a deny list. Joining that group would immediately fail its parity check.
+#
+# What it gets from being a sibling: the same crate-local deny.toml shape, the
+# same `--manifest-path` scoping (the only mechanism that reaches a
+# workspace-EXCLUDED crate — `pmcp-package` carries its own [workspace] table),
+# the same WR-02 fail-closed guard, and the same quality-gate chaining.
+PURITY_NO_CRYPTO_CRATES := pmcp-package
+
+# Fixture-driven self-test for the [bans].allow entry counter, mirroring
+# test-openapi-server-guard-selftest. It is a declared PREREQUISITE of
+# no-crypto-check below, so the parser is proven BEFORE the gate trusts its
+# reading — the gate and the proof of the gate cannot drift.
+#
+# Each fixture pins a failure mode that a naive line-oriented check gets wrong:
+#
+#   empty_allow      -> 0   THE BYPASS. `grep 'allow = \['` also matches
+#                           `allow = []`, so the naive guard passes exactly when
+#                           it must fail. This is the fixture that matters most.
+#   multiline        -> 2   the ordinary shape of the real config.
+#   single_line      -> 1   `allow = [ { name = "x" } ]` closes on its opening
+#                           line; the opener must be counted before the depth
+#                           check or this reads 0.
+#   licenses_first   -> 1   SECTION SCOPING, FORWARDS. `[licenses]` carries its
+#                           own `allow = []` in every crate-local config in this
+#                           repo, so a file-wide count reads the wrong section.
+#   licenses_after   -> 1   SECTION SCOPING, BACKWARDS. A later `[licenses]`
+#                           stanza must not reset a count already taken.
+#   comment_decoy    -> 0   COMMENT BLINDNESS. deny.toml's header prose explains
+#                           this guard and writes `{ name = ... }` inline while
+#                           doing so; a comment-blind counter would count the
+#                           documentation and report a healthy allowlist for a
+#                           file that has no [bans].allow at all.
+.PHONY: no-crypto-allowlist-guard-selftest
+no-crypto-allowlist-guard-selftest:
+	@echo "$(BLUE)Self-testing the [bans].allow entry counter...$(NC)"
+	@fail=0; ran=0; \
+	check() { \
+		fixture="$$1"; expected="$$2"; shift 2; \
+		actual=$$(printf '%s\n' "$$@" | awk -f scripts/deny-allow-entry-count.awk); \
+		ran=$$((ran + 1)); \
+		if [ "$$actual" != "$$expected" ]; then \
+			echo "$(RED)✗ allowlist guard self-test fixture '$$fixture': expected $$expected, actual $$actual$(NC)"; \
+			fail=1; \
+		fi; \
+	}; \
+	check empty_allow 0 '[bans]' 'multiple-versions = "allow"' 'allow = []'; \
+	check multiline 2 '[bans]' 'allow = [' '  { name = "sha2" },' '  { name = "digest" },' ']'; \
+	check single_line 1 '[bans]' 'allow = [ { name = "sha2" } ]'; \
+	check licenses_first 1 '[licenses]' 'allow = []' '[bans]' 'allow = [ { name = "sha2" } ]'; \
+	check licenses_after 1 '[bans]' 'allow = [ { name = "sha2" } ]' '[licenses]' 'allow = []'; \
+	check comment_decoy 0 '# the allow list holds { name = "sha2" } entries' '[bans]' 'multiple-versions = "allow"'; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	if [ "$$ran" -ne 6 ]; then \
+		echo "$(RED)✗ allowlist guard self-test executed $$ran fixtures, expected 6 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ allowlist entry-counter self-test passed ($$ran fixtures)$(NC)"
+
+# The no-crypto boundary gate (SC4). Machine-checked over the RESOLVED
+# dependency graph — which is the whole point, and is the reason the
+# `const + include_str! + assert` manifest tripwire pattern was rejected for
+# this job: it reads a committed manifest at COMPILE time and structurally
+# cannot see a transitive arrival, which is the realistic way a signing crate
+# would actually enter.
+#
+# NOTE there is deliberately NO parity loop here. purity-check runs one across
+# PURITY_CRATES to keep multiple crates' ban lists in lockstep; PURITY_NO_CRYPTO_CRATES
+# holds ONE crate, so that loop would compare a list to itself. A degenerate
+# check that always passes is worse than no check — it reads like coverage.
+# Add the parity loop if and when a second crate joins this list.
+.PHONY: no-crypto-check
+no-crypto-check: no-crypto-allowlist-guard-selftest
+	@echo "$(BLUE)no-crypto-check: pmcp-package must never gain a signing/crypto-protocol dependency$(NC)"
+	@set -euo pipefail; \
+	for crate in $(PURITY_NO_CRYPTO_CRATES); do \
+		test -f crates/$$crate/deny.toml || { \
+			echo "$(RED)✗ no-crypto-check FAILED: crates/$$crate/deny.toml missing. cargo-deny 0.18.3 does NOT fail on a missing --config path — it WARNs, falls back to the default empty-ban config and reports 'bans ok' VACUOUSLY (the WR-02 hazard). A deleted or renamed config must fail this gate, not silently disable it.$(NC)"; \
+			exit 1; \
+		}; \
+		status=0; n=$$(awk -f scripts/deny-allow-entry-count.awk crates/$$crate/deny.toml 2>&1) || status=$$?; \
+		if [ $$status -ne 0 ]; then \
+			echo "$(RED)✗ no-crypto-check FAILED: the allowlist entry counter errored for crates/$$crate/deny.toml [exit $$status] — failing closed rather than trusting a reading it could not produce.$(NC)"; \
+			printf '%s\n' "$$n"; \
+			exit 1; \
+		fi; \
+		case "$$n" in \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ no-crypto-check FAILED: the allowlist entry counter produced no usable reading ('$$n') for crates/$$crate/deny.toml. An EMPTY value means awk itself did not run: check that scripts/deny-allow-entry-count.awk exists and is readable. Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+			exit 1;; \
+		esac; \
+		if [ "$$n" -eq 0 ]; then \
+			echo "$(RED)✗ no-crypto-check FAILED: crates/$$crate/deny.toml has an EMPTY or ABSENT [bans].allow list (reading: 0). One of three things is true: there is no [bans] section, it has no allow array, or that array is empty. Any of them is fatal — cargo-deny reports success for an EMPTY allow list exactly as vacuously as for a missing config, and ONLY a NON-EMPTY allow makes this check deny-by-default. Restore the allowlist; do not relax this guard.$(NC)"; \
+			exit 1; \
+		fi; \
+		echo "$(GREEN)  ✓ crates/$$crate/deny.toml [bans].allow holds $$n entries (deny-by-default is active)$(NC)"; \
+		cargo deny --manifest-path crates/$$crate/Cargo.toml check --config deny.toml bans; \
+	done
+	@echo "$(GREEN)✓ no-crypto-check PASSED: $(PURITY_NO_CRYPTO_CRATES) resolved graph is allowlisted (hashing admitted, signing absent)$(NC)"
+
 # Standalone quality gate for the workspace-EXCLUDED `pmcp-package` crate.
 # `pmcp-package` has its own [workspace] table and is NOT a root workspace
 # member, so root `cargo fmt/clippy/test` IGNORE it. Every command that must
@@ -1236,6 +1341,7 @@ quality-gate:
 	@$(MAKE) check-unwraps
 	@$(MAKE) validate-always
 	@$(MAKE) purity-check
+	@$(MAKE) no-crypto-check
 	@$(MAKE) comply
 	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
 	@echo "$(GREEN)        ✅ ALL TOYOTA WAY QUALITY CHECKS PASSED        $(NC)"
