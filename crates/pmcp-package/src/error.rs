@@ -82,6 +82,44 @@ pub enum PackageError {
     /// name a secret, and an error message is the wrong place for one.
     #[error("config slot violation on '{key}': {reason}")]
     ConfigSlotViolation { key: String, reason: String },
+
+    /// An attestation's subject digest does not name the package it was being
+    /// packed into: the supplied subject differs from the would-be UNATTESTED
+    /// manifest digest of the very package under construction.
+    ///
+    /// Returned by `pack_server` BEFORE its first blob write, which is what
+    /// makes "an attestation attached to the wrong package" unrepresentable in
+    /// a produced layout rather than merely reported afterwards.
+    ///
+    /// Distinct from [`PackageError::DigestMismatch`] on purpose, and the two
+    /// must never be merged: a digest mismatch means the BYTES are corrupt,
+    /// while a subject mismatch means the bytes are fine and the CLAIM is
+    /// wrong.
+    ///
+    /// `supplied` and `computed` are both `sha256:<hex>` digest strings, and
+    /// this variant carries nothing else. It never carries attestation payload
+    /// bytes, an issuer, or any other attestation material — the same rule
+    /// [`PackageError::ConfigSlotViolation`]'s rustdoc sets for this crate,
+    /// applied to a payload that is opaque platform-owned data this crate has
+    /// deliberately never parsed.
+    ///
+    /// # Version consequence
+    ///
+    /// `PackageError` is NOT `#[non_exhaustive]`, so adding this variant is a
+    /// breaking change for every downstream `match` over it. Plan 122-08 owns
+    /// the version number that names that break; this crate publishes nothing
+    /// on its own account.
+    #[error(
+        "attestation subject mismatch: the attestation names {supplied}, but this package's \
+         unattested manifest digest is {computed}"
+    )]
+    AttestationSubjectMismatch {
+        /// The `sha256:<hex>` subject the caller supplied with the attestation.
+        supplied: String,
+        /// The `sha256:<hex>` unattested manifest digest actually computed for
+        /// the package being packed.
+        computed: String,
+    },
 }
 
 #[cfg(test)]

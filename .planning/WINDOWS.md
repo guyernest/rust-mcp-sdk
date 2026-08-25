@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 25
 waived_count: 0
 fixed_count: 6
-total_count: 30
-last_updated: 2026-08-25T20:06:47.115Z
+total_count: 31
+last_updated: 2026-08-25T20:42:26.793Z
 ---
 
 # Broken Windows Ledger
@@ -45,6 +45,7 @@ last_updated: 2026-08-25T20:06:47.115Z
 | 28 | 120 | deviation | crates/pmcp-agent/src/config/resolver.rs |  | Plan 120-03 Rule-3 fix outside declared file scope: SlotType is not #[non_exhaustive], so adding Endpoint/AuthMode broke pmcp-agent's exhaustive matches; resolve_slot_with and warn_if_deviates were widened (warn_if_deviates' catch-all replaced with explicit arms) | open |  | 2026-08-23T13:57:41.305Z |  |
 | 29 | 120 | unrun-verify | cargo-pmcp/src/deployment/targets/aws_lambda/artifact.rs |  | Six pre-existing cargo-pmcp test failures on this base (3x fetch_builtin_binary download-stub, configure::resolver target-source, 2x doctor widget build-rs). Unrelated to 120-03 (modules contain zero ConfigSlot/SlotType references); logged to 120 deferred-items.md, not fixed | open |  | 2026-08-23T13:57:50.363Z |  |
 | 30 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-02-PLAN.md |  | make quality-gate could not be completed for plan 122-02 - run aborted on machine-level disk exhaustion (No space left on device, 117MiB free); all per-crate and per-target legs passed individually | open |  | 2026-08-25T20:06:47.115Z |  |
+| 31 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-03-PLAN.md |  | make quality-gate could not be completed for plan 122-03 - make doc-check aborted on machine-level disk exhaustion (13x No space left on device; df showed 117MiB free on a volume shared with a concurrent sibling worktree agent). Not a code defect. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (266 tests), test-cargo-pmcp-integration exit 0 (package_inspect 8), no-crypto-check exit 0, roundtrip_e2e 8 passed, fmt-check exit 0, lint-plans exit 0, check-release-coverage exit 0 | open |  | 2026-08-25T20:42:26.793Z |  |
 
 ````json
 [
@@ -406,6 +407,18 @@ last_updated: 2026-08-25T20:06:47.115Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-25T20:06:47.115Z",
+    "resolved_at": null
+  },
+  {
+    "id": 31,
+    "kind": "unrun-verify",
+    "phase": "122",
+    "file": ".planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-03-PLAN.md",
+    "line": null,
+    "description": "make quality-gate could not be completed for plan 122-03 - make doc-check aborted on machine-level disk exhaustion (13x No space left on device; df showed 117MiB free on a volume shared with a concurrent sibling worktree agent). Not a code defect. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (266 tests), test-cargo-pmcp-integration exit 0 (package_inspect 8), no-crypto-check exit 0, roundtrip_e2e 8 passed, fmt-check exit 0, lint-plans exit 0, check-release-coverage exit 0",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-25T20:42:26.793Z",
     "resolved_at": null
   }
 ]
