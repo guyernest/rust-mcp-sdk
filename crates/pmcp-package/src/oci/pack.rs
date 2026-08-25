@@ -459,6 +459,7 @@ fn validate_pack_preconditions(
     attestation: Option<AttestationFile<'_>>,
     unattested_layers: &[PlannedLayer],
 ) -> Result<()> {
+    reject_attestation_annotations_that_break_canonical_json(attestation)?;
     reject_an_attestation_subject_naming_another_package(attestation, unattested_layers)?;
     // The document gates run only when a config file is present: an embedded,
     // pre-built package has no config document to read declarations out of,
@@ -494,6 +495,88 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
                          config file for that key to address — pack with the config \
                          document, or drop the slot's config_key"
                     .to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The first byte offset at which `value` carries a C0 control character, with
+/// the character itself.
+///
+/// C0 (U+0000–U+001F) is exactly the range RFC 8259 forbids unescaped inside a
+/// JSON string. DEL (U+007F) and every other non-ASCII code point are legal
+/// unescaped and are deliberately NOT rejected — over-refusing an issuer that
+/// happens to be non-ASCII would be a bug of its own.
+fn first_control_character(value: &str) -> Option<(usize, char)> {
+    value
+        .char_indices()
+        .find(|(_, character)| (*character as u32) < 0x20)
+}
+
+/// Refuse an attestation whose issuer or payload-type value cannot survive this
+/// crate's canonical JSON form.
+///
+/// # Why this gate exists
+///
+/// `canonicalize` is OLPC/TUF Canonical JSON, which escapes ONLY `"` and `\`
+/// and writes every other character — including C0 control characters —
+/// LITERALLY. That is correct for its own spec and wrong for RFC 8259, so a
+/// control character in ANY string reaching the manifest produces manifest bytes
+/// that no JSON parser will read back. The package packs cleanly, its digest
+/// verifies (the digest is over the bytes as stored), and then `unpack_server`
+/// — and every other OCI tool — fails on the manifest.
+///
+/// Found by `tests/attestation_opacity.rs`'s adversarial-annotation property,
+/// which generated `issuer = "\0"` and observed a package that packed and could
+/// not be unpacked. Refusing at pack time is the fix that keeps an unreadable
+/// artifact from being produced at all.
+///
+/// # Why only issuer and payload-type
+///
+/// `subject` is validated more strictly one gate later:
+/// [`reject_an_attestation_subject_naming_another_package`] parses it as
+/// `sha256:<64 hex>`, a form that admits no control character. Duplicating the
+/// weaker check here would only change which of two refusals a caller sees.
+///
+/// # Known wider blind spot, stated rather than left to be found
+///
+/// The same canonical-JSON hazard applies to every OTHER string this crate
+/// canonicalizes: a `ConfigFile`/`OpenApiSpecFile` `file_name` (which becomes
+/// the standard `org.opencontainers.image.title` annotation) and every `String`
+/// inside `ServerPackage` itself. Those values come from the packaging author's
+/// own filesystem and source, not from an untrusted platform-issued
+/// attestation, so they are a different trust class and are deliberately out of
+/// this gate's scope rather than silently assumed safe.
+///
+/// # Errors
+///
+/// Returns [`PackageError::AttestationAnnotationInvalid`] naming the annotation
+/// key and the offending code point. It never reproduces the value.
+///
+/// [`PackageError::AttestationAnnotationInvalid`]: crate::error::PackageError::AttestationAnnotationInvalid
+fn reject_attestation_annotations_that_break_canonical_json(
+    attestation: Option<AttestationFile<'_>>,
+) -> Result<()> {
+    let Some(attestation) = attestation else {
+        return Ok(());
+    };
+    for (key, value) in [
+        (ANNOTATION_ATTESTATION_ISSUER, attestation.issuer),
+        (
+            ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+            attestation.payload_type,
+        ),
+    ] {
+        if let Some((offset, character)) = first_control_character(value) {
+            return Err(PackageError::AttestationAnnotationInvalid {
+                annotation: key.to_string(),
+                reason: format!(
+                    "the value carries the control character U+{:04X} at byte offset {offset}; \
+                     canonical JSON writes control characters literally, so the manifest would \
+                     not be parseable JSON",
+                    character as u32
+                ),
             });
         }
     }
@@ -657,10 +740,18 @@ fn would_be_unattested_manifest_digest(
 /// but does not equal this package's would-be unattested manifest digest. Both
 /// carry digest strings only, never attestation payload material.
 ///
+/// When `attestation` is `Some`, also returns
+/// [`PackageError::AttestationAnnotationInvalid`] BEFORE writing anything if
+/// its `issuer` or `payload_type` carries a C0 control character. Canonical
+/// JSON writes control characters literally, so packing one would produce a
+/// manifest that is not parseable JSON — a package that packs and can never be
+/// unpacked. See `reject_attestation_annotations_that_break_canonical_json`.
+///
 /// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
 /// [`PackageError::ConfigSlotViolation`]: crate::error::PackageError::ConfigSlotViolation
 /// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
 /// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
+/// [`PackageError::AttestationAnnotationInvalid`]: crate::error::PackageError::AttestationAnnotationInvalid
 ///
 /// # Examples
 ///

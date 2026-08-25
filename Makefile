@@ -1321,7 +1321,21 @@ pmcp-package-gate:
 	@echo "$(BLUE)🔍 pmcp-package standalone gate (workspace-excluded crate)$(NC)"
 	$(CARGO) fmt --manifest-path crates/pmcp-package/Cargo.toml --all -- --check
 	$(CARGO) clippy --manifest-path crates/pmcp-package/Cargo.toml --all-targets -- -D warnings
-	$(CARGO) test --manifest-path crates/pmcp-package/Cargo.toml
+# The count assertion mirrors test-tester/test-cargo-pmcp and closes the same
+# vacuity class plan 122-01 closed for `cargo-pmcp/tests/`: a `cargo test` run
+# that selects ZERO tests EXITS 0, so this leg could report green while
+# executing nothing at all -- reproducing "the gate does not reach this crate",
+# the exact hole this whole target exists to close, while looking like proof.
+	@out=$$($(CARGO) test --manifest-path crates/pmcp-package/Cargo.toml 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-package reported 0 tests — the gate is not reaching this workspace-excluded crate$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ pmcp-package tests passed ($$ran tests)$(NC)"
 	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test OK$(NC)"
 
 .PHONY: quality-gate

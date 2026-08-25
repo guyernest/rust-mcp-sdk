@@ -120,6 +120,45 @@ pub enum PackageError {
         /// the package being packed.
         computed: String,
     },
+
+    /// An attestation's annotation value cannot survive this crate's canonical
+    /// JSON form, so packing it would produce a manifest no JSON parser can
+    /// read back.
+    ///
+    /// Canonical JSON (OLPC/TUF, which `olpc-cjson` implements and this crate's
+    /// `canonicalize` uses) escapes ONLY `"` and `\`. A C0 control character
+    /// (U+0000–U+001F) in any string it emits is written LITERALLY, and RFC 8259
+    /// forbids an unescaped control character inside a JSON string — so the
+    /// manifest bytes would be invalid JSON. The package would pack cleanly and
+    /// then fail to unpack, here and in every other OCI tool.
+    ///
+    /// Refused BEFORE the first blob write, for the same reason
+    /// [`PackageError::AttestationSubjectMismatch`] is: an unreadable package is
+    /// worse to produce and diagnose later than to refuse now. Attestation
+    /// annotation values arrive from the issuing platform rather than from this
+    /// repo, which is precisely why they are validated rather than trusted.
+    ///
+    /// `annotation` names the offending annotation KEY and `reason` describes
+    /// the offending code point and where it sits. Neither ever carries the
+    /// annotation's VALUE — the same rule
+    /// [`PackageError::ConfigSlotViolation`] sets, applied to untrusted input
+    /// that may be arbitrarily long or itself hostile to a terminal.
+    ///
+    /// # Version consequence
+    ///
+    /// `PackageError` is NOT `#[non_exhaustive]`, so adding this variant is a
+    /// breaking change for every downstream `match` over it. Plan 122-08 owns
+    /// the version number that names that break, together with the sibling
+    /// break [`PackageError::AttestationSubjectMismatch`] introduced.
+    #[error("attestation annotation '{annotation}' is not representable: {reason}")]
+    AttestationAnnotationInvalid {
+        /// The annotation KEY whose value was refused, e.g.
+        /// `run.pmcp.attestation.issuer`.
+        annotation: String,
+        /// What is wrong with the value, naming the code point and its byte
+        /// offset but never reproducing the value itself.
+        reason: String,
+    },
 }
 
 #[cfg(test)]

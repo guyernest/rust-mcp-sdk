@@ -745,4 +745,84 @@ mod attestation_subject {
             "a malformed subject is refused by the same pre-write gate"
         );
     }
+
+    // --- 19. An annotation value canonical JSON cannot represent -----------
+
+    /// A C0 control character in an attestation annotation is refused BEFORE
+    /// the first write.
+    ///
+    /// Found by `tests/attestation_opacity.rs`'s adversarial-annotation
+    /// property, which generated `issuer = "\0"` and observed a package that
+    /// packed cleanly and then failed to UNPACK: canonical JSON (OLPC/TUF)
+    /// escapes only `"` and `\`, so a control character is written literally
+    /// and the resulting manifest is not RFC 8259 JSON. Pinned here
+    /// deterministically as well, because a property that merely SAMPLES the
+    /// refusal could stop reaching it after a strategy edit and nothing would
+    /// notice.
+    #[test]
+    fn an_attestation_annotation_carrying_a_control_character_is_refused_before_any_write() {
+        for (label, issuer, payload_type) in [
+            ("issuer", "https://issuer.test.invalid/\u{0}", PAYLOAD_TYPE),
+            ("payload_type", ISSUER, "application/\u{1b}json"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let layout = OciLayout::create(dir.path()).unwrap();
+            let before = snapshot(dir.path());
+            let subject = unattested_digest();
+
+            let err = pack_server(
+                &server_package(),
+                referenced_binary(),
+                None,
+                None,
+                Some(AttestationFile {
+                    bytes: OPAQUE_PAYLOAD,
+                    subject: subject.as_str(),
+                    issuer,
+                    payload_type,
+                }),
+                &layout,
+            )
+            .unwrap_err();
+
+            assert!(
+                matches!(err, PackageError::AttestationAnnotationInvalid { .. }),
+                "a control character in the {label} annotation must be refused as \
+                 unrepresentable; got {err:?}"
+            );
+            assert_eq!(
+                before,
+                snapshot(dir.path()),
+                "the annotation gate runs BEFORE the first write, like every other pack \
+                 precondition"
+            );
+        }
+    }
+
+    /// The gate must not widen: a NON-ASCII issuer is perfectly representable
+    /// in canonical JSON and must still pack.
+    ///
+    /// Without this, "refuse anything unusual" would satisfy the test above
+    /// while breaking every legitimate internationalized issuer name.
+    #[test]
+    fn a_non_ascii_attestation_annotation_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let subject = unattested_digest();
+
+        pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            Some(AttestationFile {
+                bytes: OPAQUE_PAYLOAD,
+                subject: subject.as_str(),
+                issuer: "https://issuer.test.invalid/café-北京-\u{1f600}",
+                payload_type: PAYLOAD_TYPE,
+            }),
+            &layout,
+        )
+        .expect("a non-ASCII annotation is representable and must pack");
+    }
 }
