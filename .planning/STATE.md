@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: AI-Package Portability
 current_phase: 122
-current_phase_name: Attestation Carriage
+current_phase_name: attestation-carriage-contract-first-parked-on-the-pmcp-run-b
 status: executing
 stopped_at: Phase 122 context gathered
-last_updated: "2026-08-25T18:26:45.366Z"
+last_updated: "2026-08-25T19:13:44.208Z"
 last_activity: 2026-08-25
 last_activity_desc: Phase 121 complete, transitioned to Phase 120
-state_head: 3bf181be054b34f4bacb324b2d8fc3a97c9d8361
+state_head: cec0e3c223c2f621af2bb9c175433ce2a09b318e
 progress:
   total_phases: 5
   completed_phases: 2
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 
 ## Current Position
 
-Phase: 122 (Attestation Carriage) — READY TO EXECUTE
+Phase: 122 (attestation-carriage-contract-first-parked-on-the-pmcp-run-b) — READY TO EXECUTE
 Plan: Not started
 Status: Ready to execute
 Last activity: 2026-08-25 — Phase 121 complete (UAT 37/37, verification passed), transitioned to Phase 122
