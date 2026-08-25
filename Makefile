@@ -1336,7 +1336,16 @@ pmcp-package-gate:
 		exit 1; \
 	fi; \
 	echo "$(GREEN)✓ pmcp-package tests passed ($$ran tests)$(NC)"
-	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test OK$(NC)"
+# RUN the example, do not merely compile it. The `cargo test` and `cargo clippy
+# --all-targets` legs above already COMPILE every example target, so a
+# compile-only check here would add nothing at all. What this step catches is a
+# runtime panic or a failed `assert_eq!` INSIDE the example -- and CLAUDE.md's
+# ALWAYS requirements ask for a working `cargo run --example`, not a compiling
+# one. `make test-examples` cannot cover this: it runs
+# scripts/run-example-builds.sh over the ROOT workspace, which never reaches
+# this workspace-EXCLUDED crate.
+	$(CARGO) run --manifest-path crates/pmcp-package/Cargo.toml --example attestation_carriage
+	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test/example OK$(NC)"
 
 .PHONY: quality-gate
 quality-gate:
