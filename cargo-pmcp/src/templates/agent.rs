@@ -58,7 +58,13 @@ const PMCP_AGENT_VERSION: &str = "0.3.0";
 /// that fails to compile against the published crate. Naming it here means the
 /// emitter below and its assertion test read the SAME constant, so the next
 /// bump is one edit rather than two that can drift apart.
-const PMCP_PACKAGE_VERSION_REQ: &str = "0.2";
+///
+/// Phase 122 moved it to `"0.3"` alongside `pmcp-package`'s own 0.2.0 -> 0.3.0
+/// bump, and measured the asymmetry that makes this constant the dangerous one:
+/// reverting ONLY this line leaves `cargo build --workspace` green while
+/// `emitted_package_requirement_matches_workspace_major_minor_line` goes red.
+/// The compiler is not this emitter's tripwire; that test is.
+const PMCP_PACKAGE_VERSION_REQ: &str = "0.3";
 
 /// Emit the files of a single runnable agent crate into `dir`.
 pub fn generate(dir: &Path, name: &str) -> Result<()> {
