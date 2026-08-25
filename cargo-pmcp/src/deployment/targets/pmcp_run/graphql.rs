@@ -488,7 +488,12 @@ where
 
     let response = client
         .post(graphql_url)
-        .header("Authorization", access_token)
+        // The header NAME comes from `graphql_contract.rs` so the shipped
+        // client and the parked live-verification leg
+        // (`tests/package_attestation_contract.rs`) cannot drift into two
+        // different auth shapes. The VALUE is the RAW token — no `Bearer `
+        // prefix; see GRAPHQL_AUTH_HEADER's rustdoc.
+        .header(GRAPHQL_AUTH_HEADER, access_token)
         .header("Content-Type", "application/json")
         .json(&request)
         .send()
@@ -1391,7 +1396,7 @@ pub struct WorkflowPackageResp {
 // the lib target. Re-exported here so the rest of this file (and any other
 // `pmcp_run` code) can keep referring to them unqualified.
 pub(crate) use super::graphql_contract::{
-    GET_PACKAGE_CAPTURE_STATUS_QUERY, SUBMIT_PACKAGE_CAPTURE_QUERY,
+    GET_PACKAGE_CAPTURE_STATUS_QUERY, GRAPHQL_AUTH_HEADER, SUBMIT_PACKAGE_CAPTURE_QUERY,
 };
 
 /// Submit an async package-capture job for a team's workflow dependency graph
