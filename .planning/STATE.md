@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: AI-Package Portability
 current_phase: 122
-current_phase_name: attestation-carriage-contract-first-parked-on-the-pmcp-run-b
+current_phase_name: Attestation Carriage
 status: executing
 stopped_at: Phase 122 context gathered
-last_updated: "2026-08-25T19:13:44.208Z"
+last_updated: "2026-08-25T19:38:18.272Z"
 last_activity: 2026-08-25
-last_activity_desc: Phase 121 complete, transitioned to Phase 120
-state_head: cec0e3c223c2f621af2bb9c175433ce2a09b318e
+last_activity_desc: Phase 122 execution started
+state_head: f1142277d63779d8211b1be54407b9a422a460df
 progress:
   total_phases: 5
   completed_phases: 2
@@ -27,14 +27,14 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 > `.planning/v2.6-REQUIREMENTS-STAGED.md` was consumed and removed when v2.6 opened — its content is now `.planning/REQUIREMENTS.md`. Do not look for it.
 
 **Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
-**Current focus:** Phase 121 — Local Round-Trip E2E
+**Current focus:** Phase 122 — Attestation Carriage
 
 ## Current Position
 
-Phase: 122 (attestation-carriage-contract-first-parked-on-the-pmcp-run-b) — READY TO EXECUTE
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-25 — Phase 121 complete (UAT 37/37, verification passed), transitioned to Phase 122
+Phase: 122 (Attestation Carriage) — EXECUTING
+Plan: 1 of 8
+Status: Executing Phase 122
+Last activity: 2026-08-25 — Phase 122 execution started
 Next: Phase 122 (Attestation Carriage) — not yet discussed. Runs in parallel with Phase 123.
 
 > **Corrected by hand 2026-08-25.** `gsd-tools query phase.complete 121` returned
