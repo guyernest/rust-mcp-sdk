@@ -89,6 +89,7 @@ fn config_only_package_restores_config_bytes_verbatim_under_its_original_name() 
         referenced_binary(),
         Some(config_file()),
         None,
+        None,
         &layout,
     )
     .unwrap();
@@ -122,6 +123,7 @@ fn config_only_package_manifest_carries_no_bootstrap_layer() {
         &config_server_package(),
         referenced_binary(),
         Some(config_file()),
+        None,
         None,
         &layout,
     )
@@ -158,6 +160,7 @@ fn config_only_package_unpacks_to_referenced_binary_with_the_callers_digest() {
         &config_server_package(),
         referenced_binary(),
         Some(config_file()),
+        None,
         None,
         &layout,
     )
@@ -208,6 +211,7 @@ fn an_embedded_package_still_round_trips_its_bootstrap_bytes() {
         BinaryMode::Embedded(&bootstrap),
         None,
         None,
+        None,
         &layout,
     )
     .unwrap();
@@ -238,6 +242,7 @@ fn a_keyed_slot_without_a_config_file_is_refused_naming_the_dangling_key() {
         referenced_binary(),
         None,
         None,
+        None,
         &layout,
     )
     .expect_err("a config_key with no config document to address must not pack");
@@ -265,6 +270,7 @@ fn packing_identical_config_only_inputs_into_two_layouts_yields_one_digest() {
         referenced_binary(),
         Some(config_file()),
         None,
+        None,
         &layout_a,
     )
     .unwrap();
@@ -275,6 +281,7 @@ fn packing_identical_config_only_inputs_into_two_layouts_yields_one_digest() {
         &package,
         referenced_binary(),
         Some(config_file()),
+        None,
         None,
         &layout_b,
     )
@@ -300,6 +307,7 @@ fn a_binary_ref_layer_with_no_digest_is_rejected_at_unpack() {
         &config_server_package(),
         referenced_binary(),
         Some(config_file()),
+        None,
         None,
         &layout,
     )
@@ -393,6 +401,7 @@ fn a_packed_spec_restores_its_bytes_verbatim_under_its_original_name() {
         referenced_binary(),
         Some(config_file()),
         Some(spec_file()),
+        None,
         &layout,
     )
     .unwrap();
@@ -422,6 +431,7 @@ fn a_package_packed_without_a_spec_carries_no_spec_layer_at_all() {
         &config_server_package(),
         referenced_binary(),
         Some(config_file()),
+        None,
         None,
         &layout,
     )
@@ -455,6 +465,7 @@ fn a_json_spec_round_trips_under_exactly_the_same_media_type_as_a_yaml_one() {
         referenced_binary(),
         Some(config_file()),
         Some(json_spec),
+        None,
         &layout,
     )
     .unwrap();
@@ -478,6 +489,7 @@ fn a_json_spec_round_trips_under_exactly_the_same_media_type_as_a_yaml_one() {
         referenced_binary(),
         Some(config_file()),
         Some(spec_file()),
+        None,
         &yaml_layout,
     )
     .unwrap();
@@ -510,6 +522,7 @@ fn renaming_only_the_spec_file_changes_the_manifest_digest() {
             file_name: "london-tube-api.yaml",
             bytes: SPEC_YAML,
         }),
+        None,
         &layout_a,
     )
     .unwrap();
@@ -524,6 +537,7 @@ fn renaming_only_the_spec_file_changes_the_manifest_digest() {
             file_name: "renamed-api.yaml",
             bytes: SPEC_YAML,
         }),
+        None,
         &layout_b,
     )
     .unwrap();
@@ -553,6 +567,7 @@ fn packed_full_package(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
         referenced_binary(),
         Some(config_file()),
         Some(spec_file()),
+        None,
         &layout,
     )
     .unwrap();
@@ -738,6 +753,7 @@ fn pack_with_config(
             bytes: config_bytes,
         }),
         None,
+        None,
         &layout,
     )
 }
@@ -897,6 +913,7 @@ fn an_embedded_package_with_an_undeclared_slot_still_packs_because_no_config_is_
         BinaryMode::Embedded(&bootstrap),
         None,
         None,
+        None,
         &layout,
     )
     .expect("a config-less package must skip config-slot validation entirely");
@@ -997,6 +1014,7 @@ fn a_rejected_pack_adds_neither_a_blob_nor_an_index_entry() {
             file_name: CONFIG_FILE_NAME,
             bytes: CONFIG_WITH_BAKED_CREDENTIAL,
         }),
+        None,
         None,
         &layout,
     )
@@ -1150,6 +1168,7 @@ fn dropping_one_declaration_from_the_real_fixture_is_refused_naming_that_key() {
             file_name: LONDON_TUBE_CONFIG_NAME,
             bytes: &mutilated,
         }),
+        None,
         None,
         &layout,
     )
@@ -1323,6 +1342,7 @@ fn is_env_reference_agrees_with_the_shared_grammar_table_on_every_row() {
                 file_name: CONFIG_FILE_NAME,
                 bytes: config.as_bytes(),
             }),
+            None,
             None,
             &layout,
         );

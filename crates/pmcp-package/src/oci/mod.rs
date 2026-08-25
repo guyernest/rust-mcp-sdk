@@ -27,11 +27,12 @@ pub use config_validation::{
 };
 pub use layout::OciLayout;
 pub use pack::{
-    pack_agent, pack_server, pack_team, pack_workflow, BinaryMode, ConfigFile, OpenApiSpecFile,
+    pack_agent, pack_server, pack_team, pack_workflow, AttestationFile, BinaryMode, ConfigFile,
+    OpenApiSpecFile,
 };
 pub use unpack::{
-    unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, UnpackedBinary,
-    UnpackedServer,
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, UnpackedAttestation,
+    UnpackedBinary, UnpackedServer,
 };
 
 use crate::oci::media_types::{

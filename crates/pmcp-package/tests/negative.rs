@@ -293,6 +293,7 @@ mod server_layout {
             referenced_binary(),
             Some(config_file()),
             None,
+            None,
             &layout,
         )
         .unwrap();
@@ -505,6 +506,7 @@ mod server_layout {
         pack_server(
             &server_package(),
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &embedded_layout,

@@ -206,6 +206,7 @@ pub fn pack_london_tube(dir: &Path, spec: Option<&[u8]>) -> (OciLayout, Manifest
             file_name: LONDON_TUBE_SPEC_NAME,
             bytes,
         }),
+        None,
         &layout,
     )
     .expect("the real london-tube fixture must pack as a config-only package");

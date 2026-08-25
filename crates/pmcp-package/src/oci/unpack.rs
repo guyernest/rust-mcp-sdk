@@ -13,7 +13,7 @@
 //! A `ServerPackage`'s layers are located by MEDIA TYPE, never by position:
 //! the config and spec layers are optional and the binary layer is one of two
 //! mutually exclusive media types, so no positional contract can hold. A
-//! `ServerPackage` layout is indexed once by [`index_layers`] and every read
+//! `ServerPackage` layout is indexed once by `index_layers` and every read
 //! goes through that index. `AgentPackage`/`TeamPackage`/`WorkflowManifest`
 //! each remain a single layer. The embedded bootstrap layer is returned as raw
 //! bytes — it is never deserialized.
@@ -22,9 +22,11 @@ use crate::digest::{verify, ManifestDigest};
 use crate::error::{PackageError, Result};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
-    MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG,
-    MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
-    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
+    ANNOTATION_ATTESTATION_ISSUER, ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+    ANNOTATION_ATTESTATION_SUBJECT, MT_ATTESTATION, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP,
+    MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS,
+    MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE, MT_SERVER_OPENAPI_SPEC,
+    MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::pack::ServerEnvelope;
 use crate::oci::SingleLayerPackage;
@@ -116,9 +118,38 @@ pub struct RestoredFile {
     pub bytes: Vec<u8>,
 }
 
+/// A platform-issued attestation restored from an [`MT_ATTESTATION`] layer:
+/// the payload bytes exactly as packed, plus the three metadata values read off
+/// the layer descriptor's annotations.
+///
+/// `subject`, `issuer` and `payload_type` come from layer-descriptor
+/// annotations, which are ATTACKER-CONTROLLED input from an untrusted layout.
+/// They are returned as DATA only: this crate never writes to disk using them
+/// and never builds a path from them. A caller that acts on them is
+/// responsible for validating them first.
+///
+/// `bytes` are returned exactly as they were packed and are NEVER deserialized
+/// here — the attestation format is the issuing platform's, not this crate's.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpackedAttestation {
+    /// The attestation payload's exact bytes, byte-identical to what was
+    /// packed and never interpreted.
+    pub bytes: Vec<u8>,
+    /// The `sha256:<hex>` manifest digest this attestation CLAIMS as its
+    /// subject — the digest of the UNATTESTED package, never of the package
+    /// that carries this layer.
+    pub subject: String,
+    /// Who the attestation claims to have been issued by.
+    pub issuer: String,
+    /// The payload's own media type, as recorded at pack time.
+    pub payload_type: String,
+}
+
 /// Everything a packed server layout yields: the typed package, its binary
-/// (embedded bytes or a reference), and its optional verbatim config and spec
-/// files.
+/// (embedded bytes or a reference), its optional verbatim config and spec
+/// files, and its optional attestation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnpackedServer {
     /// The typed `ServerPackage` reassembled from the envelope + typed layers.
@@ -129,6 +160,8 @@ pub struct UnpackedServer {
     pub config: Option<RestoredFile>,
     /// The OpenAPI spec file, if the package carried one.
     pub spec: Option<RestoredFile>,
+    /// The platform-issued attestation, if the package carried one.
+    pub attestation: Option<UnpackedAttestation>,
 }
 
 /// Index a manifest's layers by media type so every read is keyed by WHAT a
@@ -226,6 +259,51 @@ fn read_named_file_layer(
     Ok(Some(RestoredFile { file_name, bytes }))
 }
 
+/// Read one of `descriptor`'s annotations, or fail naming the missing key.
+///
+/// Same precedent as [`read_named_file_layer`]'s title-annotation rule, for the
+/// same reason: a present layer missing a value that was part of what was
+/// packed is a malformed layout, and inventing a substitute would silently
+/// fabricate a claim.
+fn required_annotation(descriptor: &Descriptor, key: &str, layer_name: &str) -> Result<String> {
+    Ok(descriptor
+        .annotations()
+        .as_ref()
+        .and_then(|a| a.get(key))
+        .ok_or_else(|| PackageError::Layout {
+            reason: format!("the '{layer_name}' layer has no '{key}' annotation"),
+        })?
+        .clone())
+}
+
+/// Read the optional attestation layer back into an [`UnpackedAttestation`],
+/// taking its three metadata values from the layer descriptor's annotations.
+/// Returns `Ok(None)` when the layer is absent — an unattested package is not
+/// an error (D-14).
+///
+/// The payload bytes are digest-verified and then returned VERBATIM: this
+/// function never deserializes, parses or sniffs them.
+fn read_attestation_layer(
+    layout: &OciLayout,
+    descriptor: Option<&&Descriptor>,
+    layer_name: &str,
+) -> Result<Option<UnpackedAttestation>> {
+    let Some(descriptor) = descriptor else {
+        return Ok(None);
+    };
+    let bytes = read_verified_blob(layout, descriptor)?;
+    Ok(Some(UnpackedAttestation {
+        bytes,
+        subject: required_annotation(descriptor, ANNOTATION_ATTESTATION_SUBJECT, layer_name)?,
+        issuer: required_annotation(descriptor, ANNOTATION_ATTESTATION_ISSUER, layer_name)?,
+        payload_type: required_annotation(
+            descriptor,
+            ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+            layer_name,
+        )?,
+    }))
+}
+
 /// Read one required, digest-verified layer's RAW bytes by media type,
 /// without deserializing. Split out from [`read_required_layer`] so a caller
 /// that must inspect the raw JSON before it trusts a struct shape (see
@@ -316,13 +394,31 @@ fn detect_legacy_shape(envelope_bytes: &[u8]) -> Result<()> {
 ///
 /// [`MT_SERVER_OPENAPI_SPEC`]: crate::oci::media_types::MT_SERVER_OPENAPI_SPEC
 ///
+/// # `attestation: None` means the package carried no attestation
+///
+/// The attestation layer is OPTIONAL. A `None` here is not a decoding default
+/// and not a lossy read: it means the manifest's media-type index holds no
+/// [`MT_ATTESTATION`] entry, i.e. the package is simply unattested. There is
+/// no absence marker to distinguish "no attestation" from "attestation
+/// dropped" (D-14) because [`crate::oci::pack_server`] never drops a supplied
+/// attestation: `Some` in, layer written; `None` in, no layer.
+///
+/// A returned attestation is a CLAIM, not a verified fact. This crate holds
+/// no signing or verification keys and performs no signature check; the
+/// subject, issuer and payload type are carried through verbatim, and the
+/// payload bytes are never deserialized here.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+///
 /// # Errors
 ///
 /// Returns [`PackageError::Layout`] if the layout is malformed (duplicate
 /// media type, missing required layer, both-or-neither binary layers, a
 /// binary reference with no digest, a named-file layer with no title
-/// annotation) or if the envelope carries the pre-0.2.0 layer shape
-/// ([`detect_legacy_shape`]), [`PackageError::DigestMismatch`] if any blob has been
+/// annotation, or an attestation layer missing any of its three annotation
+/// keys — subject, issuer or payload-type) or if the envelope carries the
+/// pre-0.2.0 layer shape
+/// (`detect_legacy_shape`), [`PackageError::DigestMismatch`] if any blob has been
 /// tampered with, or [`PackageError::Serialize`] if a verified layer fails to
 /// deserialize.
 ///
@@ -383,12 +479,15 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
         by_media_type.get(MT_SERVER_OPENAPI_SPEC),
         "openapi-spec",
     )?;
+    let attestation =
+        read_attestation_layer(layout, by_media_type.get(MT_ATTESTATION), "attestation")?;
 
     Ok(UnpackedServer {
         package,
         binary,
         config,
         spec,
+        attestation,
     })
 }
 
@@ -656,7 +755,9 @@ mod tests {
         sample_agent_package, sample_server_package, sample_team_package, sample_workflow_manifest,
     };
     use super::*;
-    use crate::oci::pack::{pack_agent, pack_server, pack_team, pack_workflow, BinaryMode};
+    use crate::oci::pack::{
+        pack_agent, pack_server, pack_team, pack_workflow, AttestationFile, BinaryMode,
+    };
 
     #[test]
     fn server_pack_then_unpack_round_trips_losslessly_including_bootstrap_bytes() {
@@ -667,6 +768,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,
@@ -688,6 +790,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,
@@ -717,6 +820,64 @@ mod tests {
 
         let err = unpack_server(&layout).unwrap_err();
         assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
+    }
+
+    /// The attestation-specific case of the duplicate-media-type rule: a
+    /// crafted layout carrying TWO attestation layers is REJECTED, never
+    /// last-wins. Silently keeping one of the two would let an attacker shadow
+    /// a genuine attestation with their own while the package still unpacked
+    /// cleanly.
+    #[test]
+    fn a_duplicated_attestation_layer_is_rejected_rather_than_last_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let (package, bootstrap) = sample_server_package();
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            Some(AttestationFile {
+                bytes: b"\x00\x01 not json \xff\xfe",
+                subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                issuer: "https://issuer.test.invalid/pmcp-run",
+                payload_type: "application/vnd.test.attestation-payload",
+            }),
+            &layout,
+        )
+        .unwrap();
+
+        // Duplicate the attestation layer descriptor, simulating a crafted
+        // layout that tries to shadow the genuine attestation with a second.
+        let index = layout.read_index().unwrap();
+        let mut manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+        let mut layers = manifest.layers().clone();
+        let attestation = layers
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_ATTESTATION)
+            .unwrap()
+            .clone();
+        layers.push(attestation);
+        manifest.set_layers(layers);
+        let bytes = crate::digest::canonicalize(&manifest).unwrap();
+        let new_descriptor = layout.write_manifest(&bytes).unwrap();
+        let new_index = oci_spec::image::ImageIndexBuilder::default()
+            .schema_version(oci_spec::image::SCHEMA_VERSION)
+            .manifests(vec![new_descriptor])
+            .build()
+            .unwrap();
+        layout.write_index(&new_index).unwrap();
+
+        let err = unpack_server(&layout).unwrap_err();
+        assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
+        let PackageError::Layout { reason } = &err else {
+            unreachable!("just asserted the variant")
+        };
+        assert!(
+            reason.contains(MT_ATTESTATION),
+            "the error must NAME the duplicated media type so the operator can act on it; was: \
+             {reason}"
+        );
     }
 
     #[test]
@@ -763,6 +924,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,

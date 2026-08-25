@@ -10,14 +10,32 @@
 //!
 //! Named `inspect` (not `show`): this is a LOCAL, offline operation. The verb
 //! `show` is reserved for the platform's remote manifest-fetch thin client.
+//!
+//! # What this reports about attestations, and what it does NOT verify
+//!
+//! For a server package this renders whether the package carries an
+//! attestation, and when it does, the issuer, the subject digest it CLAIMS,
+//! and the payload's media type. Those are read from the attestation layer's
+//! descriptor annotations; the payload bytes themselves are never parsed.
+//!
+//! Stated plainly, because this phrase must be honest wherever it appears:
+//! the only verification performed locally is the subject-digest comparison —
+//! does the digest this attestation names actually correspond to this
+//! package. The SDK holds NO signing or verification keys and checks no
+//! signature. Verifying an attestation against the issuing platform's
+//! identity is a REMOTE call, and this command deliberately does not make it.
+//! An attestation rendered here is a claim that has been carried, not a claim
+//! that has been proven.
 
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
-use pmcp_package::oci::{unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout};
-use pmcp_package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
+use pmcp_package::oci::{
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout, UnpackedServer,
+};
+use pmcp_package::{AgentPackage, TeamPackage, WorkflowManifest};
 
 use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
 use crate::commands::GlobalFlags;
@@ -118,7 +136,7 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
         PackageKind::Server => {
             let unpacked = unpack_server(layout).context("unpack server package")?;
             if output {
-                render_server(&unpacked.package);
+                render_server(&unpacked);
             }
         },
         PackageKind::Workflow => {
@@ -161,11 +179,35 @@ fn render_team(pkg: &TeamPackage) {
     field("Built-in", pkg.built_in_servers.len());
 }
 
-fn render_server(pkg: &ServerPackage) {
+fn render_server(unpacked: &UnpackedServer) {
+    let pkg = &unpacked.package;
     header(PackageKind::Server);
     field("Name", &pkg.name);
     field("Version", &pkg.version);
     field("Config slots", pkg.config_slots.len());
+    render_attestation(unpacked);
+}
+
+/// Render what the package carries by way of an attestation.
+///
+/// BOTH terminal states are rendered explicitly. An unattested package says so
+/// on its own line rather than rendering nothing, so "unattested" is never
+/// indistinguishable from "this build of `inspect` does not know about
+/// attestations". The third state — attested but with a subject that does not
+/// name this package — is added by the subject-check work.
+///
+/// The subject is printed as the attestation's own CLAIM. This renderer makes
+/// no verdict about whether it names this package, and no exit-code decision
+/// follows from it here.
+fn render_attestation(unpacked: &UnpackedServer) {
+    let Some(attestation) = unpacked.attestation.as_ref() else {
+        field("Attestation", "none (package is unattested)");
+        return;
+    };
+    println!("\n{}", "Attestation".bright_cyan().bold());
+    field("Issuer", &attestation.issuer);
+    field("Subject", &attestation.subject);
+    field("Payload type", &attestation.payload_type);
 }
 
 fn render_workflow(manifest: &WorkflowManifest) {

@@ -306,6 +306,7 @@ fn pack_a_and_move_to_b(config_bytes: &[u8]) -> RoundTrip {
         }),
         // Curated-only: the london-tube reference ships no OpenAPI spec.
         None,
+        None,
         &a_layout,
     )
     .expect("the london-tube config-only package must pack in environment A");
