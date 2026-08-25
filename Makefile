@@ -294,6 +294,104 @@ test-cargo-pmcp:
 	fi; \
 	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
 
+# The GATE's reach into `cargo-pmcp/tests/`, mirroring test-openapi-server.
+#
+# `test-cargo-pmcp` above closed the hole for cargo-pmcp's LIB target (the
+# scaffold-pin tripwires) and left `tests/` wide open. Nothing in this repo
+# executed that directory before Phase 122, measured four ways:
+#   - `make test-cargo-pmcp` is `cargo test -p cargo-pmcp --lib`, and `--lib`
+#     selects the library target only (Makefile:286).
+#   - `make test-integration` is `cargo test --test '*'` with NO `-p`, so it
+#     resolves to the root `pmcp` package.
+#   - CI's `test` job (`ci.yml`) is root-package scoped.
+#   - `org-gate-checks.yml`'s `workspace-test` runs `--lib --bins`, which
+#     excludes `tests/` entirely, and that job is NOT in `gate.needs`.
+# Measured readings before this target existed: `awk -f
+# scripts/named-test-binary-count.awk` reported -1 ("never RAN") for
+# package_capture_contract, package_inspect AND pmcp_package_pin under every
+# one of those candidate gates. `package_capture_contract.rs` is the model file
+# Phase 122's attestation contract test copies, and its own module docs claimed
+# it "runs in the normal cargo test workspace gate" — a measured-false claim
+# this target is what makes true.
+#
+# WHY THREE `--test` SELECTORS AND NOT A BARE `cargo test -p cargo-pmcp`:
+# cargo-pmcp's deploy/doctor integration suites are known to race without
+# serialization (4-7 nondeterministic failures parallel vs 856/0 serialized),
+# and this gate's job is a narrow, fast, reliable reach into the contract and
+# tripwire binaries. A flaky gate gets disabled; a scoped one stays on.
+# `-- --test-threads=1` is used for the same reason test-openapi-server does:
+# these binaries touch process-global state and must not run concurrently.
+#
+# The count assertion is not ceremony. The failure this target exists to
+# prevent is "the gate does not reach this crate", and a run that selects zero
+# tests EXITS 0 — reproducing exactly that hole while looking green.
+#
+# The named-binary assertion exists because a nonzero SUM proves the SELECTION
+# ran, not that any particular binary ran. A renamed file or a `tests/` entry
+# that silently stopped being a target leaves the total comfortably nonzero
+# while its own truths go unexecuted. The extraction lives in
+# `scripts/named-test-binary-count.awk` — one file, read by both this gate and
+# `test-openapi-server-guard-selftest` (declared as this target's prerequisite),
+# so the gate and the proof of the gate cannot drift.
+#
+# `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase 122: plan 122-04 adds
+# `package_attestation_contract` when that binary first exists — the plan that
+# CREATES it. A name added BEFORE its binary exists turns this gate red for
+# every commit in between. Removing a name to quiet a red gate deletes the proof
+# instead of fixing it.
+#
+# WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
+# interchangeable and the distinction is easy to get backwards:
+#
+#   - A RENAMED OR DELETED test file is caught by CARGO ITSELF, not by the -1
+#     arm. Because this target names its binaries with explicit `--test`
+#     selectors, cargo refuses the whole invocation:
+#     `error: no test target named 'package_inspect' in 'cargo-pmcp' package`,
+#     exit 101, before any output reaches the extractor. MEASURED by renaming
+#     `cargo-pmcp/tests/package_inspect.rs` — the gate went red at cargo, which
+#     is a STRICTER failure than the -1 verdict (it cannot be misread).
+#   - The -1 arm catches the DRIFT class instead: a name present in
+#     `REQUIRED_TEST_BINARIES` but absent from the `--test` selector list above.
+#     That is exactly the append-only hazard this comment warns about, and it is
+#     live code, not defensive decoration — MEASURED by adding an unselected
+#     probe name to the list and observing the "never RAN" verdict and exit 1.
+#
+# Keeping both matters: the selectors make a deletion loud, and the -1 arm keeps
+# the two lists honest with each other.
+.PHONY: test-cargo-pmcp-integration
+test-cargo-pmcp-integration: test-openapi-server-guard-selftest
+	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_inspect pmcp_package_pin"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line. Likeliest causes: the file was renamed, or that tests/ entry stopped being a target.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it — truncated output or an aborted harness. This gate refuses to pass on output it cannot read.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests. A #[cfg] gate turned false, an #[ignore] sweep landed, or the test module was renamed away. The summed total ($$ran) stays nonzero from the other selected binaries, so the count guard above CANNOT catch this. This is the contract net Phase 122 exists to keep running — restore the tests, do not relax this guard.$(NC)"; \
+			exit 1;; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n'). An EMPTY value means awk itself did not run: check that scripts/named-test-binary-count.awk exists and is readable. Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
+	done; \
+	echo "$(GREEN)✓ cargo-pmcp integration tests passed ($$ran tests)$(NC)"
+
 # The GATE's reach into `crates/pmcp-server-toolkit/tests/`, mirroring
 # test-tester / test-cargo-pmcp / test-openapi-server.
 #
@@ -802,7 +900,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-server-toolkit test-openapi-server
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-cargo-pmcp-integration test-server-toolkit test-openapi-server
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)
