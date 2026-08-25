@@ -36,7 +36,9 @@ review, policy compliance testing, and eventually the marketplace / agent
 store. The format already has the right properties (content-addressed,
 deterministic, secret-free via slots, typed scannable layers, real OCI). The
 missing pieces are artifact **egress** (yours), local **audit tooling**
-(ours), and later an **attestation convention** (shared). The dogfood proof is
+(ours), and later an **attestation convention** (shared) — that last one now has
+a concrete first step, a one-operation SDL awaiting your ratification: see
+**ask 5**. The dogfood proof is
 a `package-auditor` agent team — built with the SDK, auditing packages,
 extensible by customers through ordinary team composition, and ultimately
 able to audit itself.
@@ -99,7 +101,67 @@ capture population (you). We need your input on which resource kinds matter
 first and whether your platform-hosted servers can populate them. Design note
 §5 / §9 Q7.
 
-### 5. FYI / later — attestations & admission (Phase E)
+### 5. Attestation contract — ratify one operation (`verifyAttestation`)
+
+**What we did.** We vendored an **SDK-PROPOSED** SDL at
+`contracts/pmcp-run/attestation-v1.graphql` naming exactly one operation,
+`verifyAttestation`, and wired an offline **blocking** contract test at
+`cargo-pmcp/tests/package_attestation_contract.rs` that fails the SDK build if
+the CLI's operation drifts from that SDL. The file carries no `Source:` and no
+`Exported:` line, and its header says plainly that it is SDK-proposed and
+awaiting your ratification — deliberately unlike `capture-v1.graphql`, whose
+contents you own.
+
+**What we're asking for.** Ratification — or a counter-proposal — of that one
+operation: its name, its arguments, and its return shape. Then, once ratified,
+an **export of your own SDL** to replace our proposal, exactly as
+`capture-v1.graphql` works today. That export is what upgrades the blocking test
+from an internal consistency check into a real cross-boundary drift net. Until
+it lands, our test can only prove that our query and our proposed schema agree
+with each other; it cannot detect drift from a platform that has not spoken, and
+we have written that limitation into the test's own module docs so nobody on our
+side mistakes green for agreement.
+
+The proposal as it stands:
+
+```graphql
+verifyAttestation(
+  attestationPayloadBase64: String!   # the attestation layer's raw bytes, base64 (RFC 4648 §4)
+  subjectPayloadDigest: String!       # the sha256: digest we re-derived locally
+): VerifyAttestationReturnType
+# → { verdict: String!, verifiedIdentity: String!, verifiedAt: String! }
+```
+
+`verdict` is `String!`, not an enum — the same discipline as `status` in
+`capture-v1.graphql`, so a later schema-versus-schema diff does not show
+permanent drift. The verdict vocabulary is yours to define.
+
+**Why only one operation.** The attestation **arrives inside the package** —
+that is what carriage means — so the CLI never fetches one, which makes a
+`getAttestation` op speculative until `import` semantics settle. Issuance is
+entirely yours to design, so an `issueAttestation` op is not ours to propose.
+One operation to ratify, not three.
+
+**The boundary, restated so this cannot be misread as scope creep.** The SDK does
+**carriage and subject-digest comparison only**. It holds no keys, adds no crypto
+dependency (machine-checked by a `cargo-deny` allowlist over `pmcp-package`'s
+resolved dependency graph), and **cannot verify a signature offline**. That is
+precisely why this one call has to exist on your side: "verified against
+pmcp.run's identity" is a signature check, and we have deliberately kept
+ourselves unable to perform one.
+
+**Timing.** Our side of this is already merged and gated, and the live leg is
+parked behind an `#[ignore]` plus a triple environment gate. Nothing here blocks
+the `pull` release (ask 1); we are asking for a design response, not a delivery
+date.
+
+**FYI on the format, since your capture writes it too.** The package format now
+records a component's **declared range alongside its resolution**, and a pack
+carrying an attestation **refuses any unresolved component reference** — an
+attested package must be fully pinned, or the attestation would be making a claim
+about a moving target. Flagging it so the two sides do not diverge silently.
+
+### 6. FYI / later — attestations & admission (Phase E)
 
 Digest-keyed audit reports (produced by the open auditor tooling) become
 attestations attached via OCI referrers; your `import` admission policy can

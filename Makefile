@@ -334,11 +334,19 @@ test-cargo-pmcp:
 # `test-openapi-server-guard-selftest` (declared as this target's prerequisite),
 # so the gate and the proof of the gate cannot drift.
 #
-# `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase 122: plan 122-04 adds
-# `package_attestation_contract` when that binary first exists — the plan that
-# CREATES it. A name added BEFORE its binary exists turns this gate red for
-# every commit in between. Removing a name to quiet a red gate deletes the proof
-# instead of fixing it.
+# `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase 122. Plan 122-04 made the
+# reserved append: `package_attestation_contract` was added to BOTH lists below
+# in the same commit that created `cargo-pmcp/tests/package_attestation_contract.rs`.
+# A name added BEFORE its binary exists turns this gate red for every commit in
+# between. Removing a name to quiet a red gate deletes the proof instead of
+# fixing it.
+#
+# `package_attestation_contract` carries three non-ignored tests plus one
+# `#[ignore]`d live leg parked on a pmcp.run backend that does not exist yet. The
+# non-ignored three are what keep its passed count nonzero — a binary whose every
+# test is ignored reports `0 passed` and trips the `0)` arm below. If a future
+# change parks the last non-ignored test in that file, this gate goes red BY
+# DESIGN; unpark or replace the test, do not relax the guard.
 #
 # WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
 # interchangeable and the distinction is easy to get backwards:
@@ -361,7 +369,7 @@ test-cargo-pmcp:
 .PHONY: test-cargo-pmcp-integration
 test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
-	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
@@ -370,7 +378,7 @@ test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="package_capture_contract package_inspect pmcp_package_pin"; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
