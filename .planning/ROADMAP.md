@@ -2394,7 +2394,32 @@ Plans:
   5. The parked boundary is explicit and reversible in one step: the live issuance/verification leg exists as an `#[ignore]`d, env-gated test that names exactly what the backend must ship — the `parity_live_tfl` / `PMCP_OPENAPI_LIVE_TEST=1` double-gate pattern — so promoting this phase from parked to blocking is removing a gate, not writing a new test (PKGX-01)
   6. Attestation implies resolved (D-09/D-10, the `cargo build --locked` analogue): attaching an attestation to a package holding any `ComponentRef::Range` fails at pack time with an error naming the offending component and its `component_type`, and `PinnedRef` gains `resolved_from: Option<VersionReq>` so pinning records the declared range instead of destroying it. The guard is explicitly **one level deep** — a test constructs attested team → pinned agent → agent holds a `Range` and asserts the team still packs, so the depth limit is pinned visible behaviour rather than an unexamined gap (PKGX-01)
 
-**Plans**: TBD
+**Plans**: 8 plans across 5 waves (planned 2026-08-25; tracer-first — 122-02 Task 1 is the end-to-end slice, verified before every expansion task)
+
+Plans:
+
+**Wave 1** *(parallel — disjoint files)*
+
+- [ ] 122-01-PLAN.md — Wave-0 infrastructure: the `test-cargo-pmcp-integration` gate-reach target (RESEARCH Pitfall 1 measured that `cargo-pmcp/tests/*` runs in NO gate) plus the no-crypto boundary — a generated crate-local cargo-deny allowlist and `make no-crypto-check` (D-12/D-13, SC4)
+- [ ] 122-02-PLAN.md — **TRACER**: attestation bytes attach at `pack_server`, travel as an opaque media-type-keyed layer with subject/issuer/payload-type in LAYER descriptor annotations, come back byte-identical from `unpack_server`, and render in `cargo pmcp package inspect` — all offline (D-01/D-04/D-05/D-14, SC2/SC3)
+
+**Wave 2** *(parallel — disjoint files)*
+
+- [ ] 122-03-PLAN.md — The only offline verification: subject-digest comparison at both ends. Pack refuses before writing; unpack reports a mismatch as DATA; `inspect` renders the diagnostic then exits non-zero, quiet mode included (D-02/D-03/D-06)
+- [ ] 122-04-PLAN.md — Contract-first: SDK-proposed `attestation-v1.graphql`, `VERIFY_ATTESTATION_QUERY`, the offline blocking `apollo_compiler` test, the `#[ignore]`+env-double-gated parked live leg, and the platform ratification ask (D-07/D-11, SC1/SC5)
+
+**Wave 3** *(parallel — disjoint files)*
+
+- [ ] 122-05-PLAN.md — Bounded format addition: `PinnedRef.resolved_from: Option<VersionReq>` (Cargo's range-plus-resolution model) and `TeamPackage`'s pinned-components guard, with the golden fixtures measured not to move (D-09 helper/D-10, SC6)
+- [ ] 122-06-PLAN.md — ALWAYS requirements: opacity and untrusted-annotation robustness as proptest properties, a runnable `attestation_carriage` example, and a nonzero-test-count assertion on `pmcp-package-gate`
+
+**Wave 4**
+
+- [ ] 122-07-PLAN.md — Team carriage through the shared `pack_single_layer` helper, `unpack_team -> UnpackedTeam`, Gate A (attestation implies resolved) with the one-level depth limit as a passing test; `pack_agent`/`pack_workflow` deliberately unchanged (D-08/D-09, SC2/SC6)
+
+**Wave 5** *(has a blocking `checkpoint:decision` — `autonomous: false`)*
+
+- [ ] 122-08-PLAN.md — Ratify and propagate the `pmcp-package` version this phase ships across all seven emitters, re-point both pin tripwires, and record the bump in CLAUDE.md's publish ledger. Phase 124 keeps the publish half.
 
 ### Phase 123: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
 
