@@ -2299,7 +2299,7 @@ regression.
 4. **Work continues on a rebased `feat/package-remote-capture-show`**, not a fresh branch off `main`.
 
 - [ ] **Phase 120: Config-Server Packaging** — `pack_server` currently demands `bootstrap: &[u8]`, so a config-only server cannot be expressed. Add vendor media types for the server's own `config.toml` and its OpenAPI spec as layers, and make the binary **dual-mode**: embedded (bootstrap bytes, for a new server or a new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required. Decide and document what is *baked* versus what is a *slot* — the working split is that the spec is baked (it defines the tool surface; change it and it is a different package) while endpoint, credentials and auth mode are slots.
-- [ ] **Phase 121: Local Round-Trip E2E** — the regression net, and the piece that needs no backend. Using the London Tube fixture already in `crates/pmcp-openapi-server/tests/fixtures/`: pack in env A → unpack in env B → `required_slots` names **exactly** the slots B must fill (and `detect_deviation` separately reports B's endpoint drift) → fill them → assert **tool-list parity** with A via the existing `parity_replay.rs`. Parity is the property; byte round-tripping is not. This test must survive an arbitrary number of manifest-shape refactors, so assert on behaviour, not on manifest structure.
+- [x] **Phase 121: Local Round-Trip E2E** — the regression net, and the piece that needs no backend. Using the London Tube fixture already in `crates/pmcp-openapi-server/tests/fixtures/`: pack in env A → unpack in env B → `required_slots` names **exactly** the slots B must fill (and `detect_deviation` separately reports B's endpoint drift) → fill them → assert **tool-list parity** with A via the existing `parity_replay.rs`. Parity is the property; byte round-tripping is not. This test must survive an arbitrary number of manifest-shape refactors, so assert on behaviour, not on manifest structure. (completed 2026-08-25)
 - [ ] **Phase 122: Attestation Carriage** *(contract-first, parked on backend)* — a layer to hold a pmcp.run-issued attestation and a verification path against pmcp.run's identity. No signing, no crypto dependency. Vendor the attestation contract from the live platform and write the offline blocking contract test; the live half activates when the backend issues attestations.
 - [ ] **Phase 123: Export/Import Verbs** *(contract-first, parked on backend)* — `cargo pmcp package pack | unpack | export | import`, resolving environments through `configure`'s existing resolver and reusing the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam (`PMCP_API_URL`, token cache + TTL) rather than inventing a second API path. `pack`/`unpack` are local and can land immediately; `export`/`import` are contract-first.
 - [ ] **Phase 124: Release & Publish Order** — `pmcp-openapi-server` is **absent from CLAUDE.md's publish order** (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`. Add it, publish `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0, and record the ordering constraint that `pmcp-package` precedes `pmcp-agent` and `cargo-pmcp`. *(Re-measured 2026-08-22: the absence was closed on `main` — slot 9b in CLAUDE.md plus a `release.yml` step and the `release-coverage` CI gate. Two residual gaps remain; see the Phase 124 reality check.)*
@@ -2376,8 +2376,8 @@ Plans:
 
 **Gap closure** *(added 2026-08-24 from `121-VERIFICATION.md` — all 4 success criteria VERIFIED; these close the 2 code-review BLOCKERs in the infrastructure that gates the deliverable. Both are wave 1 and run in parallel: disjoint `files_modified`, no shared state.)*
 
-- [ ] 121-04-PLAN.md — CR-01: the `pmcp-package` dev-dep drops its `version` key (path-only), so `cargo publish -p pmcp-openapi-server` at `release.yml:339` no longer requires an unpublished `pmcp-package 0.2.0`; the pin tripwire is re-pointed at the publish-safe shape plus the resolved crate's own 0.2 line, and the constraint is written into CLAUDE.md's publish ledger. `release.yml` order is deliberately NOT changed.
-- [ ] 121-05-PLAN.md — CR-02: the `REQUIRED_TEST_BINARIES` guard reads each binary's `test result:` passed count anchored to its `Running tests/<name>.rs` line via a single `scripts/named-test-binary-count.awk` extractor, with a five-fixture self-test chained into the same gate and a red/green demonstration against a real zero-test binary.
+- [x] 121-04-PLAN.md — CR-01: the `pmcp-package` dev-dep drops its `version` key (path-only), so `cargo publish -p pmcp-openapi-server` at `release.yml:339` no longer requires an unpublished `pmcp-package 0.2.0`; the pin tripwire is re-pointed at the publish-safe shape plus the resolved crate's own 0.2 line, and the constraint is written into CLAUDE.md's publish ledger. `release.yml` order is deliberately NOT changed.
+- [x] 121-05-PLAN.md — CR-02: the `REQUIRED_TEST_BINARIES` guard reads each binary's `test result:` passed count anchored to its `Running tests/<name>.rs` line via a single `scripts/named-test-binary-count.awk` extractor, with a five-fixture self-test chained into the same gate and a red/green demonstration against a real zero-test binary.
 
 ### Phase 122: Attestation Carriage *(contract-first — PARKED on the pmcp.run backend)*
 
@@ -2438,8 +2438,8 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 
 | Phase | Requirements | Plans Complete | Status | Completed |
 |-------|--------------|----------------|--------|-----------|
-| 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | In Progress|  |
-| 121. Local Round-Trip E2E | PKG-04 | 3/3 | In Progress|  |
+| 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
+| 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 0/TBD | Not started | - |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
