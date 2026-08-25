@@ -288,6 +288,20 @@ fn pack_the_same_package_with_and_without_an_attestation(
     )
 }
 
+/// Pack the fixture server carrying an attestation, into a fresh layout at
+/// `dir`. Returns the layout and the UNATTESTED digest the attestation names.
+///
+/// The subject cannot be an arbitrary placeholder: `pack_server`'s Gate B
+/// refuses any subject that does not name this very package, so the unattested
+/// digest has to be computed first by packing without the attestation.
+fn pack_attested_fixture_server(dir: &std::path::Path) -> (OciLayout, ManifestDigest) {
+    let scratch = tempfile::tempdir().unwrap();
+    let (_scratch_layout, unattested_digest) = pack_fixture_server(scratch.path(), None);
+    let (layout, _attested_digest) =
+        pack_fixture_server(dir, Some(attestation_claiming(unattested_digest.as_str())));
+    (layout, unattested_digest)
+}
+
 /// Read the single layer descriptor whose media type is `media_type`, or
 /// `None` if the manifest carries no such layer.
 fn layer_annotation(layout: &OciLayout, media_type: &str, key: &str) -> Option<String> {
@@ -442,7 +456,7 @@ fn attestation_bytes_that_are_neither_json_nor_utf8_round_trip_byte_identically(
     );
 
     let dir = tempfile::tempdir().unwrap();
-    let (layout, _) = pack_fixture_server(dir.path(), Some(attestation_claiming("sha256:unused")));
+    let (layout, _) = pack_attested_fixture_server(dir.path());
 
     let attestation = unpack_server(&layout)
         .unwrap()
@@ -463,7 +477,7 @@ fn attestation_bytes_that_are_neither_json_nor_utf8_round_trip_byte_identically(
 #[test]
 fn re_ordering_the_manifest_layers_does_not_change_the_attestation_read() {
     let dir = tempfile::tempdir().unwrap();
-    let (layout, _) = pack_fixture_server(dir.path(), Some(attestation_claiming("sha256:unused")));
+    let (layout, _) = pack_attested_fixture_server(dir.path());
 
     let media_types = layer_media_types(&layout);
     assert_eq!(
@@ -506,7 +520,7 @@ fn re_ordering_the_manifest_layers_does_not_change_the_attestation_read() {
 #[test]
 fn changing_only_the_artifact_type_does_not_change_how_the_attestation_is_located() {
     let dir = tempfile::tempdir().unwrap();
-    let (layout, _) = pack_fixture_server(dir.path(), Some(attestation_claiming("sha256:unused")));
+    let (layout, _) = pack_attested_fixture_server(dir.path());
 
     let index = layout.read_index().unwrap();
     let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
@@ -551,7 +565,7 @@ fn changing_only_the_artifact_type_does_not_change_how_the_attestation_is_locate
 #[test]
 fn the_issuer_and_payload_type_annotations_round_trip_verbatim() {
     let dir = tempfile::tempdir().unwrap();
-    let (layout, _) = pack_fixture_server(dir.path(), Some(attestation_claiming("sha256:unused")));
+    let (layout, _) = pack_attested_fixture_server(dir.path());
 
     assert_eq!(
         layer_annotation(&layout, MT_ATTESTATION, ANNOTATION_ATTESTATION_ISSUER).as_deref(),

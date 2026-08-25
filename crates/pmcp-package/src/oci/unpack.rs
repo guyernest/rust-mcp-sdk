@@ -829,9 +829,25 @@ mod tests {
     /// cleanly.
     #[test]
     fn a_duplicated_attestation_layer_is_rejected_rather_than_last_wins() {
+        let (package, bootstrap) = sample_server_package();
+
+        // `pack_server` now refuses a subject that does not name this package,
+        // so the subject has to be the digest the SAME package packs to with
+        // no attestation.
+        let unattested_dir = tempfile::tempdir().unwrap();
+        let unattested_layout = OciLayout::create(unattested_dir.path()).unwrap();
+        let subject = pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            None,
+            &unattested_layout,
+        )
+        .unwrap();
+
         let dir = tempfile::tempdir().unwrap();
         let layout = OciLayout::create(dir.path()).unwrap();
-        let (package, bootstrap) = sample_server_package();
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
@@ -839,7 +855,7 @@ mod tests {
             None,
             Some(AttestationFile {
                 bytes: b"\x00\x01 not json \xff\xfe",
-                subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                subject: subject.as_str(),
                 issuer: "https://issuer.test.invalid/pmcp-run",
                 payload_type: "application/vnd.test.attestation-payload",
             }),

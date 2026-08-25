@@ -520,3 +520,229 @@ mod server_layout {
         );
     }
 }
+
+// =====================================================================
+// 15-18. Gate B — the pack-time attestation-subject refusal (D-02)
+//
+// `pack_server` computes the would-be UNATTESTED manifest digest and refuses
+// to pack when the supplied subject names anything else, so "an attestation
+// attached to the wrong package" is unrepresentable in a produced layout.
+//
+// The refusal is only worth as much as its ORDERING: a refusal that fired
+// after the layers were already on disk would leave a half-written layout
+// behind. `a_refused_pack_leaves_the_destination_layout_byte_for_byte_unchanged`
+// is the assertion that pins the ordering, and it is what fails if Gate B is
+// ever moved after the writing loop.
+// =====================================================================
+
+mod attestation_subject {
+    use super::common::referenced_binary;
+    use super::*;
+    use pmcp_package::{pack_server, AttestationFile, OciLayout, ServerPackage};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    const ISSUER: &str = "https://issuer.test.invalid/pmcp-run";
+    const PAYLOAD_TYPE: &str = "application/vnd.test.attestation-payload";
+
+    /// A payload that is neither valid JSON nor valid UTF-8, so a passing test
+    /// is evidence that Gate B compares DIGESTS and never reads the payload.
+    const OPAQUE_PAYLOAD: &[u8] = b"\x00\x01 not json \xff\xfe";
+
+    fn server_package() -> ServerPackage {
+        serde_json::from_slice(&read_fixture("server_team_fs_v1.json"))
+            .expect("fixture must parse as ServerPackage")
+    }
+
+    /// Pack the fixture WITHOUT an attestation and return the manifest digest —
+    /// the one value Gate B accepts as a subject.
+    fn unattested_digest() -> ManifestDigest {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            None,
+            &layout,
+        )
+        .expect("the unattested package must pack")
+    }
+
+    fn attestation_claiming(subject: &str) -> AttestationFile<'_> {
+        AttestationFile {
+            bytes: OPAQUE_PAYLOAD,
+            subject,
+            issuer: ISSUER,
+            payload_type: PAYLOAD_TYPE,
+        }
+    }
+
+    /// Every file under `root`, keyed by its path relative to `root`, valued by
+    /// `(byte length, content digest)`.
+    ///
+    /// The content digest is deliberately stronger than the byte LENGTH the
+    /// acceptance criterion asks for: `index.json` can be rewritten to the same
+    /// length with different contents, and "the layout is byte-identical to its
+    /// pre-call state" is the property actually under test.
+    fn snapshot(root: &Path) -> BTreeMap<String, (u64, String)> {
+        let mut files = BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let bytes = std::fs::read(&path).unwrap();
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                let digest = ManifestDigest::from_bytes(&bytes).as_str().to_string();
+                files.insert(relative, (bytes.len() as u64, digest));
+            }
+        }
+        files
+    }
+
+    // --- 15. The matching subject packs, and yields the OTHER digest ------
+
+    /// The accepting half of Gate B, plus 122-02's two-digest property
+    /// re-asserted at the gate: a subject that names this package is accepted,
+    /// and the digest the attested pack returns is NOT that subject.
+    #[test]
+    fn an_attestation_whose_subject_names_this_package_packs_and_yields_a_distinct_digest() {
+        let unattested = unattested_digest();
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let attested = pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            Some(attestation_claiming(unattested.as_str())),
+            &layout,
+        )
+        .expect("a subject naming this package must be accepted");
+
+        assert_ne!(
+            attested.as_str(),
+            unattested.as_str(),
+            "the attestation layer is inside the bytes the digest covers, so an attested pack \
+             must return a DIFFERENT digest from the subject it names (D-01)"
+        );
+    }
+
+    // --- 16. A subject naming another package is refused, naming both ----
+
+    #[test]
+    fn an_attestation_whose_subject_names_another_package_is_refused_naming_both_digests() {
+        let unattested = unattested_digest();
+        let other = ManifestDigest::from_bytes(b"an entirely different package");
+        assert_ne!(other.as_str(), unattested.as_str());
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let err = pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            Some(attestation_claiming(other.as_str())),
+            &layout,
+        )
+        .expect_err("an attestation naming a different package must be refused");
+
+        assert!(
+            matches!(err, PackageError::AttestationSubjectMismatch { .. }),
+            "expected AttestationSubjectMismatch, got {err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(other.as_str()),
+            "the refusal must name the SUPPLIED subject; message was: {message}"
+        );
+        assert!(
+            message.contains(unattested.as_str()),
+            "the refusal must name the COMPUTED subject, or an operator cannot tell which \
+             package the attestation should have named; message was: {message}"
+        );
+    }
+
+    // --- 17. The refusal happens BEFORE the first write ------------------
+
+    /// The ordering assertion. Gate B running after the layer-writing loop
+    /// would still return the same `Err`, so the refusal alone proves nothing
+    /// about the filesystem — this snapshot is what pins "a rejected pack adds
+    /// neither a blob nor an index entry" for the FULL layout: no envelope,
+    /// deploy-descriptor, policy, tool-metadata, config-slots, binary,
+    /// attestation or empty-config blob may appear.
+    #[test]
+    fn a_refused_pack_leaves_the_destination_layout_byte_for_byte_unchanged() {
+        let other = ManifestDigest::from_bytes(b"an entirely different package");
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let before = snapshot(dir.path());
+        assert!(
+            !before.is_empty(),
+            "a freshly created layout carries oci-layout and index.json, or this test compares \
+             nothing against nothing"
+        );
+
+        pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            Some(attestation_claiming(other.as_str())),
+            &layout,
+        )
+        .expect_err("an attestation naming a different package must be refused");
+
+        let after = snapshot(dir.path());
+        assert_eq!(
+            before, after,
+            "a refused pack must add neither a blob nor an index entry — the gate runs BEFORE \
+             the first write"
+        );
+    }
+
+    // --- 18. A malformed subject is an error, never a panic ---------------
+
+    #[test]
+    fn a_malformed_subject_is_refused_rather_than_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let before = snapshot(dir.path());
+
+        let err = pack_server(
+            &server_package(),
+            referenced_binary(),
+            None,
+            None,
+            Some(attestation_claiming("sha256:unused")),
+            &layout,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, PackageError::MalformedDigest { .. }),
+            "a subject that is not sha256:<64 hex> is malformed, not a mismatch; got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("unused"),
+            "the refusal must name the malformed value's shape problem; message was: {err}"
+        );
+        assert_eq!(
+            before,
+            snapshot(dir.path()),
+            "a malformed subject is refused by the same pre-write gate"
+        );
+    }
+}

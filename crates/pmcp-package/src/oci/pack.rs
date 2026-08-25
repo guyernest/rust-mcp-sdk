@@ -27,16 +27,17 @@ use crate::oci::config_validation::{
 };
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
-    vendor_media_type, ANNOTATION_ATTESTATION_ISSUER, ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
-    ANNOTATION_ATTESTATION_SUBJECT, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_ATTESTATION,
-    MT_EMPTY_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET,
-    MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
-    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
+    empty_config_descriptor, vendor_media_type, ANNOTATION_ATTESTATION_ISSUER,
+    ANNOTATION_ATTESTATION_PAYLOAD_TYPE, ANNOTATION_ATTESTATION_SUBJECT, ARTIFACT_TYPE_SERVER,
+    EMPTY_CONFIG_BLOB, MT_ATTESTATION, MT_EMPTY_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP,
+    MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS,
+    MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE, MT_SERVER_OPENAPI_SPEC,
+    MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::SingleLayerPackage;
 use crate::package::{AgentPackage, BinaryRef, ServerPackage, TeamPackage, WorkflowManifest};
 use oci_spec::image::{
-    Descriptor, ImageManifestBuilder, MediaType, ANNOTATION_TITLE, SCHEMA_VERSION,
+    Descriptor, ImageManifest, ImageManifestBuilder, MediaType, ANNOTATION_TITLE, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -188,8 +189,49 @@ pub struct AttestationFile<'a> {
     pub payload_type: &'a str,
 }
 
-/// Write `bytes` as a layer under `media_type`, attaching `annotations` to the
-/// resulting LAYER descriptor.
+/// One layer's finished BYTES, plus everything needed either to write it or
+/// merely to describe it — an in-memory layer plan, private to this module.
+///
+/// It exists so byte production can happen strictly BEFORE the first
+/// `write_blob`. Without it, every descriptor `pack_server` assembles would
+/// come out of a writing call, and the pack-time attestation-subject gate
+/// (which needs the would-be unattested manifest digest) could not run until
+/// the layers it is meant to gate were already on disk.
+///
+/// Deliberately NOT a public type and NOT a staging directory: a heavier
+/// two-phase `OciLayout` API was considered during cross-AI review and
+/// rejected. This is a plain in-memory vector element and nothing more.
+struct PlannedLayer {
+    /// The vendor (or standard) media type this layer's descriptor carries.
+    media_type: MediaType,
+    /// The layer's exact bytes, already canonicalized where canonicalization
+    /// applies and left verbatim where it does not.
+    bytes: Vec<u8>,
+    /// Annotations to attach to the resulting LAYER descriptor, if any.
+    annotations: Option<HashMap<String, String>>,
+}
+
+impl PlannedLayer {
+    /// The descriptor this layer WOULD have, computed without touching the
+    /// filesystem.
+    ///
+    /// Equal by construction to what [`write_planned_layer`] returns for the
+    /// same plan: both route through the shared [`annotate`] helper over
+    /// [`OciLayout::describe_blob`]/[`OciLayout::write_blob`], whose own
+    /// equality is pinned by a test in `layout.rs`.
+    fn describe(&self) -> Descriptor {
+        annotate(
+            OciLayout::describe_blob(self.media_type.clone(), &self.bytes),
+            self.annotations.as_ref(),
+        )
+    }
+}
+
+/// Attach `annotations` to `descriptor`, if there are any.
+///
+/// Shared by the describing and the writing path so the two cannot drift into
+/// annotating differently — which would make the two manifests differ by more
+/// than their layer vectors and silently break the pack-time subject gate.
 ///
 /// Unlike the index-descriptor annotations set in [`finalize_pack`] — which are
 /// applied AFTER `write_manifest` has already computed the manifest digest and
@@ -197,65 +239,181 @@ pub struct AttestationFile<'a> {
 /// manifest that `canonicalize` then hashes, so these annotations DO feed the
 /// manifest digest. Renaming the config file, or swapping an attestation's
 /// claimed subject, changes the package's identity.
+fn annotate(
+    mut descriptor: Descriptor,
+    annotations: Option<&HashMap<String, String>>,
+) -> Descriptor {
+    if let Some(annotations) = annotations {
+        descriptor.set_annotations(Some(annotations.clone()));
+    }
+    descriptor
+}
+
+/// Write one planned layer's bytes to `layout` and return its descriptor.
 ///
-/// One mechanism, not two: [`write_named_file_layer`] is a thin caller of this
-/// function that supplies the single-entry `org.opencontainers.image.title`
-/// map, and the attestation arm of [`pack_server`] supplies a three-entry map.
-fn write_annotated_layer(
-    layout: &OciLayout,
+/// The ONE writing path for a server package's layers, called only after every
+/// gate in [`validate_pack_preconditions`] has returned `Ok`.
+fn write_planned_layer(layout: &OciLayout, planned: &PlannedLayer) -> Result<Descriptor> {
+    let descriptor = layout.write_blob(planned.media_type.clone(), &planned.bytes)?;
+    Ok(annotate(descriptor, planned.annotations.as_ref()))
+}
+
+/// Plan a STRUCT layer: the typed value serialized through the crate's one
+/// canonicalizer.
+fn plan_struct_layer<T: Serialize>(media_type: &str, value: &T) -> Result<PlannedLayer> {
+    Ok(PlannedLayer {
+        media_type: vendor_media_type(media_type),
+        bytes: canonicalize(value)?,
+        annotations: None,
+    })
+}
+
+/// Plan a VERBATIM-bytes layer carrying `annotations` on its descriptor.
+///
+/// Raw bytes, never `canonicalize` — the crate rule is to digest what was
+/// stored, never re-derive it from a parsed struct.
+fn plan_annotated_layer(
     media_type: &str,
     annotations: HashMap<String, String>,
     bytes: &[u8],
-) -> Result<Descriptor> {
-    // Raw bytes, never `canonicalize` — the crate rule is to digest what was
-    // stored, never re-derive it from a parsed struct.
-    let mut descriptor = layout.write_blob(vendor_media_type(media_type), bytes)?;
-    descriptor.set_annotations(Some(annotations));
-    Ok(descriptor)
+) -> PlannedLayer {
+    PlannedLayer {
+        media_type: vendor_media_type(media_type),
+        bytes: bytes.to_vec(),
+        annotations: Some(annotations),
+    }
 }
 
-/// Build the layer descriptor for a named vendor-content file, recording the
-/// author's original file name in the descriptor's standard
+/// Plan the layer for a named vendor-content file, recording the author's
+/// original file name in the descriptor's standard
 /// `org.opencontainers.image.title` annotation.
 ///
-/// A thin caller of [`write_annotated_layer`], which carries the rule about why
-/// a LAYER descriptor's annotations feed the manifest digest.
-fn write_named_file_layer(
-    layout: &OciLayout,
-    media_type: &str,
-    file_name: &str,
-    bytes: &[u8],
-) -> Result<Descriptor> {
-    write_annotated_layer(
-        layout,
+/// One mechanism, not two: a thin caller of [`plan_annotated_layer`] supplying
+/// the single-entry title map, where the attestation supplies a three-entry
+/// map.
+fn plan_named_file_layer(media_type: &str, file_name: &str, bytes: &[u8]) -> PlannedLayer {
+    plan_annotated_layer(
         media_type,
         HashMap::from([(ANNOTATION_TITLE.to_string(), file_name.to_string())]),
         bytes,
     )
 }
 
-/// Write the one binary layer this package carries, per [`BinaryMode`].
+/// Plan the attestation layer: the payload VERBATIM, with the subject, issuer
+/// and payload media type on the LAYER descriptor's annotations (and therefore
+/// inside the manifest digest).
+fn plan_attestation_layer(attestation: AttestationFile<'_>) -> PlannedLayer {
+    plan_annotated_layer(
+        MT_ATTESTATION,
+        HashMap::from([
+            (
+                ANNOTATION_ATTESTATION_SUBJECT.to_string(),
+                attestation.subject.to_string(),
+            ),
+            (
+                ANNOTATION_ATTESTATION_ISSUER.to_string(),
+                attestation.issuer.to_string(),
+            ),
+            (
+                ANNOTATION_ATTESTATION_PAYLOAD_TYPE.to_string(),
+                attestation.payload_type.to_string(),
+            ),
+        ]),
+        attestation.bytes,
+    )
+}
+
+/// Plan the one binary layer this package carries, per [`BinaryMode`] — the
+/// bytes-producing sibling of the writing path.
 ///
-/// Embedded bytes go through `write_blob` unchanged. A reference is a STRUCT
-/// layer: the existing [`BinaryRef`] wire type serialized via `canonicalize`,
-/// keeping the wire payload's `Option<ManifestDigest>` tolerance while the API
-/// type [`BinaryMode::Referenced`] stays non-optional.
-fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Descriptor> {
+/// Embedded bytes travel verbatim. A reference is a STRUCT layer: the existing
+/// [`BinaryRef`] wire type serialized via `canonicalize`, keeping the wire
+/// payload's `Option<ManifestDigest>` tolerance while the API type
+/// [`BinaryMode::Referenced`] stays non-optional.
+fn plan_binary_layer(binary: &BinaryMode<'_>) -> Result<PlannedLayer> {
     match binary {
-        BinaryMode::Embedded(bootstrap) => {
-            layout.write_blob(vendor_media_type(MT_SERVER_BOOTSTRAP), bootstrap)
-        },
+        BinaryMode::Embedded(bootstrap) => Ok(PlannedLayer {
+            media_type: vendor_media_type(MT_SERVER_BOOTSTRAP),
+            bytes: (*bootstrap).to_vec(),
+            annotations: None,
+        }),
         BinaryMode::Referenced { digest, media_type } => {
             let binary_ref = BinaryRef {
                 digest: Some(digest.clone()),
                 media_type: media_type.clone(),
             };
-            layout.write_blob(
-                vendor_media_type(MT_SERVER_BINARY_REF),
-                &canonicalize(&binary_ref)?,
-            )
+            plan_struct_layer(MT_SERVER_BINARY_REF, &binary_ref)
         },
     }
+}
+
+/// Every layer a `pack_server` call will write, produced as BYTES before
+/// anything reaches the filesystem.
+///
+/// The attestation is held SEPARATELY rather than appended to `unattested`, so
+/// the pack-time subject gate reads the unattested layer vector directly
+/// instead of filtering a mixed one by media type. The two manifests the gate
+/// compares can then differ only in their layer vectors — which is exactly the
+/// difference the subject digest is about.
+struct ServerLayerPlan {
+    /// Every layer EXCEPT the attestation, in deterministic push order.
+    unattested: Vec<PlannedLayer>,
+    /// The attestation layer, when the caller supplied one.
+    attestation: Option<PlannedLayer>,
+}
+
+/// Produce every layer's bytes for a server pack. Pure: no filesystem access,
+/// no `OciLayout` parameter, nothing observable outside the returned plan.
+fn plan_server_layers(
+    package: &ServerPackage,
+    binary: &BinaryMode<'_>,
+    config: Option<ConfigFile<'_>>,
+    spec: Option<OpenApiSpecFile<'_>>,
+    attestation: Option<AttestationFile<'_>>,
+) -> Result<ServerLayerPlan> {
+    let envelope = ServerEnvelope {
+        name: package.name.clone(),
+        version: package.version.clone(),
+        digest: package.digest.clone(),
+    };
+
+    // Push order is deterministic so the manifest bytes (and therefore the
+    // manifest digest) are reproducible. It is NOT a read-order contract:
+    // the optional layers make position meaningless, and `unpack_server`
+    // locates every layer by media type.
+    let mut unattested = vec![
+        plan_binary_layer(binary)?,
+        plan_struct_layer(MT_SERVER_ENVELOPE, &envelope)?,
+        plan_struct_layer(MT_SERVER_DEPLOY_DESCRIPTOR, &package.deploy)?,
+        plan_struct_layer(MT_SERVER_CEDAR_POLICY_SET, &package.policies)?,
+        plan_struct_layer(MT_SERVER_TOOL_METADATA, &package.tools)?,
+        plan_struct_layer(MT_SERVER_CONFIG_SLOTS, &package.config_slots)?,
+    ];
+
+    if let Some(config) = config {
+        unattested.push(plan_named_file_layer(
+            MT_SERVER_CONFIG,
+            config.file_name,
+            config.bytes,
+        ));
+    }
+
+    // The spec is planned after the config so the push order stays
+    // deterministic. Its bytes stay RAW — never through `canonicalize` and
+    // never parsed: one media type carries both JSON and YAML documents, and
+    // the format is evident from the file-name annotation (D-16).
+    if let Some(spec) = spec {
+        unattested.push(plan_named_file_layer(
+            MT_SERVER_OPENAPI_SPEC,
+            spec.file_name,
+            spec.bytes,
+        ));
+    }
+
+    Ok(ServerLayerPlan {
+        unattested,
+        attestation: attestation.map(plan_attestation_layer),
+    })
 }
 
 /// Every gate [`pack_server`] runs BEFORE its first `write_blob`, so a rejected
@@ -263,11 +421,23 @@ fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Des
 /// resolved secret never travels in a layer" a property of the filesystem and
 /// not merely of the return value.
 ///
+/// That invariant holds LITERALLY, for every gate including the
+/// attestation-subject one. `pack_server` produces every layer's bytes first
+/// ([`plan_server_layers`], which touches nothing on disk), runs this function
+/// over the resulting plan, and only then walks the plan writing blobs. A
+/// refused pack therefore leaves the destination layout byte-for-byte as it
+/// found it, which
+/// `negative.rs::a_refused_pack_leaves_the_destination_layout_byte_for_byte_unchanged`
+/// asserts over the FULL recursive file list rather than over the attestation
+/// blob alone.
+///
 /// Extracted from `pack_server` rather than inlined so that function stays
 /// under the repo's cognitive-complexity ceiling (CLAUDE.md: "Cognitive
 /// complexity ≤25 per function", enforced in CI by
-/// `pmat quality-gate --checks complexity`); inlined, the two arms below push
-/// `pack_server` over it.
+/// `pmat quality-gate --checks complexity`); inlined, the arms below push
+/// `pack_server` over it. Each gate is its own named free function for the
+/// same reason — growing THIS function inline is how that PR-blocking gate
+/// fires next.
 ///
 /// # Errors
 ///
@@ -276,11 +446,20 @@ fn write_binary_layer(layout: &OciLayout, binary: &BinaryMode<'_>) -> Result<Des
 /// slot-declared value key holds a resolved literal rather than an environment
 /// reference, or when a package that ships NO config file nonetheless declares
 /// a slot naming a `config_key`. Returns [`PackageError::Serialize`] when the
-/// config document is not parseable TOML.
+/// config document is not parseable TOML. Returns
+/// [`PackageError::MalformedDigest`] or
+/// [`PackageError::AttestationSubjectMismatch`] per
+/// [`reject_an_attestation_subject_naming_another_package`].
+///
+/// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
+/// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
 fn validate_pack_preconditions(
     package: &ServerPackage,
     config: Option<ConfigFile<'_>>,
+    attestation: Option<AttestationFile<'_>>,
+    unattested_layers: &[PlannedLayer],
 ) -> Result<()> {
+    reject_an_attestation_subject_naming_another_package(attestation, unattested_layers)?;
     // The document gates run only when a config file is present: an embedded,
     // pre-built package has no config document to read declarations out of,
     // and every pre-0.2 server package is exactly that shape.
@@ -319,6 +498,82 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The pack-time half of D-02's two-ended subject check: refuse an attestation
+/// whose `subject` does not name the package it is being packed into.
+///
+/// The comparison is against the would-be UNATTESTED manifest digest — the
+/// digest this same package would have had if packed with no attestation at
+/// all — because that is what an attestation's subject means (D-01's two-digest
+/// consequence). Comparing against the ATTESTED digest instead could never
+/// match, and "fixing" it that way is one of the two regressions
+/// `roundtrip.rs`'s two-digest test exists to block.
+///
+/// Runs BEFORE the first `write_blob`, so an attestation attached to the wrong
+/// package is unrepresentable in a produced layout rather than merely reported
+/// after one is on disk.
+///
+/// # The accepted cost, stated rather than discovered
+///
+/// On an ATTESTED pack the manifest is canonicalized TWICE: once dry here, and
+/// once for real in [`finalize_pack`]. D-02 accepts that. An unattested pack is
+/// unaffected — the `else` below returns immediately and the manifest is
+/// canonicalized exactly once, as it always was.
+///
+/// # Errors
+///
+/// Returns [`PackageError::MalformedDigest`] when `subject` is not a
+/// well-formed `sha256:<64 hex>` string, and
+/// [`PackageError::AttestationSubjectMismatch`] when it is well-formed but
+/// names a different package. Neither error carries any attestation payload
+/// material — see that variant's rustdoc for the rule.
+///
+/// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
+/// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
+fn reject_an_attestation_subject_naming_another_package(
+    attestation: Option<AttestationFile<'_>>,
+    unattested_layers: &[PlannedLayer],
+) -> Result<()> {
+    let Some(attestation) = attestation else {
+        return Ok(());
+    };
+    // Parsed, not string-compared: a subject that is not a well-formed digest
+    // is a malformed claim, and reporting it as a MISMATCH would tell an
+    // operator to go looking for the wrong package.
+    let supplied = ManifestDigest::parse(attestation.subject)?;
+    let computed = would_be_unattested_manifest_digest(unattested_layers)?;
+    if supplied == computed {
+        return Ok(());
+    }
+    Err(PackageError::AttestationSubjectMismatch {
+        supplied: supplied.as_str().to_string(),
+        computed: computed.as_str().to_string(),
+    })
+}
+
+/// The manifest digest this package WOULD have if packed with no attestation:
+/// describe every non-attestation layer, assemble the manifest through the
+/// SAME helper [`finalize_pack`] uses, canonicalize with the crate's ONE
+/// canonicalizer, and hash.
+///
+/// Every step is the dry twin of a step `pack_server` performs for real, which
+/// is why the result is comparable at all:
+/// [`OciLayout::describe_blob`] mirrors `write_blob`,
+/// [`assemble_manifest`] IS the builder chain `finalize_pack` runs, and
+/// [`crate::oci::media_types::empty_config_descriptor`] returns exactly the
+/// descriptor `finalize_pack`'s empty-config `write_blob` produces (both hash
+/// the same two fixed bytes). A bespoke hash or a hand-rolled serialization
+/// here would not equal the digest `finalize_pack` later stores.
+fn would_be_unattested_manifest_digest(
+    unattested_layers: &[PlannedLayer],
+) -> Result<ManifestDigest> {
+    let layers: Vec<Descriptor> = unattested_layers
+        .iter()
+        .map(PlannedLayer::describe)
+        .collect();
+    let manifest = assemble_manifest(empty_config_descriptor(), layers, ARTIFACT_TYPE_SERVER)?;
+    Ok(ManifestDigest::from_bytes(&canonicalize(&manifest)?))
 }
 
 /// Pack `package` plus its binary (embedded or referenced) and its optional
@@ -364,6 +619,18 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
 ///
 /// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
 ///
+/// # The subject is CHECKED, not trusted
+///
+/// The subject arrives from the issuing platform, not from this repo, so it is
+/// verified rather than recorded: this function computes the would-be
+/// unattested manifest digest and REFUSES to pack when the supplied subject
+/// names anything else — before writing a single blob. See
+/// [`reject_an_attestation_subject_naming_another_package`], which also states
+/// the accepted cost (an attested pack canonicalizes the manifest twice).
+///
+/// `unpack_server` re-derives the same digest INDEPENDENTLY rather than
+/// trusting that this gate ran, because a layout can arrive from anywhere.
+///
 /// # Errors
 ///
 /// Returns [`PackageError::Layout`] if the `ImageManifest` fails to build or
@@ -383,8 +650,17 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
 /// fill. Keyless slots (the pre-0.2 embedded shape) remain legal without a
 /// config.
 ///
+/// When `attestation` is `Some`, returns [`PackageError::MalformedDigest`]
+/// BEFORE writing anything if its `subject` is not a well-formed
+/// `sha256:<64 hex>` string, or
+/// [`PackageError::AttestationSubjectMismatch`] if the subject is well-formed
+/// but does not equal this package's would-be unattested manifest digest. Both
+/// carry digest strings only, never attestation payload material.
+///
 /// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
 /// [`PackageError::ConfigSlotViolation`]: crate::error::PackageError::ConfigSlotViolation
+/// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
+/// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
 ///
 /// # Examples
 ///
@@ -461,93 +737,22 @@ pub fn pack_server(
     attestation: Option<AttestationFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
-    validate_pack_preconditions(package, config)?;
+    // 1. BYTES. Nothing here touches the filesystem, which is what lets every
+    //    gate below — including the attestation-subject gate, which needs the
+    //    would-be unattested manifest digest — run before the first write.
+    let plan = plan_server_layers(package, &binary, config, spec, attestation)?;
 
-    let envelope = ServerEnvelope {
-        name: package.name.clone(),
-        version: package.version.clone(),
-        digest: package.digest.clone(),
-    };
+    // 2. GATES. Any refusal returns here, with the destination layout still
+    //    byte-for-byte as it was found.
+    validate_pack_preconditions(package, config, attestation, &plan.unattested)?;
 
-    // Push order is deterministic so the manifest bytes (and therefore the
-    // manifest digest) are reproducible. It is NOT a read-order contract:
-    // the optional layers make position meaningless, and `unpack_server`
-    // locates every layer by media type.
-    let mut layers = vec![
-        write_binary_layer(layout, &binary)?,
-        layout.write_blob(
-            vendor_media_type(MT_SERVER_ENVELOPE),
-            &canonicalize(&envelope)?,
-        )?,
-        layout.write_blob(
-            vendor_media_type(MT_SERVER_DEPLOY_DESCRIPTOR),
-            &canonicalize(&package.deploy)?,
-        )?,
-        layout.write_blob(
-            vendor_media_type(MT_SERVER_CEDAR_POLICY_SET),
-            &canonicalize(&package.policies)?,
-        )?,
-        layout.write_blob(
-            vendor_media_type(MT_SERVER_TOOL_METADATA),
-            &canonicalize(&package.tools)?,
-        )?,
-        layout.write_blob(
-            vendor_media_type(MT_SERVER_CONFIG_SLOTS),
-            &canonicalize(&package.config_slots)?,
-        )?,
-    ];
-
-    if let Some(config) = config {
-        layers.push(write_named_file_layer(
-            layout,
-            MT_SERVER_CONFIG,
-            config.file_name,
-            config.bytes,
-        )?);
-    }
-
-    // The spec is written last so the push order stays deterministic. Its
-    // bytes go to the blob store RAW — never through `canonicalize` and never
-    // parsed: one media type carries both JSON and YAML documents, and the
-    // format is evident from the file-name annotation (D-16).
-    if let Some(spec) = spec {
-        layers.push(write_named_file_layer(
-            layout,
-            MT_SERVER_OPENAPI_SPEC,
-            spec.file_name,
-            spec.bytes,
-        )?);
-    }
-
-    // The attestation is written LAST so the push order stays deterministic.
-    // As with every other layer here, that order is explicitly NOT a
-    // read-order contract — `unpack_server` locates the attestation by media
-    // type, so a re-ordered manifest reads identically. Its bytes go to the
-    // blob store RAW: never through `canonicalize`, never parsed. The subject,
-    // issuer and payload media type ride on the LAYER descriptor's
-    // annotations, which feed the manifest digest (see
-    // `write_annotated_layer`) — unlike `finalize_pack`'s index-descriptor
-    // annotations, which are applied after the digest is computed.
-    if let Some(attestation) = attestation {
-        layers.push(write_annotated_layer(
-            layout,
-            MT_ATTESTATION,
-            HashMap::from([
-                (
-                    ANNOTATION_ATTESTATION_SUBJECT.to_string(),
-                    attestation.subject.to_string(),
-                ),
-                (
-                    ANNOTATION_ATTESTATION_ISSUER.to_string(),
-                    attestation.issuer.to_string(),
-                ),
-                (
-                    ANNOTATION_ATTESTATION_PAYLOAD_TYPE.to_string(),
-                    attestation.payload_type.to_string(),
-                ),
-            ]),
-            attestation.bytes,
-        )?);
+    // 3. WRITES. The attestation goes LAST so the push order stays
+    //    deterministic. As with every other layer, that order is explicitly
+    //    NOT a read-order contract — `unpack_server` locates every layer by
+    //    media type, so a re-ordered manifest reads identically.
+    let mut layers = Vec::with_capacity(plan.unattested.len() + 1);
+    for planned in plan.unattested.iter().chain(plan.attestation.iter()) {
+        layers.push(write_planned_layer(layout, planned)?);
     }
 
     finalize_pack(
@@ -599,6 +804,38 @@ pub fn pack_workflow(package: &WorkflowManifest, layout: &OciLayout) -> Result<M
     pack_single_layer(package, layout)
 }
 
+/// Build the `ImageManifest` for a package: OCI schema version, the standard
+/// `ImageManifest` media type, the kind's `artifactType`, the (non-null)
+/// empty-config descriptor and the layer descriptors.
+///
+/// Pure — it writes nothing — and deliberately the ONE place the builder chain
+/// lives. [`finalize_pack`] calls it with the descriptors it just WROTE, and
+/// [`would_be_unattested_manifest_digest`] calls it with descriptors it merely
+/// DESCRIBED. Sharing the helper is what guarantees the two manifests can
+/// differ only in their layer vectors; a second copy of the chain would let
+/// them drift in `artifactType`, media type or config and silently invalidate
+/// the pack-time subject comparison.
+///
+/// # Errors
+///
+/// Returns [`PackageError::Layout`] if the builder rejects the combination.
+fn assemble_manifest(
+    config: Descriptor,
+    layers: Vec<Descriptor>,
+    artifact_type: &str,
+) -> Result<ImageManifest> {
+    ImageManifestBuilder::default()
+        .schema_version(SCHEMA_VERSION)
+        .media_type(MediaType::ImageManifest)
+        .artifact_type(MediaType::Other(artifact_type.to_string()))
+        .config(config)
+        .layers(layers)
+        .build()
+        .map_err(|e| PackageError::Layout {
+            reason: format!("failed to build ImageManifest: {e}"),
+        })
+}
+
 /// Shared steps 3-6: write the standard empty-config blob, build the
 /// `ImageManifest` (config + `layers` + `artifact_type`), store it under its
 /// OWN canonical-bytes digest (step 4-5 — this IS the returned
@@ -614,16 +851,7 @@ fn finalize_pack(
     let config_descriptor =
         layout.write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)?;
 
-    let manifest = ImageManifestBuilder::default()
-        .schema_version(SCHEMA_VERSION)
-        .media_type(MediaType::ImageManifest)
-        .artifact_type(MediaType::Other(artifact_type.to_string()))
-        .config(config_descriptor)
-        .layers(layers)
-        .build()
-        .map_err(|e| PackageError::Layout {
-            reason: format!("failed to build ImageManifest: {e}"),
-        })?;
+    let manifest = assemble_manifest(config_descriptor, layers, artifact_type)?;
 
     // Canonicalize (not plain serde_json) so the stored blob's own
     // content-addressed digest doubles as the identity digest —
