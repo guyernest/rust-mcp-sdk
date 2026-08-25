@@ -9,6 +9,7 @@
 //! with a clear message rather than being indexed blindly.
 
 use assert_cmd::Command;
+use pmcp_package::oci::media_types::{ANNOTATION_ATTESTATION_SUBJECT, MT_ATTESTATION};
 use pmcp_package::oci::{pack_agent, pack_server, AttestationFile, BinaryMode, OciLayout};
 use pmcp_package::package::{
     AssetsSection, AuthSection, AwsSection, DeployDescriptor, ObservabilitySection, ServerSection,
@@ -250,6 +251,129 @@ fn inspect_reports_an_unattested_server_fixture_as_carrying_no_attestation() {
         // No subject is claimed, so no subject digest may be printed.
         .stdout(contains("Subject").not())
         .stdout(contains("sha256:").not());
+}
+
+// ---------------------------------------------------------------------
+// The third render state: attested, but the subject names another package
+// ---------------------------------------------------------------------
+
+/// Overwrite the attestation layer's subject annotation so the package CLAIMS
+/// to be about a different package, rewriting the manifest so the layout stays
+/// internally consistent — every blob still digest-verifies, and the only thing
+/// wrong is that the claim is false.
+///
+/// The fixture has to be built by TAMPERING because `pack_server` refuses to
+/// produce this shape at all. That is the point of the pack-time gate, and it
+/// is why the unpack-side check cannot be dropped as redundant: the only
+/// mismatched layouts that exist are ones somebody made by hand.
+///
+/// Returns the false subject now claimed.
+fn claim_a_different_subject(layout: &OciLayout) -> String {
+    let other = ManifestDigest::from_bytes(b"an entirely different package")
+        .as_str()
+        .to_string();
+
+    let mut index = layout.read_index().expect("read index.json");
+    let old_descriptor = index.manifests()[0].clone();
+    // `finalize_pack` applies the index descriptor's name/version annotations
+    // AFTER the manifest digest is computed, so they cannot be recomputed and
+    // must be carried across by hand.
+    let index_annotations = old_descriptor.annotations().clone();
+
+    let mut manifest = layout
+        .read_manifest(&old_descriptor)
+        .expect("read the package manifest");
+    let mut layers = manifest.layers().clone();
+    for layer in &mut layers {
+        if layer.media_type().to_string() == MT_ATTESTATION {
+            let mut annotations = layer.annotations().clone().unwrap_or_default();
+            annotations.insert(ANNOTATION_ATTESTATION_SUBJECT.to_string(), other.clone());
+            layer.set_annotations(Some(annotations));
+        }
+    }
+    manifest.set_layers(layers);
+
+    let bytes = pmcp_package::canonicalize(&manifest).expect("canonicalize the manifest");
+    let mut descriptor = layout
+        .write_manifest(&bytes)
+        .expect("write the rewritten manifest blob");
+    descriptor.set_annotations(index_annotations);
+    index.set_manifests(vec![descriptor]);
+    layout.write_index(&index).expect("write index.json");
+
+    other
+}
+
+/// Pack an attested fixture at `dir`, then tamper its claimed subject.
+/// Returns `(the false subject now claimed, the real unattested digest)`.
+fn write_mismatched_server_fixture(dir: &std::path::Path) -> (String, String) {
+    let real_subject = write_attested_server_fixture(dir);
+    let claimed = claim_a_different_subject(&OciLayout::open(dir));
+    assert_ne!(
+        claimed, real_subject,
+        "the tamper must actually change the claim, or the fixture proves nothing"
+    );
+    (claimed, real_subject)
+}
+
+/// State 1 of D-06: a matching subject renders a verdict saying so and EXITS
+/// ZERO. Asserted alongside the failure cases so a blanket non-zero exit — the
+/// obvious way to break this — would be caught.
+#[test]
+fn inspect_reports_a_matching_subject_as_a_match_and_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let subject = write_attested_server_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(subject))
+        .stdout(contains("matches"));
+}
+
+/// State 2 of D-06, both halves at once. The exit status ALONE would be
+/// satisfied by a build that printed nothing, which would defeat the stated
+/// purpose — a human at a terminal must lose nothing — so the rendered content
+/// is asserted in the same test.
+#[test]
+fn inspect_renders_the_full_diagnostic_and_exits_non_zero_on_a_subject_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (claimed, actual) = write_mismatched_server_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        .code(1)
+        // All three facts, side by side: who claims it, what they claim, and
+        // what is actually true.
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(claimed))
+        .stdout(contains(actual));
+}
+
+/// The gate hole this phase exists to close: a mismatch that went silent under
+/// `--quiet` would be ungateable in exactly the automated context that needs it
+/// most. The non-zero exit must not depend on the rendering, which is what
+/// pins the check OUTSIDE the `if output` block.
+#[test]
+fn inspect_exits_non_zero_on_a_subject_mismatch_even_with_output_suppressed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_mismatched_server_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args([
+            "--quiet",
+            "package",
+            "inspect",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
 }
 
 /// A zero-manifest layout (a freshly-created, empty OCI layout) is rejected with

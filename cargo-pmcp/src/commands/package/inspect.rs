@@ -26,6 +26,29 @@
 //! identity is a REMOTE call, and this command deliberately does not make it.
 //! An attestation rendered here is a claim that has been carried, not a claim
 //! that has been proven.
+//!
+//! # A subject mismatch is NOT a digest-verification failure
+//!
+//! The V6 rule above — digest verification lives inside `unpack_*` and its
+//! failures surface verbatim, never bypassed — still holds exactly as written,
+//! and the subject check DEPARTS from it deliberately rather than by
+//! oversight:
+//!
+//! **Integrity failure means the bytes are corrupt; subject mismatch means the
+//! bytes are fine but the claim is wrong.**
+//!
+//! A corrupt blob fails INSIDE `unpack_server` and no value comes back at all,
+//! because nothing about corrupt bytes is worth rendering. A subject mismatch
+//! is the opposite: every blob verified, and the claim written over them is
+//! false. So it surfaces as a rendered verdict — issuer, claimed subject and
+//! actual re-derived digest, side by side — followed by a non-zero exit, which
+//! makes it gateable in CI without parsing stdout (D-06). The exit is emitted
+//! outside the quiet-mode gate, so suppressing output cannot suppress the
+//! verdict.
+//!
+//! **These two behaviours must NOT be harmonized in a later cleanup.** The
+//! difference is the decision (D-03), and the same instruction is recorded at
+//! the other site it lives, `pmcp_package::oci::SubjectVerdict`.
 
 use std::path::PathBuf;
 
@@ -138,6 +161,15 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
             if output {
                 render_server(&unpacked);
             }
+            // DELIBERATELY outside the `if output` block, and deliberately
+            // AFTER the rendering. Outside, so the non-zero exit holds under
+            // `--quiet` too — a mismatch that went silent when output was
+            // suppressed would be a gate hole in exactly the automated context
+            // that needs the check most, and it matches this function's
+            // standing rule that only the decorative rendering is gated.
+            // After, so a human reading the terminal sees the full diagnostic
+            // before the command fails.
+            refuse_a_subject_that_does_not_name_this_package(&unpacked)?;
         },
         PackageKind::Workflow => {
             let manifest = unpack_workflow(layout).context("unpack workflow manifest")?;
@@ -147,6 +179,29 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
         },
     }
     Ok(())
+}
+
+/// Turn a subject mismatch into a non-zero exit, so the verdict is gateable in
+/// CI by exit code alone — no stdout parsing (D-06).
+///
+/// This is NOT a digest-verification failure and must not be confused with one:
+/// every blob in a mismatched package verifies. See this module's header for
+/// the distinction, and `pmcp_package::oci::SubjectVerdict` for the rule that
+/// the two behaviours must stay different.
+fn refuse_a_subject_that_does_not_name_this_package(unpacked: &UnpackedServer) -> Result<()> {
+    let Some(attestation) = unpacked.attestation.as_ref() else {
+        // No attestation, no claim, nothing to be wrong about.
+        return Ok(());
+    };
+    if attestation.subject.matches() {
+        return Ok(());
+    }
+    bail!(
+        "attestation subject mismatch: the attestation names {}, but this package's unattested \
+         manifest digest is {}",
+        attestation.subject.claimed,
+        attestation.subject.unattested_digest
+    );
 }
 
 /// Print a `label: value` line with a consistent, colored layout.
@@ -190,15 +245,18 @@ fn render_server(unpacked: &UnpackedServer) {
 
 /// Render what the package carries by way of an attestation.
 ///
-/// BOTH terminal states are rendered explicitly. An unattested package says so
-/// on its own line rather than rendering nothing, so "unattested" is never
-/// indistinguishable from "this build of `inspect` does not know about
-/// attestations". The third state — attested but with a subject that does not
-/// name this package — is added by the subject-check work.
+/// ALL THREE states are rendered explicitly (D-06): attested with a matching
+/// subject, attested but with a subject that does not name this package, and
+/// unattested. An unattested package says so on its own line rather than
+/// rendering nothing, so "unattested" is never indistinguishable from "this
+/// build of `inspect` does not know about attestations".
 ///
-/// The subject is printed as the attestation's own CLAIM. This renderer makes
-/// no verdict about whether it names this package, and no exit-code decision
-/// follows from it here.
+/// The subject is printed as the attestation's own CLAIM, with the verdict on
+/// its own line beneath. On a mismatch the actual re-derived digest is printed
+/// too, so the claim and the reality are visible side by side — that IS the
+/// diagnostic. The exit-code decision lives in
+/// [`refuse_a_subject_that_does_not_name_this_package`], not here, so that
+/// rendering can be skipped under `--quiet` while the exit code cannot.
 fn render_attestation(unpacked: &UnpackedServer) {
     let Some(attestation) = unpacked.attestation.as_ref() else {
         field("Attestation", "none (package is unattested)");
@@ -208,6 +266,23 @@ fn render_attestation(unpacked: &UnpackedServer) {
     field("Issuer", &attestation.issuer);
     field("Subject", &attestation.subject.claimed);
     field("Payload type", &attestation.payload_type);
+
+    // Emphasised like `header` so the verdict reads as a verdict rather than
+    // as one more data line.
+    if attestation.subject.matches() {
+        field(
+            "Verdict",
+            "subject matches this package".bright_green().bold(),
+        );
+    } else {
+        field(
+            "Verdict",
+            "SUBJECT MISMATCH — this attestation is not about this package"
+                .bright_red()
+                .bold(),
+        );
+        field("Actual", &attestation.subject.unattested_digest);
+    }
 }
 
 fn render_workflow(manifest: &WorkflowManifest) {
