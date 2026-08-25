@@ -2394,7 +2394,7 @@ Plans:
   5. The parked boundary is explicit and reversible in one step: the live issuance/verification leg exists as an `#[ignore]`d, env-gated test that names exactly what the backend must ship — the `parity_live_tfl` / `PMCP_OPENAPI_LIVE_TEST=1` double-gate pattern — so promoting this phase from parked to blocking is removing a gate, not writing a new test (PKGX-01)
   6. Attestation implies resolved (D-09/D-10, the `cargo build --locked` analogue): attaching an attestation to a package holding any `ComponentRef::Range` fails at pack time with an error naming the offending component and its `component_type`, and `PinnedRef` gains `resolved_from: Option<VersionReq>` so pinning records the declared range instead of destroying it. The guard is explicitly **one level deep** — a test constructs attested team → pinned agent → agent holds a `Range` and asserts the team still packs, so the depth limit is pinned visible behaviour rather than an unexamined gap (PKGX-01)
 
-**Plans**: 2/8 plans executed across 5 waves (planned 2026-08-25; tracer-first — 122-02 Task 1 is the end-to-end slice, verified before every expansion task). Revised 2026-08-25 after cross-AI review (`122-REVIEWS.md`): the attestation media type is settled as KIND-NEUTRAL `application/vnd.pmcp.attestation.v1` before the tracer freezes it (122-02 decision record), the parked live leg gains an executable request path plus an auth gate (122-04), and the pre-write subject gate gains the pure `describe_blob` extraction that makes it implementable (122-03).
+**Plans**: 4/8 plans executed across 5 waves (planned 2026-08-25; tracer-first — 122-02 Task 1 is the end-to-end slice, verified before every expansion task). Revised 2026-08-25 after cross-AI review (`122-REVIEWS.md`): the attestation media type is settled as KIND-NEUTRAL `application/vnd.pmcp.attestation.v1` before the tracer freezes it (122-02 decision record), the parked live leg gains an executable request path plus an auth gate (122-04), and the pre-write subject gate gains the pure `describe_blob` extraction that makes it implementable (122-03).
 
 Plans:
 
@@ -2405,8 +2405,8 @@ Plans:
 
 **Wave 2** *(parallel — disjoint files)*
 
-- [ ] 122-03-PLAN.md — The only offline verification: subject-digest comparison at both ends. Pack refuses before writing; unpack reports a mismatch as DATA; `inspect` renders the diagnostic then exits non-zero, quiet mode included (D-02/D-03/D-06)
-- [ ] 122-04-PLAN.md — Contract-first: SDK-proposed `attestation-v1.graphql`, `VERIFY_ATTESTATION_QUERY` plus a pure request-builder/response-decoder seam, the offline blocking `apollo_compiler` test, the `#[ignore]`+env-TRIPLE-gated parked live leg carrying an executable request path, and the platform ratification ask (D-07/D-11, SC1/SC5)
+- [x] 122-03-PLAN.md — The only offline verification: subject-digest comparison at both ends. Pack refuses before writing; unpack reports a mismatch as DATA; `inspect` renders the diagnostic then exits non-zero, quiet mode included (D-02/D-03/D-06)
+- [x] 122-04-PLAN.md — Contract-first: SDK-proposed `attestation-v1.graphql`, `VERIFY_ATTESTATION_QUERY` plus a pure request-builder/response-decoder seam, the offline blocking `apollo_compiler` test, the `#[ignore]`+env-TRIPLE-gated parked live leg carrying an executable request path, and the platform ratification ask (D-07/D-11, SC1/SC5)
 
 **Wave 3** *(parallel — disjoint files)*
 
@@ -2466,7 +2466,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 |-------|--------------|----------------|--------|-----------|
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
-| 122. Attestation Carriage *(parked)* | PKGX-01 | 2/8 | In Progress|  |
+| 122. Attestation Carriage *(parked)* | PKGX-01 | 4/8 | In Progress|  |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
 
