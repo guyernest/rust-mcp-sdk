@@ -157,6 +157,60 @@ fn team_canonical_bytes_match_checked_in_snapshot() {
     );
 }
 
+// --- D-10: `resolved_from` participates in package identity ----------------
+
+/// The four pinned constants above prove a `None` `resolved_from` moves
+/// NOTHING — they are computed over fixtures carrying no `resolved_from` key
+/// and they still match unmodified. This test proves the COMPLEMENT: recording
+/// the range a pin resolved changes the canonical bytes and therefore the
+/// manifest digest.
+///
+/// Both halves are needed. Without this one, `skip_serializing_if` would be
+/// indistinguishable from a field the digest path ignores entirely — and a
+/// "compatible" field that never reaches the digest is a field an attacker can
+/// strip or forge for free, which would make D-10's dev-to-prod signal
+/// unattestable.
+///
+/// `workflow.canonical.json` is the fixture used because it is the only
+/// canonical fixture holding `"kind":"pinned"` refs (three of them); `agent`
+/// and `team` hold ranges and `server` holds neither.
+#[test]
+fn recording_the_range_a_pin_resolved_changes_the_manifest_digest() {
+    let none_variant = workflow_fixture();
+    assert!(
+        none_variant.components.iter().any(ComponentRef::is_pinned),
+        "the workflow fixture must carry at least one pin or this test asserts nothing"
+    );
+
+    let none_digest = manifest_digest(&none_variant).unwrap();
+    assert_eq!(
+        none_digest.as_str(),
+        EXPECTED_WORKFLOW_DIGEST,
+        "a `None` resolved_from must emit no key, so the pinned wire-freeze constant must \
+         still match — this is what makes the assert_ne below attributable to the field \
+         rather than to some unrelated drift"
+    );
+
+    let mut some_variant = none_variant.clone();
+    let pin = some_variant
+        .components
+        .iter_mut()
+        .find_map(|component| match component {
+            ComponentRef::Pinned(pin) => Some(pin),
+            ComponentRef::Range { .. } => None,
+        })
+        .expect("asserted present above");
+    pin.resolved_from = Some(semver::VersionReq::parse("^1.2").unwrap());
+
+    let some_digest = manifest_digest(&some_variant).unwrap();
+    assert_ne!(
+        none_digest, some_digest,
+        "recording a resolved range MUST change package identity — a pin that declares it \
+         resolved `^1.2` is a different fact from a pin that declares nothing, and the \
+         digest is where that difference has to show up"
+    );
+}
+
 // --- Round-trip parse checks for the two new kinds -------------------------
 
 #[test]
