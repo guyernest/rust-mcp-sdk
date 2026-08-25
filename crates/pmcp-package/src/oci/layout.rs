@@ -74,7 +74,7 @@ impl OciLayout {
     ///
     /// Side-effect free by construction: it touches no directory (hence no
     /// `&self`), performs no filesystem call, and is infallible. Nothing on
-    /// this path can fail — [`Self::blob_path`]'s `Result` comes only from its
+    /// this path can fail — `blob_path`'s `Result` comes only from its
     /// `sha256:` prefix check, and a descriptor needs no path.
     ///
     /// # The contract that makes this load-bearing

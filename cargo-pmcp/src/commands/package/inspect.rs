@@ -206,7 +206,7 @@ fn render_attestation(unpacked: &UnpackedServer) {
     };
     println!("\n{}", "Attestation".bright_cyan().bold());
     field("Issuer", &attestation.issuer);
-    field("Subject", &attestation.subject);
+    field("Subject", &attestation.subject.claimed);
     field("Payload type", &attestation.payload_type);
 }
 

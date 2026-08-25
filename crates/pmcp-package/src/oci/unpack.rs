@@ -18,7 +18,7 @@
 //! each remain a single layer. The embedded bootstrap layer is returned as raw
 //! bytes — it is never deserialized.
 
-use crate::digest::{verify, ManifestDigest};
+use crate::digest::{canonicalize, verify, ManifestDigest};
 use crate::error::{PackageError, Result};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
@@ -118,6 +118,68 @@ pub struct RestoredFile {
     pub bytes: Vec<u8>,
 }
 
+/// The result of comparing an attestation's CLAIMED subject against the
+/// unattested manifest digest this crate re-derived from the layout itself.
+///
+/// # This is the ONLY verification the SDK performs offline
+///
+/// It proves one thing: that the attestation names THIS package. It proves
+/// nothing whatsoever about who issued the attestation or whether that issuer
+/// signed it — this crate holds no keys, adds no crypto dependency, and parses
+/// no payload. Verifying an attestation against the issuing platform's identity
+/// is a REMOTE call, deliberately absent here (D-11). "A verification path
+/// exists" means subject comparison and nothing more, and it should be said
+/// that plainly wherever the phrase appears.
+///
+/// # Integrity failure and subject mismatch are DIFFERENT, deliberately
+///
+/// **Integrity failure means the bytes are corrupt; subject mismatch means the
+/// bytes are fine but the claim is wrong.**
+///
+/// [`crate::digest::verify()`] fails CLOSED — a flipped byte is
+/// [`PackageError::DigestMismatch`] and no value comes back at all, because
+/// nothing about corrupt bytes is worth inspecting. A subject mismatch is the
+/// opposite case: every byte verified, and the claim written over them is
+/// false. That is precisely the diagnostic case, so it arrives as DATA on a
+/// successfully unpacked package, with the claim and the reality readable side
+/// by side.
+///
+/// **Do not harmonize these two behaviours in a later cleanup — the difference
+/// IS the decision** (D-03). In particular, do not model this type as a
+/// `Result`: a `Result` invites a caller to `?` it and turn the verdict back
+/// into the error it was deliberately not made.
+///
+/// [`PackageError::DigestMismatch`]: crate::error::PackageError::DigestMismatch
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectVerdict {
+    /// The `sha256:<hex>` subject the attestation CLAIMS, verbatim as carried.
+    ///
+    /// A `String`, not a [`ManifestDigest`], because it is
+    /// ATTACKER-CONTROLLED input from an untrusted layout and may be any bytes
+    /// an annotation can hold. Its type says so.
+    pub claimed: String,
+    /// The unattested manifest digest RE-DERIVED from this layout: the
+    /// manifest with its attestation layer removed, canonicalized and hashed
+    /// by this crate.
+    ///
+    /// A [`ManifestDigest`], not a `String`, because this crate computed it
+    /// and it is well-formed by construction. Derived independently of
+    /// `pack_server`'s pack-time gate — neither end assumes the other ran,
+    /// because the attestation arrives from the platform, not from this repo
+    /// (D-02).
+    pub unattested_digest: ManifestDigest,
+}
+
+impl SubjectVerdict {
+    /// Whether the claimed subject names this very package.
+    ///
+    /// `false` is not an error and never becomes one here — see this type's
+    /// own documentation for why.
+    pub fn matches(&self) -> bool {
+        self.claimed == self.unattested_digest.as_str()
+    }
+}
+
 /// A platform-issued attestation restored from an [`MT_ATTESTATION`] layer:
 /// the payload bytes exactly as packed, plus the three metadata values read off
 /// the layer descriptor's annotations.
@@ -137,10 +199,14 @@ pub struct UnpackedAttestation {
     /// The attestation payload's exact bytes, byte-identical to what was
     /// packed and never interpreted.
     pub bytes: Vec<u8>,
-    /// The `sha256:<hex>` manifest digest this attestation CLAIMS as its
-    /// subject — the digest of the UNATTESTED package, never of the package
-    /// that carries this layer.
-    pub subject: String,
+    /// The subject this attestation CLAIMS, together with the unattested
+    /// manifest digest re-derived from the layout and therefore with the
+    /// verdict on whether the two agree.
+    ///
+    /// The claim and its verdict are ONE value rather than two fields on
+    /// purpose: a caller cannot read what the attestation says about its
+    /// subject without also being handed whether that says anything true.
+    pub subject: SubjectVerdict,
     /// Who the attestation claims to have been issued by.
     pub issuer: String,
     /// The payload's own media type, as recorded at pack time.
@@ -276,25 +342,66 @@ fn required_annotation(descriptor: &Descriptor, key: &str, layer_name: &str) -> 
         .clone())
 }
 
+/// Re-derive the manifest digest this package WOULD have if it carried no
+/// attestation: take the manifest as read from disk, drop its attestation
+/// layer, canonicalize with the crate's ONE canonicalizer and hash.
+///
+/// This is what an attestation's subject means — the digest of the UNATTESTED
+/// package (D-01's two-digest consequence). It is computed from the layout's
+/// own bytes and NEVER read from a stored claim, which is the whole point: the
+/// value a caller gates on must not be attacker-supplied.
+///
+/// Stripping the layer from the parsed manifest (rather than rebuilding one)
+/// keeps every other field exactly as it was packed, so the result is
+/// comparable with what `pack_server`'s own dry pass computed.
+///
+/// # Errors
+///
+/// Returns [`PackageError::Serialize`] if the manifest fails to canonicalize.
+///
+/// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+fn re_derive_unattested_digest(manifest: &ImageManifest) -> Result<ManifestDigest> {
+    let mut unattested = manifest.clone();
+    let layers: Vec<Descriptor> = manifest
+        .layers()
+        .iter()
+        .filter(|layer| layer.media_type().to_string() != MT_ATTESTATION)
+        .cloned()
+        .collect();
+    unattested.set_layers(layers);
+    Ok(ManifestDigest::from_bytes(&canonicalize(&unattested)?))
+}
+
 /// Read the optional attestation layer back into an [`UnpackedAttestation`],
-/// taking its three metadata values from the layer descriptor's annotations.
+/// taking its three metadata values from the layer descriptor's annotations
+/// and pairing the claimed subject with an independently re-derived unattested
+/// digest.
+///
 /// Returns `Ok(None)` when the layer is absent — an unattested package is not
-/// an error (D-14).
+/// an error (D-14), produces no verdict, and does NO extra work: the
+/// re-derivation below runs only on the `Some` path, so an unattested unpack
+/// is behaviourally identical to what it was before the verdict existed.
 ///
 /// The payload bytes are digest-verified and then returned VERBATIM: this
-/// function never deserializes, parses or sniffs them.
+/// function never deserializes, parses or sniffs them. A subject mismatch is
+/// reported as a verdict, NOT as an error — see [`SubjectVerdict`].
 fn read_attestation_layer(
     layout: &OciLayout,
     descriptor: Option<&&Descriptor>,
     layer_name: &str,
+    manifest: &ImageManifest,
 ) -> Result<Option<UnpackedAttestation>> {
     let Some(descriptor) = descriptor else {
         return Ok(None);
     };
     let bytes = read_verified_blob(layout, descriptor)?;
+    let subject = SubjectVerdict {
+        claimed: required_annotation(descriptor, ANNOTATION_ATTESTATION_SUBJECT, layer_name)?,
+        unattested_digest: re_derive_unattested_digest(manifest)?,
+    };
     Ok(Some(UnpackedAttestation {
         bytes,
-        subject: required_annotation(descriptor, ANNOTATION_ATTESTATION_SUBJECT, layer_name)?,
+        subject,
         issuer: required_annotation(descriptor, ANNOTATION_ATTESTATION_ISSUER, layer_name)?,
         payload_type: required_annotation(
             descriptor,
@@ -405,8 +512,17 @@ fn detect_legacy_shape(envelope_bytes: &[u8]) -> Result<()> {
 ///
 /// A returned attestation is a CLAIM, not a verified fact. This crate holds
 /// no signing or verification keys and performs no signature check; the
-/// subject, issuer and payload type are carried through verbatim, and the
-/// payload bytes are never deserialized here.
+/// issuer and payload type are carried through verbatim, and the payload bytes
+/// are never deserialized here.
+///
+/// The ONE thing that IS checked is the subject: the claimed subject arrives
+/// paired with an unattested manifest digest this function re-derives from the
+/// layout itself, so a caller can see whether the attestation names this
+/// package. A mismatch is reported as a [`SubjectVerdict`], NOT as an `Err` —
+/// a tampered or mis-attached attestation stays fully inspectable, while
+/// corrupt BYTES continue to fail closed with
+/// [`PackageError::DigestMismatch`]. Those two behaviours are deliberately
+/// different and must not be harmonized (D-03).
 ///
 /// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
 ///
@@ -479,8 +595,12 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
         by_media_type.get(MT_SERVER_OPENAPI_SPEC),
         "openapi-spec",
     )?;
-    let attestation =
-        read_attestation_layer(layout, by_media_type.get(MT_ATTESTATION), "attestation")?;
+    let attestation = read_attestation_layer(
+        layout,
+        by_media_type.get(MT_ATTESTATION),
+        "attestation",
+        &manifest,
+    )?;
 
     Ok(UnpackedServer {
         package,

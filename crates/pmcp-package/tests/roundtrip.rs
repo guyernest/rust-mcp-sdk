@@ -31,6 +31,7 @@ use pmcp_package::package::{
 };
 use pmcp_package::reference::{ComponentRef, ComponentType};
 use pmcp_package::slot::{ConfigSlot, SlotType};
+use pmcp_package::PackageError;
 mod common;
 
 /// Read a checked-in golden fixture's raw bytes (delegates to the shared
@@ -302,6 +303,26 @@ fn pack_attested_fixture_server(dir: &std::path::Path) -> (OciLayout, ManifestDi
     (layout, unattested_digest)
 }
 
+/// Everything about an attestation that is a fact of CARRIAGE — what bytes
+/// travelled, what they CLAIM, who issued them and in what format.
+///
+/// Deliberately excludes `subject.unattested_digest`, which is not a fact about
+/// the attestation at all: it is re-derived from the MANIFEST, so it changes
+/// whenever the manifest does. The two position/kind-independence tests below
+/// mutate the manifest on purpose, so comparing the whole `UnpackedAttestation`
+/// there would assert that a mutated manifest hashes to the unmutated manifest's
+/// digest — which is false, and whose falseness is exactly the tamper-evidence
+/// the subject verdict provides. Those tests compare carriage; the verdict is
+/// asserted separately, where a mutation is not in flight.
+fn carried_facts(attestation: &UnpackedAttestation) -> (Vec<u8>, String, String, String) {
+    (
+        attestation.bytes.clone(),
+        attestation.subject.claimed.clone(),
+        attestation.issuer.clone(),
+        attestation.payload_type.clone(),
+    )
+}
+
 /// Read the single layer descriptor whose media type is `media_type`, or
 /// `None` if the manifest carries no such layer.
 fn layer_annotation(layout: &OciLayout, media_type: &str, key: &str) -> Option<String> {
@@ -486,7 +507,10 @@ fn re_ordering_the_manifest_layers_does_not_change_the_attestation_read() {
         "pack writes the attestation layer last — the fact this test then breaks"
     );
 
-    let baseline = unpack_server(&layout).unwrap().attestation;
+    let baseline = unpack_server(&layout)
+        .unwrap()
+        .attestation
+        .expect("the package carried an attestation");
     rewrite_manifest(&layout, |manifest| {
         let mut layers = manifest.layers().clone();
         layers.reverse();
@@ -500,10 +524,25 @@ fn re_ordering_the_manifest_layers_does_not_change_the_attestation_read() {
         "the rewrite must actually have moved the attestation layer, or the test is a no-op"
     );
 
+    let after = unpack_server(&layout)
+        .unwrap()
+        .attestation
+        .expect("the attestation must still be located after the layers were re-ordered");
     assert_eq!(
-        unpack_server(&layout).unwrap().attestation,
-        baseline,
+        carried_facts(&after),
+        carried_facts(&baseline),
         "the attestation is located by media type, so its position carries no meaning"
+    );
+
+    // The re-derived digest is NOT compared above, and this is why: layer order
+    // is inside the bytes the manifest digest covers, so a re-ordered manifest
+    // is a genuinely different package. The verdict noticing that is the
+    // tamper-evidence working, not a position dependency in the read path —
+    // which the carriage comparison above has just shown is absent.
+    assert_ne!(
+        after.subject.unattested_digest, baseline.subject.unattested_digest,
+        "re-ordering the layers changes the manifest, so it must change the digest re-derived \
+         from it"
     );
 }
 
@@ -552,7 +591,8 @@ fn changing_only_the_artifact_type_does_not_change_how_the_attestation_is_locate
         .attestation
         .expect("the attestation must still be located after the artifactType changed");
     assert_eq!(
-        after, baseline,
+        carried_facts(&after),
+        carried_facts(&baseline),
         "kind detection and attestation location are independent axes — nothing may infer a \
          package's kind from the attestation layer, and nothing may use the kind to find it"
     );
@@ -574,5 +614,176 @@ fn the_issuer_and_payload_type_annotations_round_trip_verbatim() {
     assert_eq!(
         layer_annotation(&layout, MT_ATTESTATION, ANNOTATION_ATTESTATION_PAYLOAD_TYPE).as_deref(),
         Some(ATTESTATION_PAYLOAD_TYPE)
+    );
+}
+
+// ---------------------------------------------------------------------
+// The unpack-side subject verdict (D-02's second end, D-03's soft verdict)
+//
+// `pack_server` refuses a mismatched subject, but `unpack_server` must NOT
+// assume that gate ran: a `.pmcp` layout arrives from the platform, not from
+// this repo. It re-derives the unattested digest independently and reports the
+// comparison as DATA.
+//
+// The distinction these tests jointly pin, deliberately NOT harmonized:
+// integrity failure means the BYTES are corrupt (fail closed, `DigestMismatch`);
+// subject mismatch means the bytes are fine and the CLAIM is wrong (`Ok`, with
+// a verdict).
+// ---------------------------------------------------------------------
+
+/// Overwrite the attestation layer's subject annotation with `subject`,
+/// rewriting the manifest so the layout stays internally consistent.
+///
+/// This is the tamper an attacker performs: the payload bytes stay valid (so
+/// `digest::verify` is satisfied) while the CLAIM is swapped for one naming a
+/// package that was never attested.
+fn alter_the_claimed_subject(layout: &OciLayout, subject: &str) {
+    rewrite_manifest(layout, |manifest| {
+        let mut layers = manifest.layers().clone();
+        for layer in &mut layers {
+            if layer.media_type().to_string() == MT_ATTESTATION {
+                let mut annotations = layer.annotations().clone().unwrap_or_default();
+                annotations.insert(
+                    ANNOTATION_ATTESTATION_SUBJECT.to_string(),
+                    subject.to_string(),
+                );
+                layer.set_annotations(Some(annotations));
+            }
+        }
+        manifest.set_layers(layers);
+    });
+}
+
+/// A subject that names some other package — well-formed, so the only thing
+/// wrong with it is that it is false.
+fn a_subject_naming_another_package() -> ManifestDigest {
+    ManifestDigest::from_bytes(b"an entirely different package")
+}
+
+/// The matching case: the verdict says so, and the digest it re-derived equals
+/// the claim.
+#[test]
+fn an_attested_package_whose_subject_matches_reports_a_matching_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, unattested_digest) = pack_attested_fixture_server(dir.path());
+
+    let attestation = unpack_server(&layout)
+        .expect("an attested package must unpack")
+        .attestation
+        .expect("the package carried an attestation");
+
+    assert!(
+        attestation.subject.matches(),
+        "a subject naming this very package must read as a match"
+    );
+    assert_eq!(attestation.subject.claimed, unattested_digest.as_str());
+    assert_eq!(attestation.subject.unattested_digest, unattested_digest);
+}
+
+/// D-03, the whole decision in one test: a mis-attached or tampered
+/// attestation unpacks SUCCESSFULLY and reports its mismatch as data. It must
+/// NOT be an `Err` — the diagnostic case is exactly "show me the claim and the
+/// reality side by side", and an error destroys the value that carries them.
+#[test]
+fn an_altered_subject_annotation_unpacks_successfully_and_reports_a_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, unattested_digest) = pack_attested_fixture_server(dir.path());
+    let other = a_subject_naming_another_package();
+    alter_the_claimed_subject(&layout, other.as_str());
+
+    let unpacked =
+        unpack_server(&layout).expect("a subject mismatch is DATA, never an unpack error (D-03)");
+    let attestation = unpacked
+        .attestation
+        .expect("the tampered package still carries its attestation");
+
+    assert!(
+        !attestation.subject.matches(),
+        "the altered subject names a different package, so the verdict must be a mismatch"
+    );
+    // The three facts, independently readable — this is the diagnostic.
+    assert_eq!(attestation.subject.claimed, other.as_str());
+    assert_eq!(attestation.subject.unattested_digest, unattested_digest);
+    assert_ne!(
+        attestation.subject.claimed,
+        attestation.subject.unattested_digest.as_str()
+    );
+    assert_eq!(attestation.issuer, ATTESTATION_ISSUER);
+}
+
+/// The other side of the distinction, unchanged: corrupt BYTES still fail
+/// closed. Softening `digest::verify` into a verdict alongside the subject
+/// check would turn a tamper detector into a report, and this test is what
+/// stops that.
+#[test]
+fn flipping_the_attestation_payload_bytes_still_fails_closed_with_a_digest_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _) = pack_attested_fixture_server(dir.path());
+
+    let index = layout.read_index().unwrap();
+    let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+    let hex = manifest
+        .layers()
+        .iter()
+        .find(|l| l.media_type().to_string() == MT_ATTESTATION)
+        .expect("the attested layout must carry an attestation layer")
+        .digest()
+        .digest()
+        .to_string();
+    let blob_path = dir.path().join("blobs").join("sha256").join(hex);
+    let mut bytes = std::fs::read(&blob_path).unwrap();
+    bytes[0] ^= 0x01;
+    std::fs::write(&blob_path, bytes).unwrap();
+
+    let err = unpack_server(&layout)
+        .expect_err("corrupt attestation BYTES are an integrity failure, not a soft verdict");
+    assert!(
+        matches!(err, PackageError::DigestMismatch { .. }),
+        "expected DigestMismatch, got {err:?}"
+    );
+}
+
+/// Independence (D-02: "neither end assumes the other ran"). The digest the
+/// unpack side re-derives is the digest the PACK side returned for the
+/// unattested package — computed from the layout on disk, with no stored claim
+/// consulted.
+#[test]
+fn the_re_derived_unattested_digest_equals_the_digest_the_unattested_pack_returned() {
+    let unattested_dir = tempfile::tempdir().unwrap();
+    let (_unattested_layout, packed_unattested_digest) =
+        pack_fixture_server(unattested_dir.path(), None);
+
+    let attested_dir = tempfile::tempdir().unwrap();
+    let (attested_layout, _) = pack_fixture_server(
+        attested_dir.path(),
+        Some(attestation_claiming(packed_unattested_digest.as_str())),
+    );
+
+    // Alter the claim so the re-derivation cannot be quietly reading it.
+    alter_the_claimed_subject(
+        &attested_layout,
+        a_subject_naming_another_package().as_str(),
+    );
+
+    let attestation = unpack_server(&attested_layout)
+        .unwrap()
+        .attestation
+        .expect("the package carried an attestation");
+    assert_eq!(
+        attestation.subject.unattested_digest, packed_unattested_digest,
+        "the unpack side must re-derive the digest from the manifest, not read the annotation"
+    );
+}
+
+/// An unattested package produces no attestation and therefore NO verdict at
+/// all — the comparison is not run, and no default verdict is invented.
+#[test]
+fn an_unattested_package_carries_no_verdict_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _) = pack_fixture_server(dir.path(), None);
+
+    assert!(
+        unpack_server(&layout).unwrap().attestation.is_none(),
+        "with no attestation there is no claim, so there is nothing to render a verdict about"
     );
 }

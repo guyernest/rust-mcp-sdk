@@ -625,7 +625,7 @@ fn would_be_unattested_manifest_digest(
 /// verified rather than recorded: this function computes the would-be
 /// unattested manifest digest and REFUSES to pack when the supplied subject
 /// names anything else — before writing a single blob. See
-/// [`reject_an_attestation_subject_naming_another_package`], which also states
+/// `reject_an_attestation_subject_naming_another_package`, which also states
 /// the accepted cost (an attested pack canonicalizes the manifest twice).
 ///
 /// `unpack_server` re-derives the same digest INDEPENDENTLY rather than

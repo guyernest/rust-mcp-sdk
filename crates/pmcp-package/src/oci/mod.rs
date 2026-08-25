@@ -31,8 +31,8 @@ pub use pack::{
     OpenApiSpecFile,
 };
 pub use unpack::{
-    unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, UnpackedAttestation,
-    UnpackedBinary, UnpackedServer,
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, SubjectVerdict,
+    UnpackedAttestation, UnpackedBinary, UnpackedServer,
 };
 
 use crate::oci::media_types::{
