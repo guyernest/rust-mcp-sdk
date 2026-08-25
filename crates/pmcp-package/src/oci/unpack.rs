@@ -737,7 +737,9 @@ mod tests {
         sample_agent_package, sample_server_package, sample_team_package, sample_workflow_manifest,
     };
     use super::*;
-    use crate::oci::pack::{pack_agent, pack_server, pack_team, pack_workflow, BinaryMode};
+    use crate::oci::pack::{
+        pack_agent, pack_server, pack_team, pack_workflow, AttestationFile, BinaryMode,
+    };
 
     #[test]
     fn server_pack_then_unpack_round_trips_losslessly_including_bootstrap_bytes() {
@@ -800,6 +802,64 @@ mod tests {
 
         let err = unpack_server(&layout).unwrap_err();
         assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
+    }
+
+    /// The attestation-specific case of the duplicate-media-type rule: a
+    /// crafted layout carrying TWO attestation layers is REJECTED, never
+    /// last-wins. Silently keeping one of the two would let an attacker shadow
+    /// a genuine attestation with their own while the package still unpacked
+    /// cleanly.
+    #[test]
+    fn a_duplicated_attestation_layer_is_rejected_rather_than_last_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let (package, bootstrap) = sample_server_package();
+        pack_server(
+            &package,
+            BinaryMode::Embedded(&bootstrap),
+            None,
+            None,
+            Some(AttestationFile {
+                bytes: b"\x00\x01 not json \xff\xfe",
+                subject: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                issuer: "https://issuer.test.invalid/pmcp-run",
+                payload_type: "application/vnd.test.attestation-payload",
+            }),
+            &layout,
+        )
+        .unwrap();
+
+        // Duplicate the attestation layer descriptor, simulating a crafted
+        // layout that tries to shadow the genuine attestation with a second.
+        let index = layout.read_index().unwrap();
+        let mut manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+        let mut layers = manifest.layers().clone();
+        let attestation = layers
+            .iter()
+            .find(|l| l.media_type().to_string() == MT_ATTESTATION)
+            .unwrap()
+            .clone();
+        layers.push(attestation);
+        manifest.set_layers(layers);
+        let bytes = crate::digest::canonicalize(&manifest).unwrap();
+        let new_descriptor = layout.write_manifest(&bytes).unwrap();
+        let new_index = oci_spec::image::ImageIndexBuilder::default()
+            .schema_version(oci_spec::image::SCHEMA_VERSION)
+            .manifests(vec![new_descriptor])
+            .build()
+            .unwrap();
+        layout.write_index(&new_index).unwrap();
+
+        let err = unpack_server(&layout).unwrap_err();
+        assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
+        let PackageError::Layout { reason } = &err else {
+            unreachable!("just asserted the variant")
+        };
+        assert!(
+            reason.contains(MT_ATTESTATION),
+            "the error must NAME the duplicated media type so the operator can act on it; was: \
+             {reason}"
+        );
     }
 
     #[test]
