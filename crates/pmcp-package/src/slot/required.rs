@@ -17,7 +17,16 @@ use crate::slot::types::{ConfigSlot, SlotType};
 
 /// One slot a target environment must supply a value for, with the family it belongs to and
 /// the dotted TOML config path it fills (if any).
+///
+/// `#[non_exhaustive]`: [`class`](Self::class) is DERIVED from
+/// [`slot`](Self::slot) by [`classify`], never chosen. Leaving the struct
+/// literal-constructible from outside the crate would let a caller build a
+/// `RequiredSlot` whose `class` disagrees with its `slot` — e.g. a `Secret`
+/// labelled `BehaviorRelevant` — which every consumer that branches on `.class`
+/// (rather than re-running `classify`) would then act on. Construct these by
+/// calling [`required_slots`]; read them by field.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RequiredSlot {
     /// The slot's typed declaration. For an identity-bearing variant this names the slot
     /// only — no resolved secret value is representable in the type.
@@ -58,6 +67,12 @@ pub struct RequiredSlot {
 ///
 /// # Examples
 ///
+/// Note that each slot's `name` is the ENVIRONMENT VARIABLE the target
+/// environment sets, while `config_key` is the dotted CONFIG PATH the resolved
+/// value is written to — see [`ConfigSlot::config_key`]. They are never the
+/// same string, and putting the config path in `name` produces a slot whose
+/// derived variable (`BACKEND.BASE_URL`) no environment can portably set.
+///
 /// ```
 /// use pmcp_package::{required_slots, ConfigSlot, SlotClass, SlotType};
 ///
@@ -67,7 +82,7 @@ pub struct RequiredSlot {
 ///     })
 ///     .with_config_key("backend.auth.query_params.app_key"),
 ///     ConfigSlot::new(SlotType::Endpoint {
-///         name: "backend.base_url".to_string(),
+///         name: "TFL_BASE_URL".to_string(),
 ///         tested_value: "https://api.tfl.gov.uk".to_string(),
 ///     })
 ///     .with_config_key("backend.base_url"),
@@ -110,9 +125,13 @@ mod tests {
         .with_config_key("backend.auth.query_params.app_key")
     }
 
+    // `name` is the ENVIRONMENT VARIABLE, `config_key` the CONFIG PATH — the two
+    // are deliberately different strings here, matching the real london-tube
+    // fixture (`name = "TFL_BASE_URL"`, `key = "backend.base_url"`) rather than
+    // the config-path-in-name shape that would derive an unsettable variable.
     fn endpoint() -> ConfigSlot {
         ConfigSlot::new(SlotType::Endpoint {
-            name: "backend.base_url".to_string(),
+            name: "TFL_BASE_URL".to_string(),
             tested_value: "https://api.tfl.gov.uk".to_string(),
         })
         .with_config_key("backend.base_url")
@@ -120,7 +139,7 @@ mod tests {
 
     fn auth_mode() -> ConfigSlot {
         ConfigSlot::new(SlotType::AuthMode {
-            name: "backend.auth.type".to_string(),
+            name: "backend-auth-mode".to_string(),
             tested_value: "api_key".to_string(),
         })
         .with_config_key("backend.auth.type")

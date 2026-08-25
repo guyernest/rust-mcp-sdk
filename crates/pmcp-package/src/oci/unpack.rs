@@ -397,15 +397,46 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
 /// deserialize it. The per-kind layer name (for the "missing layer" error)
 /// comes from the [`SingleLayerPackage`] impl — one path, no per-kind
 /// copy-paste. Mirrors [`super::pack::pack_single_layer`].
+///
+/// # Located by MEDIA TYPE, and there must be exactly one
+///
+/// This used to read `layers().first()` positionally and never compare the
+/// descriptor's media type against `P::LAYER_MEDIA_TYPE`, which made the
+/// constant produce-only and left two holes on a layout this crate documents as
+/// untrusted input: a manifest carrying an EXTRA layer had it silently ignored
+/// (so a crafted layout could put an attacker's package first and the genuine
+/// one second, and only the first was ever read), and a layer of the wrong kind
+/// was accepted as long as its JSON happened to deserialize. `unpack_server`
+/// already refuses both shapes via [`index_layers`]; this is the same rule for
+/// the single-layer kinds.
 fn unpack_single_layer<P: SingleLayerPackage>(layout: &OciLayout) -> Result<P> {
     let manifest = read_the_one_manifest(layout)?;
     verify_config_blob(layout, &manifest)?;
-    let layer = manifest
-        .layers()
-        .first()
+    // Rejects a duplicate media type, exactly as the server path does.
+    let by_media_type = index_layers(&manifest)?;
+    let expected = vendor_media_type_name(P::LAYER_MEDIA_TYPE);
+    if by_media_type.len() != 1 {
+        return Err(PackageError::Layout {
+            reason: format!(
+                "a {} package must carry exactly ONE layer ('{expected}'), found {}: {:?}",
+                P::LAYER_NAME,
+                by_media_type.len(),
+                by_media_type.keys().collect::<Vec<_>>()
+            ),
+        });
+    }
+    let layer = by_media_type
+        .get(&expected)
         .ok_or_else(|| missing_layer(P::LAYER_NAME))?;
     let bytes = read_verified_blob(layout, layer)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// The string form of the vendor media type a layer descriptor carries, so the
+/// index built by [`index_layers`] (which keys on `MediaType::to_string()`) can
+/// be looked up by a `P::LAYER_MEDIA_TYPE` constant.
+fn vendor_media_type_name(media_type: &str) -> String {
+    crate::oci::media_types::vendor_media_type(media_type).to_string()
 }
 
 /// Unpack an `AgentPackage` from `layout`.

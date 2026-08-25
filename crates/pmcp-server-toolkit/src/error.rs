@@ -203,6 +203,33 @@ pub enum ConfigValidationError {
          environment, so compose the full URL in ONE variable instead"
     )]
     MalformedBackendBaseUrlRef,
+    /// A `[backend.auth]` credential field is REFERENCE-shaped but does not name
+    /// exactly one environment variable — the empty `${}` form, a
+    /// multi-placeholder composition like `"${SCHEME}://${HOST}"`, or a
+    /// non-portable name like `"${TFL-APP-KEY}"` (a `${...}` name must match
+    /// `[A-Za-z0-9_]+`; `env:VAR` remains the escape hatch for exotic names).
+    /// The `String` is the offending field path within `[backend.auth]` — e.g.
+    /// `"token"`, `"password"`, `"query_params.app_key"`.
+    ///
+    /// This is the credential sibling of [`Self::MalformedBackendBaseUrlRef`],
+    /// and it exists because the two paths resolve UNSET references differently
+    /// on purpose: a credential resolves an unset variable to the empty string
+    /// so an optional credential is OMITTED. A MALFORMED reference is not an
+    /// unset variable — no environment can ever satisfy it — so applying the
+    /// omission rule to it silently sent every backend request UNAUTHENTICATED,
+    /// with no error and no log line. Refusing it at load time turns that into
+    /// an actionable, field-naming failure before the server ever boots.
+    ///
+    /// The message names the FIELD only and deliberately never echoes the
+    /// configured value: a malformed value is by definition not a resolvable
+    /// reference, so it may well be a mistyped literal secret.
+    #[error(
+        "[backend.auth].{0} is a malformed environment reference; a reference must be \
+         exactly one `${{VAR}}` (name matching [A-Za-z0-9_]+) or `env:VAR` naming a single \
+         variable — no environment can satisfy this value, so the credential would be \
+         silently omitted and every backend request sent unauthenticated"
+    )]
+    MalformedBackendAuthRef(String),
     /// Per Phase 120 Plan 04 (PKG-03): a `[[config_slots]]` entry at `index`
     /// has an empty / whitespace-only `key` or `name`. A slot declaration whose
     /// key names no config path — or whose name names no environment variable —

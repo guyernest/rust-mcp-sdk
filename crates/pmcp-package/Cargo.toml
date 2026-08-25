@@ -53,12 +53,30 @@ hex = "0.4"
 #
 # Supply chain (T-120-25): `toml` has been on crates.io since 2014-11-11 with
 # ~15.2M downloads/week from `github.com/toml-rs/toml`, audited OK in this
-# phase's RESEARCH package-legitimacy table, and was already resolved at 0.8.23
-# in this crate's dev tree — only its ROLE changed, not its version. It is
-# deliberately NOT behind a cargo feature: `make pmcp-package-gate` runs exactly
-# one build configuration, so a feature axis here would be a gate blind spot on
-# the very code that upholds "secrets never travel".
-toml = "0.8"
+# phase's RESEARCH package-legitimacy table. It is deliberately NOT behind a
+# cargo feature: `make pmcp-package-gate` runs exactly one build configuration,
+# so a feature axis here would be a gate blind spot on the very code that
+# upholds "secrets never travel".
+#
+# PINNED ON THE 1.x LINE, deliberately, for two reasons that only appeared when
+# this dep was promoted from dev-only to runtime:
+#
+#  1. TOML-SPEC PARITY. This crate parses the SAME config bytes that
+#     `pmcp-server-toolkit` parses at boot, and that crate is on `toml = "1"`
+#     (Cargo.toml:27). `toml` 0.8 implements TOML 1.0 while 1.x implements
+#     TOML 1.1, so a 0.8 pin here means a config using any 1.1-only construct
+#     (a trailing comma or newline inside an inline table, a `\e`/`\x` escape,
+#     a non-ASCII bare key) BOOTS but fails to PACK — the "packs cleanly and
+#     then fails at boot" bug in its mirror image, which is exactly the class
+#     `env_ref_grammar_v1.tsv` exists to keep closed.
+#  2. ONE `toml` IN THE GRAPH. A dev-dep of a path dependency is never built
+#     by consumers; a runtime dep is. On 0.8 this promotion pulled the whole
+#     0.8 family (toml_edit 0.22, toml_datetime, serde_spanned, winnow) into
+#     every build of `cargo-pmcp`, `pmcp-agent`, `pmcp-team-servers` and
+#     `pmcp-cfn-renderer` ALONGSIDE the 1.x family the root workspace already
+#     compiles. `deny.toml` sets `multiple-versions = "warn"`, so nothing
+#     flagged it.
+toml = "1"
 
 [dev-dependencies]
 proptest = "1.11"

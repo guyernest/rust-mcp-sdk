@@ -221,16 +221,46 @@ make test-integration   # Integration tests
 ## Release & Publish Workflow
 
 ### Workspace Crates (publish order)
+
+**The numbered list below records RATIONALE (who depends on whom, and why a
+crate sits where it does). `.github/workflows/release.yml` is the AUTHORITY on
+the actual order — see the flat ledger at the end of this section, which mirrors
+it step for step. Where the two have ever disagreed, the workflow was right and
+the prose was wrong (items 12 and 2 below are both corrections of exactly that).
+Numbering is left dense rather than renumbered so existing "item N"
+cross-references stay valid.**
+
 1. `pmcp-widget-utils` (leaf, no internal deps)
-2. `pmcp` (core SDK, depends on widget-utils)
-3. `pmcp-code-mode` (depends on pmcp)
-4. `pmcp-code-mode-derive` (depends on pmcp-code-mode)
+1a. `pmcp-macros-support` (leaf proc-macro support crate; `pmcp` depends on it, so it
+   must publish BEFORE item 2). **This entry was missing from this list until
+   2026-08-23** — it was in `release.yml` the whole time, so CI published it
+   correctly and only the prose was silent. A releaser following the prose to bump
+   versions before a tag push would have skipped it, shipping a stale
+   `pmcp-macros-support` with the core SDK.
+1b. `pmcp-macros` (the derive crate; depends on `pmcp-macros-support`, and `pmcp`
+   depends on it, so it publishes after item 1a and before item 2). **Also missing
+   from this list until 2026-08-23**, same reason.
+2. `pmcp` (core SDK, depends on widget-utils). **Corrected 2026-08-23:** this list
+   put `pmcp` AHEAD of items 3 and 4, which inverts the real order —
+   `release.yml` publishes `pmcp-code-mode` and `pmcp-code-mode-derive` FIRST,
+   then `pmcp`. That is not an accident to be "fixed": `pmcp-code-mode` pins
+   `pmcp = ">=2.2.0"`, which an already-published `pmcp` satisfies, so the
+   code-mode crates can go first — and they must, because `pmcp`'s own
+   `code-mode` feature reaches them. A releaser who trusted the old prose and
+   reordered `release.yml` to publish `pmcp` first would reintroduce the class of
+   bug PR #303 fixed. The numbers stay as they are because "item 2" is
+   cross-referenced throughout this file.
+3. `pmcp-code-mode` (depends on pmcp; publishes BEFORE item 2 — see item 2's note)
+4. `pmcp-code-mode-derive` (depends on pmcp-code-mode; also publishes BEFORE item 2)
+4a. `pmcp-workbook-dialect` (workbook leaf; publishes between `pmcp-workbook-runtime`
+   and item 5). **Missing from this list until 2026-08-23**, same class as items
+   1a/1b — present in `release.yml`, absent from the prose.
 5. `pmcp-server-toolkit` (runtime library; depends on pmcp + pmcp-code-mode under the default `code-mode` feature)
 6. `pmcp-toolkit-postgres` (depends on pmcp-server-toolkit + tokio-postgres + deadpool-postgres)
 7. `pmcp-toolkit-mysql` (depends on pmcp-server-toolkit + sqlx)
 8. `pmcp-toolkit-athena` (depends on pmcp-server-toolkit + aws-sdk-athena)
 9. `pmcp-sql-server` (Shape A pure-config binary; depends on pmcp-server-toolkit + all four connector crates — must publish AFTER items 5–8; no inter-dep with mcp-tester)
-9a. `pmcp-workbook-server` (Shape A pure-config WORKBOOK binary; depends on `pmcp-server-toolkit` with the `workbook` + `http` features — and thus transitively on `pmcp-workbook-runtime` — plus `pmcp`. Must publish AFTER `pmcp-server-toolkit` (item 5) and its `pmcp-workbook-runtime` dep. It is a sibling of `pmcp-sql-server` (item 9) but has NO inter-dependency with the SQL connector crates (items 6–8) and NO inter-dep with `mcp-tester`, which it uses only as a `[dev-dependencies]` parity-test harness, not a published dependency. NOTE: `pmcp-workbook-runtime` is NOT a numbered item in this list — it is pulled in only transitively, through `pmcp-server-toolkit`'s `workbook` feature (this binary depends on the toolkit directly, never on the runtime crate), and is published out-of-band by its own Phase 91/92 workbook-runtime release ahead of `pmcp-server-toolkit` (item 5). The release workflow skips already-published crates gracefully, so no numbered slot is required here; just ensure the workbook-runtime tree is published before item 5.)
+9a. `pmcp-workbook-server` (Shape A pure-config WORKBOOK binary; depends on `pmcp-server-toolkit` with the `workbook` + `http` features — and thus transitively on `pmcp-workbook-runtime` — plus `pmcp`. Must publish AFTER `pmcp-server-toolkit` (item 5) and its `pmcp-workbook-runtime` dep. It is a sibling of `pmcp-sql-server` (item 9) but has NO inter-dependency with the SQL connector crates (items 6–8). Its `mcp-tester` link is only a `[dev-dependencies]` parity-test harness — but that entry carries BOTH `path` and `version`, so it IS retained in the published manifest and must resolve on crates.io at publish time, and this crate publishes BEFORE `mcp-tester` (see the CR-01 note under item 9b). NOTE: `pmcp-workbook-runtime` is NOT a numbered item in this list — it is pulled in only transitively, through `pmcp-server-toolkit`'s `workbook` feature (this binary depends on the toolkit directly, never on the runtime crate), and is published out-of-band by its own Phase 91/92 workbook-runtime release ahead of `pmcp-server-toolkit` (item 5). The release workflow skips already-published crates gracefully, so no numbered slot is required here; just ensure the workbook-runtime tree is published before item 5.)
 9b. `pmcp-openapi-server` (Shape A pure-config **OpenAPI** binary — point it at a `config.toml`
    plus an optional OpenAPI spec and it serves a production MCP server with no Rust required).
    Depends on `pmcp` and `pmcp-server-toolkit`, so it must publish AFTER item 5. A sibling of
@@ -263,7 +293,14 @@ make test-integration   # Integration tests
 
 10. `mcp-tester` (depends on pmcp)
 11. `mcp-preview` (depends on widget-utils)
-12. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+12. *(slot retired — `cargo-pmcp` moved to item 15a.)* **Corrected 2026-08-23.** This
+   list placed `cargo-pmcp` here, ahead of items 13–15, which is the exact ordering
+   bug PR #303 fixed in `release.yml` — `cargo-pmcp` pins `pmcp-agent`,
+   `pmcp-team-servers`, `pmcp-package` and `pmcp-cfn-renderer`, so it must publish
+   AFTER all of them. `release.yml` has been correct since #303; only this prose was
+   wrong, and item 13a's own text ("this must ALSO publish before `cargo-pmcp`")
+   contradicted the number in place. Numbering is left dense rather than renumbered
+   so existing "item N" cross-references stay valid.
 13. `pmcp-package` (the AI-Package format crate at `crates/pmcp-package/`). It is
    standalone / **workspace-excluded** — it has its own `[workspace]` table and is
    NOT a root member, so root `cargo fmt/clippy/test` and `cargo publish -p
@@ -282,7 +319,7 @@ make test-integration   # Integration tests
    renderer crate at `crates/pmcp-cfn-renderer/`, CFN-renderer extraction). Depends
    on `pmcp-package = "0.2"` (item 13), so it must publish AFTER `pmcp-package`
    — hence its slot here,
-   just ahead of `pmcp-agent` (item 14). `cargo-pmcp` (item 12) pins
+   just ahead of `pmcp-agent` (item 14). `cargo-pmcp` (item 15a) pins
    `pmcp-cfn-renderer = "0.2"` (it replaces `npx cdk synth`/`cdk deploy` for
    unmodified scaffolds on the `pmcp-run` and `aws-lambda` deploy targets), so
    this must ALSO publish before `cargo-pmcp` reaches crates.io. 0.x/
@@ -301,6 +338,11 @@ make test-integration   # Integration tests
    gate the core SDK release. Its `webhook` (reqwest) and `http`
    (`pmcp/streamable-http`) features are non-default, so the default publish
    build is reqwest-free and wasm-clean.
+15a. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview — and pins
+   `pmcp-package`, `pmcp-cfn-renderer`, `pmcp-agent` and `pmcp-team-servers`, so it
+   must publish AFTER items 13, 13a, 14 and 15). Formerly listed as item 12, which
+   put it four slots too early; `release.yml` publishes it here, after
+   `pmcp-team-servers`.
 16. `pmcp-server` (the docs/resources MCP server at `crates/pmcp-server/`). A root
    workspace member pinning `pmcp` (item 2) and `mcp-tester` (item 10), so it must
    publish AFTER both. **This entry was missing from this list until 2026-08-21** —
@@ -323,8 +365,11 @@ The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-ath
 have no inter-dependencies — they may publish in any order relative to each other,
 but all must publish AFTER `pmcp-server-toolkit`. `pmcp-sql-server` depends on the
 toolkit plus all three connector crates (and the SQLite feature), so it must publish
-AFTER all of items 5–8; it has no inter-dependency with `mcp-tester` (which it uses
-only as a `[dev-dependencies]` parity-test harness, not a published dependency).
+AFTER all of items 5–8; it has no inter-dependency with `mcp-tester` beyond a
+`[dev-dependencies]` parity-test harness entry — but note that entry carries BOTH
+`path` and `version`, so it IS retained in the published manifest and must resolve
+on crates.io at publish time (see the CR-01 note under item 9b). It is safe only
+while the pinned `mcp-tester` version is already published.
 
 ### Pre-Flight Checklist
 Before starting a release, verify:

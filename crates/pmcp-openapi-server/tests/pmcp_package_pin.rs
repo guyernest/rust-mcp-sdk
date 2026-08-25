@@ -17,10 +17,16 @@
 //! when it carries no version requirement. An entry that carries one is
 //! retained, and `cargo publish` must resolve it against crates.io while
 //! preparing the manifest. `pmcp-package` is workspace-EXCLUDED and publishes
-//! from `.github/workflows/release.yml:440`, roughly 100 steps AFTER
-//! `pmcp-openapi-server` publishes at `release.yml:339` — so that lookup cannot
+//! from `.github/workflows/release.yml` FIVE publish steps AFTER
+//! `pmcp-openapi-server` — so that lookup cannot
 //! succeed, and the publish step's fallback (which tolerates only
 //! `already exists` in the output) fails the whole release job. That is CR-01.
+//!
+//! The rule generalizes: a `[dev-dependencies]` entry carrying BOTH `path` and
+//! `version` is safe only while that version is already on crates.io. Four
+//! crates here still carry `mcp-tester = { version = "0.8.0", path = ... }`
+//! while publishing before `mcp-tester` — green only because 0.8.0 is published.
+//! See deferred item D12.
 //!
 //! Re-adding a version requirement to make this file "assert a pin again" is
 //! therefore the one change it exists to prevent. Test 1 is the guard.
@@ -121,8 +127,8 @@ fn pmcp_package_dev_dep_is_path_only() {
         "[dev-dependencies].pmcp-package must NOT carry a `version` key (CR-01). Cargo strips a \
          dev-dep from the published manifest only when it has no version requirement; one that \
          has a requirement is retained, and `cargo publish -p pmcp-openapi-server` must then \
-         resolve it against crates.io while preparing the manifest. pmcp-openapi-server \
-         publishes at release.yml:339 and pmcp-package at release.yml:440, ~100 steps later, so \
+         resolve it against crates.io while preparing the manifest. pmcp-package publishes five \
+         steps after pmcp-openapi-server in release.yml, so \
          that lookup cannot succeed — and the step's fallback tolerates only \"already exists\", \
          so the whole release job dies. The `exclude` list does not save it: the failure is at \
          manifest-prep time, and excluding tests/ removes the consumers, not the manifest entry."

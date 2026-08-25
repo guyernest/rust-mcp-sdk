@@ -32,22 +32,35 @@
 //! | `${VAR` | `None` | unterminated → a plain literal |
 //! | `plain` | `None` | plain literal |
 //!
-//! The malformed-means-empty rule is deliberate: the caller resolves a
-//! malformed reference to the empty string (omission) or an error rather than
-//! shipping the literal `${...}` text to the wire. A `${...}` value is a
-//! reference to exactly ONE variable — the grammar does not interpolate inside
-//! a larger string, so a composition like `${SCHEME}://${HOST}` names nothing
-//! any environment could set; compose the full value in one variable instead.
+//! The malformed-means-empty rule is deliberate: the empty name is the signal
+//! that a value is reference-SHAPED but names nothing, so no caller ships the
+//! literal `${...}` text to the wire. A `${...}` value is a reference to exactly
+//! ONE variable — the grammar does not interpolate inside a larger string, so a
+//! composition like `${SCHEME}://${HOST}` names nothing any environment could
+//! set; compose the full value in one variable instead.
 //!
-//! # Callers diverge on RESOLUTION, never on PARSING
+//! # Callers diverge on UNSET, agree on MALFORMED, never diverge on PARSING
 //!
-//! What a caller does with `Some(name)` is caller policy and it legitimately
-//! differs — a credential resolves an unset reference to the empty string so an
-//! optional credential is OMITTED, while an endpoint errors, because an empty
-//! endpoint is not a degraded request but a broken one. What must NOT differ is
-//! the PARSE: a second `${}` parser with slightly different edge cases is a
-//! latent security bug (one parser treating `${VAR` as a reference and another
-//! as a literal is exactly how a placeholder reaches the wire).
+//! Two different questions, two different answers:
+//!
+//! - **Unset variable** (`Some("VAR")`, `VAR` not exported) — caller policy, and
+//!   it legitimately differs. A credential resolves it to the empty string so an
+//!   OPTIONAL credential is omitted; an endpoint errors, because an empty
+//!   endpoint is not a degraded request but a broken one.
+//! - **Malformed reference** (`Some("")`) — NOT caller policy. Every caller
+//!   refuses it, because no environment could ever satisfy it, so "omit" would
+//!   mean silently proceeding without a value the operator believed they had
+//!   supplied. The credential path once applied the unset rule here, which made
+//!   `token = "${GITHUB-PAT}"` send every backend request unauthenticated with
+//!   no error and no log line; it is now refused at load time
+//!   ([`crate::error::ConfigValidationError::MalformedBackendAuthRef`]) and at
+//!   provider-build time, matching `base_url`'s
+//!   [`crate::error::ConfigValidationError::MalformedBackendBaseUrlRef`].
+//!
+//! What must NOT differ is the PARSE: a second `${}` parser with slightly
+//! different edge cases is a latent security bug (one parser treating `${VAR` as
+//! a reference and another as a literal is exactly how a placeholder reaches the
+//! wire).
 //!
 //! Note that `pmcp-package` deliberately DUPLICATES this grammar rather than
 //! depending on the toolkit — that crate is the workspace-excluded leaf and a

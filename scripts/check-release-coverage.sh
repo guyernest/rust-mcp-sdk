@@ -62,7 +62,15 @@ while IFS= read -r crate; do
   [ -n "$crate" ] || continue
   total=$((total + 1))
   # Match the publish step, not a longer crate name that shares the prefix.
-  if ! printf '%s\n' "$PUBLISH_LINES" | grep -qE "cargo publish -p ${crate}( |\$)"; then
+  #
+  # A HERE-STRING, never `printf ... | grep -q`. Under `set -o pipefail`,
+  # `grep -q` exits the instant it matches, and once the workflow outgrows the
+  # ~64 KiB pipe capacity the still-writing `printf` takes SIGPIPE and returns
+  # 141 — pipefail propagates that, `if !` inverts it, and the gate reports a
+  # crate that demonstrably HAS a publish step as missing. REPRODUCED by
+  # quadrupling this file's content to 74,880 bytes; at today's 24.6 KB it is
+  # latent, and release.yml gains ~18 lines per new crate.
+  if ! grep -qE "cargo publish -p ${crate}( |\$)" <<<"$PUBLISH_LINES"; then
     missing_count=$((missing_count + 1))
     missing_list="${missing_list}  - ${crate}
 "

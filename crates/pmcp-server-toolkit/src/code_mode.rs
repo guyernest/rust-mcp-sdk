@@ -1210,11 +1210,27 @@ fn resolve_token_secret(section: &CodeModeSection) -> Result<SecretValue> {
     // A string that merely *contains* `${` (e.g. an Athena `output_location`
     // substring) is still NOT a reference — `parse_env_ref` requires the exact
     // `${...}` shape — so it falls through to the inline-secret handling below
-    // and stays rejected unless the dev flag is set (R9 / REVIEW FIX #6). The
-    // malformed `${}` form is now an explicit "env var not set" error instead of
-    // being accepted as a 3-byte inline literal under the dev flag.
-    if let Some(var) = crate::env_ref::parse_env_ref(raw) {
-        return resolve_secret_env_var(var);
+    // and stays rejected unless the dev flag is set (R9 / REVIEW FIX #6).
+    match crate::env_ref::parse_env_ref(raw) {
+        // A MALFORMED reference: the empty `${}`, or a `${NAME}` whose NAME is
+        // not portably settable (`${MY-SECRET}`, `${a.b}`), or a
+        // multi-placeholder composition. The grammar maps all of them to the
+        // empty name, and `resolve_secret_env_var("")` would report
+        // `env var '' not set for token_secret` — a message that names neither
+        // what the operator wrote nor what to do about it. Say the actual thing
+        // instead, and point at the `env:` escape hatch, which keeps its
+        // any-non-empty-remainder rule precisely for exotic names.
+        Some("") => {
+            return Err(ToolkitError::CodeMode(
+                "[code_mode] token_secret is a malformed environment reference; a `${VAR}` \
+                 reference must name exactly ONE variable matching [A-Za-z0-9_]+ and nothing \
+                 else. For a name outside that set, use the `env:NAME` form, which accepts any \
+                 non-empty name. (The value is not echoed here.)"
+                    .to_string(),
+            ))
+        },
+        Some(var) => return resolve_secret_env_var(var),
+        None => {},
     }
     if section.allow_inline_token_secret_for_dev {
         tracing::warn!(

@@ -294,6 +294,62 @@ test-cargo-pmcp:
 	fi; \
 	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
 
+# The GATE's reach into `crates/pmcp-server-toolkit/tests/`, mirroring
+# test-tester / test-cargo-pmcp / test-openapi-server.
+#
+# Nothing in this repo executed that directory, measured three ways: `test-unit`
+# and `test-integration` carry no `-p` so they resolve to the root `pmcp`
+# package; CI's `test` job is root-scoped; and `org-gate-checks.yml`'s
+# `workspace-test` runs `--lib --bins`, which excludes `tests/` entirely.
+# `tests/env_ref_grammar_parity.rs` is the TOOLKIT HALF of the cross-crate
+# `${VAR}` grammar contract — only the `pmcp-package` half ran (via
+# `pmcp-package-gate`), so a change to `parse_env_ref` that diverged from the
+# shared table shipped green, which is precisely the "packs cleanly and then
+# fails to resolve at boot" divergence `env_ref_grammar_v1.tsv` exists to make
+# loud.
+#
+# `--features http` is REQUIRED, not decorative. The toolkit's `default` is
+# `["code-mode"]`, and `tests/base_url_expansion.rs` is `#![cfg(feature =
+# "http")]` — MEASURED: a default `cargo test -p pmcp-server-toolkit` compiles
+# it to `running 0 tests` and exits 0, so the whole file asserts nothing while
+# looking green. That is the same "a #[cfg] gate turned false" hole
+# `test-openapi-server`'s per-binary guard exists for, which is why the two
+# named binaries below are count-asserted individually rather than trusted to
+# the sum.
+.PHONY: test-server-toolkit
+test-server-toolkit:
+	@echo "$(BLUE)Running pmcp-server-toolkit's own tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-server-toolkit --features http -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-server-toolkit reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="env_ref_grammar_parity base_url_expansion"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests — a #[cfg] gate turned false (check that this target still passes every feature that file is gated on) or an #[ignore] sweep landed.$(NC)"; \
+			exit 1;; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n').$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
+	done; \
+	echo "$(GREEN)✓ pmcp-server-toolkit tests passed ($$ran tests)$(NC)"
+
 # Proof that `test-openapi-server`'s per-binary count guard is SENSITIVE, not
 # merely present.
 #
@@ -314,7 +370,7 @@ test-cargo-pmcp:
 # line. No cargo, no network, no compilation: sub-second, so it can sit in front
 # of the gate on every run.
 #
-# The five cases, and what each one pins (comments cannot live inside the
+# The six cases, and what each one pins (comments cannot live inside the
 # recipe: its lines are backslash-joined into a single shell command, where a
 # `#` would swallow everything after it):
 #
@@ -331,56 +387,52 @@ test-cargo-pmcp:
 #                          unittests block, and no target line for the wanted
 #                          binary at all.
 #   truncated       -> -2  a target line with no result line after it.
+#   colorized       -> 8   THE CARGO_TERM_COLOR REGRESSION FIXTURE. `ci.yml`
+#                          sets `CARGO_TERM_COLOR: always` for the whole
+#                          workflow, and MEASURED real cargo output then reads
+#                          `\033[1m\033[92m     Running\033[0m tests/x.rs`, so
+#                          awk's $$1 is an escape sequence and the field
+#                          equality matches nothing — every required binary
+#                          reported -1 ("never RAN") and the gate failed on
+#                          every PR with a message blaming a renamed file. The
+#                          extractor strips ANSI before splitting; this fixture
+#                          is what keeps that true.
 .PHONY: test-openapi-server-guard-selftest
 test-openapi-server-guard-selftest:
 	@echo "$(BLUE)Self-testing the named-test-binary count extractor...$(NC)"
-	@fail=0; \
+	@fail=0; ran=0; \
+	WANT=tests/roundtrip_e2e.rs; \
+	RUN="     Running $$WANT (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)"; \
+	ESC=$$(printf '\033'); \
+	RUN_COLORED="$${ESC}[1m$${ESC}[92m     Running$${ESC}[0m $$WANT (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)"; \
 	check() { \
-		fixture="$$1"; expected="$$2"; text="$$3"; \
-		actual=$$(printf '%s\n' "$$text" | awk -v want="tests/roundtrip_e2e.rs" -f scripts/named-test-binary-count.awk); \
+		fixture="$$1"; expected="$$2"; shift 2; \
+		actual=$$(printf '%s\n' "$$@" | awk -v want="$$WANT" -f scripts/named-test-binary-count.awk); \
+		ran=$$((ran + 1)); \
 		if [ "$$actual" != "$$expected" ]; then \
 			echo "$(RED)✗ guard self-test fixture '$$fixture': expected $$expected, actual $$actual$(NC)"; \
 			fail=1; \
 		fi; \
 	}; \
-	real=$$(printf '%s\n' \
-		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
-		'' \
-		'running 8 tests' \
-		'' \
-		'test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s'); \
-	check real 8 "$$real"; \
-	all_ignored=$$(printf '%s\n' \
-		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
-		'' \
-		'running 1 test' \
-		'test roundtrip_smoke ... ignored' \
-		'' \
-		'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s'); \
-	check all_ignored 0 "$$all_ignored"; \
-	cfg_empty=$$(printf '%s\n' \
-		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
-		'' \
-		'running 0 tests' \
-		'' \
-		'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'); \
-	check cfg_empty 0 "$$cfg_empty"; \
-	diagnostic_only=$$(printf '%s\n' \
-		'warning: unused import: std::env' \
-		'   --> tests/roundtrip_e2e.rs:123:5' \
+	check real 8 "$$RUN" '' 'running 8 tests' '' \
+		'test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s'; \
+	check all_ignored 0 "$$RUN" '' 'running 1 test' 'test roundtrip_smoke ... ignored' '' \
+		'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s'; \
+	check cfg_empty 0 "$$RUN" '' 'running 0 tests' '' \
+		'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s'; \
+	check diagnostic_only -1 'warning: unused import: std::env' "   --> $$WANT:123:5" \
 		'     Running unittests src/lib.rs (target/debug/deps/pmcp_openapi_server-2f0a1c9d4b6e8a13)' \
-		'' \
-		'running 14 tests' \
-		'' \
-		'test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s'); \
-	check diagnostic_only -1 "$$diagnostic_only"; \
-	truncated=$$(printf '%s\n' \
-		'     Running tests/roundtrip_e2e.rs (target/debug/deps/roundtrip_e2e-a4768583f5fb6f6b)' \
-		'' \
-		'running 8 tests'); \
-	check truncated -2 "$$truncated"; \
+		'' 'running 14 tests' '' \
+		'test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s'; \
+	check truncated -2 "$$RUN" '' 'running 8 tests'; \
+	check colorized 8 "$$RUN_COLORED" '' 'running 8 tests' '' \
+		'test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s'; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
-	echo "$(GREEN)✓ count extractor self-test passed: real=8, all_ignored=0, cfg_empty=0, diagnostic_only=-1, truncated=-2$(NC)"
+	if [ "$$ran" -ne 6 ]; then \
+		echo "$(RED)✗ count extractor self-test executed $$ran fixtures, expected 6 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ count extractor self-test passed ($$ran fixtures)$(NC)"
 
 # The GATE's reach into `crates/pmcp-openapi-server/tests/`, mirroring
 # test-tester and test-cargo-pmcp.
@@ -452,7 +504,7 @@ test-openapi-server: test-openapi-server-guard-selftest
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
-		''|-1) \
+		-1) \
 			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line. Likeliest causes: the file was renamed, or that tests/ entry stopped being a target.$(NC)"; \
 			exit 1;; \
 		-2) \
@@ -461,8 +513,8 @@ test-openapi-server: test-openapi-server-guard-selftest
 		0) \
 			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests. A #[cfg] gate turned false, an #[ignore] sweep landed, or the test module was renamed away. The summed total ($$ran) stays nonzero from the other suites and the lib tests, so the count guard above CANNOT catch this. This is the regression net PKG-04 exists to keep running — restore the tests, do not relax this guard.$(NC)"; \
 			exit 1;; \
-		*[!0-9]*) \
-			echo "$(RED)✗ required test binary '$$b' — the count extractor emitted an unparseable value ('$$n'). Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n'). An EMPTY value means awk itself did not run: check that scripts/named-test-binary-count.awk exists and is readable. Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
 			exit 1;; \
 		*) \
 			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
@@ -750,7 +802,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-openapi-server
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-server-toolkit test-openapi-server
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)

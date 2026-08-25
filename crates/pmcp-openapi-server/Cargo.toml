@@ -81,8 +81,9 @@ url = "2.5"
 # ONLY when it carries no version requirement; an entry that carries one is
 # retained, and `cargo publish` must then resolve it against crates.io at
 # manifest-prep time. `crates/pmcp-package` is workspace-EXCLUDED and publishes
-# from `.github/workflows/release.yml:440` via `--manifest-path`, roughly 100
-# steps AFTER this crate publishes at `release.yml:339` — so that lookup cannot
+# from `.github/workflows/release.yml` via `--manifest-path`, FIVE publish steps
+# AFTER this crate (this crate publishes right after `pmcp-sql-server`;
+# `pmcp-package` publishes after `mcp-preview`) — so that lookup cannot
 # succeed, and the publish step's fallback (which tolerates only "already
 # exists") kills the whole release job. Measured: with a requirement present,
 # `cargo package --no-verify` on this manifest exits 101 with "failed to select
@@ -105,7 +106,20 @@ url = "2.5"
 # standalone workspace (precedents: `crates/pmcp-agent/Cargo.toml:18`,
 # `cargo-pmcp/Cargo.toml:87` — both in `[dependencies]`; this is the first in
 # `[dev-dependencies]`, and the first in-repo consumer placed BEFORE
-# `release.yml:440`).
+# `pmcp-package`'s own publish step).
+#
+# THE GENERAL RULE, of which `pmcp-package` was merely the first casualty: a
+# `[dev-dependencies]` entry carrying BOTH `path` and `version` is retained in
+# the published manifest and must resolve on crates.io at publish time. It is
+# therefore safe only while the named version is ALREADY published. This is not
+# a `pmcp-package` quirk. Four crates in this workspace still carry
+# `mcp-tester = { version = "0.8.0", path = ... }` while publishing BEFORE
+# `mcp-tester` itself: `pmcp-server-toolkit` (Cargo.toml:192), `pmcp-sql-server`
+# (:57), THIS crate (:63), and `pmcp-workbook-server` (:58). They are green only
+# because 0.8.0 is already on crates.io — the next `mcp-tester` minor bump
+# rewrites all four and the release job dies partway through, after earlier
+# crates have gone irreversibly to crates.io. See deferred item D12 for the
+# generic offline gate that would catch this class before a tag push.
 pmcp-package = { path = "../pmcp-package" }
 # Why (Phase 121 D-03): the pin tripwire parses THIS manifest with a real TOML
 # parser rather than grepping its text, so a reformat or a comment cannot fool it.

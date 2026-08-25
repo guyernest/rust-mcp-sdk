@@ -44,6 +44,19 @@ use std::collections::BTreeMap;
 /// without either depending on the other.
 const ACCEPTED_KINDS: [&str; 3] = ["endpoint", "secret", "auth_mode"];
 
+/// The complete field vocabulary of a `[[config_slots]]` entry, byte-identical
+/// to `pmcp-server-toolkit`'s `ConfigSlotDecl` fields.
+///
+/// That struct carries `#[serde(deny_unknown_fields)]`, so the SERVER refuses
+/// an entry with a stray field. A pack-side parser that merely `get()`s the
+/// four known keys would be strictly more permissive than the runtime parser
+/// reading the same bytes: a typo'd `tested_vaule`, or a `description` an
+/// author added for documentation, would PACK cleanly and then fail at boot
+/// with `unknown field`. That is the "packs cleanly and then fails to resolve
+/// at boot" class this module exists to close, so the vocabulary is enforced
+/// here too — see [`parse_declaration_entry`].
+const ACCEPTED_FIELDS: [&str; 4] = ["key", "kind", "name", "tested_value"];
+
 /// Error label used when a failure is a property of the DOCUMENT rather than
 /// of any single declared key.
 const DOCUMENT_LABEL: &str = "<config document>";
@@ -212,6 +225,25 @@ fn parse_declaration_entry(index: usize, entry: &toml::Value) -> Result<Declared
         Some(toml::Value::String(value)) => Some(value.clone()),
         Some(_) => return Err(violation(&label, "`tested_value` must be a string")),
     };
+
+    // Match the runtime parser's `deny_unknown_fields` (see [`ACCEPTED_FIELDS`]).
+    // The stray field name IS echoed: it is a KEY, not a value, and naming it is
+    // the whole point — the same information `serde`'s own `unknown field` error
+    // gives at boot. The uniform "never echo document CONTENT" rule is about
+    // values.
+    for field in table.keys() {
+        if !ACCEPTED_FIELDS.contains(&field.as_str()) {
+            return Err(violation(
+                &label,
+                format!(
+                    "unknown field `{field}` on a `[[config_slots]]` entry; the accepted fields \
+                     are {}. The server that boots from these same bytes parses this table with \
+                     `deny_unknown_fields`, so packing it would ship a package that cannot boot",
+                    ACCEPTED_FIELDS.join(", ")
+                ),
+            ));
+        }
+    }
 
     Ok(DeclaredConfigSlot {
         key,

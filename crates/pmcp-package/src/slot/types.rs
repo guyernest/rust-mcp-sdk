@@ -244,11 +244,19 @@ impl ConfigSlot {
 
     /// Name the dotted TOML config path this slot fills.
     ///
+    /// Note the two strings below are DIFFERENT on purpose, per the `config_key`
+    /// field doc above: `name` is the ENVIRONMENT VARIABLE the target
+    /// environment sets (`TFL_BASE_URL`, which is also what the config's
+    /// `${TFL_BASE_URL}` placeholder reads), while `config_key` is the CONFIG
+    /// PATH the resolved value is written to. Putting the config path in `name`
+    /// makes `pmcp-agent`'s resolver derive the unsettable variable
+    /// `BACKEND.BASE_URL`, so the slot silently falls back to its tested value.
+    ///
     /// ```
     /// use pmcp_package::{ConfigSlot, SlotType};
     ///
     /// let slot = ConfigSlot::new(SlotType::Endpoint {
-    ///     name: "backend.base_url".to_string(),
+    ///     name: "TFL_BASE_URL".to_string(),
     ///     tested_value: "https://api.tfl.gov.uk".to_string(),
     /// })
     /// .with_config_key("backend.base_url");

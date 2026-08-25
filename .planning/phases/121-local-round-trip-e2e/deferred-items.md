@@ -144,3 +144,91 @@ position in the order. CR-01 is a direct consequence: the ordering constraint it
 enforced by hand-maintained CLAUDE.md prose only. Plan 121-04 Task 3 writes the specific
 constraint into the ledger at both ends but does NOT extend the check — **Phase 124 (PKGR-01)
 already owns closing that blind spot** and this is not Phase 121's to take.
+
+## D12. HIGH — four crates still carry the CR-01 shape on `mcp-tester`; a generic offline gate would catch the class
+
+CR-01 was fixed one crate deep, but its mechanism is repo-wide: **a `[dev-dependencies]` entry
+carrying BOTH `path` and `version` is retained in the published manifest and must resolve on
+crates.io at publish time.** Confirmed empirically during the `/simplify` altitude review by
+extracting the shipped `pmcp-server-toolkit-0.1.1.crate` from the local registry cache — its
+manifest contains `[dev-dependencies.mcp-tester] version = "0.7.0"` with `path` stripped and the
+version retained.
+
+Four crates carry `mcp-tester = { version = "0.8.0", path = ... }` while publishing BEFORE
+`mcp-tester` itself (verified against `release.yml` `cargo publish` line order):
+
+| crate | dev-dep | publishes at | vs `mcp-tester` (line 401) |
+|---|---|---|---|
+| `pmcp-server-toolkit` | `Cargo.toml:192` | 263 | before — armed |
+| `pmcp-sql-server` | `Cargo.toml:57` | 329 | before — armed |
+| `pmcp-openapi-server` | `Cargo.toml:63` | 344 | before — armed |
+| `pmcp-workbook-server` | `Cargo.toml:58` | 383 | before — armed |
+
+(`pmcp-server` :31 and `cargo-pmcp` :69 have the same shape but publish AFTER `mcp-tester`, so
+they are safe.) All four are green today only because `mcp-tester 0.8.0` is already on crates.io.
+CLAUDE.md's own Version Bump Rules say downstream crates pinning a bumped dep must be bumped too —
+so the next `mcp-tester` minor bump rewrites all four to `0.9.0` and the release job dies at
+publish step 9, after eight crates have gone irreversibly to crates.io.
+
+**Proposed gate** (~15 lines, offline, sub-second, chains next to `check-release-coverage` in
+`quality-gate`): assert that no path dep into this workspace carries a `version` key in
+`[dev-dependencies]`. A version key there buys nothing — dev-deps are not compiled by consumers,
+and `exclude = ["tests/"]` means they do not ship. `cargo metadata --no-deps` exposes
+`.packages[].dependencies[]` with `.path`, `.kind` and `.req`; a path-only dep reports `req == "*"`.
+
+**D11 does NOT cover this.** D11 is the *coverage* blind spot (does a publish step exist for a
+workspace-excluded crate). This is an *ordering/version-resolution* invariant across all crates,
+and closing D11 would not have caught CR-01. If D12 is absorbed into Phase 124's PKGR-01, this
+distinction must survive or the invariant is lost.
+
+## D13. MEDIUM — derive the publish order from `release.yml` instead of hand-maintaining it in prose
+
+The CLAUDE.md crate ledger drifts because it is prose. Two defects were found in it during the
+`/simplify` review and fixed in place: (a) `cargo-pmcp` was listed as item 12, four slots too
+early — the exact ordering bug PR #303 fixed in `release.yml` — while item 13a's own text said
+"this must ALSO publish before `cargo-pmcp`", contradicting the number beside it; (b) two entries
+asserted `mcp-tester` was "not a published dependency", which D12 above disproves. This is the
+third recorded drift (see items 16 and 17's own "was missing until…" notes).
+
+The order is machine-derivable from `release.yml` in ~5 lines of `grep`/`sed` (handling both
+`cargo publish -p <name>` and `cargo publish --manifest-path <path>` spellings). Have
+`scripts/check-release-coverage.sh` derive and assert the ordinal sequence, and reduce CLAUDE.md to
+what is genuinely NOT derivable: which crates are experimental leaves, which must not gate the core
+release, and why `pmcp-package` publishes by `--manifest-path`.
+
+## D14. MEDIUM — `run-era-matrix.sh` and `run-severance-proofs.sh` still use the check CR-02 replaced
+
+`scripts/run-era-matrix.sh:169` and `scripts/run-severance-proofs.sh:86` both gate on
+`grep -qE '^running [1-9][0-9]* tests?$'` — byte-identical copies. That is precisely the check the
+`all_ignored` fixture exists to reject: an all-`#[ignore]`d suite prints `running 1 test` while
+passing nothing. `scripts/named-test-binary-count.awk`'s own header names `run-era-matrix.sh` as
+carrying this blind spot, then leaves it in place, and never mentions `run-severance-proofs.sh` —
+which already copied the idiom once, so it will be copied again.
+
+Both call sites are `cargo test … --test "$name" | tee "$log"`, so
+`awk -v want="tests/$name.rs" -f scripts/named-test-binary-count.awk "$log"` with a `>= 1`
+requirement drops in at ~4 lines each and is **strictly more sensitive**. Correctly out of scope for
+a CR-02 gap-closure plan (those scripts belong to Phases 117/118), but recorded here rather than
+left as a comment inside a file neither script reads.
+
+## D15. LOW — the CR-02 guard harness is welded to `pmcp-openapi-server`; the extractor is not
+
+`scripts/named-test-binary-count.awk` is crate-agnostic (`want` is an argument). The harness around
+it is not: `REQUIRED_TEST_BINARIES` is a plain shell variable inside one recipe, and the ~17-line
+`case` block with its five diagnostic messages is inline. `test-tester` (`Makefile:263`) and
+`test-cargo-pmcp` (`Makefile:284`) still have only the summed-count guard — and `test-tester`'s own
+comment records that a pre-existing `dual_run` failure survived a full phase inside that hole across
+`mcp-tester`'s 12 test binaries. Those are exactly the targets that should adopt this, and adopting
+it today means copy-pasting the `case` block.
+
+Proposed: extract `scripts/assert-named-test-binaries.sh <name>…` (reading captured output on
+stdin) and move the five fixtures to `scripts/named-test-binary-count.test.sh`, which also restores
+per-fixture inline comments — the Makefile is a poor container for ~107 lines of shell precisely
+because `#` cannot appear in a backslash-joined recipe, as the target's own comment block concedes.
+
+**Deliberately deferred rather than applied during `/simplify`:** it is a structural refactor of
+guard code that was proven sensitive only minutes earlier, it expands the gap-closure diff well
+beyond the two BLOCKERs the phase was scoped to close, and the phase sits between execution and
+verification — the verifier checks `must_haves` against these exact file paths, which a move would
+invalidate. The benefit is realized only when a second crate adopts the guard, which is what D14
+would trigger; pair them.

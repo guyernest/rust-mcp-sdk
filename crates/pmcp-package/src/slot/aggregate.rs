@@ -24,7 +24,13 @@ use crate::slot::types::ConfigSlot;
 ///   DIFFERENT `tested_value`s return `Err(PackageError::SlotConflict)` — silently
 ///   discarding one tested value would mask a real behavioral difference.
 /// - Identity-bearing collisions with equal declaration fields dedup silently (identity
-///   slots have no tested value to conflict over).
+///   slots have no tested value to conflict over). Ones with UNEQUAL declaration fields —
+///   two `HumanRole`s sharing a `role` but differing in `description`,
+///   `responsibilities` or `channel_hints` — return
+///   `Err(PackageError::ConfigSlotViolation)` for the same order-independence reason as
+///   the `config_key` rule above: `tested_value()` is `None` for every identity-bearing
+///   variant, so the `SlotConflict` check cannot see them and first-wins would make the
+///   output depend on walk order.
 pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<Vec<ConfigSlot>> {
     // Key borrows the slot's name (`key()` returns `&str`) — no per-slot key
     // allocation. `entry` does a single lookup instead of get-then-insert.
@@ -35,43 +41,75 @@ pub fn aggregate<'a>(slots: impl IntoIterator<Item = &'a ConfigSlot>) -> Result<
             Entry::Vacant(e) => {
                 e.insert(slot.clone());
             },
-            // Same (kind, name) but a DIFFERENT config_key: erroring is the only
-            // order-independent outcome. First-wins here would silently discard a
-            // declared config path — and WHICH path survived would depend on which
-            // component was walked first, violating this module's permutation-
-            // stability contract. (Checked before the byte-equal dedup arm can
-            // never fire for it: equal ConfigSlots have equal config_keys.)
-            Entry::Occupied(e) if e.get().config_key != slot.config_key => {
-                return Err(PackageError::ConfigSlotViolation {
-                    key: key.1.to_string(),
-                    reason: "declared with two different `config_key` values by different \
-                             components; one slot fills one config path, so this must be \
-                             reconciled rather than silently resolved by input order"
-                        .to_string(),
-                });
-            },
-            // Byte-equal declaration — pure dedup, keep the one already present.
-            Entry::Occupied(e) if e.get().slot == slot.slot => {},
-            Entry::Occupied(e) => {
-                // Same `(kind, name)` but a different declaration. A conflict only
-                // exists when BOTH carry a differing `tested_value` (a real
-                // behavioral difference); identity-bearing collisions have no tested
-                // value to conflict over and dedup silently.
-                if let (Some(existing_val), Some(incoming_val)) =
-                    (e.get().slot.tested_value(), slot.slot.tested_value())
-                {
-                    if existing_val != incoming_val {
-                        return Err(PackageError::SlotConflict {
-                            slot: key.1.to_string(),
-                            tested: existing_val.to_string(),
-                            proposed: incoming_val.to_string(),
-                        });
-                    }
-                }
-            },
+            // Every collision policy lives in one function so this loop stays a
+            // loop; see `reconcile_collision` for the three cases and why each
+            // one is what it is.
+            Entry::Occupied(e) => reconcile_collision(key.1, e.get(), slot)?,
         }
     }
     Ok(map.into_values().collect())
+}
+
+/// Decide what a `(kind, name)` collision means: silent dedup, or which typed
+/// error.
+///
+/// The three cases, in the order they are checked:
+///
+/// 1. **Different `config_key`** — `ConfigSlotViolation`. First-wins would
+///    silently discard a declared config path, and WHICH path survived would
+///    depend on which component was walked first, violating this module's
+///    permutation-stability contract. Checked first because the byte-equal arm
+///    below can never fire for it (equal `ConfigSlot`s have equal
+///    `config_key`s), so the order costs nothing and makes the message specific.
+/// 2. **Byte-equal declaration** — pure dedup, keep the one already present.
+/// 3. **Anything else** — the declarations differ. A differing `tested_value`
+///    is the named, typed case (`SlotConflict`), because it is a real
+///    behavioral difference and the error can quote both values. What remains
+///    is an identity-bearing slot whose NON-value fields disagree — two
+///    `HumanRole`s sharing a `role` with different
+///    `description`/`responsibilities`/`channel_hints` is the live case, since
+///    `tested_value()` is `None` for every identity-bearing variant so the
+///    `SlotConflict` check structurally cannot see it. Falling through there
+///    would be first-wins again, so it is a `ConfigSlotViolation` for the same
+///    order-independence reason as case 1. Its values are NOT echoed: an
+///    identity-bearing slot's fields are the one place a credential-adjacent
+///    string could sit.
+///
+/// # Errors
+///
+/// [`PackageError::ConfigSlotViolation`] for cases 1 and 3,
+/// [`PackageError::SlotConflict`] for a differing `tested_value`.
+fn reconcile_collision(name: &str, existing: &ConfigSlot, incoming: &ConfigSlot) -> Result<()> {
+    if existing.config_key != incoming.config_key {
+        return Err(PackageError::ConfigSlotViolation {
+            key: name.to_string(),
+            reason: "declared with two different `config_key` values by different components; \
+                     one slot fills one config path, so this must be reconciled rather than \
+                     silently resolved by input order"
+                .to_string(),
+        });
+    }
+    if existing.slot == incoming.slot {
+        return Ok(());
+    }
+    if let (Some(tested), Some(proposed)) =
+        (existing.slot.tested_value(), incoming.slot.tested_value())
+    {
+        if tested != proposed {
+            return Err(PackageError::SlotConflict {
+                slot: name.to_string(),
+                tested: tested.to_string(),
+                proposed: proposed.to_string(),
+            });
+        }
+    }
+    Err(PackageError::ConfigSlotViolation {
+        key: name.to_string(),
+        reason: "declared twice with different declaration fields by different components; one \
+                 slot is one declaration, so this must be reconciled rather than silently \
+                 resolved by input order"
+            .to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -152,6 +190,40 @@ mod tests {
         // error — never a silent choice of "keyed" or "unkeyed".
         assert!(aggregate([&keyed, &unkeyed]).is_err());
         assert!(aggregate([&unkeyed, &keyed]).is_err());
+    }
+
+    #[test]
+    fn identity_bearing_slots_differing_in_non_value_fields_error_in_either_order() {
+        // `tested_value()` is `None` for every identity-bearing variant, so the
+        // SlotConflict check cannot see this pair. Before the guard below existed
+        // it fell through to first-wins and the aggregated Vec depended on which
+        // component was walked first.
+        let approver = |description: &str| {
+            ConfigSlot::new(SlotType::HumanRole {
+                role: "approver".to_string(),
+                description: description.to_string(),
+                responsibilities: vec!["review".to_string()],
+                channel_hints: vec!["slack".to_string()],
+            })
+        };
+        let a = approver("Approves budget overrides");
+        let b = approver("Signs off on spend");
+
+        for pair in [[&a, &b], [&b, &a]] {
+            let err = aggregate(pair).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    PackageError::ConfigSlotViolation { key, .. } if key == "approver"
+                ),
+                "differing identity-bearing declarations must be a ConfigSlotViolation naming \
+                 the slot, got: {err:?}"
+            );
+        }
+
+        // The byte-equal pair still dedups — the guard must not turn dedup into
+        // an error.
+        assert_eq!(aggregate([&a, &a.clone()]).unwrap(), vec![a]);
     }
 
     #[test]

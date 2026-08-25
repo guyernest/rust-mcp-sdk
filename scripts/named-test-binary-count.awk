@@ -64,6 +64,37 @@
 # non-zero status that an `if` reads as false — so the guard would pass
 # vacuously in exactly the case where the output cannot be trusted. A gate that
 # cannot see must say so, never pass.
+#
+# ---------------------------------------------------------------------------
+# Why ANSI escapes are stripped before field splitting
+# ---------------------------------------------------------------------------
+# MEASURED: with `CARGO_TERM_COLOR=always` cargo emits the target line as
+#
+#   \033[1m\033[92m     Running\033[0m tests/roundtrip_e2e.rs (target/debug/...)
+#
+# so under default field splitting $1 is `\033[1m\033[92m` and $2 is
+# `Running\033[0m` — the field-equality test below matches NOTHING and every
+# binary reports -1 ("never RAN"). `.github/workflows/ci.yml` sets
+# `CARGO_TERM_COLOR: always` for the whole workflow, so without this rule the
+# gate fails on every PR with a message that sends the reader hunting for a
+# renamed test file. libtest's own `test result:` line is NOT colorized in its
+# prefix, which is why the older summed-total check at `Makefile`'s
+# `/^test result:/` survives color and only this extractor broke.
+#
+# Stripping here rather than passing `--color never` at the call site keeps the
+# fix in the one file both the gate and its self-test read, so a future caller
+# that forgets the flag is still correct. `test-openapi-server-guard-selftest`
+# feeds a COLORED fixture through this same file, so the rule is re-proved on
+# every run rather than merely asserted.
+#
+# The ESC byte is built with sprintf rather than written as `\033` inside a
+# regex literal, whose handling is implementation-defined across awks; a
+# dynamic regex from a string is portable to stock macOS awk and gawk alike.
+
+BEGIN { ansi = sprintf("%c", 27) "\\[[0-9;]*[a-zA-Z]" }
+
+# Assigning to $0 re-splits the fields, so every rule below sees clean text.
+{ gsub(ansi, "") }
 
 $1 == "Running" && $2 == want { seen = 1; next }
 

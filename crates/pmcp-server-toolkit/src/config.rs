@@ -305,6 +305,16 @@ impl ServerConfig {
             if crate::env_ref::parse_env_ref(&backend.base_url) == Some("") {
                 return Err(ConfigValidationError::MalformedBackendBaseUrlRef);
             }
+            // The same rule for `[backend.auth]` credentials. It is NOT the
+            // same consequence: an unresolvable base_url breaks every request
+            // loudly, while an unresolvable CREDENTIAL was silently omitted
+            // (`expand_api_key_map` drops the entry; the scalar variants
+            // collapse to `NoAuth`), so the server booted and sent every
+            // backend request unauthenticated. Catching it here is what makes
+            // that failure visible at all.
+            if let Some(field) = backend.auth.malformed_env_ref_field() {
+                return Err(ConfigValidationError::MalformedBackendAuthRef(field));
+            }
         }
         Ok(())
     }
@@ -1219,6 +1229,86 @@ mod tests {
         let cfg = ServerConfig::from_toml(toml).expect("parse");
         cfg.validate()
             .expect("a single ${VAR} backend.base_url reference must validate");
+    }
+
+    /// The SAME malformed-reference rule applies to `[backend.auth]`
+    /// credentials, and it applies at LOAD time. Without it the credential path
+    /// resolved a malformed reference to the empty string and then OMITTED it:
+    /// the server booted, every backend call went out unauthenticated, and
+    /// nothing was logged. `${TFL-APP-KEY}` is the realistic shape — a dash is
+    /// not a portably settable variable name, so the reference names nothing.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_malformed_backend_auth_credential_ref() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+
+            [backend.auth]
+            type = "bearer"
+            token = "${TFL-APP-KEY}"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::MalformedBackendAuthRef(field)) => {
+                assert_eq!(field, "token");
+            },
+            other => panic!("expected MalformedBackendAuthRef, got {other:?}"),
+        }
+    }
+
+    /// The api_key map path gets the same refusal, and the error names the
+    /// offending entry so the operator knows WHICH parameter to fix.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_rejects_malformed_backend_auth_api_key_entry() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+
+            [backend.auth]
+            type = "api_key"
+            query_params = { app_key = "${TFL_SCHEME}://${TFL_HOST}" }
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::MalformedBackendAuthRef(field)) => {
+                assert_eq!(field, "query_params.app_key");
+            },
+            other => panic!("expected MalformedBackendAuthRef, got {other:?}"),
+        }
+    }
+
+    /// The refusal is scoped to MALFORMED shapes only: a well-formed reference
+    /// and a plain literal both still validate, so the deferred-to-environment
+    /// pattern and committed dev configs are untouched.
+    #[cfg(feature = "http")]
+    #[test]
+    fn validate_accepts_wellformed_and_literal_backend_auth_credentials() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [backend]
+            base_url = "https://api.example.com"
+
+            [backend.auth]
+            type = "basic"
+            username = "svc-account"
+            password = "${TFL_APP_KEY}"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        cfg.validate()
+            .expect("a literal username and a single ${VAR} password must validate");
     }
 
     /// A `[backend]` block with a non-empty `base_url` validates OK.

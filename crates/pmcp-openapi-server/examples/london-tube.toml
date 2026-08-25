@@ -7,7 +7,12 @@
 # is excluded from the published crate via Cargo.toml `exclude = [..., "tests/"]`),
 # this file lives under examples/ and SHIPS with the published crate, so users can:
 #
-#   pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
+#   TFL_BASE_URL=https://api.tfl.gov.uk TFL_APP_KEY=<your-key> \
+#     pmcp-openapi-server --config crates/pmcp-openapi-server/examples/london-tube.toml
+#
+# BOTH variables are required. `base_url` is the `${TFL_BASE_URL}` slot (see
+# ENDPOINT IS A SLOT below), so the bare one-line form this comment used to show
+# now fails at startup with `UnresolvedBaseUrlRef { var: "TFL_BASE_URL" }`.
 #
 # It mirrors the enriched tests/fixtures/london-tube.toml surface: the same two
 # read-only TfL tools with full annotations, the same three [[resources]], and the
