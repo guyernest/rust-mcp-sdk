@@ -294,6 +294,104 @@ test-cargo-pmcp:
 	fi; \
 	echo "$(GREEN)✓ cargo-pmcp tests passed ($$ran tests)$(NC)"
 
+# The GATE's reach into `cargo-pmcp/tests/`, mirroring test-openapi-server.
+#
+# `test-cargo-pmcp` above closed the hole for cargo-pmcp's LIB target (the
+# scaffold-pin tripwires) and left `tests/` wide open. Nothing in this repo
+# executed that directory before Phase 122, measured four ways:
+#   - `make test-cargo-pmcp` is `cargo test -p cargo-pmcp --lib`, and `--lib`
+#     selects the library target only (Makefile:286).
+#   - `make test-integration` is `cargo test --test '*'` with NO `-p`, so it
+#     resolves to the root `pmcp` package.
+#   - CI's `test` job (`ci.yml`) is root-package scoped.
+#   - `org-gate-checks.yml`'s `workspace-test` runs `--lib --bins`, which
+#     excludes `tests/` entirely, and that job is NOT in `gate.needs`.
+# Measured readings before this target existed: `awk -f
+# scripts/named-test-binary-count.awk` reported -1 ("never RAN") for
+# package_capture_contract, package_inspect AND pmcp_package_pin under every
+# one of those candidate gates. `package_capture_contract.rs` is the model file
+# Phase 122's attestation contract test copies, and its own module docs claimed
+# it "runs in the normal cargo test workspace gate" — a measured-false claim
+# this target is what makes true.
+#
+# WHY THREE `--test` SELECTORS AND NOT A BARE `cargo test -p cargo-pmcp`:
+# cargo-pmcp's deploy/doctor integration suites are known to race without
+# serialization (4-7 nondeterministic failures parallel vs 856/0 serialized),
+# and this gate's job is a narrow, fast, reliable reach into the contract and
+# tripwire binaries. A flaky gate gets disabled; a scoped one stays on.
+# `-- --test-threads=1` is used for the same reason test-openapi-server does:
+# these binaries touch process-global state and must not run concurrently.
+#
+# The count assertion is not ceremony. The failure this target exists to
+# prevent is "the gate does not reach this crate", and a run that selects zero
+# tests EXITS 0 — reproducing exactly that hole while looking green.
+#
+# The named-binary assertion exists because a nonzero SUM proves the SELECTION
+# ran, not that any particular binary ran. A renamed file or a `tests/` entry
+# that silently stopped being a target leaves the total comfortably nonzero
+# while its own truths go unexecuted. The extraction lives in
+# `scripts/named-test-binary-count.awk` — one file, read by both this gate and
+# `test-openapi-server-guard-selftest` (declared as this target's prerequisite),
+# so the gate and the proof of the gate cannot drift.
+#
+# `REQUIRED_TEST_BINARIES` is APPEND-ONLY across Phase 122: plan 122-04 adds
+# `package_attestation_contract` when that binary first exists — the plan that
+# CREATES it. A name added BEFORE its binary exists turns this gate red for
+# every commit in between. Removing a name to quiet a red gate deletes the proof
+# instead of fixing it.
+#
+# WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
+# interchangeable and the distinction is easy to get backwards:
+#
+#   - A RENAMED OR DELETED test file is caught by CARGO ITSELF, not by the -1
+#     arm. Because this target names its binaries with explicit `--test`
+#     selectors, cargo refuses the whole invocation:
+#     `error: no test target named 'package_inspect' in 'cargo-pmcp' package`,
+#     exit 101, before any output reaches the extractor. MEASURED by renaming
+#     `cargo-pmcp/tests/package_inspect.rs` — the gate went red at cargo, which
+#     is a STRICTER failure than the -1 verdict (it cannot be misread).
+#   - The -1 arm catches the DRIFT class instead: a name present in
+#     `REQUIRED_TEST_BINARIES` but absent from the `--test` selector list above.
+#     That is exactly the append-only hazard this comment warns about, and it is
+#     live code, not defensive decoration — MEASURED by adding an unselected
+#     probe name to the list and observing the "never RAN" verdict and exit 1.
+#
+# Keeping both matters: the selectors make a deletion loud, and the -1 arm keeps
+# the two lists honest with each other.
+.PHONY: test-cargo-pmcp-integration
+test-cargo-pmcp-integration: test-openapi-server-guard-selftest
+	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_inspect pmcp_package_pin"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line. Likeliest causes: the file was renamed, or that tests/ entry stopped being a target.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it — truncated output or an aborted harness. This gate refuses to pass on output it cannot read.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests. A #[cfg] gate turned false, an #[ignore] sweep landed, or the test module was renamed away. The summed total ($$ran) stays nonzero from the other selected binaries, so the count guard above CANNOT catch this. This is the contract net Phase 122 exists to keep running — restore the tests, do not relax this guard.$(NC)"; \
+			exit 1;; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n'). An EMPTY value means awk itself did not run: check that scripts/named-test-binary-count.awk exists and is readable. Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
+	done; \
+	echo "$(GREEN)✓ cargo-pmcp integration tests passed ($$ran tests)$(NC)"
+
 # The GATE's reach into `crates/pmcp-server-toolkit/tests/`, mirroring
 # test-tester / test-cargo-pmcp / test-openapi-server.
 #
@@ -802,7 +900,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-server-toolkit test-openapi-server
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-cargo-pmcp-integration test-server-toolkit test-openapi-server
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)
@@ -1100,6 +1198,111 @@ purity-check:
 	done
 	@echo "$(GREEN)purity-check PASSED: reader-free (umya/calamine/quick-xml/swc_/pmcp-code-mode absent) + writer-present (rust_xlsxwriter, per-feature) + zip-permitted + cargo-deny-bans-clean$(NC)"
 
+# Phase 122 (D-12 / D-13, PKGX-01): the NO-CRYPTO boundary for `pmcp-package`.
+#
+# A SIBLING list of PURITY_CRATES, deliberately NOT a member of it. The
+# purity-check Layer 2 loop enforces that every PURITY_CRATES member's [bans]
+# list is BYTE-IDENTICAL ("must stay in lockstep"); those crates ban Excel
+# readers, and this is an entirely different boundary — an ALLOWLIST rather than
+# a deny list. Joining that group would immediately fail its parity check.
+#
+# What it gets from being a sibling: the same crate-local deny.toml shape, the
+# same `--manifest-path` scoping (the only mechanism that reaches a
+# workspace-EXCLUDED crate — `pmcp-package` carries its own [workspace] table),
+# the same WR-02 fail-closed guard, and the same quality-gate chaining.
+PURITY_NO_CRYPTO_CRATES := pmcp-package
+
+# Fixture-driven self-test for the [bans].allow entry counter, mirroring
+# test-openapi-server-guard-selftest. It is a declared PREREQUISITE of
+# no-crypto-check below, so the parser is proven BEFORE the gate trusts its
+# reading — the gate and the proof of the gate cannot drift.
+#
+# Each fixture pins a failure mode that a naive line-oriented check gets wrong:
+#
+#   empty_allow      -> 0   THE BYPASS. `grep 'allow = \['` also matches
+#                           `allow = []`, so the naive guard passes exactly when
+#                           it must fail. This is the fixture that matters most.
+#   multiline        -> 2   the ordinary shape of the real config.
+#   single_line      -> 1   `allow = [ { name = "x" } ]` closes on its opening
+#                           line; the opener must be counted before the depth
+#                           check or this reads 0.
+#   licenses_first   -> 1   SECTION SCOPING, FORWARDS. `[licenses]` carries its
+#                           own `allow = []` in every crate-local config in this
+#                           repo, so a file-wide count reads the wrong section.
+#   licenses_after   -> 1   SECTION SCOPING, BACKWARDS. A later `[licenses]`
+#                           stanza must not reset a count already taken.
+#   comment_decoy    -> 0   COMMENT BLINDNESS. deny.toml's header prose explains
+#                           this guard and writes `{ name = ... }` inline while
+#                           doing so; a comment-blind counter would count the
+#                           documentation and report a healthy allowlist for a
+#                           file that has no [bans].allow at all.
+.PHONY: no-crypto-allowlist-guard-selftest
+no-crypto-allowlist-guard-selftest:
+	@echo "$(BLUE)Self-testing the [bans].allow entry counter...$(NC)"
+	@fail=0; ran=0; \
+	check() { \
+		fixture="$$1"; expected="$$2"; shift 2; \
+		actual=$$(printf '%s\n' "$$@" | awk -f scripts/deny-allow-entry-count.awk); \
+		ran=$$((ran + 1)); \
+		if [ "$$actual" != "$$expected" ]; then \
+			echo "$(RED)✗ allowlist guard self-test fixture '$$fixture': expected $$expected, actual $$actual$(NC)"; \
+			fail=1; \
+		fi; \
+	}; \
+	check empty_allow 0 '[bans]' 'multiple-versions = "allow"' 'allow = []'; \
+	check multiline 2 '[bans]' 'allow = [' '  { name = "sha2" },' '  { name = "digest" },' ']'; \
+	check single_line 1 '[bans]' 'allow = [ { name = "sha2" } ]'; \
+	check licenses_first 1 '[licenses]' 'allow = []' '[bans]' 'allow = [ { name = "sha2" } ]'; \
+	check licenses_after 1 '[bans]' 'allow = [ { name = "sha2" } ]' '[licenses]' 'allow = []'; \
+	check comment_decoy 0 '# the allow list holds { name = "sha2" } entries' '[bans]' 'multiple-versions = "allow"'; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	if [ "$$ran" -ne 6 ]; then \
+		echo "$(RED)✗ allowlist guard self-test executed $$ran fixtures, expected 6 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ allowlist entry-counter self-test passed ($$ran fixtures)$(NC)"
+
+# The no-crypto boundary gate (SC4). Machine-checked over the RESOLVED
+# dependency graph — which is the whole point, and is the reason the
+# `const + include_str! + assert` manifest tripwire pattern was rejected for
+# this job: it reads a committed manifest at COMPILE time and structurally
+# cannot see a transitive arrival, which is the realistic way a signing crate
+# would actually enter.
+#
+# NOTE there is deliberately NO parity loop here. purity-check runs one across
+# PURITY_CRATES to keep multiple crates' ban lists in lockstep; PURITY_NO_CRYPTO_CRATES
+# holds ONE crate, so that loop would compare a list to itself. A degenerate
+# check that always passes is worse than no check — it reads like coverage.
+# Add the parity loop if and when a second crate joins this list.
+.PHONY: no-crypto-check
+no-crypto-check: no-crypto-allowlist-guard-selftest
+	@echo "$(BLUE)no-crypto-check: pmcp-package must never gain a signing/crypto-protocol dependency$(NC)"
+	@set -euo pipefail; \
+	for crate in $(PURITY_NO_CRYPTO_CRATES); do \
+		test -f crates/$$crate/deny.toml || { \
+			echo "$(RED)✗ no-crypto-check FAILED: crates/$$crate/deny.toml missing. cargo-deny 0.18.3 does NOT fail on a missing --config path — it WARNs, falls back to the default empty-ban config and reports 'bans ok' VACUOUSLY (the WR-02 hazard). A deleted or renamed config must fail this gate, not silently disable it.$(NC)"; \
+			exit 1; \
+		}; \
+		status=0; n=$$(awk -f scripts/deny-allow-entry-count.awk crates/$$crate/deny.toml 2>&1) || status=$$?; \
+		if [ $$status -ne 0 ]; then \
+			echo "$(RED)✗ no-crypto-check FAILED: the allowlist entry counter errored for crates/$$crate/deny.toml [exit $$status] — failing closed rather than trusting a reading it could not produce.$(NC)"; \
+			printf '%s\n' "$$n"; \
+			exit 1; \
+		fi; \
+		case "$$n" in \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ no-crypto-check FAILED: the allowlist entry counter produced no usable reading ('$$n') for crates/$$crate/deny.toml. An EMPTY value means awk itself did not run: check that scripts/deny-allow-entry-count.awk exists and is readable. Failing rather than continuing on a reading this gate does not understand.$(NC)"; \
+			exit 1;; \
+		esac; \
+		if [ "$$n" -eq 0 ]; then \
+			echo "$(RED)✗ no-crypto-check FAILED: crates/$$crate/deny.toml has an EMPTY or ABSENT [bans].allow list (reading: 0). One of three things is true: there is no [bans] section, it has no allow array, or that array is empty. Any of them is fatal — cargo-deny reports success for an EMPTY allow list exactly as vacuously as for a missing config, and ONLY a NON-EMPTY allow makes this check deny-by-default. Restore the allowlist; do not relax this guard.$(NC)"; \
+			exit 1; \
+		fi; \
+		echo "$(GREEN)  ✓ crates/$$crate/deny.toml [bans].allow holds $$n entries (deny-by-default is active)$(NC)"; \
+		cargo deny --manifest-path crates/$$crate/Cargo.toml check --config deny.toml bans; \
+	done
+	@echo "$(GREEN)✓ no-crypto-check PASSED: $(PURITY_NO_CRYPTO_CRATES) resolved graph is allowlisted (hashing admitted, signing absent)$(NC)"
+
 # Standalone quality gate for the workspace-EXCLUDED `pmcp-package` crate.
 # `pmcp-package` has its own [workspace] table and is NOT a root workspace
 # member, so root `cargo fmt/clippy/test` IGNORE it. Every command that must
@@ -1138,6 +1341,7 @@ quality-gate:
 	@$(MAKE) check-unwraps
 	@$(MAKE) validate-always
 	@$(MAKE) purity-check
+	@$(MAKE) no-crypto-check
 	@$(MAKE) comply
 	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
 	@echo "$(GREEN)        ✅ ALL TOYOTA WAY QUALITY CHECKS PASSED        $(NC)"
