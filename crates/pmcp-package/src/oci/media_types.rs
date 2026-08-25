@@ -96,6 +96,104 @@ pub const MT_TEAM_CONFIG: &str = "application/vnd.pmcp.team.config.v1+json";
 pub const MT_WORKFLOW_MANIFEST: &str = "application/vnd.pmcp.workflow.manifest.v1+json";
 
 // ---------------------------------------------------------------------
+// Cross-kind layers — the media types NOT owned by exactly one package kind
+// ---------------------------------------------------------------------
+
+/// A platform-issued attestation ABOUT a package, carried as an OPAQUE layer.
+///
+/// The bytes are written and read back VERBATIM. This crate never
+/// deserializes, parses, sniffs or otherwise interprets them: the attestation
+/// format is owned by the issuing platform, not by this crate. Everything this
+/// crate reads about an attestation comes from the layer DESCRIPTOR's
+/// annotations — [`ANNOTATION_ATTESTATION_SUBJECT`],
+/// [`ANNOTATION_ATTESTATION_ISSUER`] and
+/// [`ANNOTATION_ATTESTATION_PAYLOAD_TYPE`] — which is what makes "never
+/// interprets the payload" literally true while still leaving something to
+/// compare.
+///
+/// The string carries NO format suffix, following
+/// [`MT_SERVER_OPENAPI_SPEC`] rather than [`MT_SERVER_CONFIG`]'s `+toml`
+/// (D-05): the attestation format is platform-owned and expected to churn, and
+/// pinning a format into the layer-index key would turn a format change into a
+/// media-type change — a wire break for every already-published CLI.
+///
+/// # Why the spelling is KIND-NEUTRAL
+///
+/// 1. **Two carrier kinds exist.** Attestation carriage lands on the server
+///    packer AND the team packer (D-08). A media type namespaced to one
+///    package kind would make a team package carry a layer whose type names a
+///    different kind — a claim that is simply false on disk. The kind
+///    qualifier was already wrong at the moment it was written.
+/// 2. **Kind-specificity elsewhere in this file tracks a kind-specific
+///    PAYLOAD.** [`MT_TEAM_CONFIG`]'s bytes ARE a `TeamPackage`;
+///    [`MT_SERVER_ENVELOPE`]'s bytes ARE server envelope fields. An
+///    attestation payload is platform-owned opaque bytes whose shape does not
+///    vary with the carrying kind, so a kind qualifier here would be false
+///    precision rather than the existing convention.
+/// 3. **D-05's own reasoning generalizes.** A format suffix was omitted so a
+///    format change would not become a media-type change, and a media-type
+///    change is a wire break for every already-published CLI. A kind qualifier
+///    has the identical failure mode one axis over: adding the second carrier
+///    kind would force either a second constant or a lie. One neutral spelling
+///    avoids both.
+/// 4. **One media type is one mechanism** (D-08: "one mechanism, not two").
+///    The duplicate-media-type rejection on the read side, the attestation
+///    read helper and the annotated-layer write call site are shared verbatim
+///    by the server and team paths with no kind dispatch. Two constants would
+///    require a kind-keyed lookup at every read site.
+///
+/// # This is NOT a package-kind signal
+///
+/// Package kind is determined by the manifest's `artifactType`
+/// ([`ARTIFACT_TYPE_SERVER`] / [`ARTIFACT_TYPE_TEAM`] / [`ARTIFACT_TYPE_AGENT`]
+/// / [`ARTIFACT_TYPE_WORKFLOW`]) together with which typed package layer is
+/// present. Nothing may infer a package's kind from the presence, absence or
+/// spelling of this layer.
+///
+/// # Rejected alternative
+///
+/// A PER-KIND PAIR — one attestation media type per carrying package kind,
+/// sharing a single annotation vocabulary — was considered and rejected. It
+/// buys nothing a reader cannot already get from `artifactType`, while costing
+/// a kind-keyed lookup on every read path. (The rejected spellings are
+/// deliberately not written out here: two acceptance criteria in this phase
+/// negative-grep the source tree for them, and naming them in a comment would
+/// make those guards self-invalidating.)
+pub const MT_ATTESTATION: &str = "application/vnd.pmcp.attestation.v1";
+
+/// Layer-descriptor annotation key naming the package an attestation is ABOUT.
+///
+/// The value is the `sha256:<hex>` manifest digest of the **UNATTESTED**
+/// package — explicitly NOT the digest of the package that carries this layer.
+/// Those two digests necessarily differ: the attestation layer lives inside
+/// the manifest whose canonical bytes the carrying package's digest covers
+/// (D-01). An attested package's own digest can therefore never equal the
+/// subject it names, and that is by design.
+///
+/// # Why reverse-DNS
+///
+/// The OCI image-spec annotations document says custom annotation keys SHOULD
+/// use reverse domain notation, and reserves the `org.opencontainers`
+/// namespace for the spec itself. `vnd.pmcp` is a MEDIA-TYPE prefix, not a
+/// domain, so it is the wrong shape for an annotation key. There is no
+/// in-repo precedent to follow: this crate's only annotation key today is
+/// `oci_spec`'s re-exported `org.opencontainers.image.title`.
+pub const ANNOTATION_ATTESTATION_SUBJECT: &str = "run.pmcp.attestation.subject";
+/// Layer-descriptor annotation key naming the issuer of an attestation.
+///
+/// Reverse-DNS for the same reason as [`ANNOTATION_ATTESTATION_SUBJECT`]. The
+/// value is issuer-supplied and arrives from outside this repo; this crate
+/// carries it and never validates it.
+pub const ANNOTATION_ATTESTATION_ISSUER: &str = "run.pmcp.attestation.issuer";
+/// Layer-descriptor annotation key naming the attestation payload's OWN media
+/// type (e.g. a report-schema JSON document, or a signed envelope).
+///
+/// Reverse-DNS for the same reason as [`ANNOTATION_ATTESTATION_SUBJECT`].
+/// Recording the payload's format HERE rather than in [`MT_ATTESTATION`] is
+/// what lets the layer media type stay suffix-free while the format churns.
+pub const ANNOTATION_ATTESTATION_PAYLOAD_TYPE: &str = "run.pmcp.attestation.payload-type";
+
+// ---------------------------------------------------------------------
 // artifactType per package kind (OCI 1.1 top-level manifest field)
 // ---------------------------------------------------------------------
 

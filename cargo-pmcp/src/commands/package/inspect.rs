@@ -16,8 +16,10 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
-use pmcp_package::oci::{unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout};
-use pmcp_package::{AgentPackage, ServerPackage, TeamPackage, WorkflowManifest};
+use pmcp_package::oci::{
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout, UnpackedServer,
+};
+use pmcp_package::{AgentPackage, TeamPackage, WorkflowManifest};
 
 use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
 use crate::commands::GlobalFlags;
@@ -118,7 +120,7 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
         PackageKind::Server => {
             let unpacked = unpack_server(layout).context("unpack server package")?;
             if output {
-                render_server(&unpacked.package);
+                render_server(&unpacked);
             }
         },
         PackageKind::Workflow => {
@@ -161,11 +163,28 @@ fn render_team(pkg: &TeamPackage) {
     field("Built-in", pkg.built_in_servers.len());
 }
 
-fn render_server(pkg: &ServerPackage) {
+fn render_server(unpacked: &UnpackedServer) {
+    let pkg = &unpacked.package;
     header(PackageKind::Server);
     field("Name", &pkg.name);
     field("Version", &pkg.version);
     field("Config slots", pkg.config_slots.len());
+    render_attestation(unpacked);
+}
+
+/// Render what the package carries by way of an attestation.
+///
+/// The subject is printed as the attestation's own CLAIM — this renderer makes
+/// no verdict about whether it names this package. That comparison, and any
+/// exit-code consequence, belong to the subject-check work, not here.
+fn render_attestation(unpacked: &UnpackedServer) {
+    let Some(attestation) = unpacked.attestation.as_ref() else {
+        return;
+    };
+    println!("\n{}", "Attestation".bright_cyan().bold());
+    field("Issuer", &attestation.issuer);
+    field("Subject", &attestation.subject);
+    field("Payload type", &attestation.payload_type);
 }
 
 fn render_workflow(manifest: &WorkflowManifest) {

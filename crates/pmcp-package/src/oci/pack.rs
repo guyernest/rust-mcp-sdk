@@ -27,9 +27,10 @@ use crate::oci::config_validation::{
 };
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
-    vendor_media_type, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG,
-    MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG,
-    MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
+    vendor_media_type, ANNOTATION_ATTESTATION_ISSUER, ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+    ANNOTATION_ATTESTATION_SUBJECT, ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_ATTESTATION,
+    MT_EMPTY_CONFIG, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET,
+    MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
     MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::SingleLayerPackage;
@@ -151,29 +152,86 @@ pub struct OpenApiSpecFile<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Build the layer descriptor for a named vendor-content file, recording the
-/// author's original file name in the descriptor's standard
-/// `org.opencontainers.image.title` annotation.
+/// A platform-issued attestation ABOUT this package, carried into it VERBATIM.
+///
+/// `bytes` are written to the [`MT_ATTESTATION`] layer byte-for-byte and are
+/// NEVER deserialized, parsed, sniffed or re-derived by this crate — the
+/// attestation format is the issuing platform's, not this crate's. The three
+/// metadata fields are recorded as LAYER-descriptor annotations
+/// ([`ANNOTATION_ATTESTATION_SUBJECT`], [`ANNOTATION_ATTESTATION_ISSUER`],
+/// [`ANNOTATION_ATTESTATION_PAYLOAD_TYPE`]) so that reading metadata never
+/// requires reading the payload.
+///
+/// `subject` is the `sha256:<hex>` manifest digest of the UNATTESTED package
+/// this attestation is about — not the digest of the package that carries it.
+/// See [`pack_server`]'s "two digests" section.
+///
+/// Distinct from [`ConfigFile`] and [`OpenApiSpecFile`] on purpose, for the
+/// same reason those two are distinct from each other: three types rather than
+/// one shared "named blob" type means a caller cannot transpose them.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+/// [`ANNOTATION_ATTESTATION_SUBJECT`]: crate::oci::media_types::ANNOTATION_ATTESTATION_SUBJECT
+/// [`ANNOTATION_ATTESTATION_ISSUER`]: crate::oci::media_types::ANNOTATION_ATTESTATION_ISSUER
+/// [`ANNOTATION_ATTESTATION_PAYLOAD_TYPE`]: crate::oci::media_types::ANNOTATION_ATTESTATION_PAYLOAD_TYPE
+#[derive(Debug, Clone, Copy)]
+pub struct AttestationFile<'a> {
+    /// The attestation payload's exact bytes, carried opaquely.
+    pub bytes: &'a [u8],
+    /// `sha256:<hex>` manifest digest of the UNATTESTED package this
+    /// attestation is about.
+    pub subject: &'a str,
+    /// Who issued the attestation.
+    pub issuer: &'a str,
+    /// The payload's own media type (e.g. a report schema, or a signed
+    /// envelope).
+    pub payload_type: &'a str,
+}
+
+/// Write `bytes` as a layer under `media_type`, attaching `annotations` to the
+/// resulting LAYER descriptor.
 ///
 /// Unlike the index-descriptor annotations set in [`finalize_pack`] — which are
 /// applied AFTER `write_manifest` has already computed the manifest digest and
 /// therefore do NOT feed it — a LAYER descriptor's annotations live inside the
-/// manifest that `canonicalize` then hashes, so this annotation DOES feed the
-/// manifest digest. Renaming the config file changes the package's identity.
+/// manifest that `canonicalize` then hashes, so these annotations DO feed the
+/// manifest digest. Renaming the config file, or swapping an attestation's
+/// claimed subject, changes the package's identity.
+///
+/// One mechanism, not two: [`write_named_file_layer`] is a thin caller of this
+/// function that supplies the single-entry `org.opencontainers.image.title`
+/// map, and the attestation arm of [`pack_server`] supplies a three-entry map.
+fn write_annotated_layer(
+    layout: &OciLayout,
+    media_type: &str,
+    annotations: HashMap<String, String>,
+    bytes: &[u8],
+) -> Result<Descriptor> {
+    // Raw bytes, never `canonicalize` — the crate rule is to digest what was
+    // stored, never re-derive it from a parsed struct.
+    let mut descriptor = layout.write_blob(vendor_media_type(media_type), bytes)?;
+    descriptor.set_annotations(Some(annotations));
+    Ok(descriptor)
+}
+
+/// Build the layer descriptor for a named vendor-content file, recording the
+/// author's original file name in the descriptor's standard
+/// `org.opencontainers.image.title` annotation.
+///
+/// A thin caller of [`write_annotated_layer`], which carries the rule about why
+/// a LAYER descriptor's annotations feed the manifest digest.
 fn write_named_file_layer(
     layout: &OciLayout,
     media_type: &str,
     file_name: &str,
     bytes: &[u8],
 ) -> Result<Descriptor> {
-    // Raw author bytes, never `canonicalize` — the crate rule is to digest
-    // what was stored, never re-derive it from a parsed struct.
-    let mut descriptor = layout.write_blob(vendor_media_type(media_type), bytes)?;
-    descriptor.set_annotations(Some(HashMap::from([(
-        ANNOTATION_TITLE.to_string(),
-        file_name.to_string(),
-    )])));
-    Ok(descriptor)
+    write_annotated_layer(
+        layout,
+        media_type,
+        HashMap::from([(ANNOTATION_TITLE.to_string(), file_name.to_string())]),
+        bytes,
+    )
 }
 
 /// Write the one binary layer this package carries, per [`BinaryMode`].
@@ -284,6 +342,28 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
 ///
 /// [`MT_SERVER_OPENAPI_SPEC`]: crate::oci::media_types::MT_SERVER_OPENAPI_SPEC
 ///
+/// # The attestation layer is OPTIONAL, and it carries TWO digests
+///
+/// Passing `attestation: Some(..)` writes the payload bytes VERBATIM to their
+/// own [`MT_ATTESTATION`] layer — never canonicalized, never parsed — with the
+/// subject, issuer and payload media type recorded as annotations on that
+/// LAYER's descriptor. `None` writes no layer at all; absence is exactly the
+/// layer's absence, with no marker (D-14).
+///
+/// The accepted consequence, stated here rather than discovered later: an
+/// attested package's own manifest digest NECESSARILY DIFFERS from the
+/// unattested digest the attestation names as its subject. The attestation
+/// layer (and its annotations) sit inside the manifest whose canonical bytes
+/// are hashed, so adding the attestation changes the hash. Two digests exist,
+/// and that is deliberate.
+///
+/// The rejected alternative was to exclude the attestation layer from the
+/// canonical digest. That would make the two digests equal, at the cost of
+/// weakening [`crate::digest::verify()`] into verifying everything EXCEPT the
+/// one layer an attacker would most want to swap.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+///
 /// # Errors
 ///
 /// Returns [`PackageError::Layout`] if the `ImageManifest` fails to build or
@@ -360,6 +440,8 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
 ///     Some(ConfigFile { file_name: "london-tube.toml", bytes: config_toml }),
 ///     // Curated-only: this server carries no OpenAPI spec.
 ///     None,
+///     // Unattested: this server carries no attestation.
+///     None,
 ///     &layout,
 /// )
 /// .unwrap();
@@ -369,12 +451,14 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
 /// assert_eq!(config.file_name, "london-tube.toml");
 /// assert_eq!(config.bytes, config_toml);
 /// assert_eq!(unpacked.spec, None);
+/// assert_eq!(unpacked.attestation, None);
 /// ```
 pub fn pack_server(
     package: &ServerPackage,
     binary: BinaryMode<'_>,
     config: Option<ConfigFile<'_>>,
     spec: Option<OpenApiSpecFile<'_>>,
+    attestation: Option<AttestationFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
     validate_pack_preconditions(package, config)?;
@@ -432,6 +516,37 @@ pub fn pack_server(
             MT_SERVER_OPENAPI_SPEC,
             spec.file_name,
             spec.bytes,
+        )?);
+    }
+
+    // The attestation is written LAST so the push order stays deterministic.
+    // As with every other layer here, that order is explicitly NOT a
+    // read-order contract — `unpack_server` locates the attestation by media
+    // type, so a re-ordered manifest reads identically. Its bytes go to the
+    // blob store RAW: never through `canonicalize`, never parsed. The subject,
+    // issuer and payload media type ride on the LAYER descriptor's
+    // annotations, which feed the manifest digest (see
+    // `write_annotated_layer`) — unlike `finalize_pack`'s index-descriptor
+    // annotations, which are applied after the digest is computed.
+    if let Some(attestation) = attestation {
+        layers.push(write_annotated_layer(
+            layout,
+            MT_ATTESTATION,
+            HashMap::from([
+                (
+                    ANNOTATION_ATTESTATION_SUBJECT.to_string(),
+                    attestation.subject.to_string(),
+                ),
+                (
+                    ANNOTATION_ATTESTATION_ISSUER.to_string(),
+                    attestation.issuer.to_string(),
+                ),
+                (
+                    ANNOTATION_ATTESTATION_PAYLOAD_TYPE.to_string(),
+                    attestation.payload_type.to_string(),
+                ),
+            ]),
+            attestation.bytes,
         )?);
     }
 
@@ -552,6 +667,7 @@ mod tests {
             BinaryMode::Embedded(&bootstrap),
             None,
             None,
+            None,
             &layout,
         )
         .unwrap();
@@ -578,6 +694,7 @@ mod tests {
                 digest: ManifestDigest::from_bytes(b"referenced-binary"),
                 media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
             },
+            None,
             None,
             None,
             &layout,
@@ -609,6 +726,7 @@ mod tests {
                 file_name: "openapi.yaml",
                 bytes: b"openapi: 3.1.0",
             }),
+            None,
             &layout,
         )
         .unwrap();
@@ -643,6 +761,7 @@ mod tests {
             BinaryMode::Embedded(&bootstrap),
             None,
             None,
+            None,
             &layout,
         )
         .unwrap();
@@ -669,6 +788,7 @@ mod tests {
             BinaryMode::Embedded(&bootstrap),
             None,
             None,
+            None,
             &layout,
         )
         .unwrap();
@@ -690,6 +810,7 @@ mod tests {
             BinaryMode::Embedded(&bootstrap),
             None,
             None,
+            None,
             &layout_a,
         )
         .unwrap();
@@ -699,6 +820,7 @@ mod tests {
         let digest_b = pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout_b,
@@ -720,6 +842,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,

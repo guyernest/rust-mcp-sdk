@@ -61,6 +61,7 @@ fn server_package_fixture_round_trips_and_matches_canonical_bytes() {
         BinaryMode::Embedded(&bootstrap),
         None,
         None,
+        None,
         &layout,
     )
     .unwrap();

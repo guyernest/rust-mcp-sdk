@@ -22,9 +22,11 @@ use crate::digest::{verify, ManifestDigest};
 use crate::error::{PackageError, Result};
 use crate::oci::layout::OciLayout;
 use crate::oci::media_types::{
-    MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP, MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG,
-    MT_SERVER_CONFIG_SLOTS, MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE,
-    MT_SERVER_OPENAPI_SPEC, MT_SERVER_TOOL_METADATA,
+    ANNOTATION_ATTESTATION_ISSUER, ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+    ANNOTATION_ATTESTATION_SUBJECT, MT_ATTESTATION, MT_SERVER_BINARY_REF, MT_SERVER_BOOTSTRAP,
+    MT_SERVER_CEDAR_POLICY_SET, MT_SERVER_CONFIG, MT_SERVER_CONFIG_SLOTS,
+    MT_SERVER_DEPLOY_DESCRIPTOR, MT_SERVER_ENVELOPE, MT_SERVER_OPENAPI_SPEC,
+    MT_SERVER_TOOL_METADATA,
 };
 use crate::oci::pack::ServerEnvelope;
 use crate::oci::SingleLayerPackage;
@@ -116,9 +118,38 @@ pub struct RestoredFile {
     pub bytes: Vec<u8>,
 }
 
+/// A platform-issued attestation restored from an [`MT_ATTESTATION`] layer:
+/// the payload bytes exactly as packed, plus the three metadata values read off
+/// the layer descriptor's annotations.
+///
+/// `subject`, `issuer` and `payload_type` come from layer-descriptor
+/// annotations, which are ATTACKER-CONTROLLED input from an untrusted layout.
+/// They are returned as DATA only: this crate never writes to disk using them
+/// and never builds a path from them. A caller that acts on them is
+/// responsible for validating them first.
+///
+/// `bytes` are returned exactly as they were packed and are NEVER deserialized
+/// here — the attestation format is the issuing platform's, not this crate's.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpackedAttestation {
+    /// The attestation payload's exact bytes, byte-identical to what was
+    /// packed and never interpreted.
+    pub bytes: Vec<u8>,
+    /// The `sha256:<hex>` manifest digest this attestation CLAIMS as its
+    /// subject — the digest of the UNATTESTED package, never of the package
+    /// that carries this layer.
+    pub subject: String,
+    /// Who the attestation claims to have been issued by.
+    pub issuer: String,
+    /// The payload's own media type, as recorded at pack time.
+    pub payload_type: String,
+}
+
 /// Everything a packed server layout yields: the typed package, its binary
-/// (embedded bytes or a reference), and its optional verbatim config and spec
-/// files.
+/// (embedded bytes or a reference), its optional verbatim config and spec
+/// files, and its optional attestation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnpackedServer {
     /// The typed `ServerPackage` reassembled from the envelope + typed layers.
@@ -129,6 +160,8 @@ pub struct UnpackedServer {
     pub config: Option<RestoredFile>,
     /// The OpenAPI spec file, if the package carried one.
     pub spec: Option<RestoredFile>,
+    /// The platform-issued attestation, if the package carried one.
+    pub attestation: Option<UnpackedAttestation>,
 }
 
 /// Index a manifest's layers by media type so every read is keyed by WHAT a
@@ -224,6 +257,51 @@ fn read_named_file_layer(
         })?
         .clone();
     Ok(Some(RestoredFile { file_name, bytes }))
+}
+
+/// Read one of `descriptor`'s annotations, or fail naming the missing key.
+///
+/// Same precedent as [`read_named_file_layer`]'s title-annotation rule, for the
+/// same reason: a present layer missing a value that was part of what was
+/// packed is a malformed layout, and inventing a substitute would silently
+/// fabricate a claim.
+fn required_annotation(descriptor: &Descriptor, key: &str, layer_name: &str) -> Result<String> {
+    Ok(descriptor
+        .annotations()
+        .as_ref()
+        .and_then(|a| a.get(key))
+        .ok_or_else(|| PackageError::Layout {
+            reason: format!("the '{layer_name}' layer has no '{key}' annotation"),
+        })?
+        .clone())
+}
+
+/// Read the optional attestation layer back into an [`UnpackedAttestation`],
+/// taking its three metadata values from the layer descriptor's annotations.
+/// Returns `Ok(None)` when the layer is absent — an unattested package is not
+/// an error (D-14).
+///
+/// The payload bytes are digest-verified and then returned VERBATIM: this
+/// function never deserializes, parses or sniffs them.
+fn read_attestation_layer(
+    layout: &OciLayout,
+    descriptor: Option<&&Descriptor>,
+    layer_name: &str,
+) -> Result<Option<UnpackedAttestation>> {
+    let Some(descriptor) = descriptor else {
+        return Ok(None);
+    };
+    let bytes = read_verified_blob(layout, descriptor)?;
+    Ok(Some(UnpackedAttestation {
+        bytes,
+        subject: required_annotation(descriptor, ANNOTATION_ATTESTATION_SUBJECT, layer_name)?,
+        issuer: required_annotation(descriptor, ANNOTATION_ATTESTATION_ISSUER, layer_name)?,
+        payload_type: required_annotation(
+            descriptor,
+            ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
+            layer_name,
+        )?,
+    }))
 }
 
 /// Read one required, digest-verified layer's RAW bytes by media type,
@@ -383,12 +461,15 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
         by_media_type.get(MT_SERVER_OPENAPI_SPEC),
         "openapi-spec",
     )?;
+    let attestation =
+        read_attestation_layer(layout, by_media_type.get(MT_ATTESTATION), "attestation")?;
 
     Ok(UnpackedServer {
         package,
         binary,
         config,
         spec,
+        attestation,
     })
 }
 
@@ -669,6 +750,7 @@ mod tests {
             BinaryMode::Embedded(&bootstrap),
             None,
             None,
+            None,
             &layout,
         )
         .unwrap();
@@ -688,6 +770,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,
@@ -763,6 +846,7 @@ mod tests {
         pack_server(
             &package,
             BinaryMode::Embedded(&bootstrap),
+            None,
             None,
             None,
             &layout,
