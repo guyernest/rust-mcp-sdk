@@ -847,12 +847,14 @@ pub(crate) mod tests_support {
                     component_type: ComponentType::Agent,
                     version: semver::Version::parse("1.2.0").unwrap(),
                     digest: ManifestDigest::from_bytes(b"triage-agent"),
+                    resolved_from: None,
                 }),
                 ComponentRef::Pinned(PinnedRef {
                     name: "london-tube".to_string(),
                     component_type: ComponentType::Server,
                     version: semver::Version::parse("2.0.1").unwrap(),
                     digest: ManifestDigest::from_bytes(b"london-tube"),
+                    resolved_from: None,
                 }),
             ],
             vec![ConfigSlot::new(SlotType::LlmProvider {

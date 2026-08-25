@@ -133,6 +133,7 @@ mod tests {
             component_type,
             version: semver::Version::parse(version).unwrap(),
             digest: ManifestDigest::from_bytes(format!("{name}:{component_type:?}").as_bytes()),
+            resolved_from: None,
         })
     }
 
