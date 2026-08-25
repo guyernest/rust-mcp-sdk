@@ -32,7 +32,7 @@ pub use pack::{
 };
 pub use unpack::{
     unpack_agent, unpack_server, unpack_team, unpack_workflow, RestoredFile, SubjectVerdict,
-    UnpackedAttestation, UnpackedBinary, UnpackedServer,
+    UnpackedAttestation, UnpackedBinary, UnpackedServer, UnpackedTeam,
 };
 
 use crate::oci::media_types::{

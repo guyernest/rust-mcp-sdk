@@ -70,7 +70,7 @@ pub use oci::{
     unpack_server, unpack_team, unpack_workflow, validate_config_slot_agreement,
     validate_config_slot_placeholders, AttestationFile, BinaryMode, ConfigFile, DeclaredConfigSlot,
     OciLayout, OpenApiSpecFile, RestoredFile, SubjectVerdict, UnpackedAttestation, UnpackedBinary,
-    UnpackedServer,
+    UnpackedServer, UnpackedTeam,
 };
 pub use package::{
     AgentPackage, CedarPolicySet, DeployDescriptor, ServerPackage, TeamPackage, WorkflowManifest,

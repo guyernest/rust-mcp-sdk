@@ -20,6 +20,7 @@ use pmcp_package::digest::{canonicalize, ManifestDigest};
 use pmcp_package::oci::media_types::{
     ANNOTATION_ATTESTATION_ISSUER, ANNOTATION_ATTESTATION_PAYLOAD_TYPE,
     ANNOTATION_ATTESTATION_SUBJECT, ARTIFACT_TYPE_SERVER, ARTIFACT_TYPE_TEAM, MT_ATTESTATION,
+    MT_TEAM_CONFIG,
 };
 use pmcp_package::oci::{
     pack_agent, pack_server, pack_team, pack_workflow, unpack_agent, unpack_server, unpack_team,
@@ -29,7 +30,7 @@ use pmcp_package::package::{
     AgentPackage, HumanRole, ServerPackage, TeamLimits, TeamMember, TeamPackage, TeamRole,
     WorkflowManifest,
 };
-use pmcp_package::reference::{ComponentRef, ComponentType};
+use pmcp_package::reference::{ComponentRef, ComponentType, PinnedRef};
 use pmcp_package::slot::{ConfigSlot, SlotType};
 use pmcp_package::PackageError;
 mod common;
@@ -202,13 +203,215 @@ fn team_package_round_trips_losslessly() {
     let dir = tempfile::tempdir().unwrap();
     let layout = OciLayout::create(dir.path()).unwrap();
 
-    pack_team(&package, &layout).unwrap();
+    pack_team(&package, None, &layout).unwrap();
     let unpacked = unpack_team(&layout).unwrap();
 
     assert_eq!(
-        unpacked, package,
+        unpacked.package, package,
         "TeamPackage must round-trip pack/unpack losslessly"
     );
+    assert_eq!(
+        unpacked.attestation, None,
+        "an unattested team must round-trip with no attestation — absence is the layer's \
+         absence, never a decoding default (D-14)"
+    );
+}
+
+/// The unattested team layout must be structurally what it always was: adding
+/// the OPTIONAL attestation layer to the team path must not have added a layer
+/// (or an absence marker) to packages that carry no attestation.
+#[test]
+fn an_unattested_team_manifest_carries_exactly_one_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    pack_team(&sample_team_package(), None, &layout).unwrap();
+
+    assert_eq!(
+        layer_media_types(&layout),
+        vec![MT_TEAM_CONFIG.to_string()],
+        "an unattested team packs the team-config layer and nothing else"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Attestation carriage on the TEAM path — SC2's second half
+//
+// The team carrier reuses the server path's mechanism verbatim: the same
+// kind-neutral `MT_ATTESTATION` constant, the same annotation vocabulary, the
+// same subject verdict re-derived rather than read. These tests assert that
+// from the outside, so a future kind dispatch would break them.
+// ---------------------------------------------------------------------
+
+/// The same team with every reference PINNED.
+///
+/// Attested team fixtures must be fully pinned: an attestation over a team
+/// holding a `ComponentRef::Range` is refused at pack time (D-09), so a
+/// range-bearing fixture would fail at the pack step and mask what these tests
+/// are actually asserting.
+fn fully_pinned_team_package() -> TeamPackage {
+    let mut package = sample_team_package();
+    package.entry_point = pinned("claims-triage-agent", ComponentType::Agent);
+    package.members = vec![TeamMember {
+        agent: pinned("claims-triage-agent", ComponentType::Agent),
+        role: TeamRole::EntryPoint,
+    }];
+    package.built_in_servers = vec![pinned("team-fs", ComponentType::Server)];
+    package.finalizer_agents = vec![pinned("formatter-agent", ComponentType::Agent)];
+    package
+}
+
+fn pinned(name: &str, component_type: ComponentType) -> ComponentRef {
+    ComponentRef::Pinned(PinnedRef {
+        name: name.to_string(),
+        component_type,
+        version: semver::Version::parse("1.0.0").unwrap(),
+        digest: ManifestDigest::from_bytes(name.as_bytes()),
+        resolved_from: None,
+    })
+}
+
+/// Pack a fully pinned team twice — once unattested to learn the subject, once
+/// attested with it. Returns `(the attested layout, the unattested digest the
+/// attestation names, the attested digest)`.
+fn pack_the_same_team_with_and_without_an_attestation(
+    dir: &std::path::Path,
+) -> (OciLayout, ManifestDigest, ManifestDigest) {
+    let package = fully_pinned_team_package();
+
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_layout = OciLayout::create(scratch.path()).unwrap();
+    let unattested = pack_team(&package, None, &scratch_layout).unwrap();
+
+    let layout = OciLayout::create(dir).unwrap();
+    let attested = pack_team(
+        &package,
+        Some(attestation_claiming(unattested.as_str())),
+        &layout,
+    )
+    .unwrap();
+    (layout, unattested, attested)
+}
+
+/// SC2's team half, end to end: an attested team round-trips its typed package
+/// AND its attestation, with the payload bytes byte-identical and the three
+/// annotation values carried verbatim.
+#[test]
+fn an_attested_team_round_trips_its_package_and_its_attestation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, unattested, attested) =
+        pack_the_same_team_with_and_without_an_attestation(dir.path());
+
+    assert_ne!(
+        attested.as_str(),
+        unattested.as_str(),
+        "the attestation layer is inside the bytes the digest covers, so an attested team must \
+         hash to something other than the subject it names (D-01, on the team path too)"
+    );
+
+    let unpacked = unpack_team(&layout).unwrap();
+    assert_eq!(unpacked.package, fully_pinned_team_package());
+
+    let attestation = unpacked
+        .attestation
+        .expect("the team carried an attestation");
+    assert_eq!(
+        attestation.bytes, OPAQUE_ATTESTATION_BYTES,
+        "the payload travels VERBATIM — bytes that are neither JSON nor UTF-8 prove nothing \
+         parsed them"
+    );
+    assert_eq!(attestation.issuer, ATTESTATION_ISSUER);
+    assert_eq!(attestation.payload_type, ATTESTATION_PAYLOAD_TYPE);
+    assert_eq!(attestation.subject.claimed, unattested.as_str());
+    assert!(
+        attestation.subject.matches(),
+        "the subject names this very team, so the verdict must be a match"
+    );
+}
+
+/// The verdict is RE-DERIVED on the team path too, never read from the stored
+/// claim: altering only the subject annotation yields a successful unpack whose
+/// verdict is a MISMATCH, with the claim and the reality both readable.
+#[test]
+fn an_altered_team_subject_annotation_unpacks_successfully_and_reports_a_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, unattested, _) = pack_the_same_team_with_and_without_an_attestation(dir.path());
+
+    let other = a_subject_naming_another_package();
+    alter_the_claimed_subject(&layout, other.as_str());
+
+    let attestation = unpack_team(&layout)
+        .expect("every blob still verifies — a false CLAIM is not a corrupt package")
+        .attestation
+        .expect("the team still carries an attestation");
+
+    assert_eq!(attestation.subject.claimed, other.as_str());
+    assert_eq!(
+        attestation.subject.unattested_digest, unattested,
+        "the re-derived digest must be computed from the layout, not read from the annotation"
+    );
+    assert!(
+        !attestation.subject.matches(),
+        "a subject naming another package must report a mismatch"
+    );
+}
+
+/// The kind-neutral media type is reused with NO team-specific spelling: an
+/// attested TEAM layout declares the team `artifactType` while its attestation
+/// layer declares the same constant a server's does.
+#[test]
+fn an_attested_team_declares_the_team_artifact_type_and_the_kind_neutral_attestation_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let (layout, _, _) = pack_the_same_team_with_and_without_an_attestation(dir.path());
+
+    let index = layout.read_index().unwrap();
+    let manifest = layout.read_manifest(&index.manifests()[0]).unwrap();
+    assert_eq!(
+        manifest.artifact_type().as_ref().map(ToString::to_string),
+        Some(ARTIFACT_TYPE_TEAM.to_string()),
+        "package kind is a function of artifactType, never of the attestation layer"
+    );
+    assert_eq!(
+        layer_media_types(&layout),
+        vec![MT_TEAM_CONFIG.to_string(), MT_ATTESTATION.to_string()],
+        "an attested team carries its config layer plus the SAME kind-neutral attestation layer \
+         a server carries — one constant, no kind dispatch"
+    );
+}
+
+/// The extra-layer defence still holds where it still applies: admitting a
+/// SECOND layer on the team path must not have loosened the strict
+/// exactly-one-layer rule for agents.
+#[test]
+fn a_crafted_agent_layout_with_an_extra_layer_is_still_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).unwrap();
+    pack_agent(&sample_agent_package(), &layout).unwrap();
+
+    // Graft the attestation layer from an attested TEAM onto the agent's
+    // manifest — the exact shape a crafted layout would use to smuggle a second
+    // layer past a rule that merely counted "at least one".
+    let team_dir = tempfile::tempdir().unwrap();
+    let (team_layout, _, _) = pack_the_same_team_with_and_without_an_attestation(team_dir.path());
+    let team_index = team_layout.read_index().unwrap();
+    let team_manifest = team_layout
+        .read_manifest(&team_index.manifests()[0])
+        .unwrap();
+    let extra = team_manifest
+        .layers()
+        .iter()
+        .find(|l| l.media_type().to_string() == MT_ATTESTATION)
+        .expect("the attested team carries an attestation layer")
+        .clone();
+
+    rewrite_manifest(&layout, |manifest| {
+        let mut layers = manifest.layers().clone();
+        layers.push(extra.clone());
+        manifest.set_layers(layers);
+    });
+
+    let err = unpack_agent(&layout)
+        .expect_err("an agent package must carry EXACTLY one layer, no matter what the extra is");
+    assert!(matches!(err, PackageError::Layout { .. }), "got {err:?}");
 }
 
 // ---------------------------------------------------------------------

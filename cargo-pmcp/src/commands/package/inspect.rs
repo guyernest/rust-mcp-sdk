@@ -57,8 +57,9 @@ use clap::Args;
 use colored::Colorize;
 use pmcp_package::oci::{
     unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout, UnpackedServer,
+    UnpackedTeam,
 };
-use pmcp_package::{AgentPackage, TeamPackage, WorkflowManifest};
+use pmcp_package::{AgentPackage, WorkflowManifest};
 
 use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
 use crate::commands::GlobalFlags;
@@ -151,9 +152,9 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
             }
         },
         PackageKind::Team => {
-            let pkg = unpack_team(layout).context("unpack team package")?;
+            let unpacked = unpack_team(layout).context("unpack team package")?;
             if output {
-                render_team(&pkg);
+                render_team(&unpacked);
             }
         },
         PackageKind::Server => {
@@ -225,7 +226,8 @@ fn render_agent(pkg: &AgentPackage) {
     field("Connectors", pkg.connectors.len());
 }
 
-fn render_team(pkg: &TeamPackage) {
+fn render_team(unpacked: &UnpackedTeam) {
+    let pkg = &unpacked.package;
     header(PackageKind::Team);
     field("Name", &pkg.name);
     field("Version", &pkg.version);

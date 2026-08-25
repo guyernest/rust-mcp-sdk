@@ -460,7 +460,11 @@ fn validate_pack_preconditions(
     unattested_layers: &[PlannedLayer],
 ) -> Result<()> {
     reject_attestation_annotations_that_break_canonical_json(attestation)?;
-    reject_an_attestation_subject_naming_another_package(attestation, unattested_layers)?;
+    reject_an_attestation_subject_naming_another_package(
+        attestation,
+        unattested_layers,
+        ARTIFACT_TYPE_SERVER,
+    )?;
     // The document gates run only when a config file is present: an embedded,
     // pre-built package has no config document to read declarations out of,
     // and every pre-0.2 server package is exactly that shape.
@@ -617,6 +621,7 @@ fn reject_attestation_annotations_that_break_canonical_json(
 fn reject_an_attestation_subject_naming_another_package(
     attestation: Option<AttestationFile<'_>>,
     unattested_layers: &[PlannedLayer],
+    artifact_type: &str,
 ) -> Result<()> {
     let Some(attestation) = attestation else {
         return Ok(());
@@ -625,7 +630,7 @@ fn reject_an_attestation_subject_naming_another_package(
     // is a malformed claim, and reporting it as a MISMATCH would tell an
     // operator to go looking for the wrong package.
     let supplied = ManifestDigest::parse(attestation.subject)?;
-    let computed = would_be_unattested_manifest_digest(unattested_layers)?;
+    let computed = would_be_unattested_manifest_digest(unattested_layers, artifact_type)?;
     if supplied == computed {
         return Ok(());
     }
@@ -648,14 +653,23 @@ fn reject_an_attestation_subject_naming_another_package(
 /// descriptor `finalize_pack`'s empty-config `write_blob` produces (both hash
 /// the same two fixed bytes). A bespoke hash or a hand-rolled serialization
 /// here would not equal the digest `finalize_pack` later stores.
+///
+/// `artifact_type` is a PARAMETER rather than a constant because two package
+/// kinds now carry attestations (D-08): a server pack passes
+/// [`ARTIFACT_TYPE_SERVER`] and a team pack passes `P::ARTIFACT_TYPE`
+/// (`ARTIFACT_TYPE_TEAM`). It must be the SAME value the matching
+/// [`finalize_pack`] call will use, or the dry manifest differs from the real
+/// one in a field that is inside the hash and the comparison silently stops
+/// meaning anything.
 fn would_be_unattested_manifest_digest(
     unattested_layers: &[PlannedLayer],
+    artifact_type: &str,
 ) -> Result<ManifestDigest> {
     let layers: Vec<Descriptor> = unattested_layers
         .iter()
         .map(PlannedLayer::describe)
         .collect();
-    let manifest = assemble_manifest(empty_config_descriptor(), layers, ARTIFACT_TYPE_SERVER)?;
+    let manifest = assemble_manifest(empty_config_descriptor(), layers, artifact_type)?;
     Ok(ManifestDigest::from_bytes(&canonicalize(&manifest)?))
 }
 
@@ -855,22 +869,97 @@ pub fn pack_server(
     )
 }
 
+/// Every gate a [`pack_single_layer`] call runs BEFORE its first `write_blob`
+/// — the single-layer sibling of [`validate_pack_preconditions`], carrying the
+/// same "a rejected pack adds neither a blob nor an index entry" invariant.
+///
+/// It holds the two KIND-NEUTRAL attestation gates, called in the same order
+/// and through the SAME two functions the server path uses: no second copy of
+/// either check exists, and a fix applied to one is a fix applied to both.
+///
+/// # Errors
+///
+/// Returns [`PackageError::AttestationAnnotationInvalid`],
+/// [`PackageError::MalformedDigest`] or
+/// [`PackageError::AttestationSubjectMismatch`] per the two gates it calls.
+///
+/// [`PackageError::AttestationAnnotationInvalid`]: crate::error::PackageError::AttestationAnnotationInvalid
+/// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
+/// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
+fn validate_single_layer_pack_preconditions(
+    attestation: Option<AttestationFile<'_>>,
+    unattested_layers: &[PlannedLayer],
+    artifact_type: &str,
+) -> Result<()> {
+    reject_attestation_annotations_that_break_canonical_json(attestation)?;
+    reject_an_attestation_subject_naming_another_package(
+        attestation,
+        unattested_layers,
+        artifact_type,
+    )
+}
+
 /// Pack any single-layer package (agent/team/workflow) into `layout`:
 /// serialize it to one canonical-JSON config layer under its vendor media
-/// type, then wrap it in a manifest with the kind's `artifactType`. The
-/// per-kind constants come from the [`SingleLayerPackage`] impl — one path,
-/// no per-kind copy-paste. Returns the canonical manifest digest.
+/// type, optionally append a verbatim attestation layer, then wrap the result
+/// in a manifest with the kind's `artifactType`. The per-kind constants come
+/// from the [`SingleLayerPackage`] impl — one path, no per-kind copy-paste.
+/// Returns the canonical manifest digest.
+///
+/// # Attestation carriage covers SERVER and TEAM packages only (D-08)
+///
+/// This helper takes `attestation` because all three single-layer kinds route
+/// through it, but only [`pack_team`] EXPOSES the parameter. [`pack_agent`] and
+/// [`pack_workflow`] pass `None` and their public signatures are unchanged.
+///
+/// The reason is stated here, at the shared helper, because this is exactly
+/// where a later reader is tempted to "finish the job" by exposing it on all
+/// three: **the unit that ships to production is a team, and an agent is a
+/// team of one in its essence.** An agent that needs an attestation is wrapped
+/// as a team of one and attested there; it does not get its own carriage path.
+/// `pack_workflow` is out for the same reason — a workflow is a captured
+/// resolution of a team, not an independently shipped unit.
+///
+/// The consequence to preserve: ONE mechanism, not two. The team path reuses
+/// the server path's [`plan_attestation_layer`], [`write_planned_layer`],
+/// [`reject_attestation_annotations_that_break_canonical_json`] and
+/// [`reject_an_attestation_subject_naming_another_package`] verbatim, with no
+/// kind dispatch anywhere and no team-specific attestation media type.
+///
+/// # Errors
+///
+/// Returns [`PackageError::Layout`] if the `ImageManifest` fails to build or if
+/// any blob/index write fails, [`PackageError::Serialize`] if the package fails
+/// to canonicalize, and any gate error from
+/// [`validate_single_layer_pack_preconditions`].
+///
+/// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
 fn pack_single_layer<P: SingleLayerPackage>(
     package: &P,
+    attestation: Option<AttestationFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
-    let layer_descriptor = layout.write_blob(
-        vendor_media_type(P::LAYER_MEDIA_TYPE),
-        &canonicalize(package)?,
-    )?;
+    // 1. BYTES. Nothing here touches the filesystem — the same ordering
+    //    `pack_server` uses, and what lets the subject gate below compute the
+    //    would-be unattested manifest digest before the first write.
+    let unattested = [plan_struct_layer(P::LAYER_MEDIA_TYPE, package)?];
+    let attestation_layer = attestation.map(plan_attestation_layer);
+
+    // 2. GATES. Any refusal returns here, with the destination layout still
+    //    byte-for-byte as it was found.
+    validate_single_layer_pack_preconditions(attestation, &unattested, P::ARTIFACT_TYPE)?;
+
+    // 3. WRITES. The attestation goes LAST so the push order stays
+    //    deterministic. As on the server path that order is explicitly NOT a
+    //    read-order contract — every layer is located by media type.
+    let mut layers = Vec::with_capacity(unattested.len() + 1);
+    for planned in unattested.iter().chain(attestation_layer.iter()) {
+        layers.push(write_planned_layer(layout, planned)?);
+    }
+
     finalize_pack(
         layout,
-        vec![layer_descriptor],
+        layers,
         P::ARTIFACT_TYPE,
         package.name(),
         package.version(),
@@ -879,20 +968,64 @@ fn pack_single_layer<P: SingleLayerPackage>(
 
 /// Pack an `AgentPackage` into `layout` as a single-layer local OCI artifact.
 /// Returns the canonical manifest digest.
+///
+/// An agent package carries NO attestation, by decision rather than by
+/// omission: see `pack_single_layer`'s "attestation carriage covers server
+/// and team packages only" section for why, and what to do instead (wrap the
+/// agent as a team of one).
 pub fn pack_agent(package: &AgentPackage, layout: &OciLayout) -> Result<ManifestDigest> {
-    pack_single_layer(package, layout)
+    pack_single_layer(package, None, layout)
 }
 
-/// Pack a `TeamPackage` into `layout` as a single-layer local OCI artifact.
-/// Returns the canonical manifest digest.
-pub fn pack_team(package: &TeamPackage, layout: &OciLayout) -> Result<ManifestDigest> {
-    pack_single_layer(package, layout)
+/// Pack a `TeamPackage` into `layout` as a local OCI artifact — one config
+/// layer, plus an OPTIONAL attestation layer. Returns the canonical manifest
+/// digest.
+///
+/// # The attestation layer is OPTIONAL, and it carries TWO digests
+///
+/// Exactly as on [`pack_server`], and through the same code: `Some` writes the
+/// payload bytes VERBATIM to their own [`MT_ATTESTATION`] layer — never
+/// canonicalized, never parsed — with subject, issuer and payload media type as
+/// annotations on that LAYER's descriptor. `None` writes no layer at all, and
+/// absence is exactly the layer's absence with no marker (D-14).
+///
+/// An attested team's own manifest digest therefore NECESSARILY DIFFERS from
+/// the unattested digest its attestation names as a subject (D-01). See
+/// [`pack_server`]'s "two digests" section for the full reasoning and the
+/// rejected alternative.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+///
+/// # Errors
+///
+/// Returns [`PackageError::AttestationAnnotationInvalid`] when a supplied
+/// attestation's `issuer` or `payload_type` carries a C0 control character,
+/// [`PackageError::MalformedDigest`] when its `subject` is not a well-formed
+/// `sha256:<64 hex>` string, and [`PackageError::AttestationSubjectMismatch`]
+/// when the subject is well-formed but names another package — all BEFORE
+/// anything is written. Also returns [`PackageError::Layout`] or
+/// [`PackageError::Serialize`] on a write or canonicalization failure.
+///
+/// [`PackageError::AttestationAnnotationInvalid`]: crate::error::PackageError::AttestationAnnotationInvalid
+/// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
+/// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
+/// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+pub fn pack_team(
+    package: &TeamPackage,
+    attestation: Option<AttestationFile<'_>>,
+    layout: &OciLayout,
+) -> Result<ManifestDigest> {
+    pack_single_layer(package, attestation, layout)
 }
 
 /// Pack a `WorkflowManifest` into `layout` as a single-layer local OCI
 /// artifact. Returns the canonical manifest digest.
+///
+/// A workflow manifest carries NO attestation, by decision rather than by
+/// omission: see `pack_single_layer`'s "attestation carriage covers server
+/// and team packages only" section.
 pub fn pack_workflow(package: &WorkflowManifest, layout: &OciLayout) -> Result<ManifestDigest> {
-    pack_single_layer(package, layout)
+    pack_single_layer(package, None, layout)
 }
 
 /// Build the `ImageManifest` for a package: OCI schema version, the standard
