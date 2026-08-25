@@ -826,3 +826,347 @@ mod attestation_subject {
         .expect("a non-ASCII annotation is representable and must pack");
     }
 }
+
+// =====================================================================
+// 20-27. Gate A — an attestation over an UNRESOLVED package is refused (D-09)
+//
+// "Attestation implies resolved", the `cargo build --locked` analogue. An
+// attestation's subject is a digest; if that digest covers a package holding a
+// `ComponentRef::Range`, two environments with the same package digest run
+// DIFFERENT code — dev resolves `london-tube@^1.2` to 1.3.0 while prod resolves
+// the same range to the 1.2.0 it already has — so the attestation would attest
+// nothing about what actually runs.
+//
+// Two boundaries these tests pin as VISIBLE BEHAVIOUR rather than as caveats:
+//
+//   * The guard is scoped to the CLAIM, not to the format. The same unresolved
+//     team still packs UNATTESTED — `an_unattested_team_holding_ranges_still_packs`.
+//   * The guard is ONE LEVEL DEEP —
+//     `an_attested_team_whose_pinned_agent_itself_holds_a_range_still_packs`,
+//     whose own rustdoc states what its passing does NOT mean.
+// =====================================================================
+
+mod attestation_resolved {
+    use super::*;
+    use pmcp_package::package::{
+        AgentPackage, HumanRole, TeamLimits, TeamMember, TeamPackage, TeamRole,
+    };
+    use pmcp_package::reference::PinnedRef;
+    use pmcp_package::{pack_agent, pack_team, AttestationFile};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    const ISSUER: &str = "https://issuer.test.invalid/pmcp-run";
+    const PAYLOAD_TYPE: &str = "application/vnd.test.attestation-payload";
+    const OPAQUE_PAYLOAD: &[u8] = b"\x00\x01 not json \xff\xfe";
+
+    fn pinned(name: &str, component_type: ComponentType) -> ComponentRef {
+        ComponentRef::Pinned(PinnedRef {
+            name: name.to_string(),
+            component_type,
+            version: semver::Version::parse("1.0.0").unwrap(),
+            digest: ManifestDigest::from_bytes(name.as_bytes()),
+            resolved_from: None,
+        })
+    }
+
+    fn range(name: &str, component_type: ComponentType) -> ComponentRef {
+        ComponentRef::Range {
+            name: name.to_string(),
+            range: semver::VersionReq::parse("^1").unwrap(),
+            component_type,
+        }
+    }
+
+    /// A team with ALL FOUR reference surfaces populated and pinned. Each
+    /// unresolved-surface test below takes this and breaks exactly one surface,
+    /// so a failure identifies which surface the traversal missed.
+    fn fully_pinned_team() -> TeamPackage {
+        let human_role = HumanRole {
+            role: "approver".to_string(),
+            description: "Approves budget overrides".to_string(),
+            responsibilities: vec!["review".to_string()],
+            channel_hints: vec!["slack".to_string()],
+        };
+        TeamPackage {
+            name: "support-team".to_string(),
+            version: semver::Version::parse("1.0.0").unwrap(),
+            entry_point: pinned("triage-agent", ComponentType::Agent),
+            members: vec![
+                TeamMember {
+                    agent: pinned("triage-agent", ComponentType::Agent),
+                    role: TeamRole::EntryPoint,
+                },
+                TeamMember {
+                    agent: pinned("reviewer-agent", ComponentType::Agent),
+                    role: TeamRole::Member,
+                },
+            ],
+            human_roles: vec![human_role.clone()],
+            limits: TeamLimits {
+                max_team_depth: 3,
+                max_team_total_tokens: 200_000,
+                max_team_wall_clock_seconds: 600,
+                poll_interval_ms: 2000,
+            },
+            built_in_servers: vec![pinned("team-fs", ComponentType::Server)],
+            finalizer_agents: vec![pinned("formatter-agent", ComponentType::Agent)],
+            budget_defaults: vec![],
+            config_slots: vec![human_role.to_config_slot()],
+        }
+    }
+
+    /// The manifest digest `team` packs to with NO attestation — the one value
+    /// Gate B accepts as a subject.
+    ///
+    /// Computed even for UNRESOLVED teams, which is possible precisely because
+    /// an unattested pack of an unresolved team is legal. That is what makes
+    /// the refusal tests below unambiguous: the subject they supply is CORRECT,
+    /// so the only thing Gate A can be reacting to is the unresolved reference.
+    fn unattested_digest(team: &TeamPackage) -> ManifestDigest {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        pack_team(team, None, &layout).expect("an unattested team must always pack")
+    }
+
+    fn attestation_claiming(subject: &str) -> AttestationFile<'_> {
+        AttestationFile {
+            bytes: OPAQUE_PAYLOAD,
+            subject,
+            issuer: ISSUER,
+            payload_type: PAYLOAD_TYPE,
+        }
+    }
+
+    /// Every file under `root`, keyed by relative path, valued by
+    /// `(byte length, content digest)` — the same layout snapshot Gate B's
+    /// ordering assertion uses.
+    fn snapshot(root: &Path) -> BTreeMap<String, (u64, String)> {
+        let mut files = BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let bytes = std::fs::read(&path).unwrap();
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                let digest = ManifestDigest::from_bytes(&bytes).as_str().to_string();
+                files.insert(relative, (bytes.len() as u64, digest));
+            }
+        }
+        files
+    }
+
+    /// Attempt an attested pack of `team` with a CORRECT subject, and assert it
+    /// is refused as an unresolved reference naming `name` and `component_type`.
+    fn assert_refused_naming(team: &TeamPackage, name: &str, component_type: ComponentType) {
+        let subject = unattested_digest(team);
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+
+        let err = pack_team(team, Some(attestation_claiming(subject.as_str())), &layout)
+            .expect_err("an attestation over an unresolved team must be refused");
+
+        assert!(
+            matches!(err, PackageError::InvalidReference { .. }),
+            "expected InvalidReference, got {err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(name),
+            "the refusal must NAME the offending component; message was: {message}"
+        );
+        assert!(
+            message.contains(&format!("{component_type:?}")),
+            "the refusal must name the component's TYPE too — a team can hold a server and an \
+             agent sharing one name, and the name alone would not identify which failed; \
+             message was: {message}"
+        );
+    }
+
+    // --- 20-23. One unresolved surface at a time --------------------------
+
+    #[test]
+    fn an_attested_team_with_a_range_entry_point_is_refused_naming_that_component() {
+        let mut team = fully_pinned_team();
+        team.entry_point = range("unpinned-entry", ComponentType::Agent);
+        assert_refused_naming(&team, "unpinned-entry", ComponentType::Agent);
+    }
+
+    #[test]
+    fn an_attested_team_with_a_range_member_agent_is_refused_naming_that_component() {
+        let mut team = fully_pinned_team();
+        // Deliberately the SECOND member: a traversal that read only
+        // `members[0]` would pass this test if the first were broken instead.
+        team.members[1].agent = range("unpinned-member", ComponentType::Agent);
+        assert_refused_naming(&team, "unpinned-member", ComponentType::Agent);
+    }
+
+    #[test]
+    fn an_attested_team_with_a_range_built_in_server_is_refused_naming_that_component() {
+        let mut team = fully_pinned_team();
+        team.built_in_servers = vec![range("unpinned-server", ComponentType::Server)];
+        assert_refused_naming(&team, "unpinned-server", ComponentType::Server);
+    }
+
+    #[test]
+    fn an_attested_team_with_a_range_finalizer_agent_is_refused_naming_that_component() {
+        let mut team = fully_pinned_team();
+        team.finalizer_agents = vec![range("unpinned-finalizer", ComponentType::Agent)];
+        assert_refused_naming(&team, "unpinned-finalizer", ComponentType::Agent);
+    }
+
+    // --- 24. The guard is scoped to the CLAIM, not to the format -----------
+
+    /// D-09 is *attestation implies resolved*, NOT *teams must always be
+    /// pinned*. A team holding ranges is a perfectly legal package — it is what
+    /// capture produces before resolution — and it must keep packing. Gating
+    /// unconditionally would break every existing unattested team pack.
+    #[test]
+    fn an_unattested_team_holding_ranges_still_packs() {
+        let mut team = fully_pinned_team();
+        team.entry_point = range("unpinned-entry", ComponentType::Agent);
+        team.built_in_servers = vec![range("unpinned-server", ComponentType::Server)];
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+
+        assert!(
+            pack_team(&team, None, &layout).is_ok(),
+            "the guard is scoped to the attestation claim, not to the package format"
+        );
+    }
+
+    // --- 25. The accepting half ------------------------------------------
+
+    #[test]
+    fn an_attested_fully_pinned_team_packs() {
+        let team = fully_pinned_team();
+        let subject = unattested_digest(&team);
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+
+        pack_team(&team, Some(attestation_claiming(subject.as_str())), &layout)
+            .expect("a fully pinned team may carry an attestation");
+    }
+
+    // --- 26. The refusal happens BEFORE the first write -------------------
+
+    /// Gate A running after the layer-writing loop would return the same `Err`,
+    /// so the refusal alone proves nothing about the filesystem. This snapshot
+    /// is what pins "a rejected pack adds neither a blob nor an index entry".
+    #[test]
+    fn a_refused_attested_team_pack_leaves_the_destination_layout_byte_for_byte_unchanged() {
+        let mut team = fully_pinned_team();
+        team.entry_point = range("unpinned-entry", ComponentType::Agent);
+        let subject = unattested_digest(&team);
+
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+        let before = snapshot(dir.path());
+        assert!(
+            !before.is_empty(),
+            "a freshly created layout carries oci-layout and index.json, or this test compares \
+             nothing against nothing"
+        );
+
+        pack_team(&team, Some(attestation_claiming(subject.as_str())), &layout)
+            .expect_err("an attestation over an unresolved team must be refused");
+
+        assert_eq!(
+            before,
+            snapshot(dir.path()),
+            "a refused pack must add neither a blob nor an index entry — Gate A runs BEFORE the \
+             first write"
+        );
+    }
+
+    // --- 27. The one-level depth limit, constructed literally --------------
+
+    /// **What this test's passing proves: the depth limit EXISTS. What it does
+    /// NOT prove: that the dependency graph is transitively resolved.**
+    ///
+    /// The case is built literally rather than described. An `AgentPackage`
+    /// holding a `ComponentRef::Range` connector is packed; the team's
+    /// `members[0].agent` is then a `ComponentRef::Pinned` naming that agent
+    /// package's real manifest digest, and every other surface is pinned too.
+    /// The team packs WITH an attestation and succeeds.
+    ///
+    /// It succeeds because the team holds only a DIGEST. That digest covers the
+    /// agent package's own contents, including its `connectors`, which are still
+    /// ranges — but milestone Decision 2 forbids this crate a registry client,
+    /// so nothing here can resolve a referenced package offline to look inside
+    /// it. Closing this transitively is platform ADMISSION POLICY (requiring
+    /// every pinned component to itself be attested), not SDK work.
+    ///
+    /// A green here must therefore never be read as a transitive-resolution
+    /// guarantee. It is the boundary of the guarantee, made visible.
+    #[test]
+    fn an_attested_team_whose_pinned_agent_itself_holds_a_range_still_packs() {
+        // 1. An agent whose OWN connector is unresolved.
+        let agent = AgentPackage {
+            name: "triage-agent".to_string(),
+            version: semver::Version::parse("1.0.0").unwrap(),
+            instructions: "You triage incoming support tickets.".to_string(),
+            llm: ConfigSlot::new(SlotType::LlmProvider {
+                name: "primary-llm".to_string(),
+                tested_value: "anthropic".to_string(),
+            }),
+            max_tokens: 4096,
+            max_iterations: 25,
+            connectors: vec![range("london-tube", ComponentType::Server)],
+            tool_selection: None,
+            input_schema: None,
+            output_schema: None,
+            importance: None,
+            finalizer_role: None,
+            budget_defaults: vec![],
+        };
+        assert!(
+            matches!(agent.connectors[0], ComponentRef::Range { .. }),
+            "the referenced agent must genuinely hold a Range, or this test proves nothing"
+        );
+
+        let agent_dir = tempfile::tempdir().unwrap();
+        let agent_layout = OciLayout::create(agent_dir.path()).unwrap();
+        let agent_digest = pack_agent(&agent, &agent_layout).expect("the agent package must pack");
+
+        // 2. A team pinning that agent by its REAL digest, everything else pinned.
+        let mut team = fully_pinned_team();
+        team.entry_point = ComponentRef::Pinned(PinnedRef {
+            name: agent.name.clone(),
+            component_type: ComponentType::Agent,
+            version: agent.version.clone(),
+            digest: agent_digest.clone(),
+            resolved_from: None,
+        });
+        team.members = vec![TeamMember {
+            agent: ComponentRef::Pinned(PinnedRef {
+                name: agent.name.clone(),
+                component_type: ComponentType::Agent,
+                version: agent.version.clone(),
+                digest: agent_digest,
+                resolved_from: None,
+            }),
+            role: TeamRole::EntryPoint,
+        }];
+
+        // 3. The team packs WITH an attestation.
+        let subject = unattested_digest(&team);
+        let dir = tempfile::tempdir().unwrap();
+        let layout = OciLayout::create(dir.path()).unwrap();
+
+        pack_team(&team, Some(attestation_claiming(subject.as_str())), &layout).expect(
+            "the team's own four surfaces are pinned, so it packs — the guard cannot see inside \
+             the agent package that digest names, and says so",
+        );
+    }
+}

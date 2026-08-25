@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 25
 waived_count: 0
 fixed_count: 8
-total_count: 32
-last_updated: 2026-08-25T21:58:37.332Z
+total_count: 33
+last_updated: 2026-08-25T22:52:55.776Z
 ---
 
 # Broken Windows Ledger
@@ -47,6 +47,7 @@ last_updated: 2026-08-25T21:58:37.332Z
 | 30 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-02-PLAN.md |  | make quality-gate could not be completed for plan 122-02 - run aborted on machine-level disk exhaustion (No space left on device, 117MiB free); all per-crate and per-target legs passed individually | fixed |  | 2026-08-25T20:06:47.115Z | 2026-08-25T21:01:19.333Z |
 | 31 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-03-PLAN.md |  | make quality-gate could not be completed for plan 122-03 - make doc-check aborted on machine-level disk exhaustion (13x No space left on device; df showed 117MiB free on a volume shared with a concurrent sibling worktree agent). Not a code defect. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (266 tests), test-cargo-pmcp-integration exit 0 (package_inspect 8), no-crypto-check exit 0, roundtrip_e2e 8 passed, fmt-check exit 0, lint-plans exit 0, check-release-coverage exit 0 | fixed |  | 2026-08-25T20:42:26.793Z | 2026-08-25T21:01:19.413Z |
 | 32 | 122 | deviation | crates/pmcp-package/src/oci/pack.rs |  | Canonical JSON (olpc-cjson) writes C0 control characters LITERALLY, so any string reaching the manifest can produce non-RFC-8259 JSON. Plan 122-06 closed this for the two attacker-controlled ATTESTATION annotations (issuer, payload_type) via a pack-time refusal. The same hazard remains UNGATED for ConfigFile/OpenApiSpecFile file_name (the org.opencontainers.image.title annotation) and for every String inside ServerPackage - a different trust class (author-supplied), deliberately out of 122-06 scope. | open |  | 2026-08-25T21:58:37.332Z |  |
+| 33 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-07-PLAN.md |  | make quality-gate could not be completed for plan 122-07 - the run reached make test-unit and aborted on machine-level disk exhaustion (QUALITY_GATE_EXIT=2; every error No space left on device / rustc-LLVM IO failure on output stream; free space fell 11 GiB -> 0 during the run, and the volume hit absolute zero so no further command could start). Not a code defect. The harness background notification falsely reported 'exit code 0' for this run - the explicit QUALITY_GATE_EXIT sentinel written into the log is what caught it, the same trap 122-02 recorded. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (300 tests, up from the 286 baseline), test-cargo-pmcp-integration exit 0 (package_inspect 12, package_attestation_contract 3, package_capture_contract 3), no-crypto-check exit 0, cargo fmt --all --check exit 0, cargo doc --no-deps zero warnings, pmat complexity max cognitive 21 (no violation, non-vacuity confirmed at --max-cognitive 5), example attestation_carriage exit 0 | open |  | 2026-08-25T22:52:55.776Z |  |
 
 ````json
 [
@@ -432,6 +433,18 @@ last_updated: 2026-08-25T21:58:37.332Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-25T21:58:37.332Z",
+    "resolved_at": null
+  },
+  {
+    "id": 33,
+    "kind": "unrun-verify",
+    "phase": "122",
+    "file": ".planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-07-PLAN.md",
+    "line": null,
+    "description": "make quality-gate could not be completed for plan 122-07 - the run reached make test-unit and aborted on machine-level disk exhaustion (QUALITY_GATE_EXIT=2; every error No space left on device / rustc-LLVM IO failure on output stream; free space fell 11 GiB -> 0 during the run, and the volume hit absolute zero so no further command could start). Not a code defect. The harness background notification falsely reported 'exit code 0' for this run - the explicit QUALITY_GATE_EXIT sentinel written into the log is what caught it, the same trap 122-02 recorded. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (300 tests, up from the 286 baseline), test-cargo-pmcp-integration exit 0 (package_inspect 12, package_attestation_contract 3, package_capture_contract 3), no-crypto-check exit 0, cargo fmt --all --check exit 0, cargo doc --no-deps zero warnings, pmat complexity max cognitive 21 (no violation, non-vacuity confirmed at --max-cognitive 5), example attestation_carriage exit 0",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-25T22:52:55.776Z",
     "resolved_at": null
   }
 ]

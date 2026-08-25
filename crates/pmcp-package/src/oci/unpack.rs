@@ -14,9 +14,12 @@
 //! the config and spec layers are optional and the binary layer is one of two
 //! mutually exclusive media types, so no positional contract can hold. A
 //! `ServerPackage` layout is indexed once by `index_layers` and every read
-//! goes through that index. `AgentPackage`/`TeamPackage`/`WorkflowManifest`
-//! each remain a single layer. The embedded bootstrap layer is returned as raw
-//! bytes — it is never deserialized.
+//! goes through that index. `AgentPackage` and `WorkflowManifest` each remain
+//! strictly a single layer; a `TeamPackage` carries its one config layer plus
+//! an OPTIONAL attestation layer (D-08), so it has its own accounting — see
+//! `unpack_team` and `unpack_single_layer` for the two rules and why they must
+//! stay different. The embedded bootstrap layer is returned as raw bytes — it
+//! is never deserialized.
 
 use crate::digest::{canonicalize, verify, ManifestDigest};
 use crate::error::{PackageError, Result};
@@ -226,6 +229,99 @@ pub struct UnpackedServer {
     pub config: Option<RestoredFile>,
     /// The OpenAPI spec file, if the package carried one.
     pub spec: Option<RestoredFile>,
+    /// The platform-issued attestation, if the package carried one.
+    pub attestation: Option<UnpackedAttestation>,
+}
+
+/// Everything a packed TEAM layout yields: the typed package and its optional
+/// attestation — modelled on [`UnpackedServer`]'s `{ typed package, optional
+/// carriage }` shape, and carrying the same independently re-derived subject
+/// verdict.
+///
+/// # Why `unpack_team` breaks its return type instead of gaining a sibling
+///
+/// The rejected alternative was a second entry point — an `unpack_team_attested`
+/// beside a `TeamPackage`-returning `unpack_team` — which would have kept the
+/// old signature working. It was rejected because it ships TWO functions where
+/// one was asked for, and D-08's own instruction for attestation carriage is
+/// "one mechanism, not two": a caller would then have to know which of two
+/// unpack verbs to reach for, and a caller that reached for the old one would
+/// silently never see an attestation the package actually carries. That is the
+/// failure mode a compile error is cheap insurance against.
+///
+/// Breaking the return type is affordable here specifically: `pmcp-package` is
+/// 0.x, the package tree's standing position is to break freely rather than
+/// carry compatibility shims, and this phase already forces a version
+/// conversation (plan 122-08 owns it — this phase publishes nothing).
+///
+/// # Reachable by both documented paths
+///
+/// Re-exported from `pmcp_package::oci` AND from the crate root, mirroring
+/// [`UnpackedServer`]. A sibling type reachable by only one of two documented
+/// paths is a papercut the next consumer pays.
+///
+/// # Examples
+///
+/// A team round-trips through `pack_team`/`unpack_team`, and both re-export
+/// paths name this one type:
+///
+/// ```
+/// use pmcp_package::oci::{pack_team, unpack_team, OciLayout};
+/// // Both documented paths reach the same type — the crate root ...
+/// use pmcp_package::UnpackedTeam;
+/// // ... and the `oci` module.
+/// use pmcp_package::oci::UnpackedTeam as UnpackedTeamViaOci;
+/// # use pmcp_package::package::{HumanRole, TeamLimits, TeamMember, TeamPackage, TeamRole};
+/// # use pmcp_package::reference::{ComponentRef, ComponentType};
+/// # fn sample_team() -> TeamPackage {
+/// #     let entry_point = ComponentRef::Range {
+/// #         name: "triage-agent".to_string(),
+/// #         range: semver::VersionReq::parse("^1").unwrap(),
+/// #         component_type: ComponentType::Agent,
+/// #     };
+/// #     let human_role = HumanRole {
+/// #         role: "approver".to_string(),
+/// #         description: "Approves budget overrides".to_string(),
+/// #         responsibilities: vec!["review".to_string()],
+/// #         channel_hints: vec!["slack".to_string()],
+/// #     };
+/// #     TeamPackage {
+/// #         name: "support-team".to_string(),
+/// #         version: semver::Version::parse("1.0.0").unwrap(),
+/// #         entry_point: entry_point.clone(),
+/// #         members: vec![TeamMember { agent: entry_point, role: TeamRole::EntryPoint }],
+/// #         human_roles: vec![human_role.clone()],
+/// #         limits: TeamLimits {
+/// #             max_team_depth: 3,
+/// #             max_team_total_tokens: 200_000,
+/// #             max_team_wall_clock_seconds: 600,
+/// #             poll_interval_ms: 2000,
+/// #         },
+/// #         built_in_servers: vec![],
+/// #         finalizer_agents: vec![],
+/// #         budget_defaults: vec![],
+/// #         config_slots: vec![human_role.to_config_slot()],
+/// #     }
+/// # }
+/// let team = sample_team();
+///
+/// let dir = tempfile::tempdir().unwrap();
+/// let layout = OciLayout::create(dir.path()).unwrap();
+///
+/// // Unattested: a team carrying no attestation packs exactly as it always did.
+/// pack_team(&team, None, &layout).unwrap();
+///
+/// let unpacked: UnpackedTeam = unpack_team(&layout).unwrap();
+/// assert_eq!(unpacked.package, team);
+/// assert_eq!(unpacked.attestation, None);
+///
+/// // The two import paths are the same type, so this compiles.
+/// let _also: UnpackedTeamViaOci = unpacked;
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpackedTeam {
+    /// The typed `TeamPackage` deserialized from the team-config layer.
+    pub package: TeamPackage,
     /// The platform-issued attestation, if the package carried one.
     pub attestation: Option<UnpackedAttestation>,
 }
@@ -628,6 +724,25 @@ pub fn unpack_server(layout: &OciLayout) -> Result<UnpackedServer> {
 /// was accepted as long as its JSON happened to deserialize. `unpack_server`
 /// already refuses both shapes via [`index_layers`]; this is the same rule for
 /// the single-layer kinds.
+///
+/// # Why the TEAM path has a different rule, and why they must stay different
+///
+/// [`unpack_team`] does NOT use this function. A team may legitimately carry a
+/// SECOND layer — its optional attestation (D-08) — so the strict count above
+/// would reject every attested team. Its rule is therefore
+/// exactly-one-config-layer PLUS an optional
+/// [`MT_ATTESTATION`] layer and nothing else, stated in its own rustdoc.
+///
+/// The two rules differ because the FACTS differ, not because one is a relaxed
+/// copy of the other: an agent or workflow package has exactly one legal layer,
+/// and a team has one legal layer plus one optional one. Do NOT "unify" them by
+/// loosening this function to `>= 1` layers — that would reopen the exact hole
+/// described above for agents and workflows, where a crafted layout puts an
+/// attacker's package first and the genuine one second. The team path enumerates
+/// the media types it will accept rather than counting them, so it admits the
+/// attestation without admitting anything else.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
 fn unpack_single_layer<P: SingleLayerPackage>(layout: &OciLayout) -> Result<P> {
     let manifest = read_the_one_manifest(layout)?;
     verify_config_blob(layout, &manifest)?;
@@ -663,9 +778,112 @@ pub fn unpack_agent(layout: &OciLayout) -> Result<AgentPackage> {
     unpack_single_layer(layout)
 }
 
-/// Unpack a `TeamPackage` from `layout`.
-pub fn unpack_team(layout: &OciLayout) -> Result<TeamPackage> {
-    unpack_single_layer(layout)
+/// Unpack a team package from `layout`, returning the typed `TeamPackage` and
+/// its optional attestation.
+///
+/// # Exactly ONE config layer, PLUS an optional attestation layer
+///
+/// A team package must carry its [`MT_TEAM_CONFIG`] layer, and MAY carry an
+/// [`MT_ATTESTATION`] layer alongside it (D-08). Any OTHER layer is rejected,
+/// and so is a duplicate of either (via `index_layers`).
+///
+/// This is deliberately a DIFFERENT rule from the strict exactly-one-layer rule
+/// `unpack_single_layer` applies to agents and workflows, and the difference
+/// is a fact about the kinds rather than a relaxation: a team has one legal
+/// layer plus one optional one, an agent and a workflow have exactly one legal
+/// layer each. The rule here is stated as an ALLOW-LIST of media types rather
+/// than as a count, so admitting the attestation admits nothing else — a
+/// crafted layout still cannot slip an extra package layer in beside the
+/// genuine one. See `unpack_single_layer`'s own rustdoc for the hole that
+/// rule closes and why the two must not be unified.
+///
+/// # `attestation: None` means the package carried no attestation
+///
+/// Not a decoding default and not a lossy read — the manifest simply holds no
+/// [`MT_ATTESTATION`] entry. There is no absence marker (D-14), because
+/// [`crate::oci::pack_team`] never drops a supplied attestation.
+///
+/// A returned attestation is a CLAIM, not a verified fact: this crate holds no
+/// keys and checks no signature. The ONE thing checked is the subject, paired
+/// with an unattested manifest digest re-derived from this layout — the same
+/// [`SubjectVerdict`] the server path produces, computed by the same code. A
+/// mismatch is DATA, not an `Err`; corrupt BYTES still fail closed with
+/// [`PackageError::DigestMismatch`]. Those two behaviours are deliberately
+/// different and must not be harmonized (D-03).
+///
+/// [`MT_TEAM_CONFIG`]: crate::oci::media_types::MT_TEAM_CONFIG
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+///
+/// # Errors
+///
+/// Returns [`PackageError::Layout`] if the layout is malformed (a duplicate
+/// media type, a missing team-config layer, an unexpected extra layer, or an
+/// attestation layer missing any of its three annotation keys),
+/// [`PackageError::DigestMismatch`] if any blob has been tampered with, or
+/// [`PackageError::Serialize`] if the verified layer fails to deserialize.
+///
+/// [`PackageError::DigestMismatch`]: crate::error::PackageError::DigestMismatch
+/// [`PackageError::Serialize`]: crate::error::PackageError::Serialize
+pub fn unpack_team(layout: &OciLayout) -> Result<UnpackedTeam> {
+    let manifest = read_the_one_manifest(layout)?;
+    verify_config_blob(layout, &manifest)?;
+    // Rejects a duplicate media type, exactly as the server and single-layer
+    // paths do.
+    let by_media_type = index_layers(&manifest)?;
+    let expected = vendor_media_type_name(TeamPackage::LAYER_MEDIA_TYPE);
+    reject_layers_a_team_may_not_carry(&by_media_type, &expected)?;
+
+    let layer = by_media_type
+        .get(&expected)
+        .ok_or_else(|| missing_layer(TeamPackage::LAYER_NAME))?;
+    let bytes = read_verified_blob(layout, layer)?;
+    let package: TeamPackage = serde_json::from_slice(&bytes)?;
+
+    // The SAME reader the server path uses, with no kind dispatch: the
+    // attestation media type is kind-neutral and its three annotation keys are
+    // shared verbatim.
+    let attestation = read_attestation_layer(
+        layout,
+        by_media_type.get(MT_ATTESTATION),
+        "attestation",
+        &manifest,
+    )?;
+
+    Ok(UnpackedTeam {
+        package,
+        attestation,
+    })
+}
+
+/// The team path's layer-inventory rule: every layer must be either the team's
+/// own config layer or the optional attestation layer.
+///
+/// An ALLOW-LIST rather than a count, so the second legal layer is admitted
+/// without admitting a third — see [`unpack_team`]'s rustdoc for why this
+/// differs from [`unpack_single_layer`]'s strict rule and why they must stay
+/// different.
+///
+/// # Errors
+///
+/// Returns [`PackageError::Layout`] naming the offending media type and the
+/// full inventory found, so an operator can see what the layout actually
+/// carries.
+fn reject_layers_a_team_may_not_carry(
+    by_media_type: &BTreeMap<String, &Descriptor>,
+    expected: &str,
+) -> Result<()> {
+    for media_type in by_media_type.keys() {
+        if media_type != expected && media_type != MT_ATTESTATION {
+            return Err(PackageError::Layout {
+                reason: format!(
+                    "a team package may carry only its '{expected}' layer and an OPTIONAL \
+                     '{MT_ATTESTATION}' layer; found '{media_type}'. Layers present: {:?}",
+                    by_media_type.keys().collect::<Vec<_>>()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Unpack a `WorkflowManifest` from `layout`.
@@ -1036,10 +1254,11 @@ mod tests {
         let layout = OciLayout::create(dir.path()).unwrap();
         let package = sample_team_package();
 
-        pack_team(&package, &layout).unwrap();
+        pack_team(&package, None, &layout).unwrap();
         let unpacked = unpack_team(&layout).unwrap();
 
-        assert_eq!(unpacked, package);
+        assert_eq!(unpacked.package, package);
+        assert_eq!(unpacked.attestation, None);
     }
 
     #[test]

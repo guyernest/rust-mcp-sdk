@@ -42,11 +42,18 @@
 //!   therefore never equal the subject it names.
 //! - Layers are located at unpack time by MEDIA TYPE, never by position — the
 //!   optional layers make any positional contract false.
-//! - `AgentPackage`/`TeamPackage`/`WorkflowManifest` each pack as a SINGLE
-//!   JSON layer ([`MT_AGENT_CONFIG`]/[`MT_TEAM_CONFIG`]/
-//!   [`MT_WORKFLOW_MANIFEST`]) — the whole struct serialized once; no
-//!   decomposition needed since (unlike `ServerPackage`) they don't carry a
-//!   large binary blob that must live in its own layer.
+//! - `AgentPackage` and `WorkflowManifest` each pack as STRICTLY ONE JSON layer
+//!   ([`MT_AGENT_CONFIG`]/[`MT_WORKFLOW_MANIFEST`]) — the whole struct
+//!   serialized once; no decomposition needed since (unlike `ServerPackage`)
+//!   they don't carry a large binary blob that must live in its own layer.
+//!   Neither may carry an attestation (D-08), so for both of them the single
+//!   layer is the entire inventory and an extra layer is a malformed layout.
+//! - `TeamPackage` packs as one [`MT_TEAM_CONFIG`] JSON layer — same shape,
+//!   same reason — PLUS an OPTIONAL [`MT_ATTESTATION`] layer, because a team
+//!   is one of the two kinds attestation carriage covers (D-08). A team layout
+//!   therefore holds one or two layers and nothing else. See the cross-kind
+//!   bullet below for the rule about what an attestation layer may and may not
+//!   be read to imply.
 //! - [`MT_ATTESTATION`] is this file's ONLY layer media type not owned by a
 //!   single package kind. It may appear on a server package (`pack_server`)
 //!   or on a team package (`pack_team`, per D-08), and on neither an agent
