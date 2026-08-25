@@ -18,6 +18,20 @@
 //! and the payload's media type. Those are read from the attestation layer's
 //! descriptor annotations; the payload bytes themselves are never parsed.
 //!
+//! # The three attestation states apply to SERVER and TEAM packages alike
+//!
+//! Attestation carriage covers server and team packages only (D-08), and the
+//! two are rendered by the SAME code — [`render_attestation`] and
+//! [`refuse_a_subject_that_does_not_name_this_package`] both take the optional
+//! attestation rather than a kind-specific package, so a CI pipeline gating on
+//! `inspect` behaves identically regardless of which of the two kinds it is
+//! handed, and a reader never has to learn two output formats.
+//!
+//! AGENT and WORKFLOW packages carry no attestation BY DESIGN — an agent that
+//! needs one is wrapped as a team of one — so their rendering is unchanged and
+//! shows no attestation section at all. That absence is a decision, not a bug
+//! and not an unimplemented case.
+//!
 //! Stated plainly, because this phrase must be honest wherever it appears:
 //! the only verification performed locally is the subject-digest comparison —
 //! does the digest this attestation names actually correspond to this
@@ -56,8 +70,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
 use pmcp_package::oci::{
-    unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout, UnpackedServer,
-    UnpackedTeam,
+    unpack_agent, unpack_server, unpack_team, unpack_workflow, OciLayout, UnpackedAttestation,
+    UnpackedServer, UnpackedTeam,
 };
 use pmcp_package::{AgentPackage, WorkflowManifest};
 
@@ -156,6 +170,12 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
             if output {
                 render_team(&unpacked);
             }
+            // Outside the `if output` block for the SAME reason the server arm
+            // requires it — see that arm's comment. A team subject mismatch
+            // that went silent under `--quiet` would be the identical gate
+            // hole, and the two arms must behave the same or a CI pipeline has
+            // to know which package kind it is looking at.
+            refuse_a_subject_that_does_not_name_this_package(unpacked.attestation.as_ref())?;
         },
         PackageKind::Server => {
             let unpacked = unpack_server(layout).context("unpack server package")?;
@@ -170,7 +190,7 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
             // standing rule that only the decorative rendering is gated.
             // After, so a human reading the terminal sees the full diagnostic
             // before the command fails.
-            refuse_a_subject_that_does_not_name_this_package(&unpacked)?;
+            refuse_a_subject_that_does_not_name_this_package(unpacked.attestation.as_ref())?;
         },
         PackageKind::Workflow => {
             let manifest = unpack_workflow(layout).context("unpack workflow manifest")?;
@@ -189,8 +209,15 @@ fn render_kind(layout: &OciLayout, kind: PackageKind, output: bool) -> Result<()
 /// every blob in a mismatched package verifies. See this module's header for
 /// the distinction, and `pmcp_package::oci::SubjectVerdict` for the rule that
 /// the two behaviours must stay different.
-fn refuse_a_subject_that_does_not_name_this_package(unpacked: &UnpackedServer) -> Result<()> {
-    let Some(attestation) = unpacked.attestation.as_ref() else {
+///
+/// Takes the OPTIONAL ATTESTATION rather than a package, so the server and team
+/// arms share one implementation and therefore one exit code. Two copies could
+/// drift into gating differently by kind, which is the failure this signature
+/// makes unrepresentable.
+fn refuse_a_subject_that_does_not_name_this_package(
+    attestation: Option<&UnpackedAttestation>,
+) -> Result<()> {
+    let Some(attestation) = attestation else {
         // No attestation, no claim, nothing to be wrong about.
         return Ok(());
     };
@@ -234,6 +261,10 @@ fn render_team(unpacked: &UnpackedTeam) {
     field("Members", pkg.members.len());
     field("Human roles", pkg.human_roles.len());
     field("Built-in", pkg.built_in_servers.len());
+    // The SAME renderer the server arm uses, so the two kinds are visually
+    // identical in all three attestation states (D-08 covers exactly these two
+    // kinds; agents and workflows never reach here).
+    render_attestation(unpacked.attestation.as_ref());
 }
 
 fn render_server(unpacked: &UnpackedServer) {
@@ -242,7 +273,7 @@ fn render_server(unpacked: &UnpackedServer) {
     field("Name", &pkg.name);
     field("Version", &pkg.version);
     field("Config slots", pkg.config_slots.len());
-    render_attestation(unpacked);
+    render_attestation(unpacked.attestation.as_ref());
 }
 
 /// Render what the package carries by way of an attestation.
@@ -259,8 +290,13 @@ fn render_server(unpacked: &UnpackedServer) {
 /// diagnostic. The exit-code decision lives in
 /// [`refuse_a_subject_that_does_not_name_this_package`], not here, so that
 /// rendering can be skipped under `--quiet` while the exit code cannot.
-fn render_attestation(unpacked: &UnpackedServer) {
-    let Some(attestation) = unpacked.attestation.as_ref() else {
+///
+/// Takes the OPTIONAL ATTESTATION rather than a package, so SERVER and TEAM
+/// packages render through one implementation and are therefore visually
+/// identical — same labels, same emphasis, same three states. A reader should
+/// not have to learn two formats, and a second copy could drift into being two.
+fn render_attestation(attestation: Option<&UnpackedAttestation>) {
+    let Some(attestation) = attestation else {
         field("Attestation", "none (package is unattested)");
         return;
     };

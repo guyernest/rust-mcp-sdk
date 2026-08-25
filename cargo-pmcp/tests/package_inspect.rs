@@ -10,11 +10,14 @@
 
 use assert_cmd::Command;
 use pmcp_package::oci::media_types::{ANNOTATION_ATTESTATION_SUBJECT, MT_ATTESTATION};
-use pmcp_package::oci::{pack_agent, pack_server, AttestationFile, BinaryMode, OciLayout};
-use pmcp_package::package::{
-    AssetsSection, AuthSection, AwsSection, DeployDescriptor, ObservabilitySection, ServerSection,
-    TargetSection,
+use pmcp_package::oci::{
+    pack_agent, pack_server, pack_team, AttestationFile, BinaryMode, OciLayout,
 };
+use pmcp_package::package::{
+    AssetsSection, AuthSection, AwsSection, DeployDescriptor, HumanRole, ObservabilitySection,
+    ServerSection, TargetSection, TeamLimits, TeamMember, TeamPackage, TeamRole,
+};
+use pmcp_package::reference::{ComponentRef, ComponentType, PinnedRef};
 use pmcp_package::{
     AgentPackage, CedarPolicySet, ConfigSlot, ManifestDigest, ServerPackage, SlotType,
 };
@@ -374,6 +377,180 @@ fn inspect_exits_non_zero_on_a_subject_mismatch_even_with_output_suppressed() {
         ])
         .assert()
         .code(1);
+}
+
+// ---------------------------------------------------------------------
+// The same three states on a TEAM package (D-08's second carrier kind)
+//
+// These mirror the four server tests above one for one. A CI pipeline gating on
+// `inspect` must behave identically regardless of package kind, so the
+// assertions — including the exact exit CODE — are the same values.
+// ---------------------------------------------------------------------
+
+fn pinned(name: &str, component_type: ComponentType) -> ComponentRef {
+    ComponentRef::Pinned(PinnedRef {
+        name: name.to_string(),
+        component_type,
+        version: semver::Version::new(1, 0, 0),
+        digest: ManifestDigest::from_bytes(name.as_bytes()),
+        resolved_from: None,
+    })
+}
+
+/// A minimal, valid `TeamPackage` fixture with EVERY reference PINNED.
+///
+/// Fully pinned is not decoration: Gate A refuses an attested pack over a team
+/// holding any `ComponentRef::Range` (D-09), so a range-bearing fixture would
+/// fail at the pack step and these tests would never reach the thing they are
+/// asserting — the render states and the exit code.
+fn sample_team_package() -> TeamPackage {
+    let human_role = HumanRole {
+        role: "approver".to_string(),
+        description: "Approves budget overrides".to_string(),
+        responsibilities: vec!["review".to_string()],
+        channel_hints: vec!["slack".to_string()],
+    };
+    TeamPackage {
+        name: "support-team".to_string(),
+        version: semver::Version::new(1, 0, 0),
+        entry_point: pinned("triage-agent", ComponentType::Agent),
+        members: vec![TeamMember {
+            agent: pinned("triage-agent", ComponentType::Agent),
+            role: TeamRole::EntryPoint,
+        }],
+        human_roles: vec![human_role.clone()],
+        limits: TeamLimits {
+            max_team_depth: 3,
+            max_team_total_tokens: 200_000,
+            max_team_wall_clock_seconds: 600,
+            poll_interval_ms: 2000,
+        },
+        built_in_servers: vec![pinned("team-fs", ComponentType::Server)],
+        finalizer_agents: vec![],
+        budget_defaults: vec![],
+        config_slots: vec![human_role.to_config_slot()],
+    }
+}
+
+/// Pack `sample_team_package()` into a fresh layout at `dir`, carrying an
+/// attestation whose subject is the digest of the SAME team packed WITHOUT one.
+/// Returns the subject digest that was claimed.
+fn write_attested_team_fixture(dir: &std::path::Path) -> String {
+    let package = sample_team_package();
+
+    let unattested_dir = tempfile::tempdir().expect("create the unattested scratch layout");
+    let unattested_layout =
+        OciLayout::create(unattested_dir.path()).expect("create the unattested scratch layout");
+    let subject = pack_team(&package, None, &unattested_layout)
+        .expect("the unattested team must pack")
+        .as_str()
+        .to_string();
+
+    let layout = OciLayout::create(dir).expect("create the attested OCI layout");
+    pack_team(
+        &package,
+        Some(AttestationFile {
+            bytes: OPAQUE_PAYLOAD,
+            subject: &subject,
+            issuer: TEST_ISSUER,
+            payload_type: TEST_PAYLOAD_TYPE,
+        }),
+        &layout,
+    )
+    .expect("the attested team must pack");
+
+    subject
+}
+
+/// Pack an attested team fixture at `dir`, then tamper its claimed subject with
+/// the SAME helper the server fixtures use — the tamper is a manifest edit and
+/// is kind-agnostic, exactly as the kind-neutral media type intends.
+/// Returns `(the false subject now claimed, the real unattested digest)`.
+fn write_mismatched_team_fixture(dir: &std::path::Path) -> (String, String) {
+    let real_subject = write_attested_team_fixture(dir);
+    let claimed = claim_a_different_subject(&OciLayout::open(dir));
+    assert_ne!(
+        claimed, real_subject,
+        "the tamper must actually change the claim, or the fixture proves nothing"
+    );
+    (claimed, real_subject)
+}
+
+/// State 1 of D-06 on the team path: a matching subject renders the issuer and
+/// the claimed subject, and EXITS ZERO.
+#[test]
+fn inspect_reports_a_matching_team_subject_as_a_match_and_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let subject = write_attested_team_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("team"))
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(subject))
+        .stdout(contains("matches"));
+}
+
+/// State 2 of D-06 on the team path, both halves at once. The exit status ALONE
+/// would be satisfied by a build that printed nothing, so the rendered content
+/// is asserted in the same test.
+#[test]
+fn inspect_renders_the_full_diagnostic_and_exits_non_zero_on_a_team_subject_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (claimed, actual) = write_mismatched_team_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        // The SAME code the server mismatch test asserts — a pipeline gating on
+        // `inspect` must not have to know which kind it is looking at.
+        .code(1)
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(claimed))
+        .stdout(contains(actual));
+}
+
+/// The gate hole, on the team arm: the non-zero exit must not depend on the
+/// rendering, which is what pins the check OUTSIDE the `if output` block.
+#[test]
+fn inspect_exits_non_zero_on_a_team_subject_mismatch_even_with_output_suppressed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_mismatched_team_fixture(dir.path());
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args([
+            "--quiet",
+            "package",
+            "inspect",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1);
+}
+
+/// State 3 of D-06 on the team path: an unattested team says so on its own line
+/// rather than rendering nothing, so "carries no attestation" is never
+/// indistinguishable from "this build does not know about attestations".
+#[test]
+fn inspect_reports_an_unattested_team_fixture_as_carrying_no_attestation() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).expect("create the unattested OCI layout");
+    pack_team(&sample_team_package(), None, &layout).expect("the unattested team must pack");
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("team"))
+        .stdout(contains("unattested"))
+        // No subject is claimed, so no subject digest may be printed.
+        .stdout(contains("Subject").not());
 }
 
 /// A zero-manifest layout (a freshly-created, empty OCI layout) is rejected with
