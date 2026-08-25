@@ -1321,8 +1321,31 @@ pmcp-package-gate:
 	@echo "$(BLUE)🔍 pmcp-package standalone gate (workspace-excluded crate)$(NC)"
 	$(CARGO) fmt --manifest-path crates/pmcp-package/Cargo.toml --all -- --check
 	$(CARGO) clippy --manifest-path crates/pmcp-package/Cargo.toml --all-targets -- -D warnings
-	$(CARGO) test --manifest-path crates/pmcp-package/Cargo.toml
-	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test OK$(NC)"
+# The count assertion mirrors test-tester/test-cargo-pmcp and closes the same
+# vacuity class plan 122-01 closed for `cargo-pmcp/tests/`: a `cargo test` run
+# that selects ZERO tests EXITS 0, so this leg could report green while
+# executing nothing at all -- reproducing "the gate does not reach this crate",
+# the exact hole this whole target exists to close, while looking like proof.
+	@out=$$($(CARGO) test --manifest-path crates/pmcp-package/Cargo.toml 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-package reported 0 tests — the gate is not reaching this workspace-excluded crate$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ pmcp-package tests passed ($$ran tests)$(NC)"
+# RUN the example, do not merely compile it. The `cargo test` and `cargo clippy
+# --all-targets` legs above already COMPILE every example target, so a
+# compile-only check here would add nothing at all. What this step catches is a
+# runtime panic or a failed `assert_eq!` INSIDE the example -- and CLAUDE.md's
+# ALWAYS requirements ask for a working `cargo run --example`, not a compiling
+# one. `make test-examples` cannot cover this: it runs
+# scripts/run-example-builds.sh over the ROOT workspace, which never reaches
+# this workspace-EXCLUDED crate.
+	$(CARGO) run --manifest-path crates/pmcp-package/Cargo.toml --example attestation_carriage
+	@echo "$(GREEN)✓ pmcp-package fmt/clippy/test/example OK$(NC)"
 
 .PHONY: quality-gate
 quality-gate:
