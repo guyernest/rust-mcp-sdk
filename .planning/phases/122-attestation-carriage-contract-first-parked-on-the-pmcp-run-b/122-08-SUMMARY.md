@@ -161,6 +161,15 @@ user rather than merely misleading a reader. Row 9 has a drift test *because* Ph
 
 ### Finding F1 (NEW, not in the plan) — the four pins cannot move alone without breaking the PUBLISHED build
 
+> **⚠ F1 WAS OVERSTATED AS FIRST COMMITTED (`96cb2752`), AND IS CORRECTED BY F2 BELOW.**
+> F1's mechanism is real and its type-crossing evidence stands, but its severity rested
+> on an unmeasured assumption — that `pmcp-agent 0.3.0`, `pmcp-team-servers 0.2.0` and
+> `pmcp-cfn-renderer 0.2.0` are already on crates.io. **They are not.** Measured against
+> the crates.io API in F2, F1 is a *Phase 124 ordering hazard*, not a present defect, and
+> it does **not** add six lines to this plan's scope. The correction is kept visible
+> rather than rewritten, because "a version claim asserted from assumed published state"
+> is precisely the failure this task exists to prevent, and it is worth one worked example.
+
 This was measured while bucketing row 5, and it is the reason the row count is not the
 only thing worth reading in this table.
 
@@ -227,5 +236,84 @@ These carry no independent authority — they are text inside rows 1, 5, 7, 8 an
   recording that this constant "sat on `0.1` after `pmcp-package` had gone 0.2.0".
 
 ---
+
+### Finding F2 (DECISIVE) — the measured crates.io state falsifies a stated premise in BOTH of the plan's main options
+
+The inventory above measures the REPO. The version decision is about **crates.io**, so
+the repo alone cannot settle it. Measured against the registry API directly (not
+`cargo search`, whose local path override reports the in-tree version — `cargo info
+pmcp-package` printed `version: 0.2.0 (from ./crates/pmcp-package)`, which is the
+workspace path dep and not a published fact):
+
+```
+$ /usr/bin/curl -s https://crates.io/api/v1/crates/pmcp-package/versions \
+    -H 'User-Agent: pmcp-release-audit' | jq -r '.versions[] | "\(.num) yanked=\(.yanked) created=\(.created_at)"'
+0.1.1 yanked=false created=2026-07-22T16:23:44.318266Z
+0.1.0 yanked=false created=2026-07-19T19:57:47.559844Z
+```
+
+Repeated per crate (`[.versions[].num] | join(", ")`):
+
+| Crate | Published on crates.io | In-repo | Published? |
+|---|---|---|---|
+| `pmcp-package` | 0.1.1, 0.1.0 | **0.2.0** | **NO — the entire 0.2 line is unpublished** |
+| `pmcp-agent` | 0.2.0, 0.1.0 | **0.3.0** | NO |
+| `pmcp-team-servers` | 0.1.1, 0.1.0 | **0.2.0** | NO |
+| `pmcp-cfn-renderer` | 0.1.0 | **0.2.0** | NO |
+| `cargo-pmcp` | 0.21.0 (+27 older) | **0.22.0** | NO |
+
+Nothing is yanked. **Every one of the five in-repo versions is already ahead of
+crates.io and has never shipped.** The tree is a full unreleased release-cycle ahead.
+
+**What this falsifies, stated against the plan's own words:**
+
+1. **`bump-0-3-0`'s decisive PRO is false as written.** It reads: *"an already-published
+   consumer pinned `^0.2` keeps resolving to 0.2.0 and keeps compiling."* There is no
+   published `pmcp-package 0.2.0` to resolve to. `cargo add pmcp-package@0.2` fails
+   against crates.io today. No published crate pins `^0.2`, because the 0.2 line has
+   never existed publicly.
+2. **`bump-0-2-1`'s decisive CON is equally false.** It reads: *"every already-published
+   consumer of `pmcp-package 0.2` picks up 0.2.1 on its next `cargo update` and fails to
+   compile against the four breaks."* There are no published consumers of `pmcp-package
+   0.2`. The published consumers (`pmcp-agent 0.2.0`, `pmcp-team-servers 0.1.1`,
+   `pmcp-cfn-renderer 0.1.0`, `cargo-pmcp 0.21.0`) were published from a tree on the 0.1
+   line and pin `^0.1`, which resolves to 0.1.1 and is untouched by anything either
+   option does.
+
+   **Both options were argued from the same assumption, and it is wrong.** Neither
+   option carries the external breakage its cons/pros claim, because there is no
+   external `^0.2` consumer for either to affect.
+
+3. **F1 is downgraded.** Because `pmcp-agent 0.3.0`, `pmcp-team-servers 0.2.0` and
+   `pmcp-cfn-renderer 0.2.0` are all unpublished, the next release publishes them FRESH,
+   carrying whatever `pmcp-package` requirement the tree holds at that moment. If all
+   four caret pins move together, the freshly published set is internally consistent and
+   no duplicate-copy hazard arises. F1's failure mode needs those three to publish
+   carrying `^0.2` and `pmcp-package` to move to 0.3 afterwards without bumping them —
+   a real **Phase 124 ordering hazard** to record in the ledger, not a defect present
+   now, and **not six extra lines of scope for this plan**.
+
+4. **A fourth option exists that the plan could not have considered**, because it only
+   becomes available once the published state is measured: **ship the four breaks under
+   the existing, still-unpublished `0.2.0`.** A version number is a contract only once
+   published; `0.2.0` has never been published, so its number is not yet promised to
+   anyone. Relative to the last actual publish (0.1.1), `0.2.0` is already a
+   breaking-axis bump under Cargo's 0.x rules, which is what CLAUDE.md's *Version Bump
+   Rules* ask for ("Only bump crates that have changed since their last publish" —
+   `pmcp-package` has changed, and 0.2.0 already records that).
+
+   Its cost is **in-repo meaning drift**: "the 0.2 line" currently denotes Phase 120's
+   D-08/D-09 wire break throughout both tripwires' prose and `roundtrip_e2e`'s rationale.
+   Folding four more breaks into the same unpublished number means two different commits
+   both build "pmcp-package 0.2.0" against different APIs, with nothing marking the
+   difference. That is invisible to crates.io and visible to anyone bisecting this repo
+   or to an out-of-repo consumer building from a path/git dep.
+
+**Why this is escalated rather than decided here.** The plan's options are still the
+right *shape* — the developer is choosing how loudly the version should announce these
+breaks — but two of the three carry a stated consequence that measurement refutes, and a
+fourth option is now on the table. Ratifying a one-way version decision against argued
+consequences that are not true is the specific failure Task 1 was inserted to prevent
+(cross-AI review's MEDIUM finding), so the corrected premises go to the checkpoint.
 
 <!-- Tasks 2-4 append below. -->
