@@ -505,6 +505,74 @@ fn reject_config_keys_without_a_config(package: &ServerPackage) -> Result<()> {
     Ok(())
 }
 
+/// Gate A: refuse an attestation attached to a team whose references are not
+/// all resolved (D-09).
+///
+/// # Why — "attestation implies resolved", the `cargo build --locked` analogue
+///
+/// An attestation's subject is a DIGEST, and a digest is a claim about exactly
+/// which code was examined. If that digest covers a package holding a
+/// `ComponentRef::Range`, two environments with the same package digest run
+/// DIFFERENT code — dev resolves `london-tube@^1.2` to 1.3.0 while prod
+/// resolves the same range to the 1.2.0 it already has. The attestation would
+/// then attest nothing about what actually runs, while this crate ships a
+/// verification path implying otherwise. A reader meeting this refusal deserves
+/// that reason at the refusal, which is why it is written here.
+///
+/// # Scoped to the CLAIM, not to the format
+///
+/// The gate is VACUOUS when no attestation is supplied, and that is the whole
+/// design: D-09 is *attestation implies resolved*, NOT *teams must always be
+/// pinned*. A team holding ranges is a legal package — it is what capture
+/// produces before resolution — and it must keep packing unattested. Guarding
+/// unconditionally would break every existing unattested team pack.
+///
+/// # The ONE-LEVEL DEPTH LIMIT, restated here and not only on the helper
+///
+/// `TeamMember.agent` pins an agent BY DIGEST. That digest covers the agent
+/// package's own contents, including its `connectors: Vec<ComponentRef>`, which
+/// may themselves be ranges. The team package holds only the digest, and
+/// milestone Decision 2 forbids this crate a registry client, so nothing here
+/// can resolve a referenced package offline to look inside it.
+///
+/// A team that passes this gate is resolved AT ITS OWN LEVEL. It is NOT
+/// transitively resolved and must never be read as such. Closing that
+/// transitively is platform ADMISSION POLICY — requiring every pinned component
+/// to itself be attested — not SDK work. The limit is pinned as visible
+/// behaviour by
+/// `negative.rs::attestation_resolved::an_attested_team_whose_pinned_agent_itself_holds_a_range_still_packs`,
+/// and it is also inside the error text a caller sees, so it cannot be missed
+/// by someone who never opens these docs.
+///
+/// # Why there is no server-path equivalent — a fact about the type
+///
+/// This gate is VACUOUS on the server path, so `pack_server` deliberately does
+/// not call it. `ServerPackage`'s fields are `name`, `version`, `digest`,
+/// `deploy`, `policies`, `tools` and `config_slots` — not one of them is a
+/// `ComponentRef`, so there is no unresolved reference a server package could
+/// hold. Its absence there is a fact about the type rather than an omission;
+/// do NOT "fix" the apparent asymmetry by adding a no-op call on the server
+/// path.
+///
+/// # Errors
+///
+/// Propagates [`TeamPackage::validate_all_pinned`]'s
+/// [`PackageError::InvalidReference`] unchanged, which already names the
+/// offending component, its `component_type` and the depth limit. No new error
+/// variant exists for this case, deliberately: an attestation over an
+/// unresolved package IS an invalid reference.
+///
+/// [`PackageError::InvalidReference`]: crate::error::PackageError::InvalidReference
+fn reject_an_attestation_over_an_unresolved_team(
+    package: &TeamPackage,
+    attestation: Option<AttestationFile<'_>>,
+) -> Result<()> {
+    if attestation.is_none() {
+        return Ok(());
+    }
+    package.validate_all_pinned()
+}
+
 /// The first byte offset at which `value` carries a C0 control character, with
 /// the character itself.
 ///
@@ -996,16 +1064,31 @@ pub fn pack_agent(package: &AgentPackage, layout: &OciLayout) -> Result<Manifest
 ///
 /// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
 ///
+/// # An attestation implies a RESOLVED team (D-09)
+///
+/// Attaching an attestation to a team holding any `ComponentRef::Range` is
+/// refused BEFORE the first write, naming the offending component and its
+/// component type. Packing that same team WITHOUT an attestation still
+/// succeeds — the guard is scoped to the CLAIM, not to the format.
+///
+/// The guard is ONE LEVEL DEEP: it covers this team's own four reference
+/// surfaces and cannot see inside a pinned component's own references. See
+/// `reject_an_attestation_over_an_unresolved_team` for why, and for what a
+/// passing pack does and does not prove.
+///
 /// # Errors
 ///
-/// Returns [`PackageError::AttestationAnnotationInvalid`] when a supplied
-/// attestation's `issuer` or `payload_type` carries a C0 control character,
+/// Returns [`PackageError::InvalidReference`] when an attestation is supplied
+/// over a team whose references are not all pinned,
+/// [`PackageError::AttestationAnnotationInvalid`] when its `issuer` or
+/// `payload_type` carries a C0 control character,
 /// [`PackageError::MalformedDigest`] when its `subject` is not a well-formed
 /// `sha256:<64 hex>` string, and [`PackageError::AttestationSubjectMismatch`]
 /// when the subject is well-formed but names another package — all BEFORE
 /// anything is written. Also returns [`PackageError::Layout`] or
 /// [`PackageError::Serialize`] on a write or canonicalization failure.
 ///
+/// [`PackageError::InvalidReference`]: crate::error::PackageError::InvalidReference
 /// [`PackageError::AttestationAnnotationInvalid`]: crate::error::PackageError::AttestationAnnotationInvalid
 /// [`PackageError::MalformedDigest`]: crate::error::PackageError::MalformedDigest
 /// [`PackageError::AttestationSubjectMismatch`]: crate::error::PackageError::AttestationSubjectMismatch
@@ -1015,6 +1098,18 @@ pub fn pack_team(
     attestation: Option<AttestationFile<'_>>,
     layout: &OciLayout,
 ) -> Result<ManifestDigest> {
+    // Gate A runs here rather than inside `validate_single_layer_pack_preconditions`
+    // because it needs a `&TeamPackage` to inspect four `ComponentRef` surfaces,
+    // and that helper is generic over every single-layer kind — hosting it there
+    // would mean a kind-dispatch hook on `SingleLayerPackage` whose agent and
+    // workflow impls could never run. The pre-write invariant is unaffected:
+    // this function writes nothing of its own before delegating, so a Gate-A
+    // refusal still leaves the destination layout byte-for-byte as it was found.
+    //
+    // It also runs FIRST because it is the cheapest of the three gates: it reads
+    // the typed team's own reference surfaces and needs no dry manifest digest
+    // at all, unlike the subject gate that follows.
+    reject_an_attestation_over_an_unresolved_team(package, attestation)?;
     pack_single_layer(package, attestation, layout)
 }
 
