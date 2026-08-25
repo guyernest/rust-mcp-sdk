@@ -6,10 +6,12 @@
 //! 1. **Publish safety** (`pmcp_package_dev_dep_is_path_only`) — this crate's
 //!    `[dev-dependencies].pmcp-package` entry must be the table form carrying a
 //!    `path` and **no** version requirement.
-//! 2. **The D-03 drift guarantee** (`pmcp_package_resolved_crate_is_on_the_0_2_line`)
-//!    — `crates/pmcp-package`'s own `[package].version` must stay on the 0.2
+//! 2. **The D-03 drift guarantee** (`pmcp_package_resolved_crate_is_on_the_0_3_line`)
+//!    — `crates/pmcp-package`'s own `[package].version` must stay on the 0.3
 //!    line, i.e. the crate the path dep actually resolves to is the one the
-//!    round-trip E2E was written against.
+//!    round-trip E2E was written against. Phase 122 moved this from the 0.2 line
+//!    to the 0.3 line when four source-breaking attestation-carriage changes
+//!    landed; the E2E was re-run green against 0.3 as part of that move.
 //!
 //! # Why there is no version requirement to assert any more
 //!
@@ -33,7 +35,7 @@
 //!
 //! # Where D-03's guarantee went
 //!
-//! D-03 asked that a silent 0.2 -> 0.3 drift fail loudly rather than resolve to
+//! D-03 asked that a silent line-to-line drift fail loudly rather than resolve to
 //! a version the E2E was never written against. That guarantee moved from the
 //! requirement STRING to the RESOLVED CRATE, and got stronger in the move: a
 //! caret requirement only constrains what would be accepted from a registry,
@@ -84,7 +86,7 @@ const OPENAPI_SERVER_CARGO_TOML: &str = include_str!("../Cargo.toml");
 const PMCP_PACKAGE_CARGO_TOML: &str = include_str!("../../pmcp-package/Cargo.toml");
 
 /// The major.minor line the round-trip E2E was written against.
-const EXPECTED_VERSION_LINE: &str = "0.2.";
+const EXPECTED_VERSION_LINE: &str = "0.3.";
 
 /// The path this crate's `pmcp-package` dev-dep must point at.
 const EXPECTED_DEP_PATH: &str = "../pmcp-package";
@@ -93,7 +95,7 @@ const EXPECTED_DEP_PATH: &str = "../pmcp-package";
 /// requirement of any kind.
 ///
 /// The table form is required because the string shorthand
-/// (`pmcp-package = "0.2"`) IS a bare version requirement by definition — there
+/// (`pmcp-package = "0.3"`) IS a bare version requirement by definition — there
 /// is no shorthand that expresses a path.
 #[test]
 fn pmcp_package_dev_dep_is_path_only() {
@@ -135,13 +137,13 @@ fn pmcp_package_dev_dep_is_path_only() {
     );
 }
 
-/// PKG-04 / D-03: the crate this path dep resolves to must stay on the 0.2 line.
+/// PKG-04 / D-03: the crate this path dep resolves to must stay on the 0.3 line.
 ///
 /// This replaces the former caret-requirement assertion. A path dep has no
 /// version requirement left to refuse a drifting sibling, so the sibling's own
 /// version field is the only thing that can still carry the guarantee.
 #[test]
-fn pmcp_package_resolved_crate_is_on_the_0_2_line() {
+fn pmcp_package_resolved_crate_is_on_the_0_3_line() {
     let manifest: toml::Value =
         toml::from_str(PMCP_PACKAGE_CARGO_TOML).expect("parse pmcp-package Cargo.toml");
 
@@ -155,7 +157,8 @@ fn pmcp_package_resolved_crate_is_on_the_0_2_line() {
         version.starts_with(EXPECTED_VERSION_LINE),
         "crates/pmcp-package is at version {version}, off the expected \
          {EXPECTED_VERSION_LINE}x line (PKG-04 / D-03). roundtrip_e2e.rs was written against the \
-         0.2 pmcp-package slot and package APIs, and this is a PATH dependency — there is no \
+         {EXPECTED_VERSION_LINE}x pmcp-package slot and package APIs, and this is a PATH \
+         dependency — there is no \
          version requirement left to refuse a drifting sibling, so the E2E would silently \
          compile against whatever the sibling became. Move the E2E to the new line deliberately, \
          then update this constant."
