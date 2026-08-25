@@ -1,13 +1,50 @@
 ---
 phase: 121-local-round-trip-e2e
-verified: 2026-08-24T02:00:00Z
-status: gaps_found
-score: 4/4 roadmap success criteria verified; 2 code-review BLOCKERs unresolved
+verified: 2026-08-25T00:00:00Z
+status: passed
+score: 4/4 roadmap success criteria verified; 2/2 code-review BLOCKERs closed and re-measured; 37/37 UAT checkpoints passed
 behavior_unverified: 0
 overrides_applied: 0
+previously: gaps_found (2026-08-24T02:00:00Z) — both gaps closed by plans 121-04 and 121-05
+gaps_resolved:
+  - gap: CR-01
+    resolved_by: 121-04-PLAN.md
+    evidence: >
+      crates/pmcp-openapi-server/Cargo.toml:123 now reads
+      `pmcp-package = { path = "../pmcp-package" }` — path-only, no version key,
+      so cargo strips it from the published manifest and
+      `cargo publish -p pmcp-openapi-server` no longer resolves it against
+      crates.io. Tripwire re-pointed: `pmcp_package_dev_dep_is_path_only`
+      (tests/pmcp_package_pin.rs:99) now CATCHES a re-added version key instead of
+      mandating it, and `pmcp_package_resolved_crate_is_on_the_0_2_line` (:144)
+      retains D-03's drift guarantee against the crate the path dep resolves to.
+      The constraint is written into CLAUDE.md's ledger at both ends (items 9b and
+      13). Re-measured 2026-08-25: `pmcp_package_pin` passes 2 tests in the gate.
+  - gap: CR-02
+    resolved_by: 121-05-PLAN.md
+    evidence: >
+      The `REQUIRED_TEST_BINARIES` guard (Makefile:503-522) no longer string-matches
+      `tests/<name>.rs`; it reads each binary's `test result:` passed count anchored
+      to its own `Running tests/<name>.rs` line via
+      `scripts/named-test-binary-count.awk`, and fails distinctly on never-ran (-1),
+      no-result-line (-2), ZERO-passed (0), and unreadable-extractor cases. The
+      extractor's sensitivity is re-proven every gate run by
+      `test-openapi-server-guard-selftest`, chained as a prerequisite (Makefile:492).
+      Re-measured 2026-08-25 with an absolute `gmake` (rtk truncates piped output):
+      `make test-openapi-server` -> EXIT 0, self-test passed (6 fixtures), and the
+      gate now PRINTS per-binary counts — `parity_replay passed 3 tests`,
+      `pmcp_package_pin passed 2 tests`, `roundtrip_e2e passed 8 tests`,
+      42 tests total. A zero on any named binary fails the gate.
 gaps:
   - truth: "The `pmcp-package = { version = \"0.2\", path = \"../pmcp-package\" }` dev-dependency does not break `cargo publish -p pmcp-openapi-server` (CR-01)"
-    status: failed
+    status: resolved
+    resolved_by: 121-04-PLAN.md
+    resolved_at: 2026-08-25
+    note: >
+      The finding below is the ORIGINAL 2026-08-24 diagnosis, retained verbatim as
+      the record of what was wrong. It no longer describes the tree: the version key
+      is gone (Cargo.toml:123 is path-only) and the tripwire now catches the
+      publish-breaking shape rather than mandating it. See `gaps_resolved` above.
     reason: >
       pmcp-package's max published version on crates.io is 0.1.1; the local crate is
       0.2.0 and unpublished. Cargo retains a [dev-dependencies] entry that carries a
@@ -29,7 +66,14 @@ gaps:
       - "Drop the `version` key from the dev-dep (path-only form), OR reorder release.yml so pmcp-package publishes before pmcp-openapi-server (line 339)"
       - "Update tests/pmcp_package_pin.rs to assert the chosen shape (path-only, if that fix is taken) rather than the caret-version shape"
   - truth: "`test-openapi-server`'s `REQUIRED_TEST_BINARIES` guard proves each named binary actually EXECUTED (nonzero tests), not merely that it was compiled and run (CR-02)"
-    status: failed
+    status: resolved
+    resolved_by: 121-05-PLAN.md
+    resolved_at: 2026-08-25
+    note: >
+      The finding below is the ORIGINAL 2026-08-24 diagnosis, retained verbatim as
+      the record of what was wrong. It no longer describes the tree: the guard reads
+      per-binary passed counts through `scripts/named-test-binary-count.awk` and
+      fails on a zero. See `gaps_resolved` above.
     reason: >
       The guard's Makefile comment and 121-01's must_have both state the intent is to
       prove a NAMED suite ran, closing the count-guard's blind spot. The implementation
