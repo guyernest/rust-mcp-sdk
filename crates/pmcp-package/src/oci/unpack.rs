@@ -13,7 +13,7 @@
 //! A `ServerPackage`'s layers are located by MEDIA TYPE, never by position:
 //! the config and spec layers are optional and the binary layer is one of two
 //! mutually exclusive media types, so no positional contract can hold. A
-//! `ServerPackage` layout is indexed once by [`index_layers`] and every read
+//! `ServerPackage` layout is indexed once by `index_layers` and every read
 //! goes through that index. `AgentPackage`/`TeamPackage`/`WorkflowManifest`
 //! each remain a single layer. The embedded bootstrap layer is returned as raw
 //! bytes — it is never deserialized.
@@ -394,13 +394,31 @@ fn detect_legacy_shape(envelope_bytes: &[u8]) -> Result<()> {
 ///
 /// [`MT_SERVER_OPENAPI_SPEC`]: crate::oci::media_types::MT_SERVER_OPENAPI_SPEC
 ///
+/// # `attestation: None` means the package carried no attestation
+///
+/// The attestation layer is OPTIONAL. A `None` here is not a decoding default
+/// and not a lossy read: it means the manifest's media-type index holds no
+/// [`MT_ATTESTATION`] entry, i.e. the package is simply unattested. There is
+/// no absence marker to distinguish "no attestation" from "attestation
+/// dropped" (D-14) because [`crate::oci::pack_server`] never drops a supplied
+/// attestation: `Some` in, layer written; `None` in, no layer.
+///
+/// A returned attestation is a CLAIM, not a verified fact. This crate holds
+/// no signing or verification keys and performs no signature check; the
+/// subject, issuer and payload type are carried through verbatim, and the
+/// payload bytes are never deserialized here.
+///
+/// [`MT_ATTESTATION`]: crate::oci::media_types::MT_ATTESTATION
+///
 /// # Errors
 ///
 /// Returns [`PackageError::Layout`] if the layout is malformed (duplicate
 /// media type, missing required layer, both-or-neither binary layers, a
 /// binary reference with no digest, a named-file layer with no title
-/// annotation) or if the envelope carries the pre-0.2.0 layer shape
-/// ([`detect_legacy_shape`]), [`PackageError::DigestMismatch`] if any blob has been
+/// annotation, or an attestation layer missing any of its three annotation
+/// keys — subject, issuer or payload-type) or if the envelope carries the
+/// pre-0.2.0 layer shape
+/// (`detect_legacy_shape`), [`PackageError::DigestMismatch`] if any blob has been
 /// tampered with, or [`PackageError::Serialize`] if a verified layer fails to
 /// deserialize.
 ///

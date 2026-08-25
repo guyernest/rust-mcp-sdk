@@ -275,7 +275,7 @@ type SlotFacts<'a> = (&'a str, &'a str, Option<&'a str>);
 /// not load-bearing. A [`ConfigSlot`] whose `config_key` is `None` does not
 /// participate: it fills no config path, so there is nothing for a declaration
 /// to correspond to. Whether such a slot is legal at all is
-/// [`validate_config_slot_placeholders`](crate::validate_config_slot_placeholders)'s
+/// [`crate::validate_config_slot_placeholders`]'s
 /// rule, not this one.
 ///
 /// The first disagreement is reported in a deterministic (sorted-key) order, so

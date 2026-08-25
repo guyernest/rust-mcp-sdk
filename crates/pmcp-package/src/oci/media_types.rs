@@ -18,17 +18,28 @@
 //!   ([`MT_SERVER_CONFIG_SLOTS`]) — plus the `name`/`version`/top-level
 //!   `digest` "envelope" layer ([`MT_SERVER_ENVELOPE`]) so every remaining
 //!   field round-trips losslessly by plain serialize/deserialize.
-//! - Two OPTIONAL vendor-content layers may follow: the author's verbatim
-//!   server config file ([`MT_SERVER_CONFIG`]) and, for an OpenAPI-backed
-//!   server, its spec file ([`MT_SERVER_OPENAPI_SPEC`]). Both carry raw
-//!   author bytes (never re-derived from a parsed struct) and record the
+//! - Three OPTIONAL vendor-content layers may follow: the author's verbatim
+//!   server config file ([`MT_SERVER_CONFIG`]), for an OpenAPI-backed server
+//!   its spec file ([`MT_SERVER_OPENAPI_SPEC`]), and a platform-issued
+//!   attestation ([`MT_ATTESTATION`]). All three carry raw bytes (never
+//!   re-derived from a parsed struct); the two file layers record the
 //!   original file name in their descriptor's
-//!   `org.opencontainers.image.title` annotation. Either may be absent, and
-//!   absence is exactly the layer NOT being in the manifest — there is no
-//!   absence marker (D-14). An absent [`MT_SERVER_OPENAPI_SPEC`] layer is the
-//!   author's declaration of a curated-only server, mirroring
-//!   `pmcp-openapi-server`'s `--spec: Option<PathBuf>`, never a silent drop of
-//!   a spec that was supplied.
+//!   `org.opencontainers.image.title` annotation, and the attestation records
+//!   its subject/issuer/payload-type in its own descriptor's annotations. Any
+//!   of them may be absent, and absence is exactly the layer NOT being in the
+//!   manifest — there is no absence marker (D-14). An absent
+//!   [`MT_SERVER_OPENAPI_SPEC`] layer is the author's declaration of a
+//!   curated-only server, mirroring `pmcp-openapi-server`'s
+//!   `--spec: Option<PathBuf>`, never a silent drop of a spec that was
+//!   supplied; an absent [`MT_ATTESTATION`] layer means the package is simply
+//!   unattested.
+//!
+//!   An attested package carries TWO digests, and that is by design (D-01):
+//!   the attestation names the UNATTESTED manifest digest as its subject,
+//!   while the package that carries the attestation necessarily hashes to
+//!   something else — the attestation layer and its annotations are inside
+//!   the manifest the digest covers. An attested package's own digest can
+//!   therefore never equal the subject it names.
 //! - Layers are located at unpack time by MEDIA TYPE, never by position — the
 //!   optional layers make any positional contract false.
 //! - `AgentPackage`/`TeamPackage`/`WorkflowManifest` each pack as a SINGLE
@@ -36,6 +47,14 @@
 //!   [`MT_WORKFLOW_MANIFEST`]) — the whole struct serialized once; no
 //!   decomposition needed since (unlike `ServerPackage`) they don't carry a
 //!   large binary blob that must live in its own layer.
+//! - [`MT_ATTESTATION`] is this file's ONLY layer media type not owned by a
+//!   single package kind. It may appear on a server package (`pack_server`)
+//!   or on a team package (`pack_team`, per D-08), and on neither an agent
+//!   nor a workflow — an agent that needs an attestation is wrapped as a team
+//!   of one. Package kind is read from the manifest's `artifactType` plus the
+//!   typed package layer, NEVER from this layer's presence or spelling. See
+//!   the constant's own rustdoc for the four reasons the spelling is
+//!   kind-neutral.
 //!
 //! Every layer's `Descriptor` uses [`MediaType::Other`] via [`vendor_media_type`]
 //! (RESEARCH Pattern 3) — never a hand-rolled parallel media-type enum.

@@ -223,6 +223,35 @@ fn inspect_renders_an_attested_server_fixture_offline() {
         .stdout(contains(subject));
 }
 
+/// The other terminal state of carriage: an unattested package renders as
+/// explicitly unattested — not as silence — and prints no subject-digest line,
+/// so "carries no attestation" can never be confused with "this build does not
+/// know about attestations".
+#[test]
+fn inspect_reports_an_unattested_server_fixture_as_carrying_no_attestation() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(dir.path()).expect("create the unattested OCI layout");
+    pack_server(
+        &sample_server_package(),
+        referenced_binary(),
+        None,
+        None,
+        None,
+        &layout,
+    )
+    .expect("the unattested package must pack");
+
+    Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("unattested"))
+        // No subject is claimed, so no subject digest may be printed.
+        .stdout(contains("Subject").not())
+        .stdout(contains("sha256:").not());
+}
+
 /// A zero-manifest layout (a freshly-created, empty OCI layout) is rejected with
 /// a clear error — the handler does NOT try to index an empty manifest list.
 #[test]

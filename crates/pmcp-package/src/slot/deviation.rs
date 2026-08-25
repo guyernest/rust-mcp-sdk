@@ -22,7 +22,7 @@ pub struct Deviation {
 /// # Which slots are behavior-relevant is decided by `classify`, not by this function
 ///
 /// This function contains no variant list. Behavior-relevance is delegated entirely to
-/// [`classify`](crate::slot::classification::classify), which derives the family from a
+/// [`crate::slot::classification::classify`], which derives the family from a
 /// single predicate — a variant is behavior-relevant iff it carries a `tested_value` — so
 /// `classify` and [`SlotType::tested_value`] cannot drift apart when a variant is added.
 /// **As of Phase 120 that set includes the `Endpoint` and `AuthMode` variants alongside

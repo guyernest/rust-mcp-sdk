@@ -10,6 +10,22 @@
 //!
 //! Named `inspect` (not `show`): this is a LOCAL, offline operation. The verb
 //! `show` is reserved for the platform's remote manifest-fetch thin client.
+//!
+//! # What this reports about attestations, and what it does NOT verify
+//!
+//! For a server package this renders whether the package carries an
+//! attestation, and when it does, the issuer, the subject digest it CLAIMS,
+//! and the payload's media type. Those are read from the attestation layer's
+//! descriptor annotations; the payload bytes themselves are never parsed.
+//!
+//! Stated plainly, because this phrase must be honest wherever it appears:
+//! the only verification performed locally is the subject-digest comparison —
+//! does the digest this attestation names actually correspond to this
+//! package. The SDK holds NO signing or verification keys and checks no
+//! signature. Verifying an attestation against the issuing platform's
+//! identity is a REMOTE call, and this command deliberately does not make it.
+//! An attestation rendered here is a claim that has been carried, not a claim
+//! that has been proven.
 
 use std::path::PathBuf;
 
@@ -174,11 +190,18 @@ fn render_server(unpacked: &UnpackedServer) {
 
 /// Render what the package carries by way of an attestation.
 ///
-/// The subject is printed as the attestation's own CLAIM — this renderer makes
-/// no verdict about whether it names this package. That comparison, and any
-/// exit-code consequence, belong to the subject-check work, not here.
+/// BOTH terminal states are rendered explicitly. An unattested package says so
+/// on its own line rather than rendering nothing, so "unattested" is never
+/// indistinguishable from "this build of `inspect` does not know about
+/// attestations". The third state — attested but with a subject that does not
+/// name this package — is added by the subject-check work.
+///
+/// The subject is printed as the attestation's own CLAIM. This renderer makes
+/// no verdict about whether it names this package, and no exit-code decision
+/// follows from it here.
 fn render_attestation(unpacked: &UnpackedServer) {
     let Some(attestation) = unpacked.attestation.as_ref() else {
+        field("Attestation", "none (package is unattested)");
         return;
     };
     println!("\n{}", "Attestation".bright_cyan().bold());
