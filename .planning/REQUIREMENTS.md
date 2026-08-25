@@ -23,7 +23,7 @@ Requirements for milestone v2.6. Each maps to exactly one roadmap phase.
 - [x] **PKG-01**: A server with **no bespoke binary** can be packed. Vendor media types carry the server's own `config.toml` and its OpenAPI spec as layers, so a Shape A config-only server (`pmcp-openapi-server`) has a complete package identity. Today `pack_server` requires `bootstrap: &[u8]` and neither file has a layer type.
 - [x] **PKG-02**: The binary is **dual-mode** — embedded (bootstrap bytes, for a new server or new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required; `BinaryRef` already has the right shape but nothing resolves it.
 - [x] **PKG-03**: What is **baked** versus what is a **slot** is decided and documented. Working split: the OpenAPI spec is baked (it defines the tool surface — change it and it is a different package); endpoint, credentials and auth mode are slots filled at unpack.
-- [ ] **PKG-04**: A package round-trips between environments with **tool-list parity** as the asserted property: pack in A → unpack in B → `required_slots` names exactly the slots B must fill, and `detect_deviation` separately reports B's endpoint drift → fill them → the served tool list matches A. (Corrected 2026-08-23, Phase 121 D-04/D-05: `detect_deviation` compares one already-known `(tested, proposed)` pair and short-circuits on identity-bearing slots, so it can never name the credential — `required_slots` is the enumerator.) Asserted on behaviour via the existing `parity_replay.rs`, never on manifest structure, so it survives the manifest refactors this milestone expects.
+- [x] **PKG-04**: A package round-trips between environments with **tool-list parity** as the asserted property: pack in A → unpack in B → `required_slots` names exactly the slots B must fill, and `detect_deviation` separately reports B's endpoint drift → fill them → the served tool list matches A. (Corrected 2026-08-23, Phase 121 D-04/D-05: `detect_deviation` compares one already-known `(tested, proposed)` pair and short-circuits on identity-bearing slots, so it can never name the credential — `required_slots` is the enumerator.) Asserted on behaviour via the existing `parity_replay.rs`, never on manifest structure, so it survives the manifest refactors this milestone expects.
 
 ### Package Exchange (PKGX — contract-first, backend-dependent)
 
@@ -89,8 +89,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PKG-01 | Phase 120 | Complete |
 | PKG-02 | Phase 120 | Complete |
 | PKG-03 | Phase 120 | Complete |
-| PKG-04 | Phase 121 | Pending |
-| PKGX-01 | Phase 122 | Pending — parked on backend |
+| PKG-04 | Phase 121 | Complete |
+| PKGX-01 | Phase 122 | Pending — parked on backend. Traceability note (2026-08-25, Phase 122 discuss): Phase 122 now includes a bounded format addition — D-09 (attestation implies resolved: pack-time `ComponentRef::Range` guard, one level deep) and D-10 (`PinnedRef.resolved_from: Option<VersionReq>`). The requirement text is unchanged: "verified against pmcp.run's identity on import" already implies a resolved subject. |
 | PKGX-02 | Phase 123 | Pending — parked on backend |
 | PKGR-01 | Phase 124 | Pending |
 
