@@ -64,22 +64,56 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ All 7 v2.4 crates published to crates.io as pmcp v2.17.0 (2026-07-19, PR #302/tag v2.17.0)
 - ✓ docs.rs pipeline and feature flags: `Cargo.toml` `[package.metadata.docs.rs]` replaced `all-features = true` with explicit 15-feature list + dual targets (`x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` for first-class ARM64/Graviton coverage); created crate-focused `CRATE-README.md` at repo root (171 lines, 18-row Cargo Features table) wired into `src/lib.rs` via `#![doc = include_str!("../CRATE-README.md")]` (matches Phase 66 pmcp-macros pattern, pulls DOCD-02 from Future Requirements into scope); fixed all 29 rustdoc warnings across 16 source files (+8 residual links orchestrator-applied) via the "demote to backticks" pattern; adopted `feature(doc_cfg)` (post-RFC 3631 now provides auto-cfg badging by default — original D-01 `doc_auto_cfg` flip was invalidated by Rust 1.92.0 upstream removal, amended mid-phase); added new `make doc-check` target (stable toolchain, D-16 feature list, TAB-indentation guarded) and CI `Check rustdoc zero-warnings` step inside the existing `quality-gate` job (deliberately NOT chained into local `make quality-gate` per D-27 to protect developer iteration speed); no pmcp version bump (D-28 — stays at 2.3.0, docs.rs re-renders on next unrelated release); human-verify nightly badge checkpoint APPROVED — v2.1 (Phase 67)
 
+- ✓ Version plumbing & negotiation (VERS-01..09): per-request `_meta` clientInfo, `server/discover`, required `Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version` headers, error-code rename `-32002`→`-32602` — v2.5 (Phase 112)
+- ✓ Stateless streamable-HTTP + multi-round-trip elicitation (HTTP-01..08): `initialize`/`initialized` and `Mcp-Session-Id` removal path, `InputRequiredResult`/`requestState`; era resolved from the RAW request body so every method — not just the three `_meta`-bearing ones — can be a v2 request — v2.5 (Phase 113)
+- ✓ Tasks extension migration (TASK-01..06): `tasks/list` removed, `tasks/update` added, server-directed creation; the v1.x DynamoDB/Redis task-store investment survived as an API reshape only — v2.5 (Phase 114)
+- ✓ JSON Schema 2020-12 + caching hints (SCHM-*): `structuredContent` as any JSON value, `ttlMs`/`cacheScope`, position-aware `$schema` traversal derived from the pinned meta-schemas rather than hand-kept keyword lists — v2.5 (Phase 115)
+- ✓ Auth-hardening SEPs (AUTH-*): RFC 9207 `iss` validation, DCR `application_type`, the six SEPs — v2.5 (Phase 116)
+- ✓ v1 severability (SMPL-01/02, CLNT-03/04): default-on `v1-compat` plus a `full-v2` feature set severing v1 machinery at compile time via signature-identical paired modules, so call sites carry no `#[cfg]`; CI severance gate is a real merge blocker — v2.5 (Phase 117)
+- ✓ Client & agents on v2 (CLNT-01/02/05): era-aware client, `mcp-tester --dual-run` diffing both eras against an `era-deltas.yaml` baseline — v2.5 (Phases 117, 118.2)
+- ✓ Conformance against the official suite (CONF-*): nine gaps G-1..G-9 found and closed; `Content::Resource` emits the spec shape on both eras via a tolerant `#[serde(try_from)]` reader — v2.5 (Phases 118, 118.1, 118.2)
+- ✓ Docs in three shapes (DOCS-*, carried from v2.4 Phase 111): pmcp-book v2 migration chapter, README/CHANGELOG protocol-era rewrite, course alignment — v2.5 (Phase 119)
+- ✓ Published as pmcp v2.19.0 (2026-08-20, PR #337/tag v2.19.0)
+
 ### Active
 
-## Current Milestone: v2.5 MCP Spec 2026-07-28 (v2) Support
+<!-- Milestone v2.6 AI-Package Portability. Full text with traceability in .planning/REQUIREMENTS.md. -->
 
-**Goal:** Make pmcp a dual-version SDK that speaks both MCP 2025-11-25 and the 2026-07-28 (v2) spec via per-request negotiation — stateless core, Tasks-as-extension, and conformance against the official suite.
+- [ ] **PKG-01**: A server with no bespoke binary can be packed — vendor media types carry the server's own `config.toml` and its OpenAPI spec as layers
+- [ ] **PKG-02**: The binary is dual-mode — embedded (bootstrap bytes) or referenced (`BinaryRef { digest, media_type }`) resolved in the target environment
+- [ ] **PKG-03**: What is baked versus what is a slot is decided and documented (spec baked; endpoint, credentials and auth mode are slots)
+- [ ] **PKG-04**: A package round-trips between environments with tool-list parity as the asserted property, on behaviour via `parity_replay.rs`
+- [ ] **PKGX-01**: A package carries a pmcp.run-issued attestation and verifies against pmcp.run's identity — carriage and verification only, no crypto dependency *(contract-first; parked on backend)*
+- [ ] **PKGX-02**: `cargo pmcp package pack | unpack | export | import` resolving environments through `configure`'s resolver and the existing `pmcp_run/{graphql,auth}.rs` seam *(`pack`/`unpack` land now; `export`/`import` contract-first, parked on backend)*
+- [ ] **PKGR-01**: `pmcp-openapi-server` added to CLAUDE.md's publish order
 
-**Target features (six-phase cut from the 2026-07-22 impact assessment):**
-- Version plumbing: per-request `_meta` clientInfo, `server/discover`, required headers (`Mcp-Method`/`Mcp-Name`/`MCP-Protocol-Version`), error-code rename `-32002`→`-32602`
-- Stateless streamable-HTTP: `initialize`/`initialized` and `Mcp-Session-Id` removal path + multi-round-trip elicitation (`InputRequiredResult`/`requestState`)
-- Tasks extension migration: `tasks/list` removed, `tasks/update` added, server-directed creation; the v1.x DynamoDB/Redis task-store investment survives — API reshape only
-- JSON Schema 2020-12: `structuredContent` = any JSON value (affects the 2.15 structured-output bridge) + `ttlMs`/`cacheScope` caching hints
-- Auth-hardening SEPs: RFC 9207 `iss` validation, DCR `application_type`, the six SEPs
-- Conformance against the official suite (Phase-109 conformance harness aligns)
-- Carried from v2.4 Phase 111 (folded in): docs in three shapes + runnable examples for the Agents & Teams surface (pmcp-book chapters, README/course, cargo-pmcp-first), landing alongside the v2 spec docs
+## Current Milestone: v2.6 AI-Package Portability
 
-**Non-goals:** Deprecated Roots/Sampling/Logging (12-month annotation-only window — zero work this milestone); hard cutover to v2 (dual-version stack with per-request negotiation instead).
+**Goal:** Make an AI-Package genuinely portable between pmcp.run environments — build a server from
+configuration only, test and attest it in one AWS account/region, export it, and import it into
+another with the target environment told exactly what it must supply. The proving case is
+`pmcp-openapi-server`: a Shape A pure-config binary whose entire identity is a `config.toml` plus an
+OpenAPI spec.
+
+**Target features:**
+- Config-server packaging — vendor media types for `config.toml` + OpenAPI spec as layers, dual-mode binary (embedded bootstrap or referenced `BinaryRef`), documented baked-vs-slot split (Phase 120)
+- Local round-trip E2E asserting tool-list parity on behaviour, never on manifest structure — the regression net every later refactor leans on (Phase 121)
+- Attestation carriage and verification for a pmcp.run-issued attestation; no signing, no crypto dependency (Phase 122, contract-first)
+- `cargo pmcp package pack | unpack | export | import` verbs reusing the existing pmcp.run GraphQL/auth seam rather than a second API path (Phase 123, contract-first)
+- Release hygiene — `pmcp-openapi-server` into the publish ledger; `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0 (Phase 124)
+
+**Scoping decisions taken at milestone open (2026-08-22):**
+- Phases 122/123 stay **parked** — vendored contract plus offline blocking contract test only. The
+  live E2E leg activates when the pmcp.run backend work (package import, attestation issuance) is
+  scheduled. PKGX-01/02 therefore cannot fully close inside this repo, by design.
+- UNAS-01 (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) **deferred again** — stays in Future
+  Requirements, unassigned, out of the v2.6 roadmap.
+- Work continues on a **rebased `feat/package-remote-capture-show`** (249 commits ahead of `main`,
+  20 behind; zero overlap with `src/server/`, `src/shared/`, `src/types/`).
+
+**Non-goals:** signing keys or PKI in the SDK; an ECR client in the CLI (`oci-client` is not added,
+`oci-spec` types stay); changing `LATEST_PROTOCOL_VERSION`; refactoring the manifest schema for
+elegance — the schema is expected to churn, so the E2E is the asset, not the API.
 
 ### Future
 
@@ -95,6 +129,17 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] Result download/polling from CLI
 
 ## Current State
+
+**Milestone v2.5 (MCP Spec 2026-07-28 v2 Support) SHIPPED 2026-08-22** — published as pmcp v2.19.0
+(PR #337, tag v2.19.0). 11 phases, 176 plans, all verification `passed`. pmcp is now a dual-version
+SDK: one server binary serves both MCP 2025-11-25 and 2026-07-28 clients through per-request
+negotiation, with v2 as the strategic primary path (stateless/Lambda-first, Tasks-as-extension,
+JSON Schema 2020-12) and v1 as a cleanly severable compatibility layer (`full-v2` cuts it at compile
+time, gated in CI). The whole milestone stayed additive — a 2.x minor, no breaking change. The
+official conformance suite drove nine real SDK gaps (G-1..G-9) to closure in Phases 118.1/118.2.
+
+Closed as an **override_closeout**: 461 audit items were recorded as open debt rather than
+acknowledged — see MILESTONES.md for why (two gsd-tools defects made acknowledgment unsafe).
 
 Phase 117 complete (2026-08-09) — Agents, Tester & v1 Severability (v2.5): the `full-v2` severance cut landed, proven by execution rather than inspection. A default-on `v1-compat` feature plus a `full-v2` feature set (= `full` minus exactly `v1-compat`) now sever MCP v1 machinery at compile time via a PAIRED MODULE — `v1_session.rs` (real bodies) and `v1_session_off.rs` (signature-identical null twins) — so call sites carry NO `#[cfg]` at all and `session_id: Option<String>` keeps threading the POST pipeline, just always `None`. Delivered across 14 plans in 6 waves: (117-01..04) the severability primitive, v1 wire-byte and tester-report goldens pinned BEFORE any cut, and the pmcp-agent live-socket harness; (117-05..08) the CI severance gate made a real merge blocker, the paired-module mechanism proven, `UrlConnectorClientFactory` made era-aware (CLNT-03), and the `era-deltas.yaml` expected-difference baseline (CLNT-04); (117-09..11) the era chokepoints moved, the s53 v2 agent example, and `mcp-tester --dual-run` auto-detecting a dual-era server and diffing the two runs against the baseline; (117-12) twelve v1-only functions moved into the pair; (117-14) the CLIENT half severed too — a `full-v2` client stores no session id, echoes none back, sends no DELETE, writes no `Last-Event-ID`, leaving exactly ONE call-site `#[cfg]` in the 2,941-line transport; (117-13) the GET/DELETE verbs SPLIT rather than moved so a severed build answers 405 (routed and refused), never 404, plus the four gated config fields and a sunset policy that matches the code. Post-execution code review found 2 Critical defects the plans' own self-checks missed, both fixed and independently re-verified: CR-01, a silent `MCP-Protocol-Version` downgrade to `2025-03-26` because two PURE MESSAGE CLASSIFIERS (`is_initialize_request`, `extract_negotiated_version`) holding zero v1 state were wrongly twinned — un-twinned, with a header/body-agreement regression test and a negative control; and CR-02, a severed TEST build that did not compile at all (8 integration files, 6 era-neutral files, 3 examples) — gated, and the severed test command wired into CI via `scripts/run-severance-proofs.sh`, which fails on any ZERO-count run. Two false-green traps were recorded: a dev-dependency taking pmcp's DEFAULT features re-unifies `v1-compat` during `cargo test` (making a severed test report "0 tests, exit 0" — green while proving nothing; `cargo build -p pmcp` never sees dev-deps, `cargo test` does), and an `assert!(!cfg!(feature = "v1-compat"))` guard that could never fail because `cfg!` expands to a bool literal. Verified 4/4 must-haves by execution; CLNT-03, CLNT-04, SMPL-01, SMPL-02 traced; `cargo test -p pmcp --no-default-features --features full-v2` went from a hard build failure to 3,339 passing; default-build lib suite holds at exactly 1,880; `make quality-gate` exit 0. Known limitation documented, not hidden: `Client::initialize` is dual-era and `src/composition/mcp_client.rs` calls it under `full-v2`, so SMPL-01's "initialize" clause is met on the SERVER side only.
 
@@ -122,6 +167,7 @@ v2.3 extracts the proven Excel-as-Configuration compiler from the `ai-on-cloud/t
 - v2.2: Configuration-Only MCP Servers (SQL + OpenAPI toolkits, four DX shapes, pmcp-server-toolkit)
 - v2.3: Excel-as-Configuration MCP Servers (workbook runtime/compiler/CLI, purity gate, Shape A/B) + Tasks DX arc (phases 101–105: tools-as-Tasks, HTTP tasks, SEP-1686 task-augmented results, poll-decision classifier)
 - v2.4: Agents & Teams — SDK Extraction (phases 106–110: client host surface, pmcp-package contracts, pmcp-agent loop crate, pmcp-team-servers, cargo-pmcp agent/team verbs; published as pmcp 2.17.0). Phase 111 (docs in three shapes) folded into v2.5.
+- v2.5: MCP Spec 2026-07-28 (v2) Support (phases 112–119: version plumbing, stateless HTTP + multi-round-trip elicitation, Tasks-as-extension, JSON Schema 2020-12 + caching hints, auth-hardening SEPs, v1 severability, official-suite conformance, docs in three shapes; published as pmcp 2.19.0)
 
 ### Out of Scope
 
@@ -139,7 +185,13 @@ v2.3 extracts the proven Excel-as-Configuration compiler from the `ai-on-cloud/t
 
 ## Context
 
-Shipped v1.4 with ~41,000+ Rust LOC across the workspace (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802 + v1.3: +9,197) plus 8,140 lines of documentation content in v1.4.
+Shipped v2.5 (2026-08-22) as pmcp v2.19.0. The v2.5 range alone changed 171 code files
+(+59,749/−2,586) across `src/`, `crates/`, `cargo-pmcp/`, `examples/` and `tests/`; 427 files and
++159,043 lines including planning artifacts. Timeline on `main` 2026-08-07 → 2026-08-20 (the work
+was developed on a feature branch and squash-merged as PR #337, so `main` shows 11 commits for a
+milestone scoped from 2026-07-22).
+
+Earlier baseline: shipped v1.4 with ~41,000+ Rust LOC across the workspace (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802 + v1.3: +9,197) plus 8,140 lines of documentation content in v1.4.
 Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot; optional: aws-sdk-dynamodb, redis) + `pmcp` core (protocol types, ServerCore routing, workflow system, MCP Apps) + `cargo-pmcp` (CLI tooling) + `mcp-preview` (browser preview) + `mcp-e2e-tests` (chromiumoxide CDP) + `packages/widget-runtime` (TypeScript bridge library).
 
 - The MCP Tasks spec is experimental (2025-11-25). Most MCP clients don't support it yet, so the feature is optional and isolated in `pmcp-tasks`.
@@ -194,6 +246,12 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | chromiumoxide over Playwright (v1.3) | Pure Rust E2E tests, no Node.js dependency | ✓ Good — 20 tests pass, auto-downloads Chromium |
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 | rmcp parity research scoped to ergonomics-only with severity-graduated proposals (Phase 69) | Avoid overlap with Phase 68 polish; produce actionable follow-on phases not vague gap reports | ✓ Good — 4 High-severity gaps surfaced, 3 follow-on proposals (PARITY-HANDLER/CLIENT/MACRO-01) with concrete plan-count estimates |
+| Dual-version stack over hard v2 cutover (v2.5) | One binary serves both eras via per-request negotiation; no forced client migration | ✓ Good — whole milestone stayed additive (2.x minor), zero breaking changes |
+| Read the era from the RAW request body, not typed structs (v2.5, D-113-D) | Adding `_meta` to the five list-shaped request types forced a MAJOR semver bump; the raw read needs zero public API change | ✓ Good — reverted the typed attempt, one era-detection path instead of two that disagreed; `tools/list` can be a v2 request |
+| Paired modules for v1 severance, not `#[cfg]` at call sites (v2.5) | `v1_session.rs` + signature-identical `v1_session_off.rs` null twins keep call sites clean | ✓ Good — 2,941-line transport left with exactly one call-site `#[cfg]`; CI gate blocks merge on regression |
+| Derive keyword lists from the pinned meta-schemas (v2.5, Phase 115) | Hand-kept lists silently omitted `dependencies`, so a subschema went unrewritten with no warning | ✓ Good — six keywords now derived and held by a source-text drift gate (`keyword_list_mirrors.rs`) |
+| Assert conformance on behaviour, not manifest structure (v2.5→v2.6) | Manifest schema is expected to churn; the E2E is the asset, not the API | — Pending — carried into v2.6 Phase 121 as the tool-list-parity round-trip |
+| Require a source-reading plan reviewer (v2.5, Phases 116/118/119) | Checker-approved plans carried HIGH defects that only a source-reading reviewer found | ✓ Good — recorded as a standing practice; prose-only reviewers emit checkably-false findings |
 
 ---
 ## Evolution
@@ -214,4 +272,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-22 — Milestone v2.5 (MCP Spec 2026-07-28 v2 Support) started: dual-version stack per the 2026-07-22 impact assessment (stateless core, Tasks-as-extension, JSON Schema 2020-12, auth SEPs, official conformance suite); v2.4 phases 106–110 moved to Validated (published as pmcp 2.17.0), v2.4 Phase 111 docs folded into v2.5 scope; previously 2026-07-19 — Phase 109 complete (Team Reference Servers: `pmcp-team-servers` one feature-flagged crate with dev-grade team-fs/mem-mcp/approval-mcp/team-mcp reference servers + additive pmcp-core namespaced `_meta` enablement + in-process "small team, one process" runtime + exportable wire-level conformance harness matching PKG-03 fixtures; TEAM-01..06 done, 7/7 must-haves re-verified after one `pmcp/http` feature-flag gap-closure fix; WR-01/WR-02 tracked as non-blocking follow-ups); previously 2026-07-18 — Phase 107 complete (Contracts & Package Format: pmcp-package adopted as workspace-excluded crate + wire-frozen via pinned-digest golden fixtures, team-server tool contracts as provable-contracts YAML; PKG-01/03 done, PKG-02 pending release-tag publish; WR-01/WR-02 review findings fixed; 3/3 must-haves verified); previously 2026-07-17 — Milestone v2.4 (Agents & Teams — SDK Extraction) started; design doc `docs/design/agents-teams-sdk-extraction-plan.md` approved incl. §6 recommendations; previously 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*
+*Last updated: 2026-08-22 after milestone v2.6 (AI-Package Portability) opened — pre-scoped from the v2.5 close (2026-07-27 scoping); staged requirements folded back into REQUIREMENTS.md as PKG-01..04 / PKGX-01/02 / PKGR-01; four opening decisions recorded: scope taken as scoped, Phases 122/123 stay parked contract-first, UNAS-01 (SEP-2243) deferred again unassigned, work continues on a rebased `feat/package-remote-capture-show`; previously 2026-08-22 after v2.5 milestone — **Milestone v2.5 (MCP Spec 2026-07-28 v2 Support) COMPLETE and archived**: 11 phases / 176 plans, all verification `passed`, published as pmcp v2.19.0 (PR #337, tag v2.19.0). pmcp is now a dual-version SDK — one binary serving both MCP 2025-11-25 and 2026-07-28 via per-request negotiation, v2 primary (stateless, Tasks-as-extension, JSON Schema 2020-12) and v1 cleanly severable at compile time. Nine official-suite conformance gaps closed. Closed as an override_closeout with 461 audit items recorded as open debt rather than acknowledged (two gsd-tools defects made acknowledgment unsafe — see MILESTONES.md). v2.6 (AI-Package Portability, Phases 120-124) scoped in ROADMAP.md with requirements staged in `.planning/v2.6-REQUIREMENTS-STAGED.md`, not yet opened; previously 2026-07-22 — Milestone v2.5 started: dual-version stack per the 2026-07-22 impact assessment (stateless core, Tasks-as-extension, JSON Schema 2020-12, auth SEPs, official conformance suite); v2.4 phases 106–110 moved to Validated (published as pmcp 2.17.0), v2.4 Phase 111 docs folded into v2.5 scope; previously 2026-07-19 — Phase 109 complete (Team Reference Servers: `pmcp-team-servers` one feature-flagged crate with dev-grade team-fs/mem-mcp/approval-mcp/team-mcp reference servers + additive pmcp-core namespaced `_meta` enablement + in-process "small team, one process" runtime + exportable wire-level conformance harness matching PKG-03 fixtures; TEAM-01..06 done, 7/7 must-haves re-verified after one `pmcp/http` feature-flag gap-closure fix; WR-01/WR-02 tracked as non-blocking follow-ups); previously 2026-07-18 — Phase 107 complete (Contracts & Package Format: pmcp-package adopted as workspace-excluded crate + wire-frozen via pinned-digest golden fixtures, team-server tool contracts as provable-contracts YAML; PKG-01/03 done, PKG-02 pending release-tag publish; WR-01/WR-02 review findings fixed; 3/3 must-haves verified); previously 2026-07-17 — Milestone v2.4 (Agents & Teams — SDK Extraction) started; design doc `docs/design/agents-teams-sdk-extraction-plan.md` approved incl. §6 recommendations; previously 2026-07-05 — Phase 104 complete (Task-Augmented Tool Results DX, SEP-1686 junction; ToolOutput verbatim pass-through + double-wrap tripwire + client TaskMetadata surface + migration guide; re-verified 7/7, make quality-gate green); previously 2026-06-15 — Phase 96 complete (Shape B `cargo pmcp new --kind workbook-server` scaffold + dialect-version declaration with both-lane fail-closed gate + WBEX-01 second-workbook served-schema generalization gate + WBEX-02 8-quirk corpus; WBCL-05/WBDL-02/WBEX-01/WBEX-02 validated, make quality-gate + purity-check green); previously 2026-06-14 — Phase 95 complete (pmcp-workbook-server Shape A pure-config binary mirroring pmcp-sql-server; test trio + --bundle-id proptest + reader-free purity gate + slot-9a wiring; requirement WBCL-06 validated)*

@@ -86,6 +86,83 @@
 
 ---
 
+## Milestone: v2.5 — MCP Spec 2026-07-28 (v2) Support
+
+**Shipped:** 2026-08-22 (published as pmcp v2.19.0)
+**Phases:** 11 (112, 113, 113.1, 114, 115, 116, 117, 118, 118.1, 118.2, 119) | **Plans:** 176 | **Tasks:** 337
+
+> Note: v1.5 and v2.0–v2.4 have no retrospective sections — this file jumps from v1.4 to v2.5. The
+> trend tables below therefore have a gap, not a continuous series.
+
+### What Was Built
+
+A dual-version SDK. One server binary serves both MCP 2025-11-25 and 2026-07-28 clients through
+per-request negotiation: a version-plumbing spine (`Era`, `ProtocolContext`, `TraceContext`)
+resolved once at ingress; stateless streamable-HTTP with multi-round-trip elicitation; Tasks moved
+to an extension; JSON Schema 2020-12 with caching hints; six auth-hardening SEPs; compile-time v1
+severability behind `full-v2`; nine official-suite conformance gaps closed; and documentation in
+three shapes. Entirely additive — a 2.x minor.
+
+### What Worked
+
+- **Reverting a working implementation on a measurement.** Phase 113 added `_meta` to five request
+  types, it worked, and `cargo semver-checks` showed it forced a MAJOR bump. It was reverted for a
+  raw-body read needing zero API change — which incidentally collapsed two disagreeing era-detection
+  paths into one. Measuring the cost of a working change, and acting on it, was the milestone's best
+  decision.
+- **Pinning goldens before cutting.** Phase 117 pinned v1 wire-bytes and tester-report goldens
+  *before* the severance cut, so the cut was proven by execution rather than inspection.
+- **Deriving invariants from the spec instead of restating them.** Phase 115's subschema keyword
+  list is derived from the pinned meta-schemas and held by a source-text drift gate, after a
+  hand-kept list silently omitted `dependencies`.
+- **Letting the official conformance suite set the agenda.** It found nine real gaps that internal
+  review had not.
+
+### What Was Inefficient
+
+- **False greens cost real time.** A sandboxed shell failed keychain reads 8/8 and presented as 14
+  code regressions in untouched files; `make` stdout was corrupted under the command proxy, hiding
+  the actual clippy failure; a `cargo test` dev-dependency re-unified the very feature being severed,
+  so a severance test reported "0 tests, exit 0" while proving nothing; and an
+  `assert!(!cfg!(feature = "x"))` guard could never fail. Each was diagnosed more than once.
+- **Plan review missed defects that source-reading review caught.** Phases 116, 118 and 119 all had
+  checker-approved plans carrying HIGH defects found only by a reviewer that read the source.
+- **A phase-closure fix introduced two new blockers** (Phase 118.2 CR-02), turning one-call failures
+  permanent and booking a cost as bounded by a timeout that did not exist.
+
+### Patterns Established
+
+- **Paired modules over call-site `#[cfg]`** — `v1_session.rs` plus a signature-identical
+  `v1_session_off.rs` left exactly one `#[cfg]` in a 2,941-line transport.
+- **Assert on behaviour, not structure** — carried forward into v2.6 Phase 121 as tool-list parity.
+- **Name the baseline alongside any semver ratio** (D-114-W) — "223/223" meant two different
+  measurements and the phase's own plans conflated them.
+- **Fail closed at ingress, not at the far end** — malformed reserved `_meta`, over-cap bodies, and
+  out-of-bound MRTR rounds are all refused before dispatch.
+
+### Key Lessons
+
+1. **A working implementation is not automatically the right one.** Measure its cost — semver,
+   complexity, wire bytes — before keeping it.
+2. **A test that cannot fail is worse than no test.** Three separate shapes of this appeared;
+   always assert a nonzero count and verify the guard fails on the defect it names.
+3. **Require a source-reading reviewer.** Prose-only reviewers approved all three plans that
+   carried HIGH defects, and emitted checkably-false findings.
+4. **Tooling output is not evidence.** Trust exit codes over captured text, and verify a parser's
+   output before believing its counts — the close audit's own 461 figure was ~half table-row
+   false positives.
+
+### Cost Observations
+
+- Model mix and session counts: **not recorded** for this milestone — no telemetry was captured, so
+  no figures are given rather than estimated ones.
+- Verifiable: 176 plans across 11 phases; 171 code files changed (+59,749/−2,586); scoped
+  2026-07-22, merged 2026-08-20 as a single squashed PR (#337).
+- Notable: Phase 113 alone consumed 32 plans — 18% of the milestone — and produced the decision
+  (raw-body era read) that the rest of the milestone depended on.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -97,6 +174,8 @@
 | v1.2 | 5 | 9 | GenericTaskStore<B> — domain logic once, backends are dumb KV |
 | v1.3 | 6 | 12 | Full-stack DX — Rust + TypeScript + HTML + CLI toolchain |
 | v1.4 | 5 | 10 | Documentation-only — content writing + cross-reference wiring |
+| _(v1.5–v2.4 not retrospected)_ | — | — | — |
+| v2.5 | 11 | 176 | Dual-era protocol support — revert-on-measurement, compile-time severability, official-suite conformance |
 
 ### Cumulative Quality
 
@@ -107,6 +186,8 @@
 | v1.2 | 22/22 | n/a | 4 feature-flag combinations verified in CI |
 | v1.3 | 26/26 | 26/26 req, 24/26 integration | 20 E2E browser tests |
 | v1.4 | 19/19 | 19/19 req, 14/16 integration | 3-source cross-reference |
+| _(v1.5–v2.4 not retrospected)_ | — | — | — |
+| v2.5 | 44/44 (+1 deliberately unassigned) | no milestone audit run | 11/11 phases verification `passed`; 9 official-suite gaps closed |
 
 ### Top Lessons (Verified Across Milestones)
 

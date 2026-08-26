@@ -1,10 +1,10 @@
 [package]
 name = "pmcp-workbook-server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/paiml/rust-mcp-sdk"
-description = "Shape A pure-config workbook MCP server binary — point it at a compiled bundle dir and serve five workbook tools with no Rust required"
+description = "Shape A pure-config workbook MCP server binary — point it at a compiled bundle dir and serve its governed-Excel workbook tools with no Rust required"
 keywords = ["mcp", "workbook", "config-driven", "toolkit", "excel"]
 categories = ["development-tools", "command-line-utilities"]
 
