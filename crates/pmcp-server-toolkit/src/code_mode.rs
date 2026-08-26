@@ -554,6 +554,15 @@ mod tool_handlers {
             #[cfg_attr(not(feature = "openapi-code-mode"), allow(unused_variables))]
             extra: &pmcp::RequestHandlerExtra,
         ) -> std::result::Result<serde_json::Value, pmcp_code_mode::ExecutionError> {
+            // Gated to match the ONE arm that needs it. Under `openapi-code-mode`
+            // the `PerRequestHttp` arm calls `.execute()` on a freshly built
+            // `JsCodeExecutor`, which resolves only through this trait. Without
+            // that feature the arm is cfg'd out and the `Static` arm resolves
+            // `.execute()` without the trait, leaving the import unused — a
+            // warning that becomes a hard error wherever `-D warnings` reaches
+            // this crate. Measured both ways: `--features http` warns,
+            // `--features http,openapi-code-mode` does not.
+            #[cfg(feature = "openapi-code-mode")]
             use pmcp_code_mode::CodeExecutor as _;
             match &self.source {
                 ExecSource::Static(executor) => executor.execute(code, variables).await,

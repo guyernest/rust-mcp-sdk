@@ -369,7 +369,31 @@ test-cargo-pmcp:
 .PHONY: test-cargo-pmcp-integration
 test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
-	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
+	# RUSTFLAGS is pinned EMPTY here, deliberately, and the value must stay
+	# explicit rather than inherited. Three facts combine into a gate whose
+	# strictness otherwise depends on the caller's environment:
+	#
+	#  1. GNU make re-exports a variable that CAME FROM the environment using the
+	#     MAKEFILE's value. `RUSTFLAGS = -D warnings` (line 11) is a plain make
+	#     variable, so a developer shell (no RUSTFLAGS set) leaves recipes with an
+	#     EMPTY RUSTFLAGS, while CI — which sets `RUSTFLAGS: ""` in ci.yml — turns
+	#     it into an exported `-D warnings`. Measured both ways.
+	#  2. `cargo test --test <name>` builds the crate's BIN as well, because an
+	#     integration test may exec it. The sibling `test-cargo-pmcp` leg uses
+	#     `--lib` and therefore never builds the bin at all.
+	#  3. cargo-pmcp compiles the same modules into BOTH a lib (`lib.rs`, where
+	#     `pub` means public API) and a bin (`main.rs`, where the same items are
+	#     bin-private and anything `main` does not reach is dead code). So the bin
+	#     reports ~14 dead-code/unused-import items across `pentest`, `deployment`,
+	#     `secrets` and `commands` that are live API through the lib.
+	#
+	# Result before this pin: green locally, 15 errors in CI, from one Makefile.
+	# This leg's job is to prove cargo-pmcp/tests/ is REACHED and reports a
+	# nonzero count — not to lint the bin. Linting belongs in `make lint`, and
+	# turning this into a bin linter would require blanket-allowing dead code in
+	# `commands/`, which would hide real rot. Follow-up worth doing separately:
+	# have main.rs consume the lib instead of re-declaring `mod` for each module.
+	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
