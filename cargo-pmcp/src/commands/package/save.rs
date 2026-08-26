@@ -16,6 +16,25 @@
 //! WORKING form (D-11); leaving both behind would invite the question "which
 //! one is the package?", which has a wrong answer half the time.
 //!
+//! # `save` writes SERVER packages only, and the asymmetry with `load` is a decision
+//!
+//! `load` is kind-agnostic essentially for free: it reuses `detect_kind` and
+//! handles whatever it is handed. `save` covers the server kind alone, and
+//! refuses any other by name rather than mis-packing it or accepting it with a
+//! warning.
+//!
+//! That asymmetry is deliberate (D-13). **Reading costs nothing; writing does
+//! not.** Packing an agent, team or workflow package needs per-kind INPUT
+//! semantics — an on-disk source format for each — that nobody has designed
+//! yet. Naming the missing design is honest; inventing one here to make the
+//! flag symmetric would bake a source format into a CLI flag before anyone had
+//! agreed what it should be.
+//!
+//! So the other three kinds are a DEFERRED DESIGN QUESTION, not a limitation to
+//! be quietly filled in. The refusal names the kind so the user learns which
+//! thing is missing, rather than discovering it from an artifact that packed
+//! and then would not deploy.
+//!
 //! # The config is read NARROWLY, and deliberately not through the toolkit
 //!
 //! `pmcp-server-toolkit`'s `ServerConfig` is `#[serde(deny_unknown_fields)]`
@@ -37,6 +56,7 @@ use pmcp_package::package::{CedarPolicySet, ServerPackage, ToolMetadata};
 use pmcp_package::{ConfigSlot, ManifestDigest, SlotType};
 
 use super::artifact;
+use super::kind::PackageKind;
 use crate::commands::GlobalFlags;
 use crate::deployment::config::DeployConfig;
 use crate::deployment::stack_routing::load_deploy_descriptor;
@@ -64,12 +84,82 @@ derivable from the config. Measured on the london-tube fixture, whose \
 A pure-configuration server that dispatches without a spec correctly omits \
 this flag, and the resulting package simply carries no spec layer.";
 
+/// Long help for `--kind`, written out because the refusal it documents is a
+/// deferred design question rather than a bug the user should report.
+const KIND_LONG_HELP: &str = "\
+The package kind to write. Only `server` is supported today.
+
+`load` reads every kind, but `save` writes only servers, and the asymmetry is \
+deliberate: reading a package costs nothing, while WRITING one needs per-kind \
+input semantics — an on-disk source format for agent, team and workflow \
+packages — that has not been designed. Passing any other kind fails by name \
+rather than mis-packing it.";
+
+/// The package kinds `--kind` accepts.
+///
+/// A SEPARATE enum from [`PackageKind`] rather than a `#[derive(ValueEnum)]` on
+/// that type, and not for style: `kind.rs` is `#[path]`-mounted into the
+/// LIBRARY target, where it must carry no `clap` dependency at all. Deriving a
+/// `clap` trait there would break every lib-target consumer of that leaf at
+/// once.
+///
+/// The mapping below is EXHAUSTIVE with no catch-all, so adding a package kind
+/// is a compile error here rather than a kind silently unreachable from the
+/// command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SaveKind {
+    /// A single agent package.
+    Agent,
+    /// A team package.
+    Team,
+    /// An mcp-server package — the only kind `save` writes today.
+    Server,
+    /// A workflow manifest.
+    Workflow,
+}
+
+impl SaveKind {
+    /// The [`PackageKind`] this flag value names.
+    fn as_package_kind(self) -> PackageKind {
+        match self {
+            SaveKind::Agent => PackageKind::Agent,
+            SaveKind::Team => PackageKind::Team,
+            SaveKind::Server => PackageKind::Server,
+            SaveKind::Workflow => PackageKind::Workflow,
+        }
+    }
+}
+
+/// Refuse a kind `save` cannot pack, BY NAME (D-13).
+///
+/// Deliberately not a warning and deliberately not a silent fallback to the
+/// server path: either would produce an artifact whose contents do not match
+/// what the user asked for, and the mismatch would surface much later, in a
+/// target environment, as something that packed cleanly and then would not run.
+fn refuse_a_kind_save_cannot_pack(kind: SaveKind) -> Result<()> {
+    let package_kind = kind.as_package_kind();
+    if package_kind == PackageKind::Server {
+        return Ok(());
+    }
+    bail!(
+        "`package save` does not yet support the {} kind — it writes server packages only. \
+         `package load` reads every kind, but writing one needs an on-disk source format for \
+         {} packages that has not been designed yet.",
+        package_kind.label(),
+        package_kind.label()
+    );
+}
+
 /// Arguments for `cargo pmcp package save`.
 #[derive(Debug, Args)]
 pub struct SaveArgs {
     /// Path to the server's `config.toml`.
     #[arg(long)]
     pub config: PathBuf,
+
+    /// The package kind to write. Only `server` is supported today.
+    #[arg(long, value_enum, default_value_t = SaveKind::Server, long_help = KIND_LONG_HELP)]
+    pub kind: SaveKind,
 
     /// Path to the OpenAPI spec, for an OpenAPI-backed server.
     #[arg(long, long_help = SPEC_LONG_HELP)]
@@ -193,7 +283,24 @@ fn package_from_files(config_bytes: &[u8], project_root: &Path) -> Result<Server
     // error. Falling back would produce a package whose deploy target is
     // defaulted rather than authored, which is precisely the outcome D-10
     // exists to prevent — and the package would then look fine until it was
-    // deployed somewhere wrong.
+    // deployed somewhere wrong. This verb produces an artifact whose whole
+    // purpose is to be trusted in ANOTHER environment, so a deploy target that
+    // could not be read is a refusal, never a default.
+    //
+    // The two failures stay distinguishable to the user, which is the point of
+    // making either one an error at all. `DeployConfig::load` reports a MISSING
+    // file ("Deployment not initialized"); the `load_deploy_descriptor` context
+    // below reports one that will not PARSE, naming the file and telling the
+    // user to fix the offending table. The underlying `toml` error rides the
+    // `anyhow` cause chain, so `-v` shows which table it choked on.
+    //
+    // NO PRODUCTION PATH IN THIS REPO CONSTRUCTS A `DeployDescriptor` FROM
+    // LITERALS, and none may. The only literal-built descriptors are in tests,
+    // where they exist so a test can pack without a project on disk. Copying
+    // one into this function would bake a deploy target, region and memory the
+    // user never chose into an artifact whose entire purpose is to be trusted
+    // elsewhere — a defaulted deploy target is indistinguishable from an
+    // authored one once it is inside the package.
     let deploy_config = DeployConfig::load(project_root)
         .with_context(|| format!("read {}/.pmcp/deploy.toml", project_root.display()))?;
     let deploy = load_deploy_descriptor(&deploy_config).with_context(|| {
@@ -225,6 +332,10 @@ fn package_from_files(config_bytes: &[u8], project_root: &Path) -> Result<Server
 
 /// Pack a configuration server into one movable tar.
 pub fn execute(args: SaveArgs, global_flags: &GlobalFlags) -> Result<()> {
+    // FIRST, before any file is read or written. A kind this command cannot
+    // pack is refused before it can produce a partial artifact.
+    refuse_a_kind_save_cannot_pack(args.kind)?;
+
     let config_bytes = std::fs::read(&args.config)
         .with_context(|| format!("read the server config {}", args.config.display()))?;
     let config_file_name = args
