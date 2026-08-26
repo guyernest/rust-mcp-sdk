@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 > `.planning/v2.6-REQUIREMENTS-STAGED.md` was consumed and removed when v2.6 opened — its content is now `.planning/REQUIREMENTS.md`. Do not look for it.
 
 **Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
-**Current focus:** Phase 122 — Attestation Carriage
+**Current focus:** Phase 120 — Config-Server Packaging
 
 ## Current Position
 
@@ -35,7 +35,20 @@ Phase: 120 — Config-Server Packaging
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-08-25 — Phase 122 complete, transitioned to Phase 120
-Next: Phase 122 (Attestation Carriage) — not yet discussed. Runs in parallel with Phase 123.
+Next: Phase 120 (Config-Server Packaging) — not yet discussed. It is the earliest incomplete
+phase in the 120 → 121 → 122 ∥ 123 → 124 order; 121 and 122 are both complete with verification
+passed.
+
+> **Note 2026-08-25 (Phase 122 close).** Unlike the Phase 121 close recorded below, this run's
+> `next_phase: 120` is CORRECT — 120 is genuinely `[ ]` in the ROADMAP progress table, so the verb
+> and the roadmap agree. The `Current focus:` and `Next:` lines it left behind were stale (both
+> still named the just-completed Phase 122) and were corrected by hand. Checking the verb's output
+> against the ROADMAP remains necessary; it just happened to be right this time.
+>
+> Worth flagging for whoever plans 120: Phase 122 declares **"Depends on: Phase 120 (layer +
+> vendor-media-type machinery)"**, yet 122 executed and verified 6/6 with 120 still incomplete.
+> Either that machinery already existed (Phase 121 landed the round-trip net on it) or the
+> dependency edge is inaccurate. Re-measure before assuming 120 must add something 122 already uses.
 
 > **Corrected by hand 2026-08-25.** `gsd-tools query phase.complete 121` returned
 > `next_phase: 120` and wrote `current_phase: 120` here — a phase that was already
