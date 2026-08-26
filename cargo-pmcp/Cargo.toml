@@ -114,10 +114,29 @@ open = "5.0"                            # Browser launch
 chrono = "0.4"                          # Token expiry handling
 rpassword = "7.3"                       # Secret input (for other features)
 zip = "8.1"                             # Zip file creation for landing page deployment
+# Phase 123 (PKGX-02): the `package save`/`package load` artifact codec. An
+# uncompressed tar is the MOVABLE form of an OCI image layout (D-11); the layout
+# directory stays the working form. Deliberately added HERE and NOT to
+# `crates/pmcp-package/Cargo.toml` (D-12) so the format crate's allowlist and its
+# measured 90-package graph are untouched. Sits beside `zip`, the existing
+# archive-dependency precedent. Maintainership provenance was verified by a human
+# on 2026-08-26 before this line was written — see `123-01-SUMMARY.md`.
+tar = "0.4"
+# Named directly because `commands/package/artifact.rs` must NAME `MediaType`,
+# `Descriptor`, `ImageIndex` and `ImageManifest` in its own public types —
+# `pmcp-package` re-exports none of them, and `OciLayout::write_blob` REQUIRES a
+# `MediaType` per blob. Already resolved in the graph via `pmcp-package`, so this
+# adds no package; the version requirement matches that crate's own `0.10` so the
+# workspace unifies on one copy and the types cross the crate boundary.
+oci-spec = "0.10"
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
-tempfile = "3"                          # Temp dirs/files across scaffold + publishing paths
+# 3.15 is the floor, not "3": `package load`'s transactional install persists its
+# staging directory with `TempDir::keep()`, which landed in 3.15 (the older
+# `into_path()` alias is deprecated). `path` deps hide this locally — the
+# requirement is what a published cargo-pmcp resolves against.
+tempfile = "3.15"                       # Temp dirs/files across scaffold + publishing paths
 thiserror = "2"                         # Error types for generated code
 # NOT for credential-cache keys any more: `auth_cmd` normalizes through
 # `pmcp::shared::credential_store::normalize_server_key`. Still used directly by
