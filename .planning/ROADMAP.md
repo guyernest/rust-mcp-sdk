@@ -2430,11 +2430,13 @@ Plans:
 **Requirements**: PKGX-02
 **Parked**: partially — `pack`/`unpack` are unblocked and land this milestone; `export`/`import` are contract-first, their live leg parked on pmcp.run package import.
 **Reality check 2 (2026-08-26, from the pmcp.run exchange — READ BEFORE PLANNING)**: two of this phase's four declared verbs changed meaning, and the verb count in Reality check 1 is itself measured against the wrong branch.
+
   - **`import` is NOT ours to take.** The platform answered the collision question: `import` stays theirs. It is not merely a CLI verb — it is `submitImport`/`getImportStatus` on their AppSync API, four data models, the Phase 173.5 admin UI, an ADR and a live D-14 acceptance. SC2's "resolve the collision" is answered: we do not rename theirs, we name ours differently.
   - **`pack`/`unpack` become `save`/`load`**, per Docker's split (`save`/`load` local file, `push`/`pull` registry, `import` admit-into-system). Verified free on both branches, as are `push`/`pull`. `install` is excluded — their Phase 184 admin UI already uses "Install App". SC1 should be restated in these terms.
   - **⚠ `export` has no defined job left, and this phase must decide its fate.** It was specified as a *remote* op alongside `import` (SC3/SC4), i.e. the inverse of `pull` — which is `push`. But `capture` already produces packages platform-side and `pull` (§5.1) covers the other direction. The platform asked directly: "if `export` is a new verb, what does it do that `capture` doesn't?" We have no defensible answer. **Analysis says drop it**; doing so changes this phase's declared verb set and SC3/SC4, so it is a planning decision, not a documentation fix.
   - **The five-verb count in Reality check 1 is branch-local.** `feat/package-172-cli` carries `f7ea3c4b` and `3425662d` (both 2026-07-21): `PackageCommand` has **eight** variants there and its `Import` is real, not dry-run. SC2's `verb_help.rs` pin would encode a list contradicting the platform's live control plane. **The platform asks that this branch merge BEFORE the verb list is pinned.** Their own qualifier: 172-10 was blocked before `activate` ever ran, so `activate`/`rollback`/`cancel` are wired but not exercised end to end — the test asserts the inventory, not the acceptance.
   - Full context: `docs/design/package-portability-pmcp-run-handoff.md` §5.2, and the three-message exchange in `docs/platform-requests/attestation-carriage-*.md`.
+
 **Reality check (measured 2026-08-22)**: the scoping line "`cargo pmcp package` today has exactly one verb: `inspect`" is stale. `cargo-pmcp/src/commands/package/mod.rs` on `main` enumerates **five** — `inspect | capture | show | import | approve` — and `import` is already taken by the remote *workflow-manifest dry-run* import (`cargo-pmcp/src/commands/package/import.rs`). The AI-Package import verb therefore collides with an existing, shipped verb, and this phase must resolve that explicitly.
 **Success Criteria** (what must be TRUE — all offline, in this repo, backend unavailable):
 
@@ -2447,12 +2449,26 @@ Plans:
 **Plans**: 7 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, framing gates, byte caps, verify-before-write)
 - [ ] 123-02-PLAN.md — Contract-first `getPackageArtifact`: vendored SDL, pure codec, offline blocking test, parked live leg
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 123-03-PLAN.md — `load`'s report (slots, three-state pin facts, carriage states, exit-1 subject mismatch) and `save`'s scope guards
 - [ ] 123-04-PLAN.md — The tar framing rule in `pmcp-package` docs plus its golden-fixture corpus and the test binding rule to implementation
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 123-05-PLAN.md — `pull`: the whole six-stage pipeline behind one transport seam, with D-05's named-capability failure
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 123-06-PLAN.md — The verb-list pin, the `--help` three-direction preamble, and the written note to the platform
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the Makefile gate wiring for all four test binaries
 
 ### Phase 124: Release & Publish Order

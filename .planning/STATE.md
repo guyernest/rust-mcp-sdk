@@ -2,17 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: AI-Package Portability
-current_phase: 120
-current_phase_name: Config-Server Packaging
-status: planning
+current_phase: 123
+current_phase_name: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
+status: executing
 stopped_at: Phase 123 context gathered
-last_updated: "2026-08-26T16:16:34.121Z"
-last_activity: 2026-08-25
-state_head: fdf2df5651ec30adb7df32ad07426eadfe1274e6
+last_updated: "2026-08-26T17:21:58.330Z"
+last_activity: 2026-08-26
+last_activity_desc: Phase 123 planning complete
+state_head: 1247c89bdaf243bfad7167b70908080cae60981d
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 18
+  total_plans: 25
   completed_plans: 18
   percent: 60
 ---
@@ -30,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 
 ## Current Position
 
-Phase: 120 — Config-Server Packaging
+Phase: 123 (Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*) — READY TO EXECUTE
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-25
+Status: Ready to execute
+Last activity: 2026-08-26 — Phase 123 planning complete
 Next: Phase 123 (Export/Import Verbs) — not yet discussed. Phases 120, 121 and 122 are ALL
 complete with verification passed; 123 has no phase directory yet. Order is 120 → 121 → 122 ∥ 123 → 124.
 
