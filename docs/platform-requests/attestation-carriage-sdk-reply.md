@@ -3,14 +3,19 @@
 **To:** pmcp.run platform dev team
 **From:** SDK / cargo-pmcp side (`paiml/rust-mcp-sdk`)
 **Date:** 2026-08-26
-**Re:** your review of `docs/platform-requests/attestation-carriage-format-changes.md`
+**Re:** your reply of 2026-08-25, filed here as
+`docs/platform-requests/attestation-carriage-platform-reply.md`
+
+*(Filename note: we both named our reply `attestation-carriage-reply.md`. Yours is now
+`-platform-reply.md`, ours `-sdk-reply.md`, so the exchange reads in order.)*
 
 Four things changed on our side because of this review. All four are done, not planned.
 
 | What | Where |
 |---|---|
 | SDL argument renamed `subjectPayloadDigest` → `subjectManifestDigest` | `contracts/pmcp-run/attestation-v1.graphql`, `cargo-pmcp/src/deployment/targets/pmcp_run/graphql_contract.rs` |
-| New invariant: **refuse, never normalize** | handoff §2 |
+| New invariant: **Reject vs. normalize** — corrected once your §2.2 arrived, see §2 below | handoff §2 |
+| Corpus accepted; three fixtures now owed, not one | handoff §3.2 |
 | Verb-naming decision recorded, with our false premise corrected | handoff §5.2 |
 | Your two blockers recorded as platform-owned, with the version pin escalated to our top ask | handoff §5.4, §10 |
 
@@ -55,6 +60,21 @@ because `roleLabel` and `toolDescription` are documented free text with no chars
 constraint between the admin UI and the canonicalizer — that is a more useful finding than
 the one we went looking for.
 
+**And our first version of that row was wrong, which your §2.2 caught.** We wrote "both
+sides refuse, neither sanitizes." Your name path *rewrites* — `ecr_safe_name` mapping
+outside-`[a-z0-9._]` to `-` at `bare_component`, deliberately, and correctly for a value
+that is simultaneously the pin identity and the ECR repo leaf. The row now records the
+asymmetry as it actually is: **neither behaviour is wrong, and the asymmetry is the thing to
+track**, safe today only because your rewrite sits at a single minting point. It stops being
+safe if a name is ever minted elsewhere on your side, or if we normalize anywhere instead of
+refusing. That is a better row than the one we would have written alone, and it is the
+argument for §10 ask 3 in miniature.
+
+We also lifted your §2.1 heuristic into the doc verbatim in substance: **ask a divergent
+implementation what its LIBRARY says about C0, not what its SPEC says.** `olpc-cjson`'s spec
+is silent and its module docs are explicit; that asymmetry is reusable against the next
+canonicalizer anyone brings, and it is a cheaper conformance check than a fixture.
+
 ## 3. On the verb count — you're right, and it was our own repository
 
 We verified before accepting it. `feat/package-172-cli` carries both commits you name,
@@ -79,6 +99,16 @@ four data models, the 173.5 admin UI, an ADR and a live D-14 acceptance is not a
 is a migration. The local file round-trip is **`save` / `load`**, which we checked is free
 on both branches (as are `push`/`pull`). `install` excluded per Phase 184. Phase 123 plans
 against that vocabulary.
+
+**Your qualifier is recorded too, and it changes what the test asserts.** Because 172-10 was
+blocked before `activate` ever ran, `activate`/`rollback`/`cancel` are wired but not
+exercised end to end. So the verb-list test asserts the **inventory**, and must not be read
+as asserting the acceptance — we have written that distinction into §5.2 rather than leaving
+a future reader to infer that a pinned list means a proven list.
+
+**Agreed on your ordering:** merging `feat/package-172-cli` comes ahead of the fixture work,
+for the reason you give — it determines what the verb list is even asserting. We have put it
+in §7 as an SDK-owned item ahead of the fixtures.
 
 ## 4. The version pin is now our top ask
 
@@ -122,9 +152,18 @@ Open, in the order we'd care about them:
 1. **The `pmcp-package` bump** (§4 above) — gates your ability to check anything in §2.
 2. **Ratify or counter-propose `verifyAttestation`** — now with the corrected argument name.
    Still one operation, and the payload schema is still yours to name and version.
-3. **The golden-fixture corpus decision.** If you take it, we write the attested-package
-   fixtures first — that hole is ours and we said so.
+3. **The three fixtures**, now that you have accepted the corpus. Your two additions are
+   better targeted than our one: a `Some(range)`/`None` `resolved_from` pair, because §2's
+   `resolved_from` row only *claims* the digests differ and a row in a table is not a test;
+   and an unknown `application/vnd.pmcp.*` layer, because silently-dropped is the mechanism
+   behind the kind-neutral media-type trap and the thing most likely to bite your migration.
+   Corpus **home** is still the open question.
 4. **`getPackageArtifact`**, unchanged from July and still the smallest item gating the most.
+
+One dependency worth making explicit, since your item 2 is blocked on it: **your
+`pmcp-package` bump needs us to publish 0.3.0 first**, and publishing is Phase 124. So the
+ordering is ours-then-yours, not parallel. We had listed the bump as your top item without
+noting that we are standing on the hose.
 
 One process note: we'd rather receive reviews like this one than agreement. Three of the
 four changes above exist because you checked our claims at source — the `olpc-cjson`

@@ -102,7 +102,7 @@ implementation must match it exactly, and any change must move on both sides tog
 | **Baked vs slot** — spec is baked (identity); endpoint, credentials, auth mode are slots | Phase 120, enforced by `tests/digest_stability.rs` | Two digests for one logical server, or an environment value entering identity |
 | **Dual binary mode** — embedded bootstrap bytes, OR `BinaryRef { digest, media_type }` | `package/server.rs` | A referenced package treated as missing-layer instead of "resolve this digest" |
 | **Canonical-JSON representability** — no C0 control character (U+0000–U+001F) may reach any string the manifest canonicalizes | `oci/pack.rs` — `first_control_character`, `reject_attestation_annotations_that_break_canonical_json` | **A package that packs, verifies, and can never be unpacked.** Full treatment in §2.2 — read it before implementing a writer |
-| **Unrepresentable input is REFUSED, never normalized** *(added 2026-08-26 at the platform team's suggestion)* | `oci/pack.rs` — the gate returns `PackageError::AttestationAnnotationInvalid`; it does not rewrite | **Two implementations can agree "no control characters" and still diverge**, because rewriting changes the bytes and therefore the digest. A normalizing writer and a refusing writer produce different digests for the same logical input — a digest divergence hiding behind an apparent agreement. Both sides refuse. Neither sanitizes |
+| **Reject vs. normalize — the two implementations DIFFER here today** *(added 2026-08-26 at the platform team's suggestion; corrected the same day)* | SDK: `oci/pack.rs` refuses with `PackageError::AttestationAnnotationInvalid` and never rewrites. Platform: `ecr_safe_name` (`walk.rs:479`) **rewrites**, mapping every character outside `[a-z0-9._]` to `-` | **Both satisfy "no control character reaches the canonicalizer", and they are not the same behaviour.** Rewriting changes the bytes and therefore the digest, so a normalizing writer and a refusing writer produce different digests for the same logical input — an agreement on the rule masking a disagreement on behaviour. This is currently SAFE only because their rewrite sits at a single minting point (`bare_component`, `walk.rs:511`) covering every `ComponentRef.name`. It stops being safe the moment a name is minted elsewhere on their side, or the SDK normalizes anywhere instead of refusing. **Neither is wrong; the asymmetry is the thing to track** |
 | **Attestation subject is the UNATTESTED digest** — `run.pmcp.attestation.subject` names the manifest digest the package would have had *without* this layer | `media_types.rs` (`ANNOTATION_ATTESTATION_SUBJECT`); pack-side gate in `oci/pack.rs` | An attested package's own digest can **never** equal the subject it names — the layer lives inside the manifest the digest covers. An implementation that writes the carrying package's own digest here produces an attestation that is wrong in a way that looks self-consistent |
 | **`PinnedRef.resolved_from` participates in IDENTITY** — a pin records the semver range it resolved from | `reference.rs:141`; `tests/digest_stability.rs::recording_the_range_a_pin_resolved_changes_the_manifest_digest` | `Some(range)` **changes the canonical bytes and therefore the manifest digest**; `None` emits no key at all (`skip_serializing_if`, load-bearing). If one side records the range and the other does not, the same logical package yields two digests — §1 break #2, with attestations and `ApprovedPackage` admission both failing. Wire-compatible in the additive direction only: pins written before the field existed still deserialize as `None` |
 | **Attested ⇒ fully pinned** — a team package carrying an attestation must hold no unresolved `ComponentRef` | `oci/pack.rs` — `reject_an_attestation_over_an_unresolved_team`; error is `PackageError::InvalidReference`, deliberately not a new variant | An attestation over a moving target. **Depth-1 only**, by decision: an attested team whose pinned agent itself holds a range still packs — requiring attestation transitively is platform **admission policy**, not format. Vacuous on the server path (`ServerPackage` holds no `ComponentRef`), so `pack_server` deliberately does not call it — do not "fix" that asymmetry |
@@ -188,9 +188,23 @@ literally and that `serde_json` cannot necessarily deserialize what it produces.
 capture Lambda is pinned to `pmcp-package` 0.1.0 and pulls the same crate, so **they sit
 entirely inside the ungated region with no pre-write refusal at all.**
 
-Where we guessed wrong: **component names are safe.** A single minting point maps every
-character outside `[a-z0-9._]` to `-`, so a control character cannot survive into a server
-or team name.
+Where we guessed wrong: **component names are safe.** `ecr_safe_name` (`walk.rs:479`) maps
+every character outside `[a-z0-9._]` to `-`, collapses runs and falls back to `"unnamed"`,
+applied at `bare_component` (`walk.rs:511`) — the single minting point for every
+`ComponentRef.name`, which is simultaneously the manifest pin identity and the ECR repo
+leaf. So the `org.opencontainers.image.title` case we called out specifically does not reach
+them the way we expected.
+
+Note carefully that this makes their name path a **normalizer**, not a refuser — which is
+the asymmetry §2's *Reject vs. normalize* row now tracks. It is safe today because of the
+single minting point, not because the two implementations behave alike.
+
+**A cheap conformance check for any third implementation, from their §2.1:** a canonicalizer
+that documents this boundary is easy to interrogate — so **ask a divergent implementation
+what its LIBRARY says about C0, not what its SPEC says.** `olpc-cjson`'s own module docs
+open by stating that control characters are printed literally and that `serde_json` cannot
+necessarily deserialize its output. The spec is silent; the library is explicit. That is the
+question to ask the next canonicalizer someone brings.
 
 **Config slots are the real exposure.** Their capture copies `roleLabel`,
 `toolDescription`, `displayName`, secret names and LLM provider/model strings verbatim out
@@ -202,10 +216,15 @@ charset constraint between the admin UI and the canonicalizer.
 **The generalizable lesson, which is theirs and not ours:** their planned fix is a
 fail-closed refusal at the slot-construction boundary, **not sanitization**, because
 rewriting would silently change package identity. That is now an invariant in §2 in its own
-right — *Unrepresentable input is REFUSED, never normalized*. We had documented the rule
-("no control characters") without documenting the **remedy**, and two implementations that
-agree on the rule while disagreeing on reject-vs-normalize produce different digests for the
-same input. Agreement on a constraint is not agreement on behaviour.
+right — *Reject vs. normalize*. We had documented the rule ("no control characters") without
+documenting the **remedy**, and two implementations that agree on the rule while disagreeing
+on reject-vs-normalize produce different digests for the same input. Agreement on a
+constraint is not agreement on behaviour.
+
+Our first attempt at that row asserted "both sides refuse, neither sanitizes" — **which is
+false**, and their §2.2 says so: their name path rewrites, deliberately, through
+`ecr_safe_name`. The row now records the asymmetry as it actually is rather than the
+symmetry we assumed, which is the whole point of having them check our table.
 
 ---
 
@@ -270,10 +289,23 @@ Concretely — each item is small and independently useful:
    and an identity-bearing field, and added **no golden**. Attestation is regression-netted
    by property and unit tests (`tests/attestation_opacity.rs`, `tests/negative.rs`) and by
    `digest_stability.rs`'s `resolved_from` digest assertion — but the *corpus* pins nothing
-   about an attested package, so adopting it as-is today would give you a conformance suite
-   with a hole exactly where the newest format surface is. An **attested-package fixture in
-   both carrier kinds** (server and team) is the concrete first item if this proposal is
-   accepted, and the SDK will write it.
+   about an attested package, so adopting it as-is today would give a conformance suite with
+   a hole exactly where the newest format surface is.
+
+   **ACCEPTED by the platform 2026-08-26.** The corpus becomes the shared conformance suite,
+   and the SDK owes three fixtures — the first was our offer, the second and third are theirs:
+
+   1. **An attested package in both carrier kinds** (server and team).
+   2. **A `Some(range)` `resolved_from` pin alongside its `None` twin.** Their reasoning is
+      better than our own framing: §2's `resolved_from` row *claims* the two differ in
+      digest, and that claim is exactly the assertion a divergent writer needs to fail on. A
+      row in a table is not a test.
+   3. **An unknown / misspelled `application/vnd.pmcp.*` layer.** They named the
+      silently-dropped-rather-than-rejected behaviour as the item most likely to bite them
+      during their migration, and the one they most want pinned. It is also the mechanism
+      behind the kind-neutral media-type trap in §2.
+
+   Corpus home is still open (§7).
 3. **Cross-direction round-trip, once egress exists.** Platform packs → SDK unpacks →
    assert tool-list parity, and the reverse. This is Phase 121's E2E with one side swapped,
    and it is the only test that actually proves portability. It needs `getPackageArtifact`
@@ -430,6 +462,12 @@ rustdoc reads "Submit a REAL import job … halts honestly at `awaiting_activati
 directly contradicting the branch we were reading, whose comment still says "dry-run is the
 ONLY mode this phase".
 
+**Their own qualifier, which matters for what Phase 123 pins:** their 172-10 live acceptance
+was blocked before `activate` ever ran (no `active` alias existed live yet), so
+`activate`/`rollback`/`cancel` exist and are wired but have **not** been exercised end to
+end. They belong in the inventory; they are not proven the way `import` is. A verb-list test
+should assert the inventory, not imply the acceptance.
+
 So a `verb_help.rs` pinning five would have encoded a list that contradicts the platform's
 live control plane and breaks the moment that branch merges. **This is the second unmerged
 line in this repo to distort a platform-facing document** — the first being Phases 120–122
@@ -577,11 +615,12 @@ ratification, not invention.
 | 9 | Release bundling: ship CLI package verbs now with `pull` next minor, or one bundled release? | decision holder is the **SDK**; platform has argued for shipping now |
 | 10 | Ratify design-note §7: descriptor is the contract, stack is derived, renderer is a shared open-source crate | open — **the largest architectural item** |
 | 11 | Per-wave expressiveness checklist: what must `[[resources.*]]` express before each recreation wave? | open |
-| — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | open, from §3.2 |
-| — | **When does the platform bump off `pmcp-package` 0.1.0?** | ⚠ **new, and it now gates §10 ask 3.** Their caret pin cannot reach 0.2/0.3, so no writer on their side can check any invariant added since Phase 120 — see §5.4 |
+| — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | open. **Adoption itself is settled — accepted 2026-08-26**; only the location is undecided. SDK owes three fixtures (§3.2) |
+| — | **Merge `feat/package-172-cli`** | ⚠ **new 2026-08-26 — the platform asks for this AHEAD of the fixture work**, because it determines what a pinned verb list is even asserting. SDK-owned |
+| — | **When does the platform bump off `pmcp-package` 0.1.0?** | ⚠ **gates §10 ask 3.** Their caret pin cannot reach 0.2/0.3, so no writer on their side can check any invariant added since Phase 120 (§5.4). They have taken it as work, blocked on the SDK **publishing** 0.3.0 — which is Phase 124. Source-breaking across their capture and import Lambdas |
 | — | Naming for the AI-Package import verb, given `package import` is taken | ✅ **ANSWERED 2026-08-26.** `import` stays; the new local round-trip is `save`/`load`; `install` excluded. Our five-verb premise was also corrected — see §5.2 |
-| — | Can capture's canonicalized strings originate from user-controlled input? (§2.2) | ✅ **ANSWERED 2026-08-26: yes.** Not via component names (safe by a minting point) but via **config slots** — `roleLabel`, `toolDescription`, `displayName`, secret names, LLM provider/model. Platform-owned fix; it produced a new §2 invariant (*refuse, never normalize*) |
-| — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | open — the SDL is vendored but SDK-proposed and unratified. **Its subject argument was renamed `subjectPayloadDigest` → `subjectManifestDigest` on 2026-08-26** after the platform caught it naming the wrong digest; corrected before ratification |
+| — | Can capture's canonicalized strings originate from user-controlled input? (§2.2) | ✅ **ANSWERED 2026-08-26: yes.** Not via component names (safe by a minting point) but via **config slots** — `roleLabel`, `toolDescription`, `displayName`, secret names, LLM provider/model. Platform-owned fix; it produced a new §2 invariant (*Reject vs. normalize*) |
+| — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | open, and now **unblocked**: the platform called the SDL otherwise fine and gated ratification on the one naming change, which is **done** (`subjectPayloadDigest` → `subjectManifestDigest`, 2026-08-26). They export a provenance-carrying SDL to replace ours once they confirm |
 
 Resolved and kept for the record: **Q6** (IAM population — deterministically not captured;
 the synthesized descriptor is systematically lossy) and **Q8** (AVP read scope — single
