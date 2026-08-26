@@ -307,13 +307,14 @@ you accept the proposal, and we will write it.**
 
 ## 7. Where to read it — and when these paths will resolve
 
-> **⚠ Caveat, stated up front: these paths do not resolve yet.** As of this message
-> everything from Phases 120–122 lives on an unmerged branch and is **not on
-> `paiml/rust-mcp-sdk` `main`**, which is at `v2.19.0` (2026-08-20). The attestation
-> media type does not exist there. **Do not go looking for these files on `main` and
-> conclude we sent you fiction.** §§2–6 above are self-contained and complete for
-> answering both questions; this table is for when the branch lands. We'll follow up
-> with the PR link.
+> **⚠ Caveat — narrowed 2026-08-26.** These paths resolve **on the working tree**, which is
+> what the pmcp.run team reads; they do **not** resolve on `paiml/rust-mcp-sdk` `main`, which
+> is at `v2.19.0` (2026-08-20) and where the attestation media type does not exist at all.
+> Everything from Phases 120–122 is on an unmerged branch.
+>
+> So: **read them from disk, not from GitHub.** For any other host implementing this format
+> — this document's stated secondary audience — the paths are not reachable yet, and §§2–6
+> above are self-contained precisely so that does not matter.
 
 All paths are relative to the repository root of `paiml/rust-mcp-sdk`.
 
