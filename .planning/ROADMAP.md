@@ -2451,25 +2451,36 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, framing gates, byte caps, verify-before-write)
-- [ ] 123-02-PLAN.md — Contract-first `getPackageArtifact`: vendored SDL, pure codec, offline blocking test, parked live leg
+- [ ] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, validated descriptor-graph model, framing gates, injectable byte caps, staged transactional install)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 123-03-PLAN.md — `load`'s report (slots, three-state pin facts, carriage states, exit-1 subject mismatch) and `save`'s scope guards
-- [ ] 123-04-PLAN.md — The tar framing rule in `pmcp-package` docs plus its golden-fixture corpus and the test binding rule to implementation
+- [ ] 123-02-PLAN.md — Contract-first `getPackageArtifact`: vendored SDL, pure codec, offline blocking test, parked live leg
+- [ ] 123-03-PLAN.md — `load`'s report (slots, three-state pin facts, carriage states, exit-1 subject mismatch), the renderer lib mount, and `save`'s scope guards
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 123-05-PLAN.md — `pull`: the whole six-stage pipeline behind one transport seam, with D-05's named-capability failure
+- [ ] 123-04-PLAN.md — The tar framing rule in `pmcp-package` docs, its golden-fixture corpus, and the tests binding the rule to BOTH the reader and the writer
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 123-06-PLAN.md — The verb-list pin, the `--help` three-direction preamble, and the written note to the platform
+- [ ] 123-05-PLAN.md — `pull`: the six-stage pipeline in a lib-mounted module behind one transport seam, the module-scope HTTP client, and D-05's named-capability failure
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the Makefile gate wiring for all four test binaries
+- [ ] 123-06-PLAN.md — The verb-list pin plus its gate registration, the `--help` three-direction preamble, and the written note to the platform
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the end-to-end proof that the gate executes all eight named test binaries
+
+> **Wave layout revised 2026-08-26** by `/gsd-plan-phase 123 --reviews`, from five waves to six. Two
+> causes, both from the cross-AI review: each creator plan now registers its own test binary in
+> `test-cargo-pmcp-integration` in the same commit that creates it (`Makefile:337-339`'s own
+> discipline — deferring all four to plan 07 left Waves 1-4 running a gate that executed none of their
+> own new tests), and same-wave plans must not share `files_modified`, so the four `Makefile` editors
+> are spread one per wave. Plan 04 also gained a real dependency on plan 02, whose vendored SDL its
+> framing-rule docs cross-reference. Plan numbering is unchanged.
 
 ### Phase 124: Release & Publish Order
 
