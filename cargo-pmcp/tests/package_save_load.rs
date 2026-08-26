@@ -41,6 +41,7 @@ use oci_spec::image::{
 use pmcp_package::oci::media_types::{ARTIFACT_TYPE_SERVER, EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG};
 use pmcp_package::oci::OciLayout;
 use pmcp_package::ManifestDigest;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 // ---------------------------------------------------------------------
@@ -940,4 +941,496 @@ fn load_refuses_an_over_cap_lying_header_and_writes_nothing() {
     let hostile = builder.into_inner().expect("finish the archive");
 
     assert_load_refuses(&hostile, "per-entry cap");
+}
+
+// ---------------------------------------------------------------------
+// Phase 123 Plan 03 (PKGX-02) — the REPORT, and the D-15 subject verdict
+//
+// Plan 01 proved the path and printed only enough to show it worked. These
+// cases assert what `load` exists to produce: the slots a target environment
+// must fill, the pin facts the package records about its components, the
+// carriage state, and the exit-1 verdict on an attestation whose claimed
+// subject does not name this package.
+//
+// # Two verdicts that must stay visibly different
+//
+// A corrupt package fails closed and writes NOTHING. A well-formed package
+// carrying a FALSE claim is installed, reported, and exits 1. The pair of
+// tests at the end of this file assert those two outcomes with OPPOSITE
+// destination-exists assertions, so the difference is proven behaviourally
+// rather than merely described. Do not harmonize them.
+// ---------------------------------------------------------------------
+
+const TEST_ISSUER: &str = "https://issuer.test.invalid/pmcp-run";
+const TEST_PAYLOAD_TYPE: &str = "application/vnd.test.attestation-payload";
+
+/// Attestation payload bytes that are deliberately NOT valid JSON and not valid
+/// UTF-8. If anything on the carriage path parsed the payload, packing or
+/// unpacking would fail — so a passing render is evidence the bytes travel
+/// opaquely.
+const OPAQUE_PAYLOAD: &[u8] = b"\x00\x01 this is not json \xff\xfe \x00";
+
+/// Tar the layout rooted at `dir` and return its bytes — the movable form of a
+/// fixture built directly with `pack_*` rather than through `save`.
+///
+/// `save` only packs SERVER packages (D-13) and never issues an attestation
+/// (D-15), so the team and attestation fixtures below cannot be produced
+/// through the CLI. They are packed with `pmcp-package`'s own API and tarred
+/// here, which is the same movable form `save` emits and therefore the same
+/// thing `load` reads.
+fn tar_of_layout(dir: &Path) -> Vec<u8> {
+    let holder = tempfile::tempdir().expect("create a scratch dir for the tar");
+    let tar_path = holder.path().join("fixture.tar");
+    cargo_pmcp::package_artifact::write_tar(&OciLayout::open(dir), &tar_path)
+        .expect("tar the fixture layout");
+    std::fs::read(&tar_path).expect("read the tarred fixture")
+}
+
+/// Run `package load` on `tar_bytes`, returning `(holder, destination,
+/// assertion)`. The `TempDir` is returned so the caller keeps everything alive.
+fn load_bytes(
+    tar_bytes: &[u8],
+    quiet: bool,
+) -> (tempfile::TempDir, PathBuf, assert_cmd::assert::Assert) {
+    let holder = tempfile::tempdir().expect("create a temp holder");
+    let tar = holder.path().join("fixture.tar");
+    std::fs::write(&tar, tar_bytes).expect("write the fixture tar");
+    let destination = holder.path().join("layout");
+
+    let mut command =
+        Command::cargo_bin("cargo-pmcp").expect("cargo-pmcp binary must be available");
+    command.args([
+        "package",
+        "load",
+        tar.to_str().unwrap(),
+        "--output",
+        destination.to_str().unwrap(),
+    ]);
+    if quiet {
+        command.arg("--quiet");
+    }
+    let assertion = command.assert();
+    (holder, destination, assertion)
+}
+
+/// The closed-set descriptor the fixtures carry, PARSED from the very
+/// `.pmcp/deploy.toml` text the CLI tests above feed to `save`.
+///
+/// Parsed rather than built from a struct literal, for two reasons that both
+/// outlast this file. It is the shape a real package carries — `save` reads
+/// this file precisely so a package's deploy target is authored rather than
+/// defaulted (D-10) — so a literal would drift from the thing under test the
+/// moment `DeployDescriptor` gained a field. And a literal in a test is the
+/// seed of a literal in production: one copied into `save` would bake a deploy
+/// target, region and memory the user never chose into an artifact whose whole
+/// purpose is to be trusted somewhere else.
+fn sample_deploy_descriptor() -> pmcp_package::DeployDescriptor {
+    toml::from_str(LONDON_TUBE_DEPLOY_TOML)
+        .expect("the fixture deploy.toml must parse as a closed-set DeployDescriptor")
+}
+
+/// A minimal `ServerPackage` fixture, built from the real struct so it round
+/// trips. Distinct from the london-tube CLI path because these tests need to
+/// control the attestation, which `save` never issues.
+fn sample_server_package() -> pmcp_package::ServerPackage {
+    pmcp_package::ServerPackage {
+        name: "london-tube".to_string(),
+        version: semver::Version::new(1, 1, 0),
+        digest: None,
+        deploy: sample_deploy_descriptor(),
+        policies: pmcp_package::CedarPolicySet(vec![]),
+        tools: vec![],
+        // Deliberately NO `config_key`. `pack_server` refuses a slot that
+        // names a config key while the package ships no config document for
+        // that key to address, and these fixtures pack no config file — they
+        // exist to control the ATTESTATION, not the config. The upside is
+        // real coverage rather than a workaround: this exercises the
+        // `config_key: None` render branch ("fills no config key"), while the
+        // `Some` branch is exercised by the london-tube CLI path in
+        // `load_of_a_server_package_prints_its_slots_and_carriage_and_no_pin_section`
+        // against a package that really does ship its config.
+        config_slots: vec![pmcp_package::ConfigSlot::new(
+            pmcp_package::SlotType::Secret {
+                name: "TFL_APP_KEY".to_string(),
+            },
+        )],
+    }
+}
+
+fn referenced_binary() -> pmcp_package::oci::BinaryMode<'static> {
+    pmcp_package::oci::BinaryMode::Referenced {
+        digest: ManifestDigest::from_bytes(b"pmcp-openapi-server-v1.1.0-aarch64"),
+        media_type: "application/x-lambda-bootstrap; arch=arm64".to_string(),
+    }
+}
+
+/// Pack `sample_server_package()` at `dir`, optionally attested. Returns the
+/// subject digest an attestation would claim (the UNATTESTED package's digest).
+fn write_server_fixture(dir: &Path, attested: bool) -> String {
+    let package = sample_server_package();
+
+    // The subject an attestation names is the UNATTESTED package's digest, so
+    // it has to be computed by packing without the attestation layer first.
+    let scratch = tempfile::tempdir().expect("create the unattested scratch layout");
+    let scratch_layout =
+        OciLayout::create(scratch.path()).expect("create the unattested scratch layout");
+    let subject = pmcp_package::oci::pack_server(
+        &package,
+        referenced_binary(),
+        None,
+        None,
+        None,
+        &scratch_layout,
+    )
+    .expect("the unattested package must pack")
+    .as_str()
+    .to_string();
+
+    let layout = OciLayout::create(dir).expect("create the fixture layout");
+    let attestation = attested.then_some(pmcp_package::oci::AttestationFile {
+        bytes: OPAQUE_PAYLOAD,
+        subject: &subject,
+        issuer: TEST_ISSUER,
+        payload_type: TEST_PAYLOAD_TYPE,
+    });
+    pmcp_package::oci::pack_server(
+        &package,
+        referenced_binary(),
+        None,
+        None,
+        attestation,
+        &layout,
+    )
+    .expect("the fixture package must pack");
+
+    subject
+}
+
+/// Overwrite the attestation layer's subject annotation so the package CLAIMS
+/// to be about a different package, rewriting the manifest so the layout stays
+/// internally consistent — every blob still digest-verifies, and the ONLY thing
+/// wrong is that the claim is false.
+///
+/// The fixture has to be built by TAMPERING because `pack_server` refuses to
+/// produce this shape at all. That is the point of the pack-time gate, and it
+/// is why the read-side check cannot be dropped as redundant: the only
+/// mismatched layouts that exist are ones somebody made by hand.
+fn claim_a_different_subject(layout: &OciLayout) -> String {
+    use pmcp_package::oci::media_types::{ANNOTATION_ATTESTATION_SUBJECT, MT_ATTESTATION};
+
+    let other = ManifestDigest::from_bytes(b"an entirely different package")
+        .as_str()
+        .to_string();
+
+    let mut index = layout.read_index().expect("read index.json");
+    let old_descriptor = index.manifests()[0].clone();
+    // `finalize_pack` applies the index descriptor's name/version annotations
+    // AFTER the manifest digest is computed, so they cannot be recomputed and
+    // must be carried across by hand.
+    let index_annotations = old_descriptor.annotations().clone();
+
+    let mut manifest = layout
+        .read_manifest(&old_descriptor)
+        .expect("read the package manifest");
+    let mut layers = manifest.layers().clone();
+    for layer in &mut layers {
+        if layer.media_type().to_string() == MT_ATTESTATION {
+            let mut annotations = layer.annotations().clone().unwrap_or_default();
+            annotations.insert(ANNOTATION_ATTESTATION_SUBJECT.to_string(), other.clone());
+            layer.set_annotations(Some(annotations));
+        }
+    }
+    manifest.set_layers(layers);
+
+    let bytes = pmcp_package::canonicalize(&manifest).expect("canonicalize the manifest");
+    let mut descriptor = layout
+        .write_manifest(&bytes)
+        .expect("write the rewritten manifest blob");
+    descriptor.set_annotations(index_annotations);
+    index.set_manifests(vec![descriptor]);
+    layout.write_index(&index).expect("write index.json");
+
+    other
+}
+
+/// A team whose four reference surfaces cover ALL THREE pin states at once: a
+/// declared range, a pin that recorded the range it resolved from, and a pin
+/// that did not.
+///
+/// Packed UNATTESTED deliberately. Gate A refuses an attested pack over a team
+/// holding any `ComponentRef::Range` (D-09), and this fixture needs a range to
+/// exercise the first state — so the two concerns are covered by separate
+/// fixtures rather than by one that cannot exist.
+fn sample_team_package() -> pmcp_package::TeamPackage {
+    use pmcp_package::package::{HumanRole, TeamLimits, TeamMember, TeamRole};
+    use pmcp_package::reference::{ComponentRef, ComponentType, PinnedRef};
+
+    let human_role = HumanRole {
+        role: "approver".to_string(),
+        description: "Approves budget overrides".to_string(),
+        responsibilities: vec!["review".to_string()],
+        channel_hints: vec!["slack".to_string()],
+    };
+
+    // State 1: declared as a range, never resolved.
+    let unresolved = ComponentRef::Range {
+        name: "triage-agent".to_string(),
+        range: semver::VersionReq::parse("^1.2").unwrap(),
+        component_type: ComponentType::Agent,
+    };
+    // State 2: pinned, and the pin REMEMBERS the range it resolved from.
+    let resolved_from_range = ComponentRef::Pinned(PinnedRef {
+        name: "london-tube".to_string(),
+        component_type: ComponentType::Server,
+        version: semver::Version::new(1, 3, 0),
+        digest: ManifestDigest::from_bytes(b"london-tube-1.3.0"),
+        resolved_from: Some(semver::VersionReq::parse("^1.2").unwrap()),
+    });
+    // State 3: pinned DIRECTLY — no range was ever declared, so none can be
+    // reported. The state this whole report exists to render honestly.
+    let pinned_directly = ComponentRef::Pinned(PinnedRef {
+        name: "team-fs".to_string(),
+        component_type: ComponentType::Server,
+        version: semver::Version::new(2, 0, 0),
+        digest: ManifestDigest::from_bytes(b"team-fs-2.0.0"),
+        resolved_from: None,
+    });
+
+    pmcp_package::TeamPackage {
+        name: "support-team".to_string(),
+        version: semver::Version::new(1, 0, 0),
+        entry_point: unresolved.clone(),
+        members: vec![TeamMember {
+            agent: unresolved,
+            role: TeamRole::EntryPoint,
+        }],
+        human_roles: vec![human_role.clone()],
+        limits: TeamLimits {
+            max_team_depth: 3,
+            max_team_total_tokens: 200_000,
+            max_team_wall_clock_seconds: 600,
+            poll_interval_ms: 2000,
+        },
+        built_in_servers: vec![resolved_from_range],
+        finalizer_agents: vec![pinned_directly],
+        budget_defaults: vec![],
+        config_slots: vec![human_role.to_config_slot()],
+    }
+}
+
+/// Behavior 1: a SERVER package's report carries the identity, the required
+/// slots and the carriage state — and NO pin section, because a
+/// `ServerPackage` has no `ComponentRef` field at all (D-14's scope note).
+#[test]
+fn load_of_a_server_package_prints_its_slots_and_carriage_and_no_pin_section() {
+    let project = tempfile::tempdir().unwrap();
+    let config = london_tube_project(project.path());
+    let tar = project.path().join("london-tube.tar");
+    save_london_tube(project.path(), &config, &tar).success();
+    let tar_bytes = std::fs::read(&tar).unwrap();
+
+    let (_holder, _destination, assertion) = load_bytes(&tar_bytes, false);
+    assertion
+        .success()
+        .stdout(contains("server"))
+        .stdout(contains("london-tube"))
+        .stdout(contains("1.1.0"))
+        // SC1: the slots the target environment must fill, with the
+        // environment variable and the config path under DIFFERENT labels.
+        .stdout(contains("Required slots"))
+        .stdout(contains("Env var:"))
+        .stdout(contains("TFL_APP_KEY"))
+        .stdout(contains("Config path:"))
+        .stdout(contains("backend.auth.query_params.app_key"))
+        .stdout(contains("unattested"))
+        // A server package references no components, so the section is
+        // genuinely inapplicable rather than empty.
+        .stdout(contains("Component pins").not());
+}
+
+/// Behavior 2: a TEAM package's report renders all three pin states, and the
+/// third reads CANNOT REPORT rather than as an absence of skew.
+#[test]
+fn load_of_a_team_package_prints_the_three_component_pin_states() {
+    let fixture = tempfile::tempdir().unwrap();
+    let layout = OciLayout::create(fixture.path()).expect("create the team layout");
+    pmcp_package::oci::pack_team(&sample_team_package(), None, &layout)
+        .expect("the unattested team must pack");
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    let (_holder, _destination, assertion) = load_bytes(&tar_bytes, false);
+    let output = assertion.success().get_output().stdout.clone();
+    let stdout = String::from_utf8(output).expect("stdout is UTF-8");
+
+    assert!(stdout.contains("Component pins"), "{stdout}");
+    // State 1 — declared, never resolved.
+    assert!(stdout.contains("triage-agent"), "{stdout}");
+    assert!(stdout.contains("not resolved"), "{stdout}");
+    // State 2 — pinned, and the declared range survived the pinning.
+    assert!(stdout.contains("london-tube"), "{stdout}");
+    assert!(stdout.contains("1.3.0"), "{stdout}");
+    // State 3 — pinned directly. The obligation `PinnedRef::resolved_from`
+    // states verbatim: "cannot report", NEVER "no skew".
+    assert!(stdout.contains("team-fs"), "{stdout}");
+    let lowered = stdout.to_lowercase();
+    assert!(
+        lowered.contains("cannot report"),
+        "an absent resolved_from must read as 'cannot report': {stdout}"
+    );
+    for forbidden in ["no skew", "no drift", "agrees with", "up to date"] {
+        assert!(
+            !lowered.contains(forbidden),
+            "an absent fact was rendered as a positive claim ({forbidden}): {stdout}"
+        );
+    }
+    // D-14's boundary, stated in the output rather than only in a decision
+    // record: the CLI compared nothing against any environment.
+    assert!(
+        stdout.contains("import") && stdout.contains("platform-side"),
+        "the report must name the environment comparison as import's job: {stdout}"
+    );
+}
+
+/// Behavior 3: a package carrying no attestation says so explicitly and
+/// exits 0 — "unattested" is never silence.
+#[test]
+fn load_of_an_unattested_package_reports_it_as_unattested_and_succeeds() {
+    let fixture = tempfile::tempdir().unwrap();
+    write_server_fixture(fixture.path(), false);
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    let (_holder, destination, assertion) = load_bytes(&tar_bytes, false);
+    assertion
+        .success()
+        .stdout(contains("unattested"))
+        .stdout(contains("SUBJECT MISMATCH").not());
+    assert!(destination.is_dir(), "an unattested load still installs");
+}
+
+/// Behavior 4: a matching subject renders the match and EXITS ZERO. Asserted
+/// alongside the failure cases so a blanket non-zero exit — the obvious way to
+/// break this — would be caught.
+#[test]
+fn load_of_a_matching_attestation_reports_the_match_and_succeeds() {
+    let fixture = tempfile::tempdir().unwrap();
+    let subject = write_server_fixture(fixture.path(), true);
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    let (_holder, destination, assertion) = load_bytes(&tar_bytes, false);
+    assertion
+        .success()
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(subject))
+        .stdout(contains("subject matches this package"))
+        .stdout(contains("SUBJECT MISMATCH").not());
+    assert!(destination.is_dir());
+}
+
+/// Behavior 5 (D-15), all three halves at once. The bytes are sound and only
+/// the CLAIM is false, so the package IS installed — and then reported, with
+/// issuer, claimed subject and actual re-derived digest side by side, and a
+/// non-zero exit that makes the verdict gateable in CI without parsing stdout.
+#[test]
+fn load_of_a_mismatched_subject_writes_the_layout_reports_and_exits_one() {
+    let fixture = tempfile::tempdir().unwrap();
+    let real = write_server_fixture(fixture.path(), true);
+    let claimed = claim_a_different_subject(&OciLayout::open(fixture.path()));
+    assert_ne!(
+        claimed, real,
+        "the tamper must actually change the claim, or the fixture proves nothing"
+    );
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    let (_holder, destination, assertion) = load_bytes(&tar_bytes, false);
+    assertion
+        .code(1)
+        .stdout(contains(TEST_ISSUER))
+        .stdout(contains(claimed))
+        .stdout(contains(real))
+        .stdout(contains("SUBJECT MISMATCH"));
+
+    // The OPPOSITE of the corrupt-blob assertion below, and deliberately so.
+    assert!(
+        destination.is_dir(),
+        "a mismatched subject means the BYTES are sound — the layout is written"
+    );
+    assert!(
+        destination.join("blobs").join("sha256").is_dir(),
+        "the written layout must carry its blobs"
+    );
+    assert!(destination.join("index.json").is_file());
+}
+
+/// Behavior 6: the SAME mismatch under `--quiet`. The exit code and the write
+/// both survive output suppression, because only the decorative rendering is
+/// gated. A mismatch that went silent when output was suppressed would be a
+/// gate hole in exactly the automated context that needs the check most.
+#[test]
+fn a_quiet_load_of_a_mismatched_subject_still_exits_one_and_still_writes() {
+    let fixture = tempfile::tempdir().unwrap();
+    write_server_fixture(fixture.path(), true);
+    claim_a_different_subject(&OciLayout::open(fixture.path()));
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    let (_holder, destination, assertion) = load_bytes(&tar_bytes, true);
+    let output = assertion.code(1).get_output().stdout.clone();
+    assert!(
+        output.is_empty(),
+        "--quiet must suppress the rendering entirely: {}",
+        String::from_utf8_lossy(&output)
+    );
+    assert!(
+        destination.is_dir(),
+        "the write is outside the output gate too"
+    );
+}
+
+/// Behavior 7: corrupt bytes fail CLOSED with nothing written — the verdict
+/// that must stay visibly different from the mismatch above.
+///
+/// The corruption targets the attestation payload blob of the SAME fixture
+/// family the mismatch test uses, so the pair differs in exactly one thing:
+/// whether the bytes are sound. One writes and exits 1; this one writes
+/// nothing.
+///
+/// Where it fails closed, stated precisely rather than approximated: the
+/// FRAMING gate refuses it, because that gate verifies every blob against the
+/// hex in its own file name and runs strictly BEFORE staging. That makes an
+/// in-`unpack_*` integrity failure unreachable through the tar path at all,
+/// which is a stronger property than this test set out to assert.
+/// `load_refuses_a_semantically_malformed_package_and_writes_nothing` (plan
+/// 01) covers the case that DOES reach inside `unpack_*` — a package whose
+/// bytes are all sound and whose structure is malformed.
+#[test]
+fn load_of_a_corrupt_blob_fails_closed_and_writes_no_layout() {
+    let fixture = tempfile::tempdir().unwrap();
+    write_server_fixture(fixture.path(), true);
+    let tar_bytes = tar_of_layout(fixture.path());
+
+    // Corrupt the attestation payload blob's bytes, leaving its archive path
+    // naming the digest of the ORIGINAL bytes.
+    let mut corrupted = false;
+    let entries: Vec<(String, Vec<u8>)> = entries_of(&tar_bytes)
+        .into_iter()
+        .map(|(path, bytes)| {
+            if !corrupted && bytes == OPAQUE_PAYLOAD {
+                corrupted = true;
+                (path, b"corrupted attestation payload".to_vec())
+            } else {
+                (path, bytes)
+            }
+        })
+        .collect();
+    assert!(
+        corrupted,
+        "the fixture must carry the attestation payload blob to corrupt"
+    );
+
+    let (_holder, destination, assertion) = load_bytes(&build_tar(&entries), false);
+    assertion.failure();
+    assert!(
+        !destination.exists(),
+        "corrupt bytes mean the package is BROKEN — nothing may be written, which \
+         is the opposite of the mismatch verdict"
+    );
 }
