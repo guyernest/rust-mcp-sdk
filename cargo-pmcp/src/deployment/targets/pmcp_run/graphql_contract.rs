@@ -856,4 +856,171 @@ mod tests {
             .expect_err("a missing non-null field must fail");
         assert!(err.to_string().contains("verifiedIdentity"), "got: {err}");
     }
+
+    // ========================================================================
+    // pmcp.run package-artifact egress (Phase 123 plan 02 — PARKED live leg)
+    // ========================================================================
+
+    /// A well-formed `getPackageArtifact` response body, used by the decoder
+    /// tests below so each one mutates exactly the thing it is testing.
+    fn sample_artifact_response() -> Value {
+        serde_json::json!({
+            "data": {
+                "getPackageArtifact": {
+                    "payloadDigest": "sha256:0123456789abcdef",
+                    "downloadUrl": "https://example-object-store.invalid/pkg.tar?X-Amz-Signature=redacted",
+                    "expiresAt": "2026-08-26T12:05:00Z",
+                }
+            }
+        })
+    }
+
+    /// An empty reference must be refused BEFORE anything is built — sending
+    /// one asks the platform to resolve nothing while looking like a request.
+    #[test]
+    fn get_package_artifact_request_body_rejects_empty_reference() {
+        let empty = get_package_artifact_request_body("")
+            .expect_err("an empty reference must not produce a request");
+        assert!(
+            empty.to_string().contains("EMPTY reference"),
+            "the refusal must name what it refused: {empty}"
+        );
+
+        let blank = get_package_artifact_request_body("   \t ")
+            .expect_err("a whitespace-only reference must not produce a request");
+        assert!(
+            blank.to_string().contains("EMPTY reference"),
+            "the refusal must name what it refused: {blank}"
+        );
+    }
+
+    /// The body carries the REAL runtime operation constant plus exactly one
+    /// variable, and the reference is never interpolated into the query text.
+    #[test]
+    fn get_package_artifact_request_body_carries_query_and_variables() {
+        let body = get_package_artifact_request_body("london-tube@1.4.0")
+            .expect("a non-empty reference builds a request");
+
+        let object = body.as_object().expect("the body is a JSON object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["query", "variables"],
+            "the body carries exactly `query` and `variables`"
+        );
+
+        assert_eq!(
+            body.get("query").and_then(Value::as_str),
+            Some(GET_PACKAGE_ARTIFACT_QUERY),
+            "the body must carry the real runtime operation constant"
+        );
+
+        let variables = body
+            .get("variables")
+            .and_then(Value::as_object)
+            .expect("body carries a variables object");
+        let var_keys: Vec<&str> = variables.keys().map(String::as_str).collect();
+        assert_eq!(
+            var_keys,
+            vec![VAR_PACKAGE_REFERENCE],
+            "exactly one variable, named as the SDL's argument is"
+        );
+        assert_eq!(
+            variables[VAR_PACKAGE_REFERENCE].as_str(),
+            Some("london-tube@1.4.0"),
+            "the reference travels as a variable, verbatim"
+        );
+        assert!(
+            !GET_PACKAGE_ARTIFACT_QUERY.contains("london-tube"),
+            "the reference must never be interpolated into the query string"
+        );
+    }
+
+    #[test]
+    fn decode_get_package_artifact_response_reads_all_three_fields() {
+        let outcome = decode_get_package_artifact_response(&sample_artifact_response())
+            .expect("well-formed response");
+        assert_eq!(
+            outcome,
+            GetPackageArtifactOutcome {
+                payload_digest: "sha256:0123456789abcdef".to_string(),
+                download_url:
+                    "https://example-object-store.invalid/pkg.tar?X-Amz-Signature=redacted"
+                        .to_string(),
+                expires_at: "2026-08-26T12:05:00Z".to_string(),
+            }
+        );
+    }
+
+    /// A null payload with no GraphQL errors is its OWN failure mode, and its
+    /// message must be distinguishable from a malformed-shape error — the
+    /// platform answered nothing, which the SDK must not read as a location.
+    #[test]
+    fn decode_get_package_artifact_response_rejects_null_payload() {
+        let null_payload = serde_json::json!({ "data": { "getPackageArtifact": null } });
+        let err = decode_get_package_artifact_response(&null_payload)
+            .expect_err("a null payload with no errors must not decode");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("answered nothing"),
+            "the null case has its own message: {rendered}"
+        );
+        assert!(
+            !rendered.contains("is missing the non-null"),
+            "the null case must not be reported as a missing-field error: {rendered}"
+        );
+    }
+
+    /// A GraphQL `errors` array surfaces the platform's FIRST message rather
+    /// than a generic parse failure — an authorization refusal and a malformed
+    /// body must not look identical at the call site.
+    #[test]
+    fn decode_get_package_artifact_response_surfaces_first_graphql_error() {
+        let response = serde_json::json!({
+            "data": null,
+            "errors": [
+                { "message": "package reference not visible to this org" },
+                { "message": "a second message that must not be the one reported" },
+            ]
+        });
+
+        let err = decode_get_package_artifact_response(&response)
+            .expect_err("a GraphQL errors array must not decode to an outcome");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("package reference not visible to this org"),
+            "the first error message must appear in Display: {rendered}"
+        );
+        assert!(
+            !rendered.contains("must not be the one reported"),
+            "only the FIRST error message is reported: {rendered}"
+        );
+    }
+
+    /// A missing field names WHICH field, and a wrong-typed field names it too
+    /// — four causes, four messages.
+    #[test]
+    fn decode_get_package_artifact_response_names_the_missing_field() {
+        let mut missing = sample_artifact_response();
+        missing["data"]["getPackageArtifact"]
+            .as_object_mut()
+            .expect("payload is an object")
+            .remove("downloadUrl");
+        let err = decode_get_package_artifact_response(&missing)
+            .expect_err("a missing non-null field must fail");
+        assert!(
+            err.to_string().contains("downloadUrl"),
+            "the error must name the missing field: {err}"
+        );
+
+        let mut wrong_type = sample_artifact_response();
+        wrong_type["data"]["getPackageArtifact"]["expiresAt"] = serde_json::json!(1_756_209_900);
+        let err = decode_get_package_artifact_response(&wrong_type)
+            .expect_err("a non-string value in a String! field must fail");
+        assert!(
+            err.to_string().contains("expiresAt"),
+            "the error must name the wrong-typed field: {err}"
+        );
+    }
 }
