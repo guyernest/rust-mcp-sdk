@@ -268,26 +268,201 @@ pub fn decode_verify_attestation_response(body: &Value) -> Result<VerifyAttestat
     }
 
     Ok(VerifyAttestationOutcome {
-        verdict: required_response_str(payload, "verdict")?,
-        verified_identity: required_response_str(payload, "verifiedIdentity")?,
-        verified_at: required_response_str(payload, "verifiedAt")?,
+        verdict: required_response_str(payload, "verifyAttestation", "verdict")?,
+        verified_identity: required_response_str(payload, "verifyAttestation", "verifiedIdentity")?,
+        verified_at: required_response_str(payload, "verifyAttestation", "verifiedAt")?,
     })
 }
 
 /// Read a field the vendored SDL declares as `String!`, failing loudly when it
 /// is absent or not a string.
+///
+/// `operation` names the GraphQL operation in the error message. It is a
+/// parameter rather than a hardcoded literal because this leaf now decodes more
+/// than one operation, and an error that named the wrong one would send a
+/// reader to the wrong contract file.
 #[allow(dead_code)]
-fn required_response_str(payload: &Value, key: &str) -> Result<String> {
+fn required_response_str(payload: &Value, operation: &str, key: &str) -> Result<String> {
     payload
         .get(key)
         .and_then(Value::as_str)
         .map(str::to_string)
         .with_context(|| {
             format!(
-                "verifyAttestation response is missing the non-null `{key}` field \
+                "{operation} response is missing the non-null `{key}` field \
                  (or it is not a string)"
             )
         })
+}
+
+// ============================================================================
+// pmcp.run package-artifact egress (Phase 123 plan 02 — PARKED live leg)
+// ============================================================================
+
+/// The GraphQL variable name carrying the package reference to egress. Must
+/// equal the `getPackageArtifact` argument name in
+/// `contracts/pmcp-run/portability-v1.graphql`, character for character.
+///
+/// The accepted reference GRAMMAR is an OPEN QUESTION to the platform — see
+/// that argument's comment in the vendored SDL. The SDK sends what its own
+/// reference splitter produces (`name@version`) and does not reshape it.
+#[allow(dead_code)]
+const VAR_PACKAGE_REFERENCE: &str = "reference";
+
+/// The exact `getPackageArtifact` operation a pmcp.run artifact-egress client
+/// would send, validated offline against the SDK-PROPOSED vendored SDL
+/// (`contracts/pmcp-run/portability-v1.graphql`) by
+/// `tests/package_portability_contract.rs`.
+///
+/// It lives in this narrow leaf for the same reason the capture and attestation
+/// constants do: so that offline blocking contract test can reach the REAL
+/// runtime operation string without pulling `pmcp_run`'s auth/deploy/reqwest
+/// tree into the `cargo-pmcp` lib target. Do not "simplify" by moving the HTTP
+/// call in here — the transport belongs in `graphql.rs`, and this leaf's whole
+/// reason for existing is that it stays light enough for `tests/` to reach
+/// through the lib target.
+///
+/// **This operation is NOT sent by any shipped code path in this phase.** The
+/// backend does not implement `getPackageArtifact` yet. Its only callers until
+/// it does are plan 05's transport seam and the `#[ignore]`d, double-gated live
+/// leg in `tests/package_portability_contract.rs`. Do not hunt for a production
+/// call site — there is none — and do not delete this as dead code: removing it
+/// deletes the SDK's half of a contract it is asking the platform to ratify.
+#[allow(dead_code)]
+pub const GET_PACKAGE_ARTIFACT_QUERY: &str = r#"
+        query GetPackageArtifact($reference: String!) {
+            getPackageArtifact(reference: $reference) {
+                payloadDigest
+                downloadUrl
+                expiresAt
+            }
+        }
+    "#;
+
+/// The platform's decoded answer to [`GET_PACKAGE_ARTIFACT_QUERY`].
+///
+/// Every field is `String`, mirroring the vendored SDL's no-enum discipline: a
+/// GraphQL enum (or a Rust enum mapped onto one) would make any later
+/// schema-versus-schema diff show permanent drift.
+///
+/// # `download_url` is a BEARER CREDENTIAL
+///
+/// The handoff (§5.1) calls the presigned URL "a bearer token" in its own
+/// right, which is why the platform's audit row records ISSUANCE rather than
+/// download. Anything holding this value must therefore:
+///
+/// - never LOG it, never PERSIST it, and never include it in an error message;
+/// - never attach the pmcp.run `Authorization` header ([`GRAPHQL_AUTH_HEADER`])
+///   when fetching it — that would send a pmcp.run credential to a DIFFERENT
+///   origin, which is a disclosure event. It is fetched with a plain
+///   unauthenticated GET (an open question confirmed in the SDL's comment).
+///
+/// The instruction lives on the type so it travels with the value into plan
+/// 05's transport rather than being rediscovered at the call site.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetPackageArtifactOutcome {
+    /// The digest the SDK cross-checks its locally re-derived value against.
+    /// Whether it is the OCI manifest digest or a digest over the tar bytes is
+    /// an OPEN QUESTION to the platform (the SDK assumes the former) — see the
+    /// field's comment in the vendored SDL. Either way the SDK re-verifies
+    /// every blob digest locally after unpacking; transport is never trusted.
+    pub payload_digest: String,
+    /// The short-lived presigned URL for the artifact tar. A BEARER CREDENTIAL
+    /// — see this type's docs before doing anything with it.
+    pub download_url: String,
+    /// When the presigned URL stops working (RFC 3339 per the SDL). Treated as
+    /// opaque text by this phase.
+    pub expires_at: String,
+}
+
+/// Build the exact HTTP request body the CLI would POST for
+/// [`GET_PACKAGE_ARTIFACT_QUERY`]: `{"query": ..., "variables": {...}}`.
+///
+/// PURE and IO-free — no network, no auth, no environment reads. It exists as
+/// PRODUCTION code (rather than as a hand-written JSON literal inside the
+/// parked test) so that unparking the live leg is deleting a gate, never
+/// writing a client.
+///
+/// The reference travels as a VARIABLE and is never interpolated into the query
+/// string.
+///
+/// # Errors
+///
+/// Returns `Err` when `reference` is empty or whitespace-only. Sending one
+/// would ask the platform to resolve nothing while looking like a successful
+/// round trip.
+#[allow(dead_code)]
+pub fn get_package_artifact_request_body(reference: &str) -> Result<Value> {
+    if reference.trim().is_empty() {
+        anyhow::bail!("refusing to build a getPackageArtifact request for an EMPTY reference");
+    }
+
+    let mut variables = serde_json::Map::new();
+    variables.insert(
+        VAR_PACKAGE_REFERENCE.to_string(),
+        Value::String(reference.to_string()),
+    );
+
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "query".to_string(),
+        Value::String(GET_PACKAGE_ARTIFACT_QUERY.to_string()),
+    );
+    body.insert("variables".to_string(), Value::Object(variables));
+
+    Ok(Value::Object(body))
+}
+
+/// Decode a `getPackageArtifact` GraphQL response body into a typed
+/// [`GetPackageArtifactOutcome`].
+///
+/// PURE and IO-free — it takes an already-parsed `serde_json::Value`, so the
+/// parked live leg is a thin transport wrapper rather than a place where new
+/// decoding logic gets written at unpark time.
+///
+/// Four distinct failure causes get four distinct messages. A decoder that
+/// collapsed them would make every backend integration failure look identical:
+/// an authorization refusal, an unimplemented resolver, a renamed field and a
+/// retyped field are four different things to go fix.
+///
+/// # Errors
+///
+/// Returns `Err` when the body carries a GraphQL `errors` array (surfacing the
+/// FIRST message), when `data.getPackageArtifact` is absent, when it is null
+/// with no errors alongside it, or when any field the SDL declares non-null is
+/// missing or is not a string (naming the field).
+#[allow(dead_code)]
+pub fn decode_get_package_artifact_response(body: &Value) -> Result<GetPackageArtifactOutcome> {
+    if let Some(first) = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|errors| errors.first())
+    {
+        let message = first
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("<error entry carried no message>");
+        anyhow::bail!("getPackageArtifact returned a GraphQL error: {message}");
+    }
+
+    let payload = body
+        .get("data")
+        .and_then(|data| data.get("getPackageArtifact"))
+        .context("getPackageArtifact response has no `data.getPackageArtifact` field")?;
+
+    if payload.is_null() {
+        anyhow::bail!(
+            "getPackageArtifact returned null with no GraphQL errors — the platform \
+             answered nothing, which the SDK must not read as an artifact location"
+        );
+    }
+
+    Ok(GetPackageArtifactOutcome {
+        payload_digest: required_response_str(payload, "getPackageArtifact", "payloadDigest")?,
+        download_url: required_response_str(payload, "getPackageArtifact", "downloadUrl")?,
+        expires_at: required_response_str(payload, "getPackageArtifact", "expiresAt")?,
+    })
 }
 
 // ============================================================================
