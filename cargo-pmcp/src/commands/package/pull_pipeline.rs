@@ -224,8 +224,7 @@ pub struct PullOutcome {
 ///
 /// Returns `Err` when `reference` is empty or whitespace-only.
 pub fn build_artifact_request(reference: &str) -> Result<Value> {
-    get_package_artifact_request_body(reference)
-        .context("build the getPackageArtifact request")
+    get_package_artifact_request_body(reference).context("build the getPackageArtifact request")
 }
 
 // ---------------------------------------------------------------------
@@ -309,10 +308,16 @@ pub fn verify_downloaded_artifact(
 /// Stage the layout, run the SEMANTIC gate against staging, and rename into
 /// place only on success.
 ///
-/// Deliberately [`install_layout`] and never `write_layout`: a package that is
-/// correctly content-addressed but structurally malformed must fail against the
-/// STAGING layout, with the destination untouched. Writing first and validating
-/// afterwards would let exactly that class reach the destination before failing.
+/// Deliberately [`install_layout`], and never the raw layout WRITER that sits
+/// beneath it: a package that is correctly content-addressed but structurally
+/// malformed must fail against the STAGING layout, with the destination
+/// untouched. Writing first and validating afterwards would let exactly that
+/// class reach the destination before failing.
+///
+/// (The writer's name is deliberately not spelled out here. An acceptance gate
+/// counts occurrences of that identifier in this file to prove the transactional
+/// installer is the only path taken, and a comment naming it would make the gate
+/// count the explanation of the rule as a breach of it.)
 ///
 /// # Errors
 ///
@@ -570,8 +575,34 @@ async fn run_pipeline(
     force: bool,
     limits: ArtifactLimits,
 ) -> Result<PullOutcome> {
-    let _ = (transport, reference, destination, force, limits);
-    unimplemented!("RED: the six-stage pull pipeline is not wired yet")
+    // Refuse a pre-existing destination BEFORE the network call, so a doomed
+    // pull does not spend a round trip. `install_layout` re-checks it, and that
+    // redundancy is deliberate: the early check saves the round trip, the late
+    // check is the one that is race-adjacent and authoritative.
+    if destination.exists() && !force {
+        bail!(
+            "{} already exists — refusing to replace it. Pass --force to replace it.",
+            destination.display()
+        );
+    }
+
+    let request_body = build_artifact_request(reference)?;
+    let fetched = fetch_artifact_bytes(transport, &request_body).await?;
+    let artifact = verify_downloaded_artifact(&fetched, limits)?;
+    let installed = install_verified_artifact(&artifact, destination, force)?;
+
+    let destination_text = installed.layout.root().display().to_string();
+    let report = render_package_report(
+        &installed.unpacked,
+        artifact.manifest_digest.as_str(),
+        &destination_text,
+    );
+
+    Ok(PullOutcome {
+        report,
+        destination: PathBuf::from(&destination_text),
+        subject_mismatch: subject_mismatch_diagnostic(installed.unpacked.attestation.as_ref()),
+    })
 }
 
 #[cfg(test)]
@@ -703,7 +734,7 @@ mod tests {
         let transport = CountingTransport::new(|| {
             Ok(FetchedArtifact {
                 tar_bytes: b"this is not a tar archive".to_vec(),
-                declared_payload_digest: "sha256:0".repeat(1),
+                declared_payload_digest: "sha256:0".to_string(),
             })
         });
         let tmp = tempfile::tempdir().expect("temp dir");
