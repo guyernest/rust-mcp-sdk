@@ -224,7 +224,7 @@ pub struct PullOutcome {
 ///
 /// Returns `Err` when `reference` is empty or whitespace-only.
 pub fn build_artifact_request(reference: &str) -> Result<Value> {
-    get_package_artifact_request_body(reference).context("build the getPackageArtifact request")
+    get_package_artifact_request_body(reference).context(STAGE_REQUEST)
 }
 
 // ---------------------------------------------------------------------
@@ -247,13 +247,35 @@ pub async fn fetch_artifact_bytes(
         .context(STAGE_DOWNLOAD)
 }
 
+// ---------------------------------------------------------------------
+// The per-stage context frames (D-05, second half)
+// ---------------------------------------------------------------------
+//
+// ONE frame per stage, underneath ONE frame for the verb
+// ([`PARKED_CAPABILITY_CONTEXT`]). A reader of `-v` output should be able to see
+// from the chain alone WHICH stage failed — building the request, downloading,
+// verifying or installing — under a top line that says what capability the whole
+// verb needs.
+//
+// They are named constants rather than inline strings for one reason: the tests
+// assert on them. An inline string would let a reworded message quietly stop
+// being the thing the test looks for, and the test would keep passing against
+// whatever text happened to remain.
+//
+// The report stage has no frame because it cannot fail: rendering is infallible
+// once the package is installed.
+
+/// Stage context: building the GraphQL request, purely and offline.
+pub const STAGE_REQUEST: &str = "build the getPackageArtifact request";
+
 /// Stage context: the one impure step.
 pub const STAGE_DOWNLOAD: &str = "download the package artifact from pmcp.run";
 
 /// Stage context: the in-memory verification gate.
 pub const STAGE_VERIFY: &str = "verify the downloaded artifact before writing anything";
 
-/// Stage context: the transactional install.
+/// Stage context: the transactional install, including the SEMANTIC gate that
+/// runs against staging.
 pub const STAGE_INSTALL: &str = "install the verified package";
 
 // ---------------------------------------------------------------------
@@ -666,6 +688,63 @@ mod tests {
         assert!(
             format!("{error:#}").contains("EMPTY reference"),
             "the refusal must name its own cause: {error:#}"
+        );
+    }
+
+    /// D-05: the empty-reference refusal is labelled with the REQUEST stage,
+    /// not the download stage — the chain must say which stage failed, and this
+    /// failure never reaches the network.
+    #[tokio::test]
+    async fn an_empty_reference_is_labelled_with_the_request_stage() {
+        let transport = erroring_transport();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let dest = tmp.path().join("destination");
+
+        let error = pull_package(&transport, "", &dest, false)
+            .await
+            .expect_err("an empty reference must be refused");
+
+        assert!(
+            error.chain().any(|c| c.to_string().contains(STAGE_REQUEST)),
+            "the chain must name the request stage: {error:#}"
+        );
+        assert!(
+            !error
+                .chain()
+                .any(|c| c.to_string().contains(STAGE_DOWNLOAD)),
+            "a failure that never reached the network must not be labelled with \
+             the download stage: {error:#}"
+        );
+    }
+
+    /// D-05: the two assertions the wrapped-error test makes are INDEPENDENT —
+    /// the top-level capability name and the reachable cause. Recorded as a
+    /// negative control in this plan's SUMMARY: removing the context frame turns
+    /// the capability assertion red while the cause assertion stays green.
+    #[tokio::test]
+    async fn the_capability_frame_and_the_cause_chain_are_independent_assertions() {
+        let transport = erroring_transport();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let dest = tmp.path().join("destination");
+
+        let error = pull_package(&transport, "london-tube@1.0.0", &dest, false)
+            .await
+            .expect_err("a transport failure must surface");
+
+        // The frame is the OUTERMOST one: `to_string()` renders only the top.
+        assert_eq!(
+            error.to_string(),
+            PARKED_CAPABILITY_CONTEXT,
+            "the outermost frame must be exactly the parked-capability context"
+        );
+        // ...and the cause is still reachable underneath it, which is what makes
+        // the attribution tolerable rather than lossy.
+        assert!(
+            error
+                .chain()
+                .skip(1)
+                .any(|c| c.to_string().contains("connection refused")),
+            "the original cause must remain BELOW the frame: {error:#}"
         );
     }
 
