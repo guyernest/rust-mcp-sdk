@@ -104,7 +104,7 @@ implementation must match it exactly, and any change must move on both sides tog
 | **Canonical-JSON representability** — no C0 control character (U+0000–U+001F) may reach any string the manifest canonicalizes | `oci/pack.rs` — `first_control_character`, `reject_attestation_annotations_that_break_canonical_json` | **A package that packs, verifies, and can never be unpacked.** Full treatment in §2.2 — read it before implementing a writer |
 | **Reject vs. normalize — the two implementations DIFFER here today** *(added 2026-08-26 at the platform team's suggestion; corrected the same day)* | SDK: `oci/pack.rs` refuses with `PackageError::AttestationAnnotationInvalid` and never rewrites. Platform: `ecr_safe_name` (`walk.rs:479`) **rewrites**, mapping every character outside `[a-z0-9._]` to `-` | **Both satisfy "no control character reaches the canonicalizer", and they are not the same behaviour.** Rewriting changes the bytes and therefore the digest, so a normalizing writer and a refusing writer produce different digests for the same logical input — an agreement on the rule masking a disagreement on behaviour. This is currently SAFE only because their rewrite sits at a single minting point (`bare_component`, `walk.rs:511`) covering every `ComponentRef.name`. It stops being safe the moment a name is minted elsewhere on their side, or the SDK normalizes anywhere instead of refusing. **Neither is wrong; the asymmetry is the thing to track** |
 | **Attestation subject is the UNATTESTED digest** — `run.pmcp.attestation.subject` names the manifest digest the package would have had *without* this layer | `media_types.rs` (`ANNOTATION_ATTESTATION_SUBJECT`); pack-side gate in `oci/pack.rs` | An attested package's own digest can **never** equal the subject it names — the layer lives inside the manifest the digest covers. An implementation that writes the carrying package's own digest here produces an attestation that is wrong in a way that looks self-consistent |
-| **`PinnedRef.resolved_from` participates in IDENTITY** — a pin records the semver range it resolved from | `reference.rs:141`; `tests/digest_stability.rs::recording_the_range_a_pin_resolved_changes_the_manifest_digest` | `Some(range)` **changes the canonical bytes and therefore the manifest digest**; `None` emits no key at all (`skip_serializing_if`, load-bearing). If one side records the range and the other does not, the same logical package yields two digests — §1 break #2, with attestations and `ApprovedPackage` admission both failing. Wire-compatible in the additive direction only: pins written before the field existed still deserialize as `None` |
+| **`PinnedRef.resolved_from` participates in IDENTITY** — a pin records the semver range it resolved from | `reference.rs:141`; `tests/digest_stability.rs::recording_the_range_a_pin_resolved_changes_the_manifest_digest` | `Some(range)` **changes the canonical bytes and therefore the manifest digest**; `None` emits no key at all (`skip_serializing_if`, load-bearing). If one side records the range and the other does not, the same logical package yields two digests — §1 break #2, with attestations and `ApprovedPackage` admission both failing. Wire-compatible in the additive direction only: pins written before the field existed still deserialize as `None`. **Scope narrowed 2026-08-26: this cannot bite CAPTURE.** Capture walks live deployed state, so no declared semver range exists anywhere in its path — `None` is the *truthful* value there, not an unfilled gap, and capture is structurally range-free. The risk applies only to paths that resolve FROM a declared range, which on the platform side means **import**, not capture |
 | **Attested ⇒ fully pinned** — a team package carrying an attestation must hold no unresolved `ComponentRef` | `oci/pack.rs` — `reject_an_attestation_over_an_unresolved_team`; error is `PackageError::InvalidReference`, deliberately not a new variant | An attestation over a moving target. **Depth-1 only**, by decision: an attested team whose pinned agent itself holds a range still packs — requiring attestation transitively is platform **admission policy**, not format. Vacuous on the server path (`ServerPackage` holds no `ComponentRef`), so `pack_server` deliberately does not call it — do not "fix" that asymmetry |
 | **Duplicate media type is an ERROR, never last-wins** | `oci/unpack.rs` — `index_layers` → `PackageError::Layout` naming the duplicated type | Silently keeping one of two same-typed layers lets a crafted layout **shadow** the real config. Layers are read by *what* they are, never by position |
 
@@ -305,7 +305,13 @@ Concretely — each item is small and independently useful:
       during their migration, and the one they most want pinned. It is also the mechanism
       behind the kind-neutral media-type trap in §2.
 
-   Corpus home is still open (§7).
+   **The platform reframed the open question, and their framing is better than ours.** We
+   had asked *where the corpus lives*. The property that actually matters is that **fixtures
+   are checked-in bytes that are never regenerated from the writer under test** — otherwise
+   the suite passes by construction and proves nothing, vacuous in exactly the way our own
+   `cargo-deny` empty-allow-list check was built to catch. Pin that property and the
+   location answers itself: they live in this repo, and the platform PRs changes in. §7's
+   "corpus home" row is therefore closed in favour of the provenance rule.
 3. **Cross-direction round-trip, once egress exists.** Platform packs → SDK unpacks →
    assert tool-list parity, and the reverse. This is Phase 121's E2E with one side swapped,
    and it is the only test that actually proves portability. It needs `getPackageArtifact`
@@ -387,8 +393,16 @@ must do, so they are §2 invariants rather than release notes.
 `pack_server` gained a sixth positional parameter (`attestation`); `pack_team` gained one;
 `PinnedRef` gained a fifth public field, breaking every struct literal; `unpack_team`'s
 return type changed from `Result<TeamPackage>` to `Result<UnpackedTeam>`; and
-**`PackageError` is not `#[non_exhaustive]`** and gained two variants, so every downstream
-`match` over it breaks.
+**`PackageError` is not `#[non_exhaustive]`** and gained two variants.
+
+**Corrected 2026-08-26 — the last clause said "so every downstream `match` over it breaks",
+which is a worst case stated as a fact.** A `match` with a wildcard arm does not break, and
+the platform's does have one (`pull.rs:170`). They sized the whole migration rather than
+accept our framing: **five call sites across two Lambdas, and only four of the five breaks
+land** — `publish.rs:287` (`pack_server`), `:299` (`pack_team`), `:513` (the `PinnedRef`
+literal), `pull.rs:114` (`unpack_team`), and no `PackageError` breakage at all. Roughly half
+a day, not a migration. We had escalated their bump to the single blocking item in §10
+partly on our own worst-case reading; the item stays, the framing was wrong.
 
 Versions: `pmcp-package` **0.3.0** locally, `cargo-pmcp` **0.23.0**. The 0.3 line names
 exactly the breaks above. **Measured, because it explains why this broke no consumer:**
@@ -524,6 +538,14 @@ Delivered (see §4), stated here as the properties you can build against:
    shape is entirely a platform contract — but it should be *versioned* like
    `capture-v1.graphql`, and its media type goes in `run.pmcp.attestation.payload-type`
    (which is exactly why `MT_ATTESTATION` carries no format suffix).
+
+   **Do not read item 1 as "export soon" (their correction, 2026-08-26).** Ratifying the
+   *shape* is free and can happen now. The provenance-carrying SDL export cannot: there is
+   **no attestation surface in their AppSync API at all** — zero matches repo-wide — so the
+   export follows an implementation that is currently unscheduled. That means the blocking
+   test stays an internal consistency check for longer than the `capture-v1` precedent
+   suggests, and nobody on the SDK side should plan as though a real cross-boundary drift
+   net is arriving with ratification. It arrives with implementation.
 3. **Confirm the subject convention** (§2, *Attestation subject is the UNATTESTED digest*).
    The subject digest is the **unattested**
    manifest digest. This is the single easiest thing to implement backwards, because the
@@ -555,6 +577,12 @@ check against**, and §10 ask 3 ("confirm the invariant table matches your imple
 cannot be answered until they bump. The bump is source-breaking in all five ways §4 lists.
 This is the practical reason §7's unmerged-branch caveat matters: the format has moved twice
 while the only other implementation stayed on 0.1.0.
+
+**Sized by the platform 2026-08-26, and it is small:** five call sites across two Lambdas,
+four of the five §4 breaks landing, ~half a day. **And it does not have to wait for the
+0.3.0 publish** — they can pre-flight the entire migration against a git rev of this branch.
+Our earlier claim that "the ordering is ours-then-yours, not parallel" was wrong in the
+direction that made their own top ask look more blocked than it is.
 
 **Every team package they write today would be refused an attestation.** Their `publish.rs`
 ships team packages with an empty entry point (`Range { name: "", range: * }`) and no
@@ -615,9 +643,9 @@ ratification, not invention.
 | 9 | Release bundling: ship CLI package verbs now with `pull` next minor, or one bundled release? | decision holder is the **SDK**; platform has argued for shipping now |
 | 10 | Ratify design-note §7: descriptor is the contract, stack is derived, renderer is a shared open-source crate | open — **the largest architectural item** |
 | 11 | Per-wave expressiveness checklist: what must `[[resources.*]]` express before each recreation wave? | open |
-| — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | open. **Adoption itself is settled — accepted 2026-08-26**; only the location is undecided. SDK owes three fixtures (§3.2) |
+| — | Golden-fixture corpus: **provenance, not home** | ✅ **RESOLVED 2026-08-26.** Adoption accepted; the platform reframed the open question from *where it lives* to *fixtures must be checked-in bytes never regenerated from the writer under test*, which is the property that keeps the suite non-vacuous. Location follows: this repo, platform PRs in. SDK owes three fixtures (§3.2) |
 | — | **Merge `feat/package-172-cli`** | ⚠ **new 2026-08-26 — the platform asks for this AHEAD of the fixture work**, because it determines what a pinned verb list is even asserting. SDK-owned |
-| — | **When does the platform bump off `pmcp-package` 0.1.0?** | ⚠ **gates §10 ask 3.** Their caret pin cannot reach 0.2/0.3, so no writer on their side can check any invariant added since Phase 120 (§5.4). They have taken it as work, blocked on the SDK **publishing** 0.3.0 — which is Phase 124. Source-breaking across their capture and import Lambdas |
+| — | **When does the platform bump off `pmcp-package` 0.1.0?** | gates §10 ask 3, but **smaller than we claimed**: they sized it at five call sites across two Lambdas, four of five §4 breaks landing, ~half a day (§5.4). **Not blocked on our publish** — they can pre-flight against a git rev of this branch |
 | — | Naming for the AI-Package import verb, given `package import` is taken | ✅ **ANSWERED 2026-08-26.** `import` stays; the new local round-trip is `save`/`load`; `install` excluded. Our five-verb premise was also corrected — see §5.2 |
 | — | Can capture's canonicalized strings originate from user-controlled input? (§2.2) | ✅ **ANSWERED 2026-08-26: yes.** Not via component names (safe by a minting point) but via **config slots** — `roleLabel`, `toolDescription`, `displayName`, secret names, LLM provider/model. Platform-owned fix; it produced a new §2 invariant (*Reject vs. normalize*) |
 | — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | open, and now **unblocked**: the platform called the SDL otherwise fine and gated ratification on the one naming change, which is **done** (`subjectPayloadDigest` → `subjectManifestDigest`, 2026-08-26). They export a provenance-carrying SDL to replace ours once they confirm |
@@ -726,6 +754,11 @@ remains:
 1. **Bump off `pmcp-package` 0.1.0 (§5.4).** A caret pin on `0.1` cannot resolve `0.2` or
    `0.3`, so nothing on your side can implement — or be checked against — any invariant added
    since Phase 120. Every other format ask below is downstream of this one.
+
+   **Framing corrected 2026-08-26 by your own sizing:** five call sites, two Lambdas, four
+   of the five §4 breaks landing, ~half a day — and pre-flightable against a git rev without
+   waiting for our 0.3.0 publish. It stays first because of what it unblocks, not because it
+   is large. We had it listed as large on our own worst-case reading of §4.
 
 **No deadline:**
 

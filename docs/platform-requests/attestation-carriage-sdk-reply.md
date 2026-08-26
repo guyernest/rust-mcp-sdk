@@ -142,10 +142,63 @@ admission policy, not our format.
 
 ---
 
+## 6. Your three points back — taken, and one of them is a real catch
+
+**(a) You are right that we reintroduced the collision we had just closed.** Writing Phase
+123 as "`save`/`load`, plus `export`/`import` against your API" put `import` back in the new
+verb set one paragraph after agreeing it stays yours. That was careless, and your question is
+the right one: *if `export` is a new verb, what does it do that `capture` doesn't?*
+
+Our honest answer is that we do not have a defensible one, and tracing where `export` came
+from explains why. The roadmap declares Phase 123 as `pack | unpack | export | import`, with
+both `export` and `import` specified as **remote** operations through the `pmcp_run` seam.
+That set was written before `pull` (§5.1) and before this exchange settled `import`. Lay the
+current verbs out and there is no gap left for it:
+
+| Verb | Direction | Status |
+|---|---|---|
+| `capture` | deployed server → package, platform-side | shipped |
+| `pull` | platform artifact → local | planned, needs `getPackageArtifact` |
+| `save` / `load` | local package ↔ local file | Phase 123, new |
+| `import` | package → admitted into an environment | shipped, yours |
+| `export` | *inverse of `pull`, i.e. `push`* | **no job `capture` doesn't already do** |
+
+`export` was `push` under a different name, conceived when only one direction existed. We
+are not going to assert its retirement in a letter — it changes Phase 123's declared scope
+and success criteria, so it is a phase-planning decision. But the analysis says drop it, and
+we would rather tell you that than ship you a verb we cannot justify. You will get the
+resolved list before anything is pinned.
+
+**(b) Corpus home was the wrong question — adopted.** The property that matters is that
+fixtures are **checked-in bytes never regenerated from the writer under test**; otherwise
+the suite passes by construction. You are right that this is the same failure our own
+`cargo-deny` empty-allow-list check exists to catch, which is a slightly embarrassing place
+to have missed it. §7's "corpus home" row is closed in favour of the provenance rule, and
+the location follows from it: our repo, you PR in.
+
+**(c) Ratification is free, the export is not — recorded verbatim.** Zero attestation
+surface in your AppSync API means the blocking test stays an internal consistency check
+until implementation, not until ratification. That is a longer parked window than the
+`capture-v1` precedent implies, and §5.3 now says so explicitly so nobody here plans against
+a drift net that does not exist yet.
+
+**On the bump sizing:** you sized it, we had guessed, and the guess was worse. Four of five
+breaks landing, five call sites, ~half a day, pre-flightable against a git rev of our branch.
+It stays first in §10 because of what it unblocks, not because it is large — and our
+"ours-then-yours, not parallel" was wrong in the direction that made your own top ask look
+more blocked than it is.
+
+**The range-free finding is the most useful thing in your reply**, and it retires a risk
+rather than adding one. Because capture walks live deployed state, no declared range exists
+in its path, so `None` is truthful there and capture is structurally incapable of being the
+diverging side of `resolved_from`. We have narrowed that §2 row to say so — the risk applies
+to import, not capture. We would not have found that from outside your code.
+
+---
+
 ## What's next
 
-Nothing here blocks you. On our side Phase 123 (`save`/`load`, plus `export`/`import`
-against your API) plans against the vocabulary above.
+Nothing here blocks you.
 
 Open, in the order we'd care about them:
 
