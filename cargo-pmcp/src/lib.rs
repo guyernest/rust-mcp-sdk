@@ -152,6 +152,24 @@ pub mod workbook_explain;
 #[path = "commands/package/kind.rs"]
 pub mod package_kind;
 
+// PKGX-02 (Phase 123-01): expose ONLY the `.tar` <-> OCI-layout codec to the lib
+// target (mirrors the `package_kind` `#[path]` convention immediately above).
+// `artifact.rs` references only `tar`, `anyhow`, `serde_json`, `oci_spec`,
+// `tempfile`, `pmcp_package` and std (NO `clap`/`GlobalFlags`/the bin-only
+// `commands::*` tree), so it compiles in the lib target on its own.
+//
+// This seam exists so the module's property tests run under `cargo test --lib`
+// and so a fuzz target can point straight at `read_verified` — the
+// untrusted-bytes boundary, where a `.tar` handed to `package load`/`pull`
+// arrives with no known provenance. It is ALSO what forbids `super::` and
+// `crate::commands::` inside that file: here its parent is the crate root,
+// which declares no `commands` module. That constraint is why
+// `install_layout` takes its semantic gate as a closure.
+// `#[doc(hidden)]`: an internal support surface, not a stable public API.
+#[doc(hidden)]
+#[path = "commands/package/artifact.rs"]
+pub mod package_artifact;
+
 // Package-capture contract test seam (170-08 Task 3; extended in the
 // final-review fix wave with pure SDL-extraction helpers): expose the two
 // dependency-light capture GraphQL query consts, plus the pure,

@@ -2,6 +2,15 @@
 //! capture/show/import/approve remote workflow packages against the pmcp.run
 //! platform.
 //!
+//! The group now spans THREE directions, and each verb belongs to exactly one:
+//!
+//! - **LOCAL, offline, on a layout directory:** `inspect`.
+//! - **LOCAL, offline, between a layout directory and a movable `.tar`:**
+//!   `save` writes a package out to one tar file; `load` reads one back into a
+//!   working layout. Neither touches the network (D-11).
+//! - **REMOTE, against the pmcp.run platform:** `capture`/`show`/`import`/
+//!   `approve`.
+//!
 //! Mirrors the `workbook` command-group shape (D-01) with an ASYNC `execute`.
 //! `inspect` is a LOCAL, offline OCI-layout inspector (unchanged by this
 //! module). `capture`/`show`/`import`/`approve` are the platform's REMOTE
@@ -15,10 +24,13 @@
 //! both digests, never a caller-supplied one).
 
 pub mod approve;
+pub mod artifact;
 pub mod capture;
 pub mod import;
 pub mod inspect;
 pub mod kind;
+pub mod load;
+pub mod save;
 pub mod show;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -31,6 +43,10 @@ use super::GlobalFlags;
 pub enum PackageCommand {
     /// Inspect the kind and key fields of a local AI-Package, fully offline
     Inspect(inspect::InspectArgs),
+    /// Write a package to a local tar file — the movable form (local, offline)
+    Save(save::SaveArgs),
+    /// Read a local tar file back into a working layout (local, offline)
+    Load(load::LoadArgs),
     /// Submit an async capture job for a team's workflow dependency graph
     /// (remote, platform-side — polls to a terminal status)
     Capture(capture::CaptureArgs),
@@ -48,7 +64,12 @@ impl PackageCommand {
     /// Dispatch the subcommand to its handler.
     pub async fn execute(self, global_flags: &GlobalFlags) -> Result<()> {
         match self {
+            // `Inspect`, `Save` and `Load` are the SYNCHRONOUS arms: all three
+            // are local, offline filesystem operations with no `.await` to
+            // reach for.
             PackageCommand::Inspect(args) => inspect::execute(args, global_flags),
+            PackageCommand::Save(args) => save::execute(args, global_flags),
+            PackageCommand::Load(args) => load::execute(args, global_flags),
             PackageCommand::Capture(args) => capture::execute(args, global_flags).await,
             PackageCommand::Show(args) => show::execute(args, global_flags).await,
             PackageCommand::Import(args) => import::execute(args, global_flags).await,
