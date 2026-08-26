@@ -28,8 +28,13 @@
 //! `commands/package/mod.rs` exists in the bin tree and nowhere else — invisible
 //! to `cargo test --lib` and unreachable from any integration test. Two
 //! consequences follow and both are load-bearing: this file must stay
-//! dependency-light (`pmcp_package` types + `std` only — no `clap`, no
-//! `GlobalFlags`, no `crate::commands::*`), and it must never name `super::`.
+//! dependency-light — `pmcp_package` types and `std` ONLY, never the argument
+//! parser, never the command layer's global-flags type, never anything under
+//! `crate::commands` — and it must never name `super::`. The exact prohibition
+//! is spelled out at the mount in `cargo-pmcp/src/lib.rs`; it is deliberately
+//! not repeated verbatim here, because the acceptance grep that enforces it
+//! scans THIS file for those symbols and would otherwise match its own
+//! prohibition text instead of a real dependency.
 //!
 //! # One output shape, matching `inspect`'s visual vocabulary
 //!
@@ -117,7 +122,16 @@ pub fn render_report(report: &PackageReport<'_>) -> String {
 /// where it landed.
 #[must_use]
 pub fn render_identity(report: &PackageReport<'_>) -> String {
-    String::new()
+    let mut out = String::new();
+    section(&mut out, "Package");
+    field(&mut out, "  ", "Kind", report.kind);
+    field(&mut out, "  ", "Name", report.name);
+    field(&mut out, "  ", "Version", report.version);
+    // The package's IDENTITY, derived locally over the manifest blob's own
+    // bytes — never read out of the archive and called derived.
+    field(&mut out, "  ", "Digest", report.digest);
+    field(&mut out, "  ", "Layout", report.destination);
+    out
 }
 
 /// Render the inventory of slots a target environment must fill.
@@ -146,7 +160,53 @@ pub fn render_identity(report: &PackageReport<'_>) -> String {
 /// Nothing is re-sorted here.
 #[must_use]
 pub fn render_required_slots(slots: &[ConfigSlot]) -> String {
-    String::new()
+    let mut out = String::new();
+    section(&mut out, "Required slots");
+
+    let required = required_slots(slots);
+    if required.is_empty() {
+        let _ = writeln!(
+            out,
+            "  This package declares no config slots — nothing to fill."
+        );
+        return out;
+    }
+
+    let _ = writeln!(
+        out,
+        "  The target environment must supply a value for each entry below."
+    );
+    for (position, entry) in required.iter().enumerate() {
+        let (kind, name) = entry.slot.key();
+        let class = match entry.class {
+            SlotClass::IdentityBearing => "identity-bearing (a credential or binding)",
+            SlotClass::BehaviorRelevant => "behavior-relevant (changes what the tools do)",
+        };
+        let _ = writeln!(out, "\n  [{}] {kind}", position + 1);
+        // A `HumanRole` names a ROLE a person fills, not a variable any
+        // environment can set, so it is labelled honestly rather than forced
+        // into the environment-variable column.
+        let name_label = match entry.slot {
+            SlotType::HumanRole { .. } => "Role",
+            _ => "Env var",
+        };
+        field(&mut out, "      ", name_label, name);
+        field(&mut out, "      ", "Class", class);
+        match entry.config_key.as_deref() {
+            Some(key) => field(&mut out, "      ", "Config path", key),
+            // Explicitly stated rather than left blank: an empty value reads as
+            // a missing render, whereas "fills no config key" is a fact.
+            None => field(&mut out, "      ", "Config path", "fills no config key"),
+        }
+        // Rendered ONLY for the behavior-relevant family. An identity-bearing
+        // slot has no value field in the type at all, so there is nothing here
+        // to leak — the absence is structural, not a filter that could be
+        // forgotten.
+        if let Some(tested) = entry.slot.tested_value() {
+            field(&mut out, "      ", "Tested value", tested);
+        }
+    }
+    out
 }
 
 /// Render what THIS PACKAGE records about each of its component references.
@@ -175,7 +235,86 @@ pub fn render_required_slots(slots: &[ConfigSlot]) -> String {
 /// input order.
 #[must_use]
 pub fn render_component_pins(components: &[ComponentRef]) -> String {
-    String::new()
+    let mut out = String::new();
+    if components.is_empty() {
+        // A server package has no `ComponentRef` field at all, so the section
+        // is genuinely inapplicable rather than empty. Rendering an empty
+        // heading would invite the reader to wonder what was omitted.
+        return out;
+    }
+    section(&mut out, "Component pins");
+    let _ = writeln!(
+        out,
+        "  What THIS PACKAGE records about each component it references."
+    );
+    // The boundary D-14 draws, stated in the output rather than only in a
+    // decision record: an operator who does not see it will assume the CLI
+    // checked something it structurally cannot check, because the comparison
+    // needs deployed-state knowledge nothing offline has.
+    let _ = writeln!(
+        out,
+        "  Comparing these against what a target environment actually runs is\n  \
+         `import`'s job, platform-side. Nothing below was derived from any\n  \
+         environment — only from this package."
+    );
+
+    let mut ordered: Vec<&ComponentRef> = components.iter().collect();
+    // Stable, so two references agreeing on BOTH keys keep their input order.
+    ordered.sort_by(|a, b| {
+        a.name()
+            .cmp(b.name())
+            .then(a.component_type().cmp(&b.component_type()))
+    });
+
+    for (position, component) in ordered.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "\n  [{}] {} {}",
+            position + 1,
+            component_type_label(component.component_type()),
+            component.name()
+        );
+        match component {
+            ComponentRef::Range { range, .. } => {
+                field(&mut out, "      ", "Declared", &range.to_string());
+                field(
+                    &mut out,
+                    "      ",
+                    "Resolved",
+                    "not resolved in this package",
+                );
+            },
+            ComponentRef::Pinned(pinned) => {
+                match &pinned.resolved_from {
+                    Some(range) => field(&mut out, "      ", "Declared", &range.to_string()),
+                    // The third state, and the reason this renderer exists.
+                    // Reading an absent fact as a positive claim is precisely
+                    // the failure `resolved_from` was added to prevent, so the
+                    // wording says what is UNKNOWN and says nothing about
+                    // whether the pin and the declaration agree.
+                    None => field(
+                        &mut out,
+                        "      ",
+                        "Declared",
+                        "CANNOT REPORT — pinned directly, so this package records no \
+                         declared range",
+                    ),
+                }
+                field(&mut out, "      ", "Resolved", &pinned.version.to_string());
+                field(&mut out, "      ", "Digest", pinned.digest.as_str());
+            },
+        }
+    }
+    out
+}
+
+/// The lowercase label for a component type, for the pin section's headings.
+fn component_type_label(component_type: ComponentType) -> &'static str {
+    match component_type {
+        ComponentType::Server => "server",
+        ComponentType::Agent => "agent",
+        ComponentType::Team => "team",
+    }
 }
 
 /// Render what the package carries by way of an attestation — all three states.
@@ -189,7 +328,50 @@ pub fn render_component_pins(components: &[ComponentRef]) -> String {
 /// never joined onto a path or interpreted.
 #[must_use]
 pub fn render_carriage(attestation: Option<&UnpackedAttestation>) -> String {
-    String::new()
+    let mut out = String::new();
+    section(&mut out, "Attestation");
+    let Some(attestation) = attestation else {
+        // Said explicitly rather than rendered as silence, so "carries no
+        // attestation" can never be confused with "this build does not know
+        // about attestations".
+        field(&mut out, "  ", "Carriage", "none (package is unattested)");
+        return out;
+    };
+    field(&mut out, "  ", "Issuer", &untrusted(&attestation.issuer));
+    field(
+        &mut out,
+        "  ",
+        "Subject",
+        &untrusted(&attestation.subject.claimed),
+    );
+    field(
+        &mut out,
+        "  ",
+        "Payload type",
+        &untrusted(&attestation.payload_type),
+    );
+    // Read from `SubjectVerdict::matches()`. A CLI-side digest comparison would
+    // be a second implementation of the same rule, free to drift from
+    // `inspect`'s — this asks the crate that derived the digest.
+    if attestation.subject.matches() {
+        field(&mut out, "  ", "Verdict", "subject matches this package");
+    } else {
+        field(
+            &mut out,
+            "  ",
+            "Verdict",
+            "SUBJECT MISMATCH — this attestation is not about this package",
+        );
+        // The claim and the reality side by side. That juxtaposition IS the
+        // diagnostic; either line alone tells the operator nothing.
+        field(
+            &mut out,
+            "  ",
+            "Actual",
+            attestation.subject.unattested_digest.as_str(),
+        );
+    }
+    out
 }
 
 /// Append a section header, matching `inspect.rs`'s `header` shape.
@@ -215,7 +397,23 @@ fn field(out: &mut String, indent: &str, label: &str, value: &str) {
 /// sequence smuggled through an annotation could otherwise repaint the terminal
 /// and forge a verdict line the renderer never wrote.
 fn untrusted(s: &str) -> String {
-    String::new()
+    let mut out = String::with_capacity(s.len().min(UNTRUSTED_MAX));
+    let mut clipped = false;
+    for (taken, ch) in s.chars().enumerate() {
+        if taken == UNTRUSTED_MAX {
+            clipped = true;
+            break;
+        }
+        if ch.is_control() {
+            let _ = write!(out, "\\u{{{:04x}}}", ch as u32);
+        } else {
+            out.push(ch);
+        }
+    }
+    if clipped {
+        out.push('…');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -345,7 +543,10 @@ mod tests {
         let rendered = render_component_pins(&[pinned_with_range()]);
         assert!(rendered.contains("london-tube"), "{rendered}");
         assert!(rendered.contains("^1.2"), "the declared range: {rendered}");
-        assert!(rendered.contains("1.3.0"), "the resolved version: {rendered}");
+        assert!(
+            rendered.contains("1.3.0"),
+            "the resolved version: {rendered}"
+        );
         assert!(
             rendered.contains(digest_of(b"london-tube-1.3.0").as_str()),
             "the resolved digest: {rendered}"
@@ -467,6 +668,20 @@ mod tests {
             })
         };
 
-        assert_eq!(build(), build(), "the report must be a function of its inputs");
+        let first = build();
+        // Asserted BEFORE the equality, and not as decoration: two empty
+        // strings are equal, so without this the determinism claim would hold
+        // vacuously against a renderer that produced nothing. Measured during
+        // the RED phase — this test was the ONE of eight that passed against
+        // stub bodies returning `String::new()`.
+        assert!(
+            first.contains("support-team") && first.contains("TFL_APP_KEY"),
+            "the report must actually render its inputs: {first}"
+        );
+        assert_eq!(
+            first,
+            build(),
+            "the report must be a function of its inputs"
+        );
     }
 }
