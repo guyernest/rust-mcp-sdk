@@ -2446,12 +2446,12 @@ Plans:
   4. The platform half is contract-first and offline-blocking: **`getPackageArtifact`** is validated against the vendored `contracts/pmcp-run/portability-v1.graphql` by a test in the default `cargo test` gate, and invoking `pull` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error, with the underlying cause preserved in the `anyhow` chain (PKGX-02)
   5. The artifact's **tar framing rule** — entry inventory, no wrapper directory, no absolute or `..` paths, no symlinks, no duplicates, uncompressed, reproducible headers — is documented normatively in `crates/pmcp-package` (the crate both sides read) and pinned by checked-in golden fixtures that the writer under test never regenerates; and a `save`/`load`/`pull` whose artifact fails verification leaves the destination **byte-for-byte unchanged** (PKGX-02)
 
-**Plans**: 7 plans
+**Plans**: 1/7 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, validated descriptor-graph model, framing gates, injectable byte caps, staged transactional install)
+- [x] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, validated descriptor-graph model, framing gates, injectable byte caps, staged transactional install)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -2512,7 +2512,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 8/8 | Complete    | 2026-08-25 |
-| 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/7 | Planned | - |
+| 123. Export/Import Verbs *(parked)* | PKGX-02 | 1/7 | In Progress|  |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend

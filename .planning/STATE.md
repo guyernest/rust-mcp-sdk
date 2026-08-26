@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: AI-Package Portability
 current_phase: 123
-current_phase_name: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
+current_phase_name: Export/Import Verbs
 status: executing
 stopped_at: Phase 123 replanned from cross-AI review
-last_updated: "2026-08-26T17:21:58.330Z"
+last_updated: "2026-08-26T18:56:31.696Z"
 last_activity: 2026-08-26
-last_activity_desc: Phase 123 replanned from cross-AI review (4 HIGH fixes) — checker PASSED
-state_head: 1247c89bdaf243bfad7167b70908080cae60981d
+last_activity_desc: Phase 123 execution started
+state_head: c13dd3508fcec4998cd4141b444a1ee44811a6e9
 progress:
   total_phases: 5
   completed_phases: 3
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 
 ## Current Position
 
-Phase: 123 (Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*) — READY TO EXECUTE
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-26 — Phase 123 replanned from cross-AI review; plan checker PASSED
+Phase: 123 (Export/Import Verbs) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 123
+Last activity: 2026-08-26 — Phase 123 execution started
 Next: Execute Phase 123 — `/gsd-execute-phase 123`. 7 plans across 6 waves
 (1:{01} 2:{02,03} 3:{04} 4:{05} 5:{06} 6:{07}), all carrying PKGX-02.
 
