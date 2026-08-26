@@ -108,6 +108,22 @@ pub const LONDON_TUBE_SPEC_NAME: &str = "london-tube-api.yaml";
 /// Read a file out of this crate's `tests/golden_fixtures/` tree. The one
 /// canonical fixture reader — per-binary copies of this loop are exactly the
 /// duplication this module's header forbids.
+///
+/// # The corpus is no longer text-only
+///
+/// Every fixture in `tests/golden_fixtures/` was TEXT (`.json`, `.tsv`,
+/// `.toml`, `.yaml`) until `artifact_tar_v1/` landed, and the corpus's review
+/// habit — read the diff — silently stops working on the `.tar` files there: a
+/// `git diff` over them prints `Binary files differ` and nothing else. A
+/// reviewer of a change under `artifact_tar_v1/` must read that directory's
+/// `README.md` (authoring procedure plus per-file rule mapping) and its
+/// consuming test, `cargo-pmcp/tests/package_artifact_framing.rs`, instead.
+///
+/// Those fixtures also carry a provenance rule the older text fixtures state
+/// only informally: they are checked-in bytes and are NEVER regenerated from
+/// the writer under test, because a fixture produced by the code it tests
+/// agrees with that code by construction and cannot detect drift. See
+/// `docs/design/package-portability-pmcp-run-handoff.md` §3.2.
 pub fn fixture_bytes(relative: impl AsRef<Path>) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
