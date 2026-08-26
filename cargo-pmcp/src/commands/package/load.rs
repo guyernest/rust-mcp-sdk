@@ -202,6 +202,15 @@ pub fn execute(args: LoadArgs, global_flags: &GlobalFlags) -> Result<()> {
             "->".bright_black(),
             installed.layout.root().display()
         );
+        // The package's IDENTITY, derived locally over the manifest blob's own
+        // bytes — never read out of the archive. Printing it is what lets an
+        // operator confirm that the thing they just loaded is the thing they
+        // were told to expect, without a second command.
+        println!(
+            "  {} {}",
+            "digest:".bright_black(),
+            verified.manifest_digest
+        );
     }
     Ok(())
 }
