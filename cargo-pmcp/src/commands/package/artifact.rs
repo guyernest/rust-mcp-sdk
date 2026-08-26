@@ -46,7 +46,7 @@
 //! here, not at the call site: staging is written, the closure validates the
 //! STAGING layout, and only a successful closure earns the rename into place.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -164,6 +164,57 @@ pub enum EntrySlot {
 // Reading: untrusted bytes in, a validated model out, nothing written
 // ---------------------------------------------------------------------
 
+/// The two byte budgets [`read_verified_with_limits`] enforces while parsing an
+/// artifact into memory.
+///
+/// D-06 accepts holding the artifact in memory as a cost but names no bound,
+/// and an unbounded hold over untrusted bytes is an OOM waiting for a
+/// mis-sized, hostile or accidentally-huge input. These are that bound.
+///
+/// # Why this is injectable
+///
+/// Not for convenience — for FALSIFIABILITY. A cap that is never observed to
+/// refuse anything is indistinguishable from a cap that does not work, and
+/// proving a multi-hundred-megabyte cap with real bytes is not a test anyone
+/// will run. With the limits as a parameter, "the cap is what refused this" is
+/// a two-line deterministic experiment: feed one input under a tiny cap and
+/// assert the specific refusal, feed the SAME input under a large cap and
+/// assert acceptance. The pair is what turns "an error happened" into "the cap
+/// caused it".
+///
+/// A fuzz campaign cannot do this. Arbitrary bytes are overwhelmingly unlikely
+/// to produce a well-framed multi-megabyte entry, so a short campaign would
+/// never approach the cap at all. Fuzzing keeps the job it is actually good at
+/// — panic and hang resistance at the untrusted-bytes boundary.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactLimits {
+    /// Maximum bytes admitted from any ONE archive entry.
+    ///
+    /// The largest single blob a package can plausibly carry is an EMBEDDED
+    /// server binary (an `MT_SERVER_BOOTSTRAP` layer). A Lambda bootstrap built
+    /// from this workspace is tens of megabytes, so 512 MiB is roughly an order
+    /// of magnitude of headroom over the realistic worst case while still
+    /// refusing anything that could only be an attack or an accident.
+    pub per_entry: u64,
+    /// Maximum cumulative bytes admitted from the whole archive.
+    ///
+    /// A package is one binary plus a handful of small JSON/TOML/YAML layers,
+    /// so the total is dominated by that single largest blob. 1 GiB leaves room
+    /// for one over-large binary plus every other layer without ever admitting
+    /// an archive whose sheer size is the payload.
+    pub total: u64,
+}
+
+impl ArtifactLimits {
+    /// The budgets every production caller uses. See the per-field rustdoc for
+    /// why each number is that number.
+    pub const DEFAULT: Self = Self {
+        per_entry: 512 * 1024 * 1024,
+        total: 1024 * 1024 * 1024,
+    };
+}
+
 /// Everything the entry loop collected, before any graph reasoning.
 struct RawArchive {
     index_bytes: Option<Vec<u8>>,
@@ -178,12 +229,46 @@ struct RawArchive {
 /// the path checks run over the raw [`Component`]s rather than over a
 /// canonicalized string, because canonicalizing would consult the filesystem
 /// and this function must not.
-fn classify_entry(path: &Path) -> Result<EntrySlot> {
+///
+/// `seen` accumulates the paths already admitted from this archive, so a
+/// repeated path is refused rather than resolved. Two entries claiming one path
+/// is an authoring bug or an attack, and last-wins merging would let a hostile
+/// writer append a benign-looking entry to shadow a real one — so the refusal
+/// says exactly that.
+fn classify_entry(
+    path: &Path,
+    entry_type: tar::EntryType,
+    seen: &mut BTreeSet<String>,
+) -> Result<EntrySlot> {
     let text = path
         .to_str()
         .ok_or_else(|| anyhow!("refusing an archive entry whose path is not valid UTF-8"))?;
 
+    // Entry TYPE first: a symlink or hardlink entry is a request to create a
+    // named object pointing somewhere else, and an artifact carries only
+    // content. `EntryType::new` already folds the legacy AREGTYPE (`b'\0'`)
+    // into `Regular`, so this rejects no real archive.
+    if entry_type != tar::EntryType::Regular {
+        bail!(
+            "refusing archive entry '{text}': only regular files are admitted, and this entry is \
+             {entry_type:?}. A symlink, hardlink, directory or device entry has no meaning in a \
+             content-addressed artifact."
+        );
+    }
+
+    if path.is_absolute() {
+        bail!(
+            "refusing archive entry '{text}': the path is absolute, and an artifact's entries are \
+             all relative to the archive root"
+        );
+    }
     for component in path.components() {
+        if matches!(component, Component::ParentDir) {
+            bail!(
+                "refusing archive entry '{text}': the path contains a parent-directory ('..') \
+                 component"
+            );
+        }
         if !matches!(component, Component::Normal(_)) {
             bail!(
                 "refusing archive entry '{text}': only plain relative path components are \
@@ -192,22 +277,28 @@ fn classify_entry(path: &Path) -> Result<EntrySlot> {
         }
     }
 
-    if text == LAYOUT_MARKER_PATH {
-        return Ok(EntrySlot::LayoutMarker);
+    let slot = if text == LAYOUT_MARKER_PATH {
+        EntrySlot::LayoutMarker
+    } else if text == INDEX_PATH {
+        EntrySlot::Index
+    } else if let Some(hex) = text.strip_prefix(BLOB_PREFIX).filter(|h| is_sha256_hex(h)) {
+        EntrySlot::Blob(hex.to_string())
+    } else {
+        bail!(
+            "refusing archive entry '{text}': an artifact carries exactly '{LAYOUT_MARKER_PATH}', \
+             '{INDEX_PATH}' and '{BLOB_PREFIX}<64 lowercase hex>' at the archive ROOT — a wrapper \
+             directory or any other path shape is not part of an OCI image layout"
+        );
+    };
+
+    if !seen.insert(text.to_string()) {
+        bail!(
+            "refusing duplicate archive entry '{text}': this path appears more than once. A \
+             repeated entry is refused rather than merged last-wins, because last-wins would let \
+             a writer append an entry that shadows a real one."
+        );
     }
-    if text == INDEX_PATH {
-        return Ok(EntrySlot::Index);
-    }
-    if let Some(hex) = text.strip_prefix(BLOB_PREFIX) {
-        if is_sha256_hex(hex) {
-            return Ok(EntrySlot::Blob(hex.to_string()));
-        }
-    }
-    bail!(
-        "refusing archive entry '{text}': an artifact carries exactly '{LAYOUT_MARKER_PATH}', \
-         '{INDEX_PATH}' and '{BLOB_PREFIX}<64 lowercase hex>' at the archive ROOT — a wrapper \
-         directory or any other path shape is not part of an OCI image layout"
-    );
+    Ok(slot)
 }
 
 /// Exactly 64 lowercase ASCII hex characters — the shape a sha256 blob file
@@ -216,9 +307,9 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Parse every entry of `tar_bytes` into memory. Touches the filesystem zero
-/// times.
-fn collect_entries(tar_bytes: &[u8]) -> Result<RawArchive> {
+/// Parse every entry of `tar_bytes` into memory, within `limits`. Touches the
+/// filesystem zero times.
+fn collect_entries(tar_bytes: &[u8], limits: &ArtifactLimits) -> Result<RawArchive> {
     let mut archive = tar::Archive::new(std::io::Cursor::new(tar_bytes));
     let entries = archive
         .entries()
@@ -227,20 +318,58 @@ fn collect_entries(tar_bytes: &[u8]) -> Result<RawArchive> {
     let mut index_bytes: Option<Vec<u8>> = None;
     let mut blobs: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut entry_count = 0usize;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut running_total = 0u64;
 
     for entry in entries {
         let mut entry = entry.context("read a tar entry from the artifact")?;
+        let entry_type = entry.header().entry_type();
+        let declared_size = entry.header().size().unwrap_or(0);
         let path = entry
             .path()
             .context("read a tar entry's path from the artifact")?
             .into_owned();
-        let slot = classify_entry(&path)?;
+        let slot = classify_entry(&path, entry_type, &mut seen)?;
         entry_count += 1;
+
+        // The header's declared size is ATTACKER-CONTROLLED input. It is used
+        // here only as an early refusal — never as the authority for how much
+        // is read. The bounded read below is what actually holds the line, per
+        // the ordering rule Phase 113 recorded: collecting an over-cap body and
+        // then measuring it performs exactly the allocation the cap exists to
+        // prevent.
+        if declared_size > limits.per_entry {
+            bail!(
+                "refusing archive entry '{}': its header declares {declared_size} bytes, over the \
+                 per-entry cap of {} bytes",
+                path.display(),
+                limits.per_entry
+            );
+        }
 
         let mut buf = Vec::new();
         entry
+            .by_ref()
+            .take(limits.per_entry.saturating_add(1))
             .read_to_end(&mut buf)
             .with_context(|| format!("read the content of archive entry '{}'", path.display()))?;
+        let actual = buf.len() as u64;
+        if actual > limits.per_entry {
+            bail!(
+                "refusing archive entry '{}': its content exceeds the per-entry cap of {} bytes",
+                path.display(),
+                limits.per_entry
+            );
+        }
+        running_total = running_total.saturating_add(actual);
+        if running_total > limits.total {
+            bail!(
+                "refusing this artifact at archive entry '{}': its cumulative entry size exceeds \
+                 the total cap of {} bytes",
+                path.display(),
+                limits.total
+            );
+        }
 
         match slot {
             // Accepted, content ignored: nothing in `pmcp-package` ever reads
@@ -401,11 +530,36 @@ fn resolve_graph(raw: RawArchive) -> Result<VerifiedArtifact> {
 /// carry, a descriptor whose declared size disagrees with the blob, and a blob
 /// no descriptor reaches.
 pub fn read_verified(tar_bytes: &[u8]) -> Result<VerifiedArtifact> {
+    read_verified_with_limits(tar_bytes, &ArtifactLimits::DEFAULT)
+}
+
+/// [`read_verified`] with injectable byte budgets — the real implementation.
+///
+/// Every production caller goes through [`read_verified`]; the limits are not
+/// exposed on the CLI. This entry point exists so the caps are FALSIFIABLE by a
+/// deterministic test rather than by a fuzz campaign (see [`ArtifactLimits`]).
+///
+/// Neither this function nor anything it calls performs a single `std::fs`
+/// operation, on any path, on success or on failure. That is enforced
+/// structurally rather than by discipline: every write lives in
+/// [`write_layout`], and `write_layout` is unreachable except through an owned
+/// [`VerifiedArtifact`], which only this function constructs. It is the
+/// read-side mirror of `pack_server`'s "a rejected pack adds neither a blob nor
+/// an index entry".
+///
+/// # Errors
+///
+/// See [`read_verified`].
+#[doc(hidden)]
+pub fn read_verified_with_limits(
+    tar_bytes: &[u8],
+    limits: &ArtifactLimits,
+) -> Result<VerifiedArtifact> {
     if tar_bytes.is_empty() {
         bail!("artifact is empty (zero bytes) — there is no archive here to read");
     }
 
-    let raw = collect_entries(tar_bytes)?;
+    let raw = collect_entries(tar_bytes, limits)?;
     if raw.entry_count == 0 {
         bail!("artifact archive contains no entries at all");
     }
@@ -784,27 +938,37 @@ fn append_normalized(builder: &mut tar::Builder<Vec<u8>>, path: &str, bytes: &[u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oci_spec::image::{ImageIndexBuilder, ImageManifestBuilder, SCHEMA_VERSION};
+    use pmcp_package::oci::media_types::{EMPTY_CONFIG_BLOB, MT_EMPTY_CONFIG};
+    use proptest::prelude::*;
+
+    /// Classify `path` as a regular file with a fresh duplicate-tracking set.
+    fn classify(path: &str) -> Result<EntrySlot> {
+        classify_entry(
+            Path::new(path),
+            tar::EntryType::Regular,
+            &mut BTreeSet::new(),
+        )
+    }
+
+    // -----------------------------------------------------------------
+    // The framing gates
+    // -----------------------------------------------------------------
 
     #[test]
     fn classify_entry_accepts_the_three_layout_slots() {
-        assert_eq!(
-            classify_entry(Path::new("oci-layout")).unwrap(),
-            EntrySlot::LayoutMarker
-        );
-        assert_eq!(
-            classify_entry(Path::new("index.json")).unwrap(),
-            EntrySlot::Index
-        );
+        assert_eq!(classify("oci-layout").unwrap(), EntrySlot::LayoutMarker);
+        assert_eq!(classify("index.json").unwrap(), EntrySlot::Index);
         let hex = "a".repeat(64);
         assert_eq!(
-            classify_entry(Path::new(&format!("blobs/sha256/{hex}"))).unwrap(),
+            classify(&format!("blobs/sha256/{hex}")).unwrap(),
             EntrySlot::Blob(hex)
         );
     }
 
     #[test]
     fn classify_entry_refuses_a_wrapper_directory() {
-        let err = classify_entry(Path::new("package/index.json")).unwrap_err();
+        let err = classify("package/index.json").unwrap_err();
         assert!(
             err.to_string().contains("archive ROOT"),
             "unexpected message: {err}"
@@ -813,18 +977,49 @@ mod tests {
 
     #[test]
     fn classify_entry_refuses_a_parent_directory_component() {
-        let err = classify_entry(Path::new("../index.json")).unwrap_err();
+        let err = classify("../index.json").unwrap_err();
         assert!(
-            err.to_string().contains("plain relative path components"),
+            err.to_string().contains("parent-directory"),
             "unexpected message: {err}"
         );
     }
 
     #[test]
     fn classify_entry_refuses_an_absolute_path() {
-        let err = classify_entry(Path::new("/index.json")).unwrap_err();
+        let err = classify("/index.json").unwrap_err();
         assert!(
-            err.to_string().contains("plain relative path components"),
+            err.to_string().contains("absolute"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn classify_entry_refuses_every_non_regular_entry_type() {
+        for entry_type in [
+            tar::EntryType::Symlink,
+            tar::EntryType::Link,
+            tar::EntryType::Directory,
+            tar::EntryType::Fifo,
+            tar::EntryType::Char,
+            tar::EntryType::Block,
+        ] {
+            let err = classify_entry(Path::new("index.json"), entry_type, &mut BTreeSet::new())
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("only regular files are admitted"),
+                "{entry_type:?} must be refused by type: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_entry_refuses_a_repeated_path_rather_than_merging_it() {
+        let mut seen = BTreeSet::new();
+        classify_entry(Path::new("index.json"), tar::EntryType::Regular, &mut seen).unwrap();
+        let err = classify_entry(Path::new("index.json"), tar::EntryType::Regular, &mut seen)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate archive entry"),
             "unexpected message: {err}"
         );
     }
@@ -835,10 +1030,7 @@ mod tests {
             format!("blobs/sha256/{}", "A".repeat(64)),
             format!("blobs/sha256/{}", "a".repeat(63)),
         ] {
-            assert!(
-                classify_entry(Path::new(&bad)).is_err(),
-                "{bad} must be refused"
-            );
+            assert!(classify(&bad).is_err(), "{bad} must be refused");
         }
     }
 
@@ -849,5 +1041,252 @@ mod tests {
             err.to_string().contains("zero bytes"),
             "unexpected message: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // The byte caps, proven by falsification PAIRS
+    // -----------------------------------------------------------------
+
+    /// The smallest artifact that passes every READ-side gate: an index naming
+    /// one manifest, that manifest, and the standard empty-config blob it
+    /// references. The descriptor graph closes in both directions.
+    ///
+    /// It is deliberately not a loadable SERVER — `read_verified` answers
+    /// framing, integrity and graph closure, and knows nothing about package
+    /// semantics. That separation is what lets this fixture stay three blobs
+    /// long.
+    fn minimal_valid_artifact() -> Vec<u8> {
+        let layout_dir = tempfile::tempdir().expect("create a layout dir");
+        let out_dir = tempfile::tempdir().expect("create an output dir");
+        let layout = OciLayout::create(layout_dir.path()).expect("create the layout");
+
+        let config = layout
+            .write_blob(MediaType::from(MT_EMPTY_CONFIG), EMPTY_CONFIG_BLOB)
+            .expect("write the config blob");
+        let manifest = ImageManifestBuilder::default()
+            .schema_version(SCHEMA_VERSION)
+            .media_type(MediaType::ImageManifest)
+            .config(config)
+            .layers(Vec::<Descriptor>::new())
+            .build()
+            .expect("build the manifest");
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("serialize the manifest");
+        let manifest_descriptor = layout
+            .write_manifest(&manifest_bytes)
+            .expect("write the manifest blob");
+        let index = ImageIndexBuilder::default()
+            .schema_version(SCHEMA_VERSION)
+            .manifests(vec![manifest_descriptor])
+            .build()
+            .expect("build the index");
+        write_canonical_index(&layout, &index).expect("write index.json");
+
+        let tar_path = out_dir.path().join("artifact.tar");
+        write_tar(&layout, &tar_path).expect("tar the layout");
+        std::fs::read(&tar_path).expect("read the artifact")
+    }
+
+    /// Falsification pair 1a: under a tiny PER-ENTRY cap the artifact is
+    /// refused, and the refusal names that cap and the entry it tripped on.
+    #[test]
+    fn a_tiny_per_entry_cap_refuses_an_artifact_naming_the_cap_and_the_entry() {
+        let artifact = minimal_valid_artifact();
+        let limits = ArtifactLimits {
+            per_entry: 4,
+            total: ArtifactLimits::DEFAULT.total,
+        };
+        let err = read_verified_with_limits(&artifact, &limits).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("per-entry cap of 4 bytes"),
+            "the refusal must name the cap: {message}"
+        );
+        // Whichever entry it trips on first, the refusal must NAME it — a cap
+        // that refuses anonymously is a cap nobody can diagnose. The layout
+        // marker is emitted first, so under a 4-byte cap that is the entry the
+        // reader reaches first.
+        assert!(
+            message.contains(LAYOUT_MARKER_PATH)
+                || message.contains(INDEX_PATH)
+                || message.contains(BLOB_PREFIX),
+            "the refusal must name the entry: {message}"
+        );
+    }
+
+    /// Falsification pair 1b: the SAME artifact under a large per-entry cap is
+    /// accepted. Without this half, 1a only says "an error happened".
+    #[test]
+    fn a_large_per_entry_cap_accepts_the_same_artifact() {
+        let artifact = minimal_valid_artifact();
+        let limits = ArtifactLimits {
+            per_entry: 1 << 20,
+            total: ArtifactLimits::DEFAULT.total,
+        };
+        assert!(
+            read_verified_with_limits(&artifact, &limits).is_ok(),
+            "the artifact 1a refused must be accepted once the per-entry cap is raised"
+        );
+    }
+
+    /// Falsification pair 2a: under a tiny TOTAL cap the artifact is refused,
+    /// naming that cap.
+    #[test]
+    fn a_tiny_total_cap_refuses_an_artifact_naming_the_total_cap() {
+        let artifact = minimal_valid_artifact();
+        let limits = ArtifactLimits {
+            per_entry: ArtifactLimits::DEFAULT.per_entry,
+            total: 8,
+        };
+        let err = read_verified_with_limits(&artifact, &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("total cap of 8 bytes"),
+            "the refusal must name the total cap: {err}"
+        );
+    }
+
+    /// Falsification pair 2b: the same artifact under a large total cap is
+    /// accepted.
+    #[test]
+    fn a_large_total_cap_accepts_the_same_artifact() {
+        let artifact = minimal_valid_artifact();
+        let limits = ArtifactLimits {
+            per_entry: ArtifactLimits::DEFAULT.per_entry,
+            total: 1 << 20,
+        };
+        assert!(
+            read_verified_with_limits(&artifact, &limits).is_ok(),
+            "the artifact 2a refused must be accepted once the total cap is raised"
+        );
+    }
+
+    /// A header that LIES about its size is refused without reading a body —
+    /// the case the per-entry cap exists for, since the declared size is
+    /// attacker-controlled and reading first would perform the very allocation
+    /// the cap prevents.
+    #[test]
+    fn a_lying_oversized_header_is_refused_without_a_large_allocation() {
+        let mut header = tar::Header::new_ustar();
+        header.set_path("index.json").unwrap();
+        header.set_size(u64::MAX / 2);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut builder = tar::Builder::new(Vec::new());
+        // The BODY is tiny; only the header claims otherwise.
+        builder.append(&header, &b"{}"[..]).unwrap();
+        let bytes = builder.into_inner().unwrap();
+
+        let err = read_verified(&bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("per-entry cap"),
+            "unexpected message: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Where staging lives, captured rather than assumed
+    // -----------------------------------------------------------------
+
+    /// The semantic gate runs against a staging directory that is a SIBLING of
+    /// the destination, never against the destination itself and never under
+    /// `TMPDIR`.
+    ///
+    /// This is the "captured trace" form of the check rather than the
+    /// different-filesystem form: mounting a second filesystem is not
+    /// arrangeable in a unit test, and the property that actually matters —
+    /// `staging.parent() == dest.parent()`, which is what makes the final
+    /// rename same-filesystem and therefore not `EXDEV` — is directly
+    /// observable from inside the validation closure, which is handed the
+    /// staged layout. Asserting it here is exact; asserting it through
+    /// `TMPDIR` would be circumstantial.
+    #[test]
+    fn install_layout_stages_in_the_destinations_parent_and_validates_there() {
+        let artifact = read_verified(&minimal_valid_artifact()).expect("the fixture is valid");
+        let home = tempfile::tempdir().expect("create a destination parent");
+        let dest = home.path().join("layout");
+
+        let observed = std::cell::RefCell::new(PathBuf::new());
+        let installed = install_layout(&artifact, &dest, false, |layout| {
+            observed.replace(layout.root().to_path_buf());
+            // The destination must not exist while validation is running.
+            assert!(
+                !dest.exists(),
+                "the destination must not be created before the semantic gate has passed"
+            );
+            Ok(())
+        })
+        .expect("install the artifact");
+
+        let staging = observed.into_inner();
+        assert_ne!(
+            staging, dest,
+            "validation must run against staging, not against the destination"
+        );
+        assert_eq!(
+            staging.parent(),
+            dest.parent(),
+            "staging must be a SIBLING of the destination, or the final rename would cross \
+             filesystems and fail EXDEV"
+        );
+        assert_eq!(
+            installed.layout.root(),
+            dest,
+            "the installed layout is opened at the destination"
+        );
+        assert!(
+            dest.is_dir(),
+            "the destination exists after a successful install"
+        );
+        assert!(
+            !staging.exists(),
+            "the staging directory is consumed by the rename and must not linger"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Properties
+    // -----------------------------------------------------------------
+
+    proptest! {
+        /// PROPERTY: any path `classify_entry` ACCEPTS, joined onto a
+        /// destination root, stays inside that root. This is the no-escape
+        /// property stated over generated paths rather than asserted in prose.
+        #[test]
+        fn an_accepted_path_never_escapes_the_destination_root(candidate in ".*") {
+            if classify(&candidate).is_ok() {
+                let root = Path::new("/destination/root");
+                let joined = root.join(&candidate);
+                prop_assert!(
+                    joined.starts_with(root),
+                    "accepted path {candidate:?} escaped to {joined:?}"
+                );
+            }
+        }
+
+        /// PROPERTY (the complement, without which the one above is satisfied
+        /// by a `classify_entry` that accepts nothing): a path carrying a
+        /// parent-directory component or a leading separator is ALWAYS refused.
+        #[test]
+        fn a_traversing_path_is_always_refused(
+            prefix in prop_oneof![Just("../"), Just("/"), Just("./../")],
+            tail in "[a-z0-9./-]{0,40}",
+        ) {
+            let candidate = format!("{prefix}{tail}");
+            prop_assert!(
+                classify(&candidate).is_err(),
+                "{candidate:?} must be refused"
+            );
+        }
+
+        /// PROPERTY: the untrusted-bytes boundary is TOTAL — `read_verified`
+        /// returns `Ok` or `Err` on arbitrary bytes and never unwinds. This is
+        /// the same boundary a fuzz target campaigns; having the property here
+        /// first is what makes that target's invariant meaningful.
+        #[test]
+        fn read_verified_never_panics_on_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..4096)
+        ) {
+            let _ = read_verified(&bytes);
+        }
     }
 }

@@ -705,3 +705,239 @@ fn save_help_documents_the_spec_resolution_rule() {
         .stdout(contains("not derivable from the config"))
         .stdout(contains("pure-configuration server"));
 }
+
+// ---------------------------------------------------------------------
+// Framing refusals — every hostile shape, refused by name, with the
+// destination left non-existent
+// ---------------------------------------------------------------------
+
+/// Rebuild an archive, optionally appending one entry under an explicit entry
+/// TYPE, so the type gate can be exercised from the real CLI.
+fn build_tar_with_type(
+    entries: &[(String, Vec<u8>)],
+    extra: Option<(String, tar::EntryType)>,
+) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, bytes) in entries {
+        let mut header = tar::Header::new_ustar();
+        header.set_path(path).expect("set the entry path");
+        header.set_size(bytes.len() as u64);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_username("").expect("normalize the user name");
+        header.set_groupname("").expect("normalize the group name");
+        header.set_cksum();
+        builder
+            .append(&header, bytes.as_slice())
+            .expect("append an entry");
+    }
+    if let Some((path, entry_type)) = extra {
+        let mut header = tar::Header::new_ustar();
+        header.set_path(&path).expect("set the entry path");
+        header.set_size(0);
+        header.set_entry_type(entry_type);
+        header.set_mode(0o777);
+        header.set_mtime(0);
+        header
+            .set_link_name("../../../../etc/passwd")
+            .expect("set a link target");
+        header.set_cksum();
+        builder
+            .append(&header, &[][..])
+            .expect("append the typed entry");
+    }
+    builder.into_inner().expect("finish the archive")
+}
+
+/// Rebuild an archive and append one entry whose name field is stamped in RAW,
+/// bypassing the `tar` crate's own writer-side validation.
+///
+/// This indirection is load-bearing, and it is a measured fact rather than a
+/// preference: `tar` 0.4.46's `Header::set_path` REFUSES to author a traversing
+/// path at all — `"paths in archives must not have `..`"` and `"paths in
+/// archives must be relative"`. That is a good property of the WRITER, and it
+/// is exactly why the reader's own gate cannot be exercised through it. A
+/// hostile producer is under no obligation to use tar-rs; it writes the 100-byte
+/// name field directly, so the test does too. Building these fixtures through
+/// `set_path` would test tar-rs's writer and report it as coverage of this
+/// reader.
+fn build_tar_with_raw_path(entries: &[(String, Vec<u8>)], raw_path: &str) -> Vec<u8> {
+    // ONE builder for everything: `build_tar` finishes its archive (writing the
+    // two trailing zero blocks), and an entry appended after those would sit
+    // past the end-of-archive marker where no reader would ever see it — the
+    // test would then pass while measuring nothing.
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, bytes) in entries {
+        let mut header = tar::Header::new_ustar();
+        header.set_path(path).expect("set the entry path");
+        header.set_size(bytes.len() as u64);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_username("").expect("normalize the user name");
+        header.set_groupname("").expect("normalize the group name");
+        header.set_cksum();
+        builder
+            .append(&header, bytes.as_slice())
+            .expect("append an entry");
+    }
+    let body = b"{}";
+
+    let mut header = tar::Header::new_ustar();
+    header.set_size(body.len() as u64);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    {
+        let old = header.as_old_mut();
+        let raw = raw_path.as_bytes();
+        assert!(
+            raw.len() < old.name.len(),
+            "the raw path must fit the tar name field"
+        );
+        old.name[..raw.len()].copy_from_slice(raw);
+    }
+    header.set_cksum();
+
+    builder
+        .append(&header, &body[..])
+        .expect("append the raw-path entry");
+    builder.into_inner().expect("finish the archive")
+}
+
+/// A path escaping the archive root via a parent-directory component.
+#[test]
+fn load_refuses_a_parent_directory_component_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let entries = entries_of(&tar_bytes);
+    assert_load_refuses(
+        &build_tar_with_raw_path(&entries, "../escaped.json"),
+        "parent-directory",
+    );
+}
+
+/// An absolute path.
+#[test]
+fn load_refuses_an_absolute_path_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let entries = entries_of(&tar_bytes);
+    assert_load_refuses(
+        &build_tar_with_raw_path(&entries, "/etc/passwd"),
+        "absolute",
+    );
+}
+
+/// A symlink entry — a request to create a named object pointing somewhere
+/// else, which has no meaning in a content-addressed artifact.
+#[test]
+fn load_refuses_a_symlink_entry_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let entries = entries_of(&tar_bytes);
+    let hostile = build_tar_with_type(
+        &entries,
+        Some(("index.json.link".to_string(), tar::EntryType::Symlink)),
+    );
+    assert_load_refuses(&hostile, "only regular files are admitted");
+}
+
+/// An entry nested under a wrapper directory: the framing rule places
+/// `index.json` at the archive ROOT.
+#[test]
+fn load_refuses_a_wrapper_directory_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let entries: Vec<(String, Vec<u8>)> = entries_of(&tar_bytes)
+        .into_iter()
+        .map(|(path, bytes)| (format!("package/{path}"), bytes))
+        .collect();
+    assert_load_refuses(&build_tar(&entries), "archive ROOT");
+}
+
+/// Two entries claiming one path — refused, never merged last-wins.
+#[test]
+fn load_refuses_a_duplicate_archive_entry_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let mut entries = entries_of(&tar_bytes);
+    let index = entries
+        .iter()
+        .find(|(path, _)| path == "index.json")
+        .expect("the artifact carries index.json")
+        .clone();
+    entries.push(index);
+    assert_load_refuses(&build_tar(&entries), "duplicate archive entry");
+}
+
+/// A blob whose bytes do not hash to the hex in its own file name.
+#[test]
+fn load_refuses_a_blob_that_does_not_match_its_own_name_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let mut swapped = false;
+    let entries: Vec<(String, Vec<u8>)> = entries_of(&tar_bytes)
+        .into_iter()
+        .map(|(path, bytes)| {
+            if !swapped && path.starts_with("blobs/sha256/") {
+                swapped = true;
+                (path, b"substituted".to_vec())
+            } else {
+                (path, bytes)
+            }
+        })
+        .collect();
+    assert!(swapped, "the fixture must carry at least one blob to swap");
+    assert_load_refuses(&build_tar(&entries), "does not match its own name");
+}
+
+/// An archive with zero entries.
+#[test]
+fn load_refuses_an_empty_archive_and_writes_nothing() {
+    let empty = build_tar(&[]);
+    assert!(
+        !empty.is_empty(),
+        "an empty tar still carries its trailing blocks"
+    );
+    assert_load_refuses(&empty, "no entries");
+}
+
+/// An archive carrying `index.json` and no blobs at all.
+#[test]
+fn load_refuses_an_index_only_archive_and_writes_nothing() {
+    let (_project, tar_bytes) = saved_london_tube_tar();
+    let entries: Vec<(String, Vec<u8>)> = entries_of(&tar_bytes)
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with("blobs/sha256/"))
+        .collect();
+    assert_load_refuses(&build_tar(&entries), "no blobs");
+}
+
+/// A zero-byte input file.
+#[test]
+fn load_refuses_a_zero_byte_artifact_and_writes_nothing() {
+    assert_load_refuses(&[], "zero bytes");
+}
+
+/// A header LYING about its size, over the per-entry cap, in an archive that
+/// itself stays small — the exact case the cap exists for, since believing the
+/// declared size would perform the very allocation the cap prevents.
+#[test]
+fn load_refuses_an_over_cap_lying_header_and_writes_nothing() {
+    let mut header = tar::Header::new_ustar();
+    header.set_path("index.json").expect("set the entry path");
+    header.set_size(u64::MAX / 2);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_cksum();
+    let mut builder = tar::Builder::new(Vec::new());
+    builder
+        .append(&header, &b"{}"[..])
+        .expect("append the lying entry");
+    let hostile = builder.into_inner().expect("finish the archive");
+
+    assert_load_refuses(&hostile, "per-entry cap");
+}
