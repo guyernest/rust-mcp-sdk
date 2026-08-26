@@ -2,10 +2,25 @@
 
 **Audience:** pmcp.run platform team, and any other host implementing pack/unpack
 **From:** PMCP Rust SDK team (`paiml/rust-mcp-sdk`)
-**Date:** 2026-08-25
-**SDK milestone:** v2.6 "AI-Package Portability" (Phases 120–124) — 120 and 121 complete
+**Date:** 2026-08-25 (revised the same day — see **Revision** below)
+**SDK milestone:** v2.6 "AI-Package Portability" (Phases 120–124) — 120, 121 and 122 complete
 **Status:** the SDK's format half is done and regression-netted. **Two independent
 implementations of one format now exist, and keeping them from drifting is the work.**
+
+> **Revision, 2026-08-25.** This document was first issued hours before Phase 122
+> (attestation carriage) executed. That phase added a media type, three layer-descriptor
+> annotation keys, a field that participates in package identity, and two pre-write
+> refusals — so the invariant table it asked you to confirm was already incomplete when
+> you received it. Changed sections: **§1** (a fifth break mode), **§2** (the media-types
+> row, seven new rows, and a new **§2.2**), **§3.2**, **§4**, **§5.3**, **§7**, **§8**,
+> **§9** and **§10**. Rows are referenced by name rather than number throughout, so the
+> table can grow without invalidating the cross-references.
+>
+> **The one to read first is §2.2 — the canonical-JSON control-character hazard.** It is
+> a live way for *either* implementation to mint a package that packs cleanly, whose
+> digest verifies, and which can never be unpacked by anything. The SDK found it by
+> property test, not by reasoning, and the gate it added deliberately does **not** cover
+> the whole surface.
 
 ---
 
@@ -57,6 +72,11 @@ That gap is where portability actually lives. Four ways it can break:
 4. **Baked-vs-slot drift.** One side bakes the OpenAPI spec into identity, the other treats
    it as environment → the same logical server gets two different digests, and
    digest-keyed attestations and `ApprovedPackage` admission both break.
+5. **Representability drift** *(added after Phase 122)*. One side writes a string into the
+   manifest that its canonicalizer emits in a form no JSON parser accepts → the package
+   packs, its digest verifies, and it is permanently unreadable. This one is worse than the
+   other four because the artifact is not merely misread — it is unrecoverable, and the
+   digest says it is fine. See **§2.2**.
 
 None of these produce a loud error. All of them produce a package that looks fine.
 
@@ -69,7 +89,9 @@ implementation must match it exactly, and any change must move on both sides tog
 
 | Invariant | SDK source of truth | What breaks if it drifts |
 |---|---|---|
-| **Vendor media types** — every `application/vnd.pmcp.*` layer string | `crates/pmcp-package/src/oci/media_types.rs` (`MT_SERVER_CONFIG`, `MT_SERVER_OPENAPI_SPEC`, `MT_SERVER_BINARY_REF`, `MT_SERVER_BOOTSTRAP`, `MT_SERVER_DEPLOY_DESCRIPTOR`, …) | A layer is unrecognized → silently dropped, not an error |
+| **Vendor media types** — every `application/vnd.pmcp.*` layer string | `crates/pmcp-package/src/oci/media_types.rs` (`MT_SERVER_CONFIG`, `MT_SERVER_OPENAPI_SPEC`, `MT_SERVER_BINARY_REF`, `MT_SERVER_BOOTSTRAP`, `MT_SERVER_DEPLOY_DESCRIPTOR`, **`MT_ATTESTATION`**, …) | A layer is unrecognized → silently dropped, not an error |
+| **Attestation media type is KIND-NEUTRAL** — `application/vnd.pmcp.attestation.v1`, with **no** `mcp-server` / `team` segment and **no** format suffix | `media_types.rs:188` (`MT_ATTESTATION`) | The obvious guess (`…mcp-server.attestation.v1`, matching every sibling constant) is **wrong**, and a layer written under it is silently dropped by the *Vendor media types* row's mechanism. One spelling is shared verbatim by the server and team paths with no kind dispatch; **package kind comes from `artifactType`, never from this layer** |
+| **Attestation annotation keys** — reverse-DNS `run.pmcp.attestation.{subject,issuer,payload-type}` | `media_types.rs` (`ANNOTATION_ATTESTATION_SUBJECT` / `_ISSUER` / `_PAYLOAD_TYPE`) | Note the namespace switch: `vnd.pmcp` is a media-type prefix, not a domain, so annotations use `run.pmcp.*`. The payload's own format is recorded in `payload-type`, which is what lets the layer media type stay suffix-free while the payload schema churns |
 | **Canonical digest** — deterministic serialization, then hash | `digest/canonical.rs` — `canonicalize()` then `manifest_digest()` | Identical content yields different digests → attestations and admission fail |
 | **Integrity verification semantics** — what `verify` does and does NOT mean | `digest/verify.rs` — integrity ONLY, never a signature check | One side believing a verified digest implies authenticity |
 | **Slot classification rule** — behavior-relevant iff it carries a `tested_value` | `slot/classification.rs:24-30` — a single predicate, no variant list | Wrong slot set demanded from the target environment |
@@ -79,6 +101,11 @@ implementation must match it exactly, and any change must move on both sides tog
 | **`name` vs `config_key`** — `name` is the ENV VAR; `config_key` is the dotted CONFIG PATH | `slot/required.rs`, `ConfigSlot::config_key` | Putting the config path in `name` derives a variable no environment can set (`BACKEND.BASE_URL`) |
 | **Baked vs slot** — spec is baked (identity); endpoint, credentials, auth mode are slots | Phase 120, enforced by `tests/digest_stability.rs` | Two digests for one logical server, or an environment value entering identity |
 | **Dual binary mode** — embedded bootstrap bytes, OR `BinaryRef { digest, media_type }` | `package/server.rs` | A referenced package treated as missing-layer instead of "resolve this digest" |
+| **Canonical-JSON representability** — no C0 control character (U+0000–U+001F) may reach any string the manifest canonicalizes | `oci/pack.rs` — `first_control_character`, `reject_attestation_annotations_that_break_canonical_json` | **A package that packs, verifies, and can never be unpacked.** Full treatment in §2.2 — read it before implementing a writer |
+| **Attestation subject is the UNATTESTED digest** — `run.pmcp.attestation.subject` names the manifest digest the package would have had *without* this layer | `media_types.rs` (`ANNOTATION_ATTESTATION_SUBJECT`); pack-side gate in `oci/pack.rs` | An attested package's own digest can **never** equal the subject it names — the layer lives inside the manifest the digest covers. An implementation that writes the carrying package's own digest here produces an attestation that is wrong in a way that looks self-consistent |
+| **`PinnedRef.resolved_from` participates in IDENTITY** — a pin records the semver range it resolved from | `reference.rs:141`; `tests/digest_stability.rs::recording_the_range_a_pin_resolved_changes_the_manifest_digest` | `Some(range)` **changes the canonical bytes and therefore the manifest digest**; `None` emits no key at all (`skip_serializing_if`, load-bearing). If one side records the range and the other does not, the same logical package yields two digests — §1 break #2, with attestations and `ApprovedPackage` admission both failing. Wire-compatible in the additive direction only: pins written before the field existed still deserialize as `None` |
+| **Attested ⇒ fully pinned** — a team package carrying an attestation must hold no unresolved `ComponentRef` | `oci/pack.rs` — `reject_an_attestation_over_an_unresolved_team`; error is `PackageError::InvalidReference`, deliberately not a new variant | An attestation over a moving target. **Depth-1 only**, by decision: an attested team whose pinned agent itself holds a range still packs — requiring attestation transitively is platform **admission policy**, not format. Vacuous on the server path (`ServerPackage` holds no `ComponentRef`), so `pack_server` deliberately does not call it — do not "fix" that asymmetry |
+| **Duplicate media type is an ERROR, never last-wins** | `oci/unpack.rs` — `index_layers` → `PackageError::Layout` naming the duplicated type | Silently keeping one of two same-typed layers lets a crafted layout **shadow** the real config. Layers are read by *what* they are, never by position |
 
 ### 2.1 The one semantic trap worth calling out by name
 
@@ -93,6 +120,63 @@ credential, the single most important thing a target environment must supply.**
 
 If the platform's import UI answers "what must this environment provide?", it must call
 **`required_slots`**. This is the highest-value thing in this document for import.
+
+### 2.2 The canonical-JSON control-character hazard *(new — Phase 122)*
+
+§2.1 is the highest-value section for an implementation that **reads** packages. This is
+the highest-value section for one that **writes** them — and capture writes them.
+
+**The mechanism.** Canonical JSON (OLPC/TUF, which `olpc-cjson` implements and this
+crate's `canonicalize` uses) escapes **only** `"` and `\`. Every other character is
+written **literally**, C0 control characters (U+0000–U+001F) included. That is correct
+for Canonical JSON's own specification and **wrong for RFC 8259**, which forbids an
+unescaped control character inside a JSON string. So a control character in any string
+that reaches the manifest produces manifest bytes no JSON parser will read back.
+
+**Why it is worse than ordinary drift.** The failure is silent at every point where you
+would expect to catch it:
+
+- The package **packs cleanly** — no error, no warning.
+- Its digest **verifies** — the digest is computed over the bytes as stored, and those
+  bytes are exactly what was written.
+- It then fails to unpack. Not just in this crate — in **every** OCI tool, permanently.
+  There is no recovery path, because the artifact's identity is the digest of the
+  unreadable bytes.
+
+**How it was found, which is the part worth transferring.** Not by review or reasoning.
+A generated property in `crates/pmcp-package/tests/attestation_opacity.rs` produced
+`issuer = "\0"`, and the resulting package packed and could not be unpacked. Nobody
+predicted it. If your implementation canonicalizes with a different library, that library
+almost certainly makes a *different* choice at this exact boundary, which is itself the
+divergence — the two sides need not merely agree on the rule, they need to agree on what
+their serializers do with input that violates it.
+
+**What the SDK now does — and precisely what it does not.** `pack_server` / `pack_team`
+refuse **before the first blob write** with `PackageError::AttestationAnnotationInvalid`,
+naming the offending annotation key, the code point and its byte offset, and **never**
+reproducing the value (untrusted input, potentially long or hostile to a terminal).
+
+The gate covers **two values only**: `run.pmcp.attestation.issuer` and
+`run.pmcp.attestation.payload-type`. Deliberately excluded:
+
+- `run.pmcp.attestation.subject` — validated more strictly one gate later as
+  `sha256:<64 hex>`, a form that admits no control character.
+- **Everything else the crate canonicalizes.** A `ConfigFile` / `OpenApiSpecFile`
+  `file_name` (which becomes the standard `org.opencontainers.image.title` annotation),
+  and every `String` inside `ServerPackage` itself. These are ungated because in the SDK's
+  threat model they come from the packaging author's own filesystem and source — a
+  different trust class from a platform-issued attestation.
+
+**That exclusion is the ask.** The trust-class argument is a statement about the *SDK's*
+inputs, and it may simply not hold for capture. If any of those strings can originate from
+user-controlled input on the platform side — a server name, a config filename, a spec
+title flowing in from a tenant — then the platform is writing in the **ungated** region
+and needs its own equivalent refusal. The SDK cannot make that determination; only you
+know where capture's strings come from. It is tracked SDK-side as an open hazard
+(`.planning/WINDOWS.md` #32) rather than treated as closed.
+
+**Scope note:** DEL (U+007F) and all non-ASCII code points are legal unescaped and are
+deliberately **not** rejected. Over-refusing a non-ASCII issuer would be a bug of its own.
 
 ---
 
@@ -152,6 +236,15 @@ Concretely — each item is small and independently useful:
 2. **A fixture is added with every format change.** A new media type, a new slot variant, a
    new package kind → a new golden. This is already the SDK's habit (Phase 120 added
    `config_server_london_tube_v1`); the ask is that it becomes a joint habit.
+
+   **Honesty about the current state:** Phase 122 added a media type, three annotation keys
+   and an identity-bearing field, and added **no golden**. Attestation is regression-netted
+   by property and unit tests (`tests/attestation_opacity.rs`, `tests/negative.rs`) and by
+   `digest_stability.rs`'s `resolved_from` digest assertion — but the *corpus* pins nothing
+   about an attested package, so adopting it as-is today would give you a conformance suite
+   with a hole exactly where the newest format surface is. An **attested-package fixture in
+   both carrier kinds** (server and team) is the concrete first item if this proposal is
+   accepted, and the SDK will write it.
 3. **Cross-direction round-trip, once egress exists.** Platform packs → SDK unpacks →
    assert tool-list parity, and the reverse. This is Phase 121's E2E with one side swapped,
    and it is the only test that actually proves portability. It needs `getPackageArtifact`
@@ -207,11 +300,45 @@ Gate: `make test-openapi-server` → `parity_replay` 3, `pmcp_package_pin` 2,
 `roundtrip_e2e` 8, 42 tests total, with per-binary counts printed so a suite that silently
 stops running fails the gate.
 
-### Phases 122–124 — not started
+### Phase 122 — Attestation Carriage ✅ complete (verification passed)
 
-122 (attestation carriage) and 123 (export/import verbs) are **contract-first and parked on
-the platform**; 124 is internal release hygiene. Versions: `pmcp-package` **0.2.0** locally
-(crates.io max is 0.1.1), `cargo-pmcp` **0.22.0**.
+Contract-first: every criterion was achievable with the backend unavailable, and all of it
+landed. **Nothing here waits on the platform**, and nothing here asks the platform to
+change a behaviour it already ships — but several items change what a *conforming writer*
+must do, so they are §2 invariants rather than release notes.
+
+- **Carriage, opaque and kind-neutral.** An attestation rides as one layer under
+  `MT_ATTESTATION` with three `run.pmcp.attestation.*` descriptor annotations. The crate
+  never deserializes or interprets the payload bytes. Server and team carriers share the
+  write helper, the duplicate-layer rejection and the read helper **verbatim**, with no
+  kind dispatch.
+- **Two pre-write refusals**, both leaving the destination layout byte-for-byte unchanged
+  on failure: subject-digest mismatch, and the §2.2 canonical-JSON refusal.
+- **Ranges recorded alongside resolutions.** `PinnedRef.resolved_from` — additive on the
+  wire, **breaking in Rust source**, and **identity-bearing** (§2, *`PinnedRef.resolved_from`
+  participates in IDENTITY*).
+- **No-crypto boundary now machine-enforced**, not just asserted — see §8.
+- **`cargo pmcp package inspect`** renders all three states (attested-and-matching,
+  attested-mismatched, unattested) for both carrier kinds, fixture-driven with no network
+  on any path, and **exits `1` on a subject-digest mismatch**, including under `--quiet`.
+
+**API breaks, listed because they are source-breaking for any Rust consumer you have:**
+`pack_server` gained a sixth positional parameter (`attestation`); `pack_team` gained one;
+`PinnedRef` gained a fifth public field, breaking every struct literal; `unpack_team`'s
+return type changed from `Result<TeamPackage>` to `Result<UnpackedTeam>`; and
+**`PackageError` is not `#[non_exhaustive]`** and gained two variants, so every downstream
+`match` over it breaks.
+
+Versions: `pmcp-package` **0.3.0** locally, `cargo-pmcp` **0.23.0**. The 0.3 line names
+exactly the breaks above. **Measured, because it explains why this broke no consumer:**
+crates.io's max `pmcp-package` is **0.1.1** — the entire 0.2 line was never published, so
+nothing on the registry pinned `^0.2`. Do not generalize that into a rule; it was true only
+because of that unpublished state.
+
+### Phases 123–124 — not started
+
+123 (export/import verbs) remains **contract-first and parked on the platform**; 124 is
+internal release hygiene, including publishing the above.
 
 ---
 
@@ -277,24 +404,51 @@ config cache. **No second API path**: no new base-URL env var, no second token c
 ### 5.3 Attestation issuance on version promotion
 
 Scoping decision #1: **attestation is pmcp.run-issued.** Trust is anchored in the platform,
-not a developer-held key. The SDK's job is carriage and verification only:
+not a developer-held key. The SDK's job is carriage and verification only — and **as of
+Phase 122 the SDK's half is delivered**, so what follows is the platform's remainder.
 
-- **No crypto dependency enters `pmcp-package`** — to be enforced by a dependency tripwire test.
-- `digest::verify` remains an **integrity** check, never a signature check.
-- The attestation rides as an **opaque** layer under an `application/vnd.pmcp.*` media type;
-  the crate never deserializes or interprets its bytes.
-- `cargo pmcp package inspect` renders presence, subject digest and issuer when one is
-  carried, and reports "unattested" when none is — fixture-driven, no network on any path.
+Delivered (see §4), stated here as the properties you can build against:
 
-**Needed:** `contracts/pmcp-run/attestation-v1.graphql` (issuance + verification-against-
-platform-identity), plus the attestation payload schema. The attestation **format** is a
-**shared contract**, versioned like `capture-v1.graphql`. Attestation **storage and
-admission control** ("which attestations must exist for import") is the platform's — a
-commercial policy surface the SDK does not model. Reference payload shape: design note §4.
+- **No crypto dependency enters `pmcp-package`** — now **enforced**, see §8.
+- `digest::verify` remains an **integrity** check, never a signature check. Integrity
+  failure means the bytes are corrupt; subject mismatch means the bytes are fine and the
+  claim is wrong. Two different verdicts, deliberately handled differently — please keep
+  them distinct on your side too rather than harmonizing them into one "invalid".
+- The attestation rides as an **opaque** layer under `MT_ATTESTATION`; the crate never
+  deserializes or interprets its bytes.
+- `cargo pmcp package inspect` renders all three carriage states, and exits `1` on a
+  subject mismatch.
 
-**Parked-boundary discipline:** the live leg exists SDK-side as an `#[ignore]`d, env-gated
-test naming exactly what the backend must ship (the `PMCP_OPENAPI_LIVE_TEST=1` double-gate).
-Promoting Phase 122 from parked to blocking is **removing a gate, not writing a new test**.
+**Still needed from the platform, in priority order:**
+
+1. **Ratify or counter-propose `verifyAttestation`.** `contracts/pmcp-run/attestation-v1.graphql`
+   now exists, vendored, with an offline blocking test — but it is **SDK-PROPOSED and
+   carries no provenance**, deliberately unlike `capture-v1.graphql` whose contents you
+   own. Its header says so, and the test's module docs say so, because a green build on
+   our side proves only that our query agrees with our own proposal. It becomes a real
+   cross-boundary drift net the moment you export your own SDL to replace it. **One
+   operation to ratify, not three** — issuance is yours to design, and the CLI never
+   fetches an attestation because carriage means it arrives inside the package.
+2. **The attestation payload schema.** The layer is opaque to the SDK, so the payload's
+   shape is entirely a platform contract — but it should be *versioned* like
+   `capture-v1.graphql`, and its media type goes in `run.pmcp.attestation.payload-type`
+   (which is exactly why `MT_ATTESTATION` carries no format suffix).
+3. **Confirm the subject convention** (§2, *Attestation subject is the UNATTESTED digest*).
+   The subject digest is the **unattested**
+   manifest digest. This is the single easiest thing to implement backwards, because the
+   wrong answer — the carrying package's own digest — is self-consistent and looks right.
+
+Attestation **storage and admission control** ("which attestations must exist for import")
+stays the platform's — a commercial policy surface the SDK does not model. Note that the
+depth-1 pinning rule (§2, *Attested ⇒ fully pinned*) is where the two meet: the format guarantees an attested
+team is itself fully pinned, and *transitive* attestation requirements are admission policy.
+Reference payload shape: design note §4.
+
+**Parked-boundary discipline, now demonstrated rather than promised:** the live leg exists
+SDK-side as an `#[ignore]`d, env-gated test naming exactly what the backend must ship (the
+`PMCP_OPENAPI_LIVE_TEST=1` double-gate). Promoting it from parked to blocking is **removing
+a gate, not writing a new test**. Phase 122 shipped its entire format half against that
+seam with the backend unavailable, which is the evidence that the pattern works for 123.
 
 ---
 
@@ -343,8 +497,10 @@ ratification, not invention.
 | 9 | Release bundling: ship CLI package verbs now with `pull` next minor, or one bundled release? | decision holder is the **SDK**; platform has argued for shipping now |
 | 10 | Ratify design-note §7: descriptor is the contract, stack is derived, renderer is a shared open-source crate | open — **the largest architectural item** |
 | 11 | Per-wave expressiveness checklist: what must `[[resources.*]]` express before each recreation wave? | open |
-| — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | **new, from §3.2** |
-| — | Naming for the AI-Package import verb, given `package import` is taken | **new** — needed before Phase 123 planning |
+| — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | open, from §3.2 |
+| — | **Naming for the AI-Package import verb**, given `package import` is taken | ⚠ **DUE NOW.** Phase 123 planning is the next thing the SDK starts. Past that point the rename cost lands on platform docs too |
+| — | **Can capture's canonicalized strings originate from user-controlled input?** (§2.2) — server name, config `file_name`, spec title | ⚠ **new, and the only one that is a live defect risk rather than a design choice.** The SDK's gate covers two attestation annotations; everything else is ungated on a trust-class argument that may not hold for capture |
+| — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | **new** — the SDL is vendored but SDK-proposed and unratified |
 
 Resolved and kept for the record: **Q6** (IAM population — deterministically not captured;
 the synthesized descriptor is systematically lossy) and **Q8** (AVP read scope — single
@@ -377,7 +533,8 @@ Settled decisions, not preferences under review. The platform can build against 
 
 | The SDK will not | Because |
 |---|---|
-| Add signing keys or PKI to `pmcp-package` | Attestation is platform-issued; trust is anchored there. To be enforced by a dependency tripwire test |
+| Add signing keys or PKI to `pmcp-package` | Attestation is platform-issued; trust is anchored there. **Now enforced, not merely stated:** `crates/pmcp-package/deny.toml` bans crypto crates from the crate's resolved dependency graph, run in CI as `cargo deny --manifest-path crates/pmcp-package/Cargo.toml check --config deny.toml bans` with cargo-deny pinned to 0.18.3. The gate was checked for vacuity — an empty `[bans].allow` returns `bans ok`, exit 0, so an empty policy would have passed silently |
+| Verify an attestation signature offline | The same boundary from the other side, and the reason `verifyAttestation` (§5.3) has to exist on the platform: "verified against pmcp.run's identity" is a signature check, and the SDK has deliberately made itself unable to perform one. Its only offline check is comparing a claimed subject digest against one it re-derives |
 | Add an ECR / OCI registry client (`oci-client`) to the CLI | GraphQL mediates import and owns ECR placement. `oci-spec` types stay so a registry client could consume the manifests later with zero translation |
 | Interpret attestation bytes | Carriage is opaque by design |
 | Teach the format crate about policies, registries, or reports | All audit logic lives *above* the format. The small, auditable trust kernel is itself part of the security posture |
@@ -402,15 +559,23 @@ Settled decisions, not preferences under review. The platform can build against 
 |---|---|
 | `.planning/REQUIREMENTS.md` | The 7 v2.6 requirements (PKG-01..04, PKGX-01/02, PKGR-01), both scoping decisions, traceability, and the "⚠ PKGX-01/02 cannot fully close inside this repo" note |
 | `.planning/ROADMAP.md` § `v2.6 AI-Package Portability` | Milestone goal, scoping decisions, non-goals, decisions taken at the open |
-| `.planning/ROADMAP.md` § `Phase Details — Current Milestone` | Per-phase success criteria. **Phases 122 and 123 are the platform-relevant ones** — every criterion is achievable offline with the backend unavailable |
+| `.planning/ROADMAP.md` § `Phase Details — Current Milestone` | Per-phase success criteria. **Phase 123 is the remaining platform-relevant one** (122 shipped) — every criterion is achievable offline with the backend unavailable, which 122 has now demonstrated rather than promised |
 | `.planning/phases/120-config-server-packaging/` | 5 plans + summaries, `120-VERIFICATION.md` (passed) |
 | `.planning/phases/121-local-round-trip-e2e/` | 5 plans + summaries, `121-VERIFICATION.md` (passed), `121-UAT.md` (37/37), `deferred-items.md` |
+| `.planning/phases/122-attestation-carriage-.../` | 8 plans + summaries, `122-VERIFICATION.md` (passed), `122-LEARNINGS.md`. **The §2.2 hazard's full derivation is in `122-06-SUMMARY.md`** |
+| `.planning/WINDOWS.md` | The SDK's open-hazard ledger. **#32 is the §2.2 canonical-JSON hazard**, recorded as open rather than closed because the gate is deliberately partial |
 
 ### Code seams
 
 | Path | What it is |
 |---|---|
-| `crates/pmcp-package/src/oci/media_types.rs` | **All `application/vnd.pmcp.*` layer types** — §2 row 1 |
+| `crates/pmcp-package/src/oci/media_types.rs` | **All `application/vnd.pmcp.*` layer types** — §2, *Vendor media types*. Also `MT_ATTESTATION` (line 188) and the three `run.pmcp.attestation.*` annotation keys, each with the rationale for its spelling in rustdoc |
+| `crates/pmcp-package/src/oci/pack.rs` | The pre-write gates: `first_control_character`, `reject_attestation_annotations_that_break_canonical_json` (§2.2), the subject gate, `reject_an_attestation_over_an_unresolved_team` |
+| `crates/pmcp-package/src/error.rs` | `PackageError` — **not `#[non_exhaustive]`**; `AttestationSubjectMismatch` and `AttestationAnnotationInvalid` carry the §2.2 reasoning in rustdoc |
+| `crates/pmcp-package/src/reference.rs` | `PinnedRef`, incl. `resolved_from` (line 141) and its both-halves compatibility note — additive on the wire, breaking in Rust source, identity-bearing |
+| `crates/pmcp-package/tests/attestation_opacity.rs` | The generated property that found the §2.2 hazard, plus the opacity properties |
+| `crates/pmcp-package/deny.toml` | The machine-enforced no-crypto boundary — §8 |
+| `contracts/pmcp-run/attestation-v1.graphql` | `verifyAttestation` — **SDK-PROPOSED, unratified**; contrast `capture-v1.graphql`'s ownership |
 | `crates/pmcp-package/src/digest/canonical.rs` | `canonicalize()` + `manifest_digest()` — the canonical digest both sides must reproduce |
 | `crates/pmcp-package/src/digest/verify.rs` | Integrity verification — stays integrity-only |
 | `crates/pmcp-package/src/slot/types.rs` | Slot vocabulary + the identity/behavior split, with module docs defining the shared terms |
@@ -430,20 +595,43 @@ Settled decisions, not preferences under review. The platform can build against 
 
 ## 10. Concrete asks
 
-1. **Confirm the §2 invariant table matches the platform's implementation** — particularly
-   the slot classification rule and the `name` vs `config_key` split. A mismatch here is the
-   highest-probability silent break.
-2. **Decide the golden-fixture question (§3.2, §7)**: adopt the corpus as a shared
-   conformance suite, and decide where it lives.
-3. **Ratify Q1 and Q2 now** (tar-at-capture, digest-addressed fetch) — the backfill window is
+Two are time-boxed by something on the SDK's side; the rest are not.
+
+**⚠ Answer before Phase 123 planning starts** — which is the SDK's next action:
+
+1. **The import-verb naming question (§5.2, §7).** `cargo pmcp package import` is already
+   taken by the remote workflow-manifest dry-run. If you have a preference, now is when it
+   is free; after Phase 123 the rename cost lands on platform docs too.
+
+**⚠ Answer whenever you can, because it is a defect risk rather than a design choice:**
+
+2. **Can any string capture canonicalizes originate from user-controlled input?** (§2.2,
+   §7.) The SDK gates two attestation annotations and leaves the rest ungated on a
+   trust-class argument about *its own* inputs. Only you can say whether that argument
+   holds for capture. If it does not, you need your own pre-write refusal — the artifact
+   this produces is unrecoverable, and its digest verifies.
+
+**No deadline:**
+
+3. **Confirm the §2 invariant table matches your implementation** — particularly the slot
+   classification rule, the `name` vs `config_key` split, and the seven rows added by
+   Phase 122. A mismatch here is the highest-probability silent break.
+4. **Decide the golden-fixture question (§3.2, §7)**: adopt the corpus as a shared
+   conformance suite, and decide where it lives. If yes, the SDK writes the
+   attested-package fixtures that are currently missing.
+5. **Ratify Q1 and Q2 now** (tar-at-capture, digest-addressed fetch) — the backfill window is
    closing.
-4. **Schedule `getPackageArtifact` (§5.1)** and export `portability-v1.graphql`. Smallest
+6. **Schedule `getPackageArtifact` (§5.1)** and export `portability-v1.graphql`. Smallest
    item, gates the most — including the cross-direction round-trip that actually proves
    portability.
-5. **Say whether import and attestation issuance are on the roadmap, and roughly when.** Not
-   needed to land the contract-first halves; needed to decide whether Phases 122/123 stay
-   parked or get promoted with a live E2E leg this milestone.
-6. **Answer the import-verb naming question** before Phase 123 planning.
-7. **Take a position on design-note §7 (Q10).**
+7. **Ratify or counter-propose `verifyAttestation` (§5.3)**, and name the attestation
+   payload schema. The SDL is vendored and blocking-tested, but SDK-authored — it cannot
+   detect drift from a party that has not spoken.
+8. **Say whether import and attestation issuance are on the roadmap, and roughly when.** Not
+   needed to land the contract-first halves — Phase 122 proved that by shipping its whole
+   format half with the backend unavailable. Needed to decide whether 122/123 stay parked
+   or get promoted with a live E2E leg this milestone.
+9. **Take a position on design-note §7 (Q10).**
 
-A joint review is the efficient path if more than two of these are live.
+A joint review is the efficient path if more than two of these are live. Items 1 and 2 do
+not need one — a one-line answer to each is enough.

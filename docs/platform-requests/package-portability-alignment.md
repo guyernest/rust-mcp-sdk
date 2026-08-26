@@ -7,6 +7,14 @@
 full design note this message asks you to review. This message is the
 executive summary + the specific asks.
 
+> **⚠ Read the addendum at the end of this file first (2026-08-25).** Phase 122
+> has since shipped, and it carries **two questions that are due now** — one
+> because the SDK starts Phase 123 planning next, one because it is a live
+> defect risk on your side rather than a design choice. The current
+> engineering contract is
+> `docs/design/package-portability-pmcp-run-handoff.md`, which supersedes this
+> message wherever they differ.
+
 ## Where we are (shared wins)
 
 - **`capture` / `import` / `approve` / `show` are merged** to `main`
@@ -187,3 +195,101 @@ revocation endpoint this needs.
 (§2 boundaries, §3 Phase A, §9 open questions), then we split tickets: your
 Phase-A op + the two verification items; our `pull` verb + contract test
 scaffolding, ready for your SDL export.
+
+---
+
+# Addendum — 2026-08-25: Phase 122 shipped, and two things are due
+
+**From:** SDK / cargo-pmcp side
+**Supersedes:** ask 5 above is now delivered on our side; asks 1–4 and 6 stand
+unchanged. The engineering contract is
+`docs/design/package-portability-pmcp-run-handoff.md` (revised the same day) —
+read that for detail; this is the short version.
+
+## What we shipped
+
+**Phase 122 (attestation carriage) is complete**, contract-first, with the
+backend unavailable throughout. That last part is the useful signal: the whole
+format half landed against an `#[ignore]`d, env-gated live leg, so **nothing
+below is us waiting on you**. Attestation now rides as one opaque layer, both
+carrier kinds share the read/write path verbatim, and `cargo pmcp package
+inspect` renders all three states and exits `1` on a subject mismatch.
+
+`pmcp-package` moved **0.2.0 → 0.3.0** and `cargo-pmcp` **0.22.0 → 0.23.0**.
+Neither is published yet — crates.io's max `pmcp-package` is still **0.1.1**,
+so the entire 0.2 line was never released and nothing on the registry could
+have been affected.
+
+## Two questions that are actually due
+
+### A. The import-verb name — **before we start Phase 123 planning**
+
+`cargo pmcp package import` is already taken by the remote workflow-manifest
+dry-run, and the AI-Package import verb collides with it. We flagged this in
+the handoff doc as "needed before Phase 123 planning"; Phase 123 is the next
+thing we start. **If you have a naming preference, this is the last moment it
+is free** — after that the rename cost lands on your docs too. A one-line
+answer is enough; no meeting needed.
+
+### B. Where do capture's canonicalized strings come from? — **a defect risk**
+
+This one is not a design choice, and we would rather you heard it from us than
+found it.
+
+Canonical JSON (OLPC/TUF) escapes **only** `"` and `\`. A C0 control character
+(U+0000–U+001F) is written **literally**, which RFC 8259 forbids inside a JSON
+string. A package containing one **packs cleanly, its digest verifies, and it
+can never be unpacked** — not by us, not by any OCI tool, permanently. We found
+it by generated property test, not by reasoning: the property produced
+`issuer = "\0"` and the resulting package was unrecoverable.
+
+We now refuse it before the first blob write. **But our gate covers exactly two
+values** — the attestation `issuer` and `payload-type` annotations. Everything
+else we canonicalize is ungated: the config/spec `file_name` (which becomes
+`org.opencontainers.image.title`) and every string inside `ServerPackage`. Our
+justification is a trust-class argument — those come from the packaging
+author's own filesystem and source, not from an untrusted issuer.
+
+**That argument is about our inputs, and it may not hold for capture.** If a
+server name, filename or spec title can reach your writer from tenant-supplied
+input, you are writing in the ungated region and need your own refusal. We
+can't determine that from here. It's tracked on our side as an open hazard, not
+as closed.
+
+## Three format facts a conforming writer needs
+
+Full detail in the handoff doc §2. The ones most likely to be implemented
+wrong:
+
+1. **The attestation media type is kind-neutral:**
+   `application/vnd.pmcp.attestation.v1` — **no** `mcp-server`/`team` segment,
+   no format suffix. The obvious guess matches every sibling constant and is
+   wrong; a layer under it is silently dropped. Package kind comes from
+   `artifactType`, never from this layer. Annotations switch namespace to
+   `run.pmcp.attestation.{subject,issuer,payload-type}` (reverse-DNS — `vnd.pmcp`
+   is a media-type prefix, not a domain).
+2. **The subject digest is the UNATTESTED manifest digest** — not the carrying
+   package's own, which it can never equal. This is the easiest thing here to
+   implement backwards, because the wrong answer is self-consistent.
+3. **`PinnedRef.resolved_from` participates in identity.** Recording the range a
+   pin resolved from **changes the manifest digest**; `None` emits no key at
+   all. If one side records it and the other doesn't, the same logical package
+   yields two digests and digest-keyed attestation plus `ApprovedPackage`
+   admission both break.
+
+## On ask 5 (attestation ratification)
+
+Our half is done: `contracts/pmcp-run/attestation-v1.graphql` is vendored with
+an offline blocking test. It is still **SDK-proposed and carries no
+provenance** — deliberately unlike `capture-v1.graphql`, whose contents you
+own. A green build on our side proves only that our query agrees with our own
+proposal; it becomes a real drift net when you export yours. Still one
+operation to ratify, not three.
+
+## One thing we owe you
+
+The golden-fixture corpus we proposed as a shared conformance suite (handoff
+§3.2) **has no attested-package fixture** — Phase 122 added a media type and an
+identity-bearing field and added no golden. Attestation is covered by property
+and unit tests, but the *corpus* has a hole exactly where the newest surface
+is. If you adopt the corpus, we'll write those fixtures first.
