@@ -1460,3 +1460,191 @@ fn load_of_a_corrupt_blob_fails_closed_and_writes_no_layout() {
          is the opposite of the mismatch verdict"
     );
 }
+
+// ---------------------------------------------------------------------
+// Phase 123 Plan 03, Task 3 — `save`'s two refusals
+//
+// Both assert on the MESSAGE TEXT, not only on the exit code. The whole point
+// of refusing rather than defaulting is that the user is told what to fix; an
+// exit code alone would satisfy the letter of the refusal and none of its
+// purpose.
+// ---------------------------------------------------------------------
+
+/// D-13: `save` writes SERVER packages only, and refuses every other kind BY
+/// NAME rather than mis-packing it or accepting it with a warning.
+#[test]
+fn save_refuses_each_non_server_kind_by_name() {
+    for kind in ["agent", "team", "workflow"] {
+        let project = tempfile::tempdir().unwrap();
+        let config = london_tube_project(project.path());
+        let output = project.path().join("out.tar");
+
+        Command::cargo_bin("cargo-pmcp")
+            .unwrap()
+            .args([
+                "package",
+                "save",
+                "--kind",
+                kind,
+                "--config",
+                config.to_str().unwrap(),
+                "--project-root",
+                project.path().to_str().unwrap(),
+                "--output",
+                output.to_str().unwrap(),
+                "--binary-digest",
+                &referenced_binary_digest(),
+            ])
+            .assert()
+            .failure()
+            // The refused kind is NAMED, so the user learns which thing is
+            // missing rather than only that something is.
+            .stderr(contains(kind))
+            .stderr(contains("does not yet support"));
+
+        assert!(
+            !output.exists(),
+            "a refused --kind {kind} must leave no partial artifact"
+        );
+    }
+}
+
+/// The server kind is accepted, asserted alongside the refusals so a blanket
+/// refusal — the obvious way to break this — would be caught.
+#[test]
+fn save_accepts_the_server_kind_explicitly() {
+    let project = tempfile::tempdir().unwrap();
+    let config = london_tube_project(project.path());
+    let output = project.path().join("explicit.tar");
+
+    Command::cargo_bin("cargo-pmcp")
+        .unwrap()
+        .args([
+            "package",
+            "save",
+            "--kind",
+            "server",
+            "--config",
+            config.to_str().unwrap(),
+            "--project-root",
+            project.path().to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--binary-digest",
+            &referenced_binary_digest(),
+        ])
+        .assert()
+        .success();
+    assert!(output.is_file());
+}
+
+/// Pitfall 6, the half plan 01 did not cover: a project with NO
+/// `.pmcp/deploy.toml` at all must fail with a message DISTINGUISHABLE from the
+/// unparseable case.
+///
+/// Both are refusals — `save` never defaults a deploy target — but they need
+/// different fixes, so they must read differently. "You have not initialized
+/// deployment" and "your deploy.toml has a table the descriptor cannot model"
+/// send the user to two different places, and a single shared message would
+/// send half of them to the wrong one.
+///
+/// Asserted as a PAIR in one test, with an explicit cross-assertion that
+/// neither message contains the other's distinguishing phrase — two separate
+/// tests could each pass while both messages were identical.
+#[test]
+fn save_distinguishes_a_missing_deploy_descriptor_from_an_unparseable_one() {
+    // Case 1: no `.pmcp/deploy.toml` at all.
+    let missing_project = tempfile::tempdir().unwrap();
+    let fixture = golden_fixture_dir();
+    let missing_config = missing_project.path().join("london-tube.toml");
+    std::fs::copy(fixture.join("london-tube.toml"), &missing_config).unwrap();
+    let missing_output = missing_project.path().join("missing.tar");
+
+    let missing_stderr = Command::cargo_bin("cargo-pmcp")
+        .unwrap()
+        .args([
+            "package",
+            "save",
+            "--config",
+            missing_config.to_str().unwrap(),
+            "--project-root",
+            missing_project.path().to_str().unwrap(),
+            "--output",
+            missing_output.to_str().unwrap(),
+            "--binary-digest",
+            &referenced_binary_digest(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let missing_stderr = String::from_utf8_lossy(&missing_stderr).into_owned();
+    assert!(
+        !missing_output.exists(),
+        "a refused save must leave no partial artifact"
+    );
+
+    // Case 2: a `.pmcp/deploy.toml` carrying a table the closed-set descriptor
+    // does not model. `[aws].account_id` is the canonical one: cargo-pmcp's own
+    // `AwsConfig` accepts it, `pmcp-package`'s `AwsSection` does not.
+    let bad_project = tempfile::tempdir().unwrap();
+    let bad_config = london_tube_project(bad_project.path());
+    write_deploy_toml(
+        bad_project.path(),
+        &LONDON_TUBE_DEPLOY_TOML.replace(
+            "[aws]\nregion = \"us-east-1\"",
+            "[aws]\nregion = \"us-east-1\"\naccount_id = \"123456789012\"",
+        ),
+    );
+    let bad_output = bad_project.path().join("bad.tar");
+
+    let bad_stderr = save_london_tube(bad_project.path(), &bad_config, &bad_output)
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let bad_stderr = String::from_utf8_lossy(&bad_stderr).into_owned();
+    assert!(
+        !bad_output.exists(),
+        "a refused save must leave no partial artifact"
+    );
+
+    // Each names its own cause ...
+    assert!(
+        missing_stderr.contains("not initialized"),
+        "the MISSING case must say deployment was never initialized: {missing_stderr}"
+    );
+    assert!(
+        bad_stderr.contains("does not parse as a deploy descriptor"),
+        "the UNPARSEABLE case must say the file does not parse: {bad_stderr}"
+    );
+    assert!(
+        bad_stderr.contains("deploy.toml"),
+        "the UNPARSEABLE case must name the file to fix: {bad_stderr}"
+    );
+
+    // ... and neither borrows the other's. This is the assertion that fails if
+    // the two messages are ever collapsed into one.
+    assert!(
+        !missing_stderr.contains("does not parse as a deploy descriptor"),
+        "the two refusals must not read the same: {missing_stderr}"
+    );
+    assert!(
+        !bad_stderr.contains("not initialized"),
+        "the two refusals must not read the same: {bad_stderr}"
+    );
+}
+
+/// `--kind`'s long help states the asymmetry rather than leaving a user to
+/// infer that the missing kinds are a bug worth reporting.
+#[test]
+fn save_help_documents_the_kind_asymmetry() {
+    Command::cargo_bin("cargo-pmcp")
+        .unwrap()
+        .args(["package", "save", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Only `server` is supported today"))
+        .stdout(contains("per-kind"));
+}
