@@ -1150,6 +1150,32 @@ fn claim_a_different_subject(layout: &OciLayout) -> String {
     index.set_manifests(vec![descriptor]);
     layout.write_index(&index).expect("write index.json");
 
+    // Remove the manifest blob the rewrite SUPERSEDED. Rewriting the manifest
+    // writes a new content-addressed blob and leaves the old one on disk with
+    // nothing pointing at it — and the artifact reader enforces graph closure
+    // in BOTH directions, so an orphan blob is refused at the framing gate
+    // before the subject check is ever reached.
+    //
+    // This is not a workaround for an over-strict reader; it is what makes the
+    // fixture say what it claims to say. The package under test must differ
+    // from a legitimate one in EXACTLY ONE respect — the claim is false — so
+    // that a failure can only be the subject verdict. Leaving the orphan in
+    // would have tested the orphan gate a second time while the D-15 verdict
+    // went entirely unexercised.
+    //
+    // `inspect` never noticed this because it reads a layout DIRECTORY, where
+    // an unreferenced blob is simply invisible.
+    let stale_hex = old_descriptor
+        .digest()
+        .to_string()
+        .strip_prefix("sha256:")
+        .expect("a sha256 manifest digest")
+        .to_string();
+    let stale_blob = layout.root().join("blobs").join("sha256").join(&stale_hex);
+    if stale_blob.is_file() {
+        std::fs::remove_file(&stale_blob).expect("remove the superseded manifest blob");
+    }
+
     other
 }
 
@@ -1397,10 +1423,10 @@ fn a_quiet_load_of_a_mismatched_subject_still_exits_one_and_still_writes() {
 /// FRAMING gate refuses it, because that gate verifies every blob against the
 /// hex in its own file name and runs strictly BEFORE staging. That makes an
 /// in-`unpack_*` integrity failure unreachable through the tar path at all,
-/// which is a stronger property than this test set out to assert.
-/// `load_refuses_a_semantically_malformed_package_and_writes_nothing` (plan
-/// 01) covers the case that DOES reach inside `unpack_*` — a package whose
-/// bytes are all sound and whose structure is malformed.
+/// which is a stronger property than this test set out to assert. Plan 01's
+/// `load_refuses_a_semantically_malformed_package_and_writes_nothing` covers
+/// the case that DOES reach inside `unpack_*` — a package whose bytes are all
+/// sound and whose structure is malformed.
 #[test]
 fn load_of_a_corrupt_blob_fails_closed_and_writes_no_layout() {
     let fixture = tempfile::tempdir().unwrap();
