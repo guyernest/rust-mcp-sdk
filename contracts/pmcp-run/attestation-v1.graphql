@@ -59,14 +59,26 @@ type Query {
   #   Typed String because GraphQL has no bytes scalar and the SDK will not invent one for
   #   a contract it does not own.
   #
-  # subjectPayloadDigest: the `sha256:...` payload digest the SDK RE-DERIVED LOCALLY from
-  #   the package it is holding. It is supplied so the platform can answer about THIS
-  #   artifact rather than about whatever the attestation claims as its own subject. The
-  #   SDK's separate offline check compares this value against the attestation descriptor's
-  #   recorded subject; that comparison is not what this call performs.
+  # subjectManifestDigest: the `sha256:...` OCI MANIFEST digest the SDK RE-DERIVED LOCALLY
+  #   from the package it is holding — specifically the digest that package WOULD have if
+  #   packed with no attestation layer. It is supplied so the platform can answer about
+  #   THIS artifact rather than about whatever the attestation claims as its own subject.
+  #   The SDK's separate offline check compares this value against the attestation
+  #   descriptor's recorded subject; that comparison is not what this call performs.
+  #
+  #   NOT A PAYLOAD DIGEST, and the argument was RENAMED to say so (2026-08-26). It was
+  #   `subjectPayloadDigest` until the pmcp.run team reviewed this proposal and pointed
+  #   out that in their vocabulary `payload_digest` and `oci_manifest_digest` are two
+  #   DISTINCT values — their `publish.rs` returns both as separate fields — and that
+  #   conflating them already cost them a live production bug in their Phase 171 (import
+  #   pulled by payload digest, ECR indexes by OCI-manifest digest, "image not found").
+  #   Removing the attestation layer changes the OCI manifest digest and NOT the payload
+  #   digest, so the value this argument carries is unambiguously the OCI one. The old
+  #   name pointed at the wrong digest in exactly the way that had already burned them
+  #   once. Renamed before ratification, which is the cheap moment to do it.
   verifyAttestation(
     attestationPayloadBase64: String!
-    subjectPayloadDigest: String!
+    subjectManifestDigest: String!
   ): VerifyAttestationReturnType
 }
 

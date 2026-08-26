@@ -9,6 +9,17 @@
 > answer either question or to check your writer against the format facts in §3.
 > Paths are listed in §7 for later, with an important caveat about when they resolve.
 
+> **✅ ANSWERED 2026-08-26 — this message is now a historical record. Do not act on §2.**
+> The platform answered both questions, corrected a false premise in Q1, and found a bug
+> in the §5 SDL. **Q1:** `import` stays (it is a whole control plane, not a verb); the new
+> local round-trip is `save`/`load`; `install` is excluded. Our "already ships five verbs"
+> was measured against one branch — `feat/package-172-cli` in this repo has carried eight
+> since 2026-07-21. **Q2:** yes — not via component names, which are safe, but via config
+> slots (`roleLabel`, `toolDescription`, `displayName`, secret names, LLM strings). **SDL:**
+> `subjectPayloadDigest` named the wrong digest and has been renamed
+> `subjectManifestDigest`. The live contract is
+> `docs/design/package-portability-pmcp-run-handoff.md` (§2.2, §5.2, §5.4, §7, §10).
+
 ---
 
 ## 1. Why you're getting this
@@ -240,7 +251,7 @@ drifts from it:
 ```graphql
 verifyAttestation(
   attestationPayloadBase64: String!   # the attestation layer's raw bytes, base64 (RFC 4648 §4)
-  subjectPayloadDigest: String!       # the sha256: digest we re-derived locally
+  subjectManifestDigest: String!       # the sha256: digest we re-derived locally
 ): VerifyAttestationReturnType
 # → { verdict: String!, verifiedIdentity: String!, verifiedAt: String! }
 ```

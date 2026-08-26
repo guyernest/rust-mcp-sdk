@@ -135,7 +135,7 @@ The proposal as it stands:
 ```graphql
 verifyAttestation(
   attestationPayloadBase64: String!   # the attestation layer's raw bytes, base64 (RFC 4648 §4)
-  subjectPayloadDigest: String!       # the sha256: digest we re-derived locally
+  subjectManifestDigest: String!       # the sha256: digest we re-derived locally
 ): VerifyAttestationReturnType
 # → { verdict: String!, verifiedIdentity: String!, verifiedAt: String! }
 ```

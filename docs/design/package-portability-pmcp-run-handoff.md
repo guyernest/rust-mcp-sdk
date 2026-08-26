@@ -102,6 +102,7 @@ implementation must match it exactly, and any change must move on both sides tog
 | **Baked vs slot** — spec is baked (identity); endpoint, credentials, auth mode are slots | Phase 120, enforced by `tests/digest_stability.rs` | Two digests for one logical server, or an environment value entering identity |
 | **Dual binary mode** — embedded bootstrap bytes, OR `BinaryRef { digest, media_type }` | `package/server.rs` | A referenced package treated as missing-layer instead of "resolve this digest" |
 | **Canonical-JSON representability** — no C0 control character (U+0000–U+001F) may reach any string the manifest canonicalizes | `oci/pack.rs` — `first_control_character`, `reject_attestation_annotations_that_break_canonical_json` | **A package that packs, verifies, and can never be unpacked.** Full treatment in §2.2 — read it before implementing a writer |
+| **Unrepresentable input is REFUSED, never normalized** *(added 2026-08-26 at the platform team's suggestion)* | `oci/pack.rs` — the gate returns `PackageError::AttestationAnnotationInvalid`; it does not rewrite | **Two implementations can agree "no control characters" and still diverge**, because rewriting changes the bytes and therefore the digest. A normalizing writer and a refusing writer produce different digests for the same logical input — a digest divergence hiding behind an apparent agreement. Both sides refuse. Neither sanitizes |
 | **Attestation subject is the UNATTESTED digest** — `run.pmcp.attestation.subject` names the manifest digest the package would have had *without* this layer | `media_types.rs` (`ANNOTATION_ATTESTATION_SUBJECT`); pack-side gate in `oci/pack.rs` | An attested package's own digest can **never** equal the subject it names — the layer lives inside the manifest the digest covers. An implementation that writes the carrying package's own digest here produces an attestation that is wrong in a way that looks self-consistent |
 | **`PinnedRef.resolved_from` participates in IDENTITY** — a pin records the semver range it resolved from | `reference.rs:141`; `tests/digest_stability.rs::recording_the_range_a_pin_resolved_changes_the_manifest_digest` | `Some(range)` **changes the canonical bytes and therefore the manifest digest**; `None` emits no key at all (`skip_serializing_if`, load-bearing). If one side records the range and the other does not, the same logical package yields two digests — §1 break #2, with attestations and `ApprovedPackage` admission both failing. Wire-compatible in the additive direction only: pins written before the field existed still deserialize as `None` |
 | **Attested ⇒ fully pinned** — a team package carrying an attestation must hold no unresolved `ComponentRef` | `oci/pack.rs` — `reject_an_attestation_over_an_unresolved_team`; error is `PackageError::InvalidReference`, deliberately not a new variant | An attestation over a moving target. **Depth-1 only**, by decision: an attested team whose pinned agent itself holds a range still packs — requiring attestation transitively is platform **admission policy**, not format. Vacuous on the server path (`ServerPackage` holds no `ComponentRef`), so `pack_server` deliberately does not call it — do not "fix" that asymmetry |
@@ -177,6 +178,34 @@ know where capture's strings come from. It is tracked SDK-side as an open hazard
 
 **Scope note:** DEL (U+007F) and all non-ASCII code points are legal unescaped and are
 deliberately **not** rejected. Over-refusing a non-ASCII issuer would be a bug of its own.
+
+#### The platform's answer (2026-08-26) — yes, and the exposure is not where we guessed
+
+They confirmed the mechanism at source before answering: `olpc-cjson` 0.1.4 is in their
+lockfile, its `write_char_escape` ends `CharEscape::AsciiControl(byte) => byte` — written
+raw — and the crate's own module docs open by saying ASCII control characters are printed
+literally and that `serde_json` cannot necessarily deserialize what it produces. Their
+capture Lambda is pinned to `pmcp-package` 0.1.0 and pulls the same crate, so **they sit
+entirely inside the ungated region with no pre-write refusal at all.**
+
+Where we guessed wrong: **component names are safe.** A single minting point maps every
+character outside `[a-z0-9._]` to `-`, so a control character cannot survive into a server
+or team name.
+
+**Config slots are the real exposure.** Their capture copies `roleLabel`,
+`toolDescription`, `displayName`, secret names and LLM provider/model strings verbatim out
+of DynamoDB into slot types, and those land in `config_slots` — canonicalized into the
+manifest digest. Their own schema documents two of them as free text (`roleLabel` "e.g.
+Finance approver"; `toolDescription` "analyst-editable per-member description"), with no
+charset constraint between the admin UI and the canonicalizer.
+
+**The generalizable lesson, which is theirs and not ours:** their planned fix is a
+fail-closed refusal at the slot-construction boundary, **not sanitization**, because
+rewriting would silently change package identity. That is now an invariant in §2 in its own
+right — *Unrepresentable input is REFUSED, never normalized*. We had documented the rule
+("no control characters") without documenting the **remedy**, and two implementations that
+agree on the rule while disagreeing on reject-vs-normalize produce different digests for the
+same input. Agreement on a constraint is not agreement on behaviour.
 
 ---
 
@@ -387,13 +416,37 @@ translation, which keeps that door open for the platform.
 What the SDK produces is `required_slots`' output — typed, each carrying `name` (env var)
 and `config_key` (config path), and **never carrying values**.
 
-**A collision the SDK must resolve, which affects platform docs:** `cargo pmcp package`
-already ships five verbs — `inspect | capture | show | import | approve` — and **`import` is
-already taken** by the remote *workflow-manifest dry-run* import. The AI-Package import verb
-collides with a shipped verb. The SDK will resolve it explicitly and pin the complete
-post-change verb list in `cargo-pmcp/tests/verb_help.rs`. **If the platform has a naming
-preference, say so before Phase 123 planning** — after that the rename cost lands on
-platform docs too.
+**The verb collision — RESOLVED 2026-08-26 by the platform's answer, and our framing of it
+was wrong in a way worth recording.**
+
+We asked whether `import` should be renamed, describing `cargo pmcp package` as shipping
+**five** verbs (`inspect | capture | show | import | approve`). The platform answered no,
+and corrected the premise: **five is what `fix/release-ledger-coverage` ships, not what the
+SDK has built.** Branch `feat/package-172-cli` in this same repository carries `f7ea3c4b`
+("activate/rollback/cancel verbs — the D-13 CLI driver") and `3425662d` ("real
+(`dryRun=false`) package import"), both dated **2026-07-21**, five weeks before we wrote to
+them. Verified: that branch's `PackageCommand` enum has **eight** variants, and its `Import`
+rustdoc reads "Submit a REAL import job … halts honestly at `awaiting_activation`, D-14" —
+directly contradicting the branch we were reading, whose comment still says "dry-run is the
+ONLY mode this phase".
+
+So a `verb_help.rs` pinning five would have encoded a list that contradicts the platform's
+live control plane and breaks the moment that branch merges. **This is the second unmerged
+line in this repo to distort a platform-facing document** — the first being Phases 120–122
+themselves (§7's caveat). Measure the verb surface across all live branches before pinning it.
+
+**The decision:**
+
+- **`import` stays.** It is not merely a CLI verb on the platform side: it is
+  `submitImport` / `getImportStatus` on the AppSync API, the `ImportJob` / `ApprovedPackage`
+  / `InstalledPackage` / `PackageBinding` models, the Phase 173.5 admin UI, an ADR, and a
+  live D-14 acceptance on dev. The rename cost lands on a shipped control plane.
+- **The new local file round-trip is `save` / `load`**, following Docker's split — `save`/`load`
+  for a local file, `push`/`pull` for a registry, `import` for admitting something into the
+  system. That reading also keeps `pull` (§5.1) coherent.
+- **`install` is excluded**: Phase 184's admin UI already uses "Install App".
+
+Phase 123 plans against that vocabulary.
 
 **Already committed to, so it can be relied on:** export/import resolves its environment
 through `configure`'s existing resolver and the **existing** `pmcp_run` seam —
@@ -452,6 +505,33 @@ seam with the backend unavailable, which is the evidence that the pattern works 
 
 ---
 
+### 5.4 Two blockers the platform's 2026-08-26 review surfaced
+
+Both are platform-owned. Recorded here because each is a case where an SDK invariant is
+correct and the platform cannot satisfy it yet — which is exactly what this document is for.
+
+**The platform is version-frozen out of every invariant added since Phase 120.** Their pin is
+`pmcp-package = "0.1"`, caret, locked at 0.1.0 — and caret on a `0.x` never resolves `0.2` or
+`0.3`. So every row in §2 added by Phases 120–122 currently has **no writer on their side to
+check against**, and §10 ask 3 ("confirm the invariant table matches your implementation")
+cannot be answered until they bump. The bump is source-breaking in all five ways §4 lists.
+This is the practical reason §7's unmerged-branch caveat matters: the format has moved twice
+while the only other implementation stayed on 0.1.0.
+
+**Every team package they write today would be refused an attestation.** Their `publish.rs`
+ships team packages with an empty entry point (`Range { name: "", range: * }`) and no
+members — a documented gap in their own Phase 170, where team adjacency was never threaded
+through the captured-component type. Under §2's *Attested ⇒ fully pinned*, an empty-name
+star range is an unresolved reference, so `pack_team` refuses the attestation.
+
+They have accepted this as theirs to fix and called the loud failure the right outcome. It is
+worth stating why the gate is right rather than inconvenient: an attestation over a team whose
+entry point is `*` would be a signed claim about whatever that star resolves to tomorrow. The
+refusal is the feature. **Do not add an escape hatch for it** — if a caller needs to pack that
+team today, the answer is to pack it *unattested*, which is fully supported.
+
+---
+
 ## 6. Instructions alignment
 
 Code alignment without instruction alignment just relocates the drift. Three concrete asks:
@@ -498,9 +578,10 @@ ratification, not invention.
 | 10 | Ratify design-note §7: descriptor is the contract, stack is derived, renderer is a shared open-source crate | open — **the largest architectural item** |
 | 11 | Per-wave expressiveness checklist: what must `[[resources.*]]` express before each recreation wave? | open |
 | — | **Golden-fixture corpus home** — SDK repo (platform vendors), shared repo, or duplicated with a drift check? | open, from §3.2 |
-| — | **Naming for the AI-Package import verb**, given `package import` is taken | ⚠ **DUE NOW.** Phase 123 planning is the next thing the SDK starts. Past that point the rename cost lands on platform docs too |
-| — | **Can capture's canonicalized strings originate from user-controlled input?** (§2.2) — server name, config `file_name`, spec title | ⚠ **new, and the only one that is a live defect risk rather than a design choice.** The SDK's gate covers two attestation annotations; everything else is ungated on a trust-class argument that may not hold for capture |
-| — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | **new** — the SDL is vendored but SDK-proposed and unratified |
+| — | **When does the platform bump off `pmcp-package` 0.1.0?** | ⚠ **new, and it now gates §10 ask 3.** Their caret pin cannot reach 0.2/0.3, so no writer on their side can check any invariant added since Phase 120 — see §5.4 |
+| — | Naming for the AI-Package import verb, given `package import` is taken | ✅ **ANSWERED 2026-08-26.** `import` stays; the new local round-trip is `save`/`load`; `install` excluded. Our five-verb premise was also corrected — see §5.2 |
+| — | Can capture's canonicalized strings originate from user-controlled input? (§2.2) | ✅ **ANSWERED 2026-08-26: yes.** Not via component names (safe by a minting point) but via **config slots** — `roleLabel`, `toolDescription`, `displayName`, secret names, LLM provider/model. Platform-owned fix; it produced a new §2 invariant (*refuse, never normalize*) |
+| — | Ratify `verifyAttestation` (§5.3 item 1) and the attestation payload schema (item 2) | open — the SDL is vendored but SDK-proposed and unratified. **Its subject argument was renamed `subjectPayloadDigest` → `subjectManifestDigest` on 2026-08-26** after the platform caught it naming the wrong digest; corrected before ratification |
 
 Resolved and kept for the record: **Q6** (IAM population — deterministically not captured;
 the synthesized descriptor is systematically lossy) and **Q8** (AVP read scope — single
@@ -587,7 +668,7 @@ Settled decisions, not preferences under review. The platform can build against 
 | `contracts/pmcp-run/capture-v1.graphql` | **The contract-seam template** + the ownership rule |
 | `cargo-pmcp/tests/package_capture_contract.rs` | **The template test** — offline, credential-free `apollo_compiler` validation |
 | `cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs` | `get_api_base_url()` (line 113) + TTL'd token cache — **the one API path** |
-| `cargo-pmcp/src/commands/package/mod.rs` | The five shipped verbs, incl. the colliding `import` |
+| `cargo-pmcp/src/commands/package/mod.rs` | The package verbs. **Five on `fix/release-ledger-coverage`, EIGHT on `feat/package-172-cli`** (which adds `activate`/`rollback`/`cancel` and makes `import` real, not dry-run). Count across branches before pinning a verb list — see §5.2 |
 | `crates/pmcp-openapi-server/tests/roundtrip_e2e.rs` | The Phase 121 pack-A → unpack-B → parity E2E |
 | `crates/pmcp-cfn-renderer/` | The extracted descriptor → CloudFormation renderer (design-note §7) |
 
@@ -595,21 +676,17 @@ Settled decisions, not preferences under review. The platform can build against 
 
 ## 10. Concrete asks
 
-Two are time-boxed by something on the SDK's side; the rest are not.
+**Items 1 and 2 were answered on 2026-08-26** — `import` stays with `save`/`load` for the
+local round-trip (§5.2), and yes, capture's config-slot strings are user-controlled (§2.2).
+Both answers changed this document rather than merely closing a ticket: the first corrected a
+false premise about our own verb surface, the second produced a new §2 invariant. What
+remains:
 
-**⚠ Answer before Phase 123 planning starts** — which is the SDK's next action:
+**⚠ Newly blocking, and it gates item 3:**
 
-1. **The import-verb naming question (§5.2, §7).** `cargo pmcp package import` is already
-   taken by the remote workflow-manifest dry-run. If you have a preference, now is when it
-   is free; after Phase 123 the rename cost lands on platform docs too.
-
-**⚠ Answer whenever you can, because it is a defect risk rather than a design choice:**
-
-2. **Can any string capture canonicalizes originate from user-controlled input?** (§2.2,
-   §7.) The SDK gates two attestation annotations and leaves the rest ungated on a
-   trust-class argument about *its own* inputs. Only you can say whether that argument
-   holds for capture. If it does not, you need your own pre-write refusal — the artifact
-   this produces is unrecoverable, and its digest verifies.
+1. **Bump off `pmcp-package` 0.1.0 (§5.4).** A caret pin on `0.1` cannot resolve `0.2` or
+   `0.3`, so nothing on your side can implement — or be checked against — any invariant added
+   since Phase 120. Every other format ask below is downstream of this one.
 
 **No deadline:**
 

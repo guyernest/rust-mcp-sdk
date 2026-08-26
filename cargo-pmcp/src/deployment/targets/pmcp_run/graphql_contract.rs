@@ -102,8 +102,16 @@ const VAR_ATTESTATION_PAYLOAD: &str = "attestationPayloadBase64";
 /// The GraphQL variable name carrying the locally re-derived subject digest.
 /// Must equal the `verifyAttestation` argument name in the vendored SDL,
 /// character for character.
+///
+/// The value is the OCI **manifest** digest the package would have with no
+/// attestation layer — NOT a payload digest. The wire name said
+/// `subjectPayloadDigest` until 2026-08-26, when the pmcp.run team's review of
+/// the proposal pointed out that `payload_digest` and `oci_manifest_digest` are
+/// two distinct values on their side, and that conflating them had already cost
+/// them a live bug. Renamed before ratification. See the argument's comment in
+/// `contracts/pmcp-run/attestation-v1.graphql` for the full reasoning.
 #[allow(dead_code)]
-const VAR_SUBJECT_DIGEST: &str = "subjectPayloadDigest";
+const VAR_SUBJECT_DIGEST: &str = "subjectManifestDigest";
 
 /// The exact `verifyAttestation` operation a pmcp.run attestation-verification
 /// client would send, validated offline against the SDK-PROPOSED vendored SDL
@@ -126,11 +134,11 @@ const VAR_SUBJECT_DIGEST: &str = "subjectPayloadDigest";
 pub const VERIFY_ATTESTATION_QUERY: &str = r#"
         query VerifyAttestation(
             $attestationPayloadBase64: String!,
-            $subjectPayloadDigest: String!
+            $subjectManifestDigest: String!
         ) {
             verifyAttestation(
                 attestationPayloadBase64: $attestationPayloadBase64,
-                subjectPayloadDigest: $subjectPayloadDigest
+                subjectManifestDigest: $subjectManifestDigest
             ) {
                 verdict
                 verifiedIdentity
@@ -720,7 +728,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["attestationPayloadBase64", "subjectPayloadDigest"],
+            vec!["attestationPayloadBase64", "subjectManifestDigest"],
             "emitted variable keys drifted from the SDL's argument names"
         );
 
@@ -757,7 +765,7 @@ mod tests {
             "payload bytes must round-trip unchanged"
         );
         assert_eq!(
-            body["variables"]["subjectPayloadDigest"].as_str(),
+            body["variables"]["subjectManifestDigest"].as_str(),
             Some("sha256:deadbeef"),
             "the subject digest is sent verbatim, never re-encoded"
         );
