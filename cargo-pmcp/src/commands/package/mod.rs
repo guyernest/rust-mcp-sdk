@@ -30,6 +30,7 @@ pub mod import;
 pub mod inspect;
 pub mod kind;
 pub mod load;
+pub mod render;
 pub mod save;
 pub mod show;
 

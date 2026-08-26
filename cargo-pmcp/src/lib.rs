@@ -170,6 +170,29 @@ pub mod package_kind;
 #[path = "commands/package/artifact.rs"]
 pub mod package_artifact;
 
+// PKGX-02 (Phase 123-03): expose the ONE human-text report renderer that the
+// local read verbs share, mirroring the `package_kind`/`package_artifact`
+// `#[path]` convention immediately above.
+//
+// This seam is what makes the renderer testable AND shareable. Two things
+// depend on it and neither works without it: the module's own unit tests run
+// under `cargo test -p cargo-pmcp --lib` (declared only in
+// `commands/package/mod.rs`, they would compile into the bin tree, where no
+// `--lib` run and no `tests/` binary can see them — they would simply be
+// ABSENT rather than failing), and plan 05's lib-mounted `pull` pipeline calls
+// the same renderer `load` calls, which is what keeps the two verbs on one
+// output shape by construction rather than by discipline.
+//
+// `render.rs` references only `pmcp_package` types and std — NO `clap`, NO
+// `GlobalFlags`, NO `crate::commands::*` — which is exactly what lets it
+// compile in the lib target on its own, where the crate root declares no
+// `commands` module. It is also why the file may never name `super::`.
+//
+// `#[doc(hidden)]`: an internal support surface, not a stable public API.
+#[doc(hidden)]
+#[path = "commands/package/render.rs"]
+pub mod package_render;
+
 // Package-capture contract test seam (170-08 Task 3; extended in the
 // final-review fix wave with pure SDL-extraction helpers): expose the two
 // dependency-light capture GraphQL query consts, plus the pure,
