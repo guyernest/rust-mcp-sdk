@@ -5,10 +5,10 @@ milestone_name: AI-Package Portability
 current_phase: 123
 current_phase_name: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
 status: executing
-stopped_at: Phase 123 context gathered
+stopped_at: Phase 123 replanned from cross-AI review
 last_updated: "2026-08-26T17:21:58.330Z"
 last_activity: 2026-08-26
-last_activity_desc: Phase 123 planning complete
+last_activity_desc: Phase 123 replanned from cross-AI review (4 HIGH fixes) — checker PASSED
 state_head: 1247c89bdaf243bfad7167b70908080cae60981d
 progress:
   total_phases: 5
@@ -34,9 +34,30 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 Phase: 123 (Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*) — READY TO EXECUTE
 Plan: Not started
 Status: Ready to execute
-Last activity: 2026-08-26 — Phase 123 planning complete
-Next: Phase 123 (Export/Import Verbs) — not yet discussed. Phases 120, 121 and 122 are ALL
-complete with verification passed; 123 has no phase directory yet. Order is 120 → 121 → 122 ∥ 123 → 124.
+Last activity: 2026-08-26 — Phase 123 replanned from cross-AI review; plan checker PASSED
+Next: Execute Phase 123 — `/gsd-execute-phase 123`. 7 plans across 6 waves
+(1:{01} 2:{02,03} 3:{04} 4:{05} 5:{06} 6:{07}), all carrying PKGX-02.
+
+> **The two lines above were STALE and are corrected 2026-08-26.** They said Phase 123 was
+> "not yet discussed" and had "no phase directory yet". Both were false by then: the phase dir
+> exists with CONTEXT (D-01..D-16), RESEARCH, PATTERNS, VALIDATION, seven PLANs, REVIEWS and
+> COVERAGE. Left uncorrected, a reader following STATE.md would have re-run discuss-phase over
+> settled decisions.
+
+**Phase 123 planning currency (2026-08-26):** plans were cross-AI reviewed (`123-REVIEWS.md`,
+commit `8f2bc451`) and then replanned against that review (commit `2b7d59b4`). Codex returned
+HIGH/non-executable with four architectural findings — all four independently re-verified against
+source — while Gemini returned "APPROVED"; Gemini's verdict is marked
+`[reviewed-without-source-citations]` and is NOT counted at full consensus weight, because the six
+files it cited as read do not exist (they are this phase's planned outputs). Do not re-read that
+approval as evidence the original plans were ready.
+
+The replan also caught two defects neither reviewer found: `bytes_stream()` is
+`#[cfg(feature = "stream")]` and `cargo-pmcp/Cargo.toml:111` sets `default-features = false`
+without it (so the originally planned call would not have compiled), and two self-invalidating
+greps in plan 05. Wave count went 5 → 6 because four plans now edit the `Makefile` under the
+same-commit registration rule (`Makefile:337-339`, the Phase 122 precedent) and same-wave plans
+must not share `files_modified` — recorded in ROADMAP.md so it is not "optimized" back.
 
 > **Corrected again 2026-08-25 (Phase 122 close) — my first correction was WRONG.**
 > `phase.complete 122` returned `next_phase: 120`, and I initially wrote here that this was
