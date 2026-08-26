@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 > `.planning/v2.6-REQUIREMENTS-STAGED.md` was consumed and removed when v2.6 opened — its content is now `.planning/REQUIREMENTS.md`. Do not look for it.
 
 **Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
-**Current focus:** Phase 120 — Config-Server Packaging
+**Current focus:** Phase 123 — Export/Import Verbs
 
 ## Current Position
 
@@ -34,20 +34,26 @@ Phase: 120 — Config-Server Packaging
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-08-25
-Next: Phase 120 (Config-Server Packaging) — not yet discussed. It is the earliest incomplete
-phase in the 120 → 121 → 122 ∥ 123 → 124 order; 121 and 122 are both complete with verification
-passed.
+Next: Phase 123 (Export/Import Verbs) — not yet discussed. Phases 120, 121 and 122 are ALL
+complete with verification passed; 123 has no phase directory yet. Order is 120 → 121 → 122 ∥ 123 → 124.
 
-> **Note 2026-08-25 (Phase 122 close).** Unlike the Phase 121 close recorded below, this run's
-> `next_phase: 120` is CORRECT — 120 is genuinely `[ ]` in the ROADMAP progress table, so the verb
-> and the roadmap agree. The `Current focus:` and `Next:` lines it left behind were stale (both
-> still named the just-completed Phase 122) and were corrected by hand. Checking the verb's output
-> against the ROADMAP remains necessary; it just happened to be right this time.
+> **Corrected again 2026-08-25 (Phase 122 close) — my first correction was WRONG.**
+> `phase.complete 122` returned `next_phase: 120`, and I initially wrote here that this was
+> correct "because 120 is genuinely `[ ]`". That was a mistake: I checked the CHECKBOX at
+> ROADMAP line 2301 instead of the **Progress table**, which is what the Phase 121 note below
+> tells you to check. The Progress table has read
+> `| 120. Config-Server Packaging | ... | 5/5 | Complete | 2026-08-23 |` since 2026-08-23, and
+> `120-VERIFICATION.md` carries `status: passed`. Phase 120 has 5 plans, 5 summaries and a passing
+> verification — it finished two days before Phase 122 ran.
 >
-> Worth flagging for whoever plans 120: Phase 122 declares **"Depends on: Phase 120 (layer +
-> vendor-media-type machinery)"**, yet 122 executed and verified 6/6 with 120 still incomplete.
-> Either that machinery already existed (Phase 121 landed the round-trip net on it) or the
-> dependency edge is inaccurate. Re-measure before assuming 120 must add something 122 already uses.
+> The stale `[ ]` checkbox is the ROOT CAUSE of this verb misrouting twice (once at the 121 close,
+> once at the 122 close). It has now been ticked, so the next `phase.complete` should route
+> correctly. **Check the Progress table, not the checkbox** — they can disagree, and the table wins.
+>
+> Retracted: an earlier version of this note speculated that Phase 122's declared
+> "Depends on: Phase 120" edge might be inaccurate, because 122 appeared to complete while 120 was
+> open. That premise was false. Phase 120 completed 2026-08-23, BEFORE 122 executed, so the
+> dependency was properly satisfied in the normal order. There is nothing to re-measure.
 
 > **Corrected by hand 2026-08-25.** `gsd-tools query phase.complete 121` returned
 > `next_phase: 120` and wrote `current_phase: 120` here — a phase that was already
