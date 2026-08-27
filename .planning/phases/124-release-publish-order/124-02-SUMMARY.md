@@ -250,3 +250,11 @@ None — no external service configuration required.
 ---
 *Phase: 124-release-publish-order*
 *Completed: 2026-08-27*
+
+## Self-Check: PASSED
+
+- `124-02-SUMMARY.md` exists on disk
+- `11cce7c1` (merge) present in git log
+- `a0cf0ab0` (docs) present in git log
+- `git merge-base --is-ancestor c64e2b2b HEAD` re-verified post-commit: exit 0
+- `.planning/WINDOWS.md` carries the 4 new entries (open_count 28 -> 32)
