@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 25
+open_count: 28
 waived_count: 0
 fixed_count: 9
-total_count: 34
-last_updated: 2026-08-27T00:00:46.520Z
+total_count: 37
+last_updated: 2026-08-27T16:57:04.300Z
 ---
 
 # Broken Windows Ledger
@@ -49,6 +49,9 @@ last_updated: 2026-08-27T00:00:46.520Z
 | 32 | 122 | deviation | crates/pmcp-package/src/oci/pack.rs |  | Canonical JSON (olpc-cjson) writes C0 control characters LITERALLY, so any string reaching the manifest can produce non-RFC-8259 JSON. Plan 122-06 closed this for the two attacker-controlled ATTESTATION annotations (issuer, payload_type) via a pack-time refusal. The same hazard remains UNGATED for ConfigFile/OpenApiSpecFile file_name (the org.opencontainers.image.title annotation) and for every String inside ServerPackage - a different trust class (author-supplied), deliberately out of 122-06 scope. | open |  | 2026-08-25T21:58:37.332Z |  |
 | 33 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-07-PLAN.md |  | make quality-gate could not be completed for plan 122-07 - the run reached make test-unit and aborted on machine-level disk exhaustion (QUALITY_GATE_EXIT=2; every error No space left on device / rustc-LLVM IO failure on output stream; free space fell 11 GiB -> 0 during the run, and the volume hit absolute zero so no further command could start). Not a code defect. The harness background notification falsely reported 'exit code 0' for this run - the explicit QUALITY_GATE_EXIT sentinel written into the log is what caught it, the same trap 122-02 recorded. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (300 tests, up from the 286 baseline), test-cargo-pmcp-integration exit 0 (package_inspect 12, package_attestation_contract 3, package_capture_contract 3), no-crypto-check exit 0, cargo fmt --all --check exit 0, cargo doc --no-deps zero warnings, pmat complexity max cognitive 21 (no violation, non-vacuity confirmed at --max-cognitive 5), example attestation_carriage exit 0 | fixed |  | 2026-08-25T22:52:55.776Z | 2026-08-25T23:15:17.723Z |
 | 34 | 123 | unrun-verify | cargo-pmcp/src/deployment/targets/pmcp_run/graphql.rs | 1971 | download_artifact_bytes' streaming byte cap and URL-withholding live behind the transport seam, so the offline tests that substitute that seam cannot exercise them; pinned by signature, constants and reading only | open |  | 2026-08-27T00:00:46.520Z |  |
+| 35 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 1 criteria 'grep -c mapfile' and the SIGPIPE-shape grep read the RAW file; both hits are pre-existing COMMENT lines (identical counts on the pre-phase file). Correct measurement is over comment-stripped lines, where both are 0. | open |  | 2026-08-27T16:56:56.528Z |  |
+| 36 | 124 | deviation | scripts/check-release-coverage.sh |  | D-10 sentinels are shell no-ops (: 'BEGIN D-10 ORDER ASSERTION'), not comments as the plan prescribed: Task 1's excision criterion strips comments BEFORE the awk excision, so a commented sentinel would vanish and the criterion could never pass. | open |  | 2026-08-27T16:57:02.271Z |  |
+| 37 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 2's word-boundary criterion (two grep -c counts must be EQUAL) cannot hold: 2 of the 4 executable 'cargo publish -p' hits are error-message echoes, not matchers, and the criterion's BRE backslash-dollar does not match the text's literal backslash-dollar. Intent verified directly instead: both matchers carry the ( \|$) boundary. | open |  | 2026-08-27T16:57:04.300Z |  |
 
 ````json
 [
@@ -458,6 +461,42 @@ last_updated: 2026-08-27T00:00:46.520Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T00:00:46.520Z",
+    "resolved_at": null
+  },
+  {
+    "id": 35,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "Task 1 criteria 'grep -c mapfile' and the SIGPIPE-shape grep read the RAW file; both hits are pre-existing COMMENT lines (identical counts on the pre-phase file). Correct measurement is over comment-stripped lines, where both are 0.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:56:56.528Z",
+    "resolved_at": null
+  },
+  {
+    "id": 36,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "D-10 sentinels are shell no-ops (: 'BEGIN D-10 ORDER ASSERTION'), not comments as the plan prescribed: Task 1's excision criterion strips comments BEFORE the awk excision, so a commented sentinel would vanish and the criterion could never pass.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:57:02.271Z",
+    "resolved_at": null
+  },
+  {
+    "id": 37,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "Task 2's word-boundary criterion (two grep -c counts must be EQUAL) cannot hold: 2 of the 4 executable 'cargo publish -p' hits are error-message echoes, not matchers, and the criterion's BRE backslash-dollar does not match the text's literal backslash-dollar. Intent verified directly instead: both matchers carry the ( |$) boundary.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:57:04.300Z",
     "resolved_at": null
   }
 ]
