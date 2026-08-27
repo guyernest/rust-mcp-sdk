@@ -17,9 +17,9 @@ provides:
 affects: [124-05, 124-06, 124-07, release-workflow]
 
 actuals:
-  tokens: 21000
+  tokens: 48000
   tasks: 1
-  commits: 1
+  commits: 2
 
 tech-stack:
   added: []
@@ -83,20 +83,278 @@ coverage:
     verification: []
     human_judgment: true
     rationale: "Blocked on D4. The CHANGELOG section must name every crate that ships and the release manifest's expected_new set is the authorised list plus consequence bumps — both are unwritable until the bump set is final."
+  - id: D6
+    description: "Round 2: the amended axis (pmcp-workbook-runtime 0.1.1) is refuted by the published-baseline semver verdict — render_xlsx changed arity, so the crate needs a breaking bump"
+    verification:
+      - kind: integration
+        ref: "cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0 -> EXIT 100, function_parameter_count_changed: render_xlsx 2 -> 3 params at src/render/mod.rs:270; 'semver requires new major version: 1 major and 0 minor checks failed'"
+        status: pass
+      - kind: integration
+        ref: "pmcp EXIT 0 '(patch change)' 223 pass/30 skip; pmcp-workbook-compiler EXIT 0 'no semver update required'; pmcp-code-mode-derive EXIT 101 'no library target' (proc-macro, not checkable)"
+        status: pass
+    human_judgment: false
+  - id: D7
+    description: "Round 2: a third compiler-invisible version emitter (PMCP_VERSION in the workbook-server scaffold) enumerated and proven guarded, by a name-anchored sweep over all tracked files rather than by trusting a plan's files_modified"
+    verification:
+      - kind: integration
+        ref: "negative control: constant left at 2.19.0 with root at 2.19.1 -> `cargo build -p cargo-pmcp` EXIT 0 while `cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches_workspace_pin` EXIT 101; restored"
+        status: pass
+      - kind: integration
+        ref: "pin-necessity check with positive control: compiler 0/0 and dialect 0/0 new-symbol uses vs pmcp-server-toolkit 3 imports / 10 qualified refs"
+        status: pass
+    human_judgment: false
+  - id: D8
+    description: "Round 2: row 2 of the authorised set is OPEN again; options A and B remain, C is eliminated"
+    verification: []
+    human_judgment: true
+    rationale: "Option C was chosen on a premise measurement refutes. Restoring 0.2.0 restores the round-1 collision, which needs the user's call on whether pmcp-workbook-dialect 0.1.1 is authorised. Version-number consumption is one-way (CONTEXT D-07)."
 
-duration: ~55 min
+
+duration: ~110 min (two rounds)
 completed: 2026-08-27
 status: halted
 ---
 
 # Phase 124 Plan 05: Consume the Authorised Versions — HALTED at an Unauthorised Consequence Bump
 
-**Plan 03's "closed, exhaustive" four-crate bump list is not executable as recorded: `pmcp-workbook-runtime` 0.1.0 -> 0.2.0 is semver-INCOMPATIBLE with four in-workspace requirement sites (measured: `cargo metadata` exits 101), and moving them forces a fifth crate — `pmcp-workbook-dialect` — to consume a version number nobody authorised. No version literal was edited. Separately, D-04 is fully discharged by measurement: `pmcp-package` ships 0.3.0 as-is, all nine emitters consistent, all three tripwires green.**
+**ROUND 2 (Option C): `cargo semver-checks` refutes Option C's premise — `render_xlsx` changed arity from 2 to 3 parameters, so `pmcp-workbook-runtime` needs a BREAKING bump (0.2.0 on a 0.x line), not 0.1.1; shipping 0.1.1 would silently break every `^0.1.0` consumer. Row 2 is open again and options A/B remain. ROUND 1: the list is not executable as recorded — `pmcp-workbook-runtime` 0.1.0 -> 0.2.0 is semver-INCOMPATIBLE with four in-workspace requirement sites (measured: `cargo metadata` exits 101), and moving them forces a fifth crate — `pmcp-workbook-dialect` — to consume a version number nobody authorised. No version literal was edited. Separately, D-04 is fully discharged by measurement: `pmcp-package` ships 0.3.0 as-is, all nine emitters consistent, all three tripwires green.**
 
 > **STATUS: HALTED at a `gate="blocking-human"` decision checkpoint.** Task 2's audit half
 > is complete and needs no user input. Task 1, Task 3 and Task 4 are blocked on one
 > decision. The working tree is byte-identical to the base commit — `git status --short`
 > is empty and the per-manifest keyed table reports NO DIFFERING ROWS.
+
+---
+
+# ROUND 2 — resumed under Option C, halted again: Option C's premise is false
+
+> **Read this before the round-1 write-up below.** The user chose **Option C**
+> (`pmcp-workbook-runtime` -> **0.1.1** rather than 0.2.0) on the stated grounds that the
+> change is "purely additive — a new `pub mod reconcile` plus six re-exports, breaking
+> nothing". I applied the amended set, then ran the per-crate `cargo semver-checks` verdict
+> Task 1 requires. **It refutes that premise.** The tree has been returned to a clean state
+> and no version literal is currently changed.
+
+## The refutation
+
+```
+$ cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0
+    Checking pmcp-workbook-runtime v0.1.0 -> v0.1.1 (minor change)
+--- failure function_parameter_count_changed: pub fn parameter count changed ---
+  pmcp_workbook_runtime::render::render_xlsx now takes 3 parameters instead of 2,
+  in crates/pmcp-workbook-runtime/src/render/mod.rs:270
+     Summary semver requires new major version: 1 major and 0 minor checks failed
+EXIT=100
+```
+
+`pub fn render_xlsx` gained a third parameter, `mode: RenderMode` — and `RenderMode` is itself
+one of the symbols absent from the published 0.1.0, so the arity change and the new surface
+arrived together:
+
+```rust
+pub fn render_xlsx(
+    layout: &LayoutDescriptor,
+    run: &RunResult,
+    mode: RenderMode,                      // <- new third parameter
+) -> Result<Vec<u8>, RenderError>
+```
+
+- **Public and reachable:** `pub mod render;` at `crates/pmcp-workbook-runtime/src/lib.rs:65`.
+- **Called across a crate boundary:** `crates/pmcp-server-toolkit/src/workbook/render_resource.rs:42`
+  (`use pmcp_workbook_runtime::render::render_xlsx;`) and `:108` (three-argument call).
+- **Baseline is the real artifact:** semver-checks built `pmcp-workbook-runtime v0.1.0
+  (baseline)` from crates.io, not from a tag.
+
+On a 0.x line, "requires new major" means bumping the leftmost non-zero component — **0.2.0**.
+
+**Why 0.1.1 would be actively wrong, not merely conservative.** `^0.1.0` admits `0.1.1`. Every
+consumer pinned to the published 0.1.0 that calls `render_xlsx` would silently receive the
+incompatible version on a fresh resolve and fail to compile. On a 0.x line the minor is the
+breaking axis precisely to prevent that, and `pmcp-server-toolkit` is an in-repo instance of
+the consumer shape in question.
+
+**Both stated rationales for this row were wrong, in opposite directions.** Plan 03 said
+"additive public API -> minor" — right answer, wrong reason. Option C said "purely additive ->
+patch" — wrong answer, same wrong premise. RESEARCH described the delta as `pub mod reconcile`
+plus six re-exports and nobody re-derived it. **No document in this phase cited `render_xlsx`
+before now.** The per-crate semver-checks run is the check that catches this class, and Task 1
+is the first step that required it for this crate.
+
+## The other three rows are confirmed and unaffected
+
+| Crate | Move | `cargo semver-checks` | Verdict |
+|---|---|---|---|
+| `pmcp` | 2.19.0 -> 2.19.1 | EXIT **0** — classified "(patch change)", 223 checks: 223 pass / 30 skip, "no semver update required" | **patch correct** |
+| `pmcp-workbook-runtime` | 0.1.0 -> 0.1.1 | EXIT **100** — 1 major, 0 minor failed | **PATCH WRONG — needs 0.2.0** |
+| `pmcp-code-mode-derive` | 0.2.0 -> 0.2.1 | EXIT **101** — *not checkable*: proc-macro, no library target, so there is no API surface to compare. Its change is in **emitted** code. | patch defensible on plan 03's reasoning; **unverifiable by tooling** — recorded as such rather than claimed as verified |
+| `pmcp-workbook-compiler` | 0.1.0 -> 0.1.1 | EXIT **0** — "no semver update required" | **patch correct** |
+
+## What this leaves open — the original collision returns
+
+Restoring 0.2.0 restores round 1's blocker exactly: `^0.1.0` does not admit 0.2.0, so all four
+pin sites are forced to move (measured in round 1: `cargo metadata` EXIT 101), and
+`pmcp-workbook-dialect` — 0.1.0 in-tree **and** 0.1.0 published — then needs a version number
+the authorised list does not contain.
+
+**Option C is eliminated.** Options **A** and **B** from round 1 remain, unchanged in
+substance:
+
+| | Option | Consumes | Cost |
+|---|---|---|---|
+| **A** | Authorise `pmcp-workbook-dialect` 0.1.0 -> 0.1.1; move all four pins to `0.2.0` | the four **+ dialect 0.1.1** | One extra permanent number. Fully consistent published tree, no second runtime copy anywhere. What CLAUDE.md's Version Bump Rules prescribe literally. |
+| **B** | Move all four pins to `0.2.0`, leave `pmcp-workbook-dialect` at 0.1.0 | the four | Dialect's edit never publishes; published dialect 0.1.0 keeps `^0.1.0` forever, so downstream trees can carry two runtime copies. Measured in round 1 to still *compile* (no runtime type crosses the dialect boundary; 0 workspace imports of its re-exports). Violates the crate family's "re-export, don't re-declare" keystone. |
+
+A third possibility the measurement now makes visible, offered as fact rather than
+recommendation: **`pmcp-workbook-dialect`'s cost under A is small.** Its entire public surface
+names no runtime type, its only non-test runtime use is one re-export line, and nothing in the
+workspace imports through it — so 0.1.1 would be a pure re-pin release. That is an argument
+for A being cheap, not an argument that I should choose it.
+
+## Work completed in round 2 (all of it re-verified, none of it committed as version changes)
+
+### The full emitter enumeration — HOW, not just what
+
+Method, recorded because the coordinator asked for it: over every **tracked** file
+(`git ls-files`, so `target/` and build output are structurally excluded — 4,333 files), find
+lines mentioning the crate by **either spelling** (hyphen or underscore) **and** containing a
+semver-ish literal. Name-anchored rather than manifest-anchored, so it reaches constants,
+scaffold templates, book/course prose and tests. For `pmcp` the crate name is too common to
+anchor on, so that hunt is version-anchored on the literal `2.19.0` instead. Cross-checked
+with a targeted sweep for `const [A-Z_]*VERSION[A-Z_]*: &str = "[0-9]` across `cargo-pmcp/`,
+`crates/` and `src/`, and for `drifted from` to enumerate the guards.
+
+**The find that no plan's `files_modified` contains:**
+`cargo-pmcp/src/templates/workbook_server.rs:53` — `const PMCP_VERSION: &str = "2.19.0";`,
+emitted into projects created by `cargo pmcp new --kind workbook-server`, and guarded by
+**exact equality** against the root `[package].version` in
+`emitted_pmcp_version_matches_workspace_pin`.
+
+Negative control, the Phase-122 experiment re-run for this constant:
+
+```
+reverted constant to "2.19.0" while the root reads 2.19.1
+cargo build -p cargo-pmcp                                          EXIT=0
+cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches...     EXIT=101
+  assertion `left == right` failed: the scaffold's hardcoded pmcp version `2.19.0`
+  drifted from the workspace-root pin `2.19.1` — bump PMCP_VERSION in workbook_server.rs
+restored
+```
+
+A green build does not prove a complete bump — measured again, on a new instance.
+
+**Complete emitter table for the amended set** (each row's action and the guard that enforces
+it). Rows marked UNCHANGED are the ones a checklist silently drops.
+
+| Crate | Emitter | Value | Action | Guard |
+|---|---|---|---|---|
+| `pmcp` | `Cargo.toml:3` `[package].version` | `2.19.0` | -> `2.19.1` | the bump itself |
+| `pmcp` | `cargo-pmcp/src/templates/workbook_server.rs:53` `PMCP_VERSION` | `2.19.0` | -> `2.19.1` | **`emitted_pmcp_version_matches_workspace_pin` only — invisible to `cargo build`** |
+| `pmcp` | `cargo-pmcp/Cargo.toml:68` | `"2.19.0"` | **UNCHANGED** — caret exception | none needed; `^2.19.0` admits 2.19.1 |
+| `pmcp` | `crates/mcp-tester/Cargo.toml:21` | `"2.19.0"` | **UNCHANGED** — caret exception | same |
+| `pmcp` | ~30 prose/`#[deprecated(since)]`/CHANGELOG occurrences | `2.19.0` | **UNCHANGED** — historical statements ("as of pmcp 2.19.0", "before 2.19.0") that describe when something happened | n/a |
+| `pmcp-workbook-runtime` | `crates/pmcp-workbook-runtime/Cargo.toml:3` | `0.1.0` | **OPEN** (0.2.0 vs 0.1.1) | the four pins fail `cargo metadata` |
+| `pmcp-workbook-runtime` | `crates/pmcp-server-toolkit/Cargo.toml:81` (optional dep) | `"0.1.0"` | -> the shipped version, **required** | `cargo metadata`; and the published-artifact defect below |
+| `pmcp-workbook-runtime` | `crates/pmcp-server-toolkit/Cargo.toml:202` (dev-dep) | `"0.1.0"` | -> the shipped version, **required** | same |
+| `pmcp-workbook-runtime` | `crates/pmcp-workbook-compiler/Cargo.toml:41` | `"0.1.0"` | **UNCHANGED under 0.1.1; forced to move under 0.2.0** | `cargo metadata` under 0.2.0 |
+| `pmcp-workbook-runtime` | `crates/pmcp-workbook-dialect/Cargo.toml:25` | `"0.1.0"` | **UNCHANGED under 0.1.1; forced to move under 0.2.0** | same |
+| `pmcp-code-mode-derive` | `crates/pmcp-code-mode-derive/Cargo.toml:3` | `0.2.0` | -> `0.2.1` | the bump itself |
+| `pmcp-code-mode-derive` | root `Cargo.toml:257` dev-dep | `"0.2.0"` | **UNCHANGED** — `^0.2.0` admits 0.2.1 | none |
+| `pmcp-code-mode-derive` | `pmcp-book/src/ch12-9-code-mode.md:90`, `pmcp-course/src/part8-advanced/ch22-code-mode.md:68`, `ch22-exercises.md:17` | `"0.2.0"` | **UNCHANGED** — doc-quoted caret floors that stay correct; tightening an unnecessary bound is its own defect | none (unguarded) |
+| `pmcp-code-mode-derive` | `CHANGELOG.md:926` | `0.2.0` | **UNCHANGED** — historical record of the 0.2.0 publish | n/a |
+| `pmcp-workbook-compiler` | `crates/pmcp-workbook-compiler/Cargo.toml:3` | `0.1.0` | -> `0.1.1` | the bump itself |
+| `pmcp-workbook-compiler` | `cargo-pmcp/Cargo.toml:75` | `"0.1.0"` | **UNCHANGED** — `^0.1.0` admits 0.1.1 | none |
+
+Also enumerated and confirmed **not** to move: `cargo-pmcp/src/templates/agent.rs:49`
+`PMCP_AGENT_VERSION = "0.3.0"` (tracks `pmcp-agent`, not bumped), `:67`
+`PMCP_PACKAGE_VERSION_REQ = "0.3"` (tracks `pmcp-package`, ships 0.3.0 as-is), and
+`workbook_server.rs:59` `TOOLKIT_VERSION = "0.1.2"` (tracks `pmcp-server-toolkit`, not
+bumped) — all three guarded, all three verified green.
+
+### The pin question the coordinator asked me to prove rather than assume
+
+Do `pmcp-workbook-compiler` / `-dialect` actually use the runtime API that is new since the
+published 0.1.0? Measured two ways, with `pmcp-server-toolkit` as a positive control so the
+enumeration is not vacuous:
+
+| Crate | `use pmcp_workbook_runtime::{...}` lines naming a new symbol | `pmcp_workbook_runtime::<new>` path-qualified refs |
+|---|---|---|
+| `pmcp-workbook-compiler` | **0** | **0** |
+| `pmcp-workbook-dialect` | **0** | **0** |
+| `pmcp-server-toolkit` (control) | **3** | **10** |
+
+New-symbol set: `reconcile`, `RenderMode`, `ReconcileReport`, `ToolReport`, `OutputRow`,
+`seed_reference_inputs`, `reconcile_reference`. The control's three lines are
+`handler.rs:32`, `render_resource.rs:43`, `render_uri.rs:42`, all importing `RenderMode`.
+
+**Conclusion: neither the compiler's nor the dialect's pin should be tightened on code
+grounds.** They move under 0.2.0 only because Cargo forces them to, not because their source
+needs the new surface. `pmcp-server-toolkit`'s two pins move on code grounds and would move
+under either axis.
+
+> **A false positive of my own, recorded because it nearly stuck.** My first version of this
+> check reported "9 new-symbol imports" for `pmcp-workbook-compiler`. All nine were `grep -n`
+> output lines whose **file path** contained `reconcile`
+> (`crates/pmcp-workbook-compiler/src/reconcile/drift.rs:17:...`) — the pattern matched the
+> path prefix, not the import list. The compiler has its own crate-local `reconcile` module
+> (`src/lib.rs:58`), which is what made the collision plausible. Re-run with the path prefix
+> stripped (`grep -h`), the count is 0. A positive control is what made the difference
+> visible: 9-vs-3 against a control known to be smaller was the wrong shape.
+
+### The per-manifest keyed table under the amended set (before reverting)
+
+Applied, measured, then reverted. Partitioned as WINDOWS #51 prescribes:
+
+```
+6 differing row(s):
+  [package].version rows (4) — equal the amended authorised map EXACTLY:
+    Cargo.toml                                  2.19.0 -> 2.19.1
+    crates/pmcp-workbook-runtime/Cargo.toml      0.1.0 -> 0.1.1
+    crates/pmcp-code-mode-derive/Cargo.toml      0.2.0 -> 0.2.1
+    crates/pmcp-workbook-compiler/Cargo.toml     0.1.0 -> 0.1.1
+  dependency-requirement rows (2) — the discovered consequence set:
+    crates/pmcp-server-toolkit/Cargo.toml  dependencies.pmcp-workbook-runtime      0.1.0 -> 0.1.1
+    crates/pmcp-server-toolkit/Cargo.toml  dev-dependencies.pmcp-workbook-runtime  0.1.0 -> 0.1.1
+```
+
+No extra rows, no missing rows on either axis. `cargo metadata` (full resolve) EXIT 0, and all
+three scaffold drift tests green with non-zero counts (`1 passed; 524 filtered out` each).
+
+### Current tree state
+
+**Clean of version changes.** All seven edits were reverted; `git status --short` shows only
+the two `.planning/` documents this round writes. The keyed table reports `NO DIFFERING ROWS`
+and `cargo metadata` EXIT 0. Nothing half-moved is committed or left behind — the one-set rule
+is preserved by there being no version commit at all. Re-applying is seven line-anchored
+`sed` substitutions, scripted and reproduced above.
+
+`RUSTFLAGS="" make quality-gate` was **not** run this round: with the tree byte-identical to
+the base on every non-`.planning` path, it would measure nothing. It must be run by whichever
+run lands the version edits, and its log must be confirmed to end in
+`ALL TOYOTA WAY QUALITY CHECKS PASSED` (~11.5k–12k lines) rather than a truncation marker.
+
+### Carried forward from round 1, unchanged and not re-litigated
+
+`pmcp-package` ships **0.3.0 as-is** (docs + tests + fixtures only since `6430afae`: 0 added
+non-doc, non-blank lines in both touched source files). All nine emitters mutually consistent
+on the 0.3 line with row 9 path-only. Three tripwires green. `mcp-tester` unchanged at all
+four before-publish pin sites. The caret non-bump of `crates/mcp-tester` and `cargo-pmcp`
+against `pmcp` holds.
+
+### Still not delivered
+
+Tasks 3 (CHANGELOG `## [2.19.1]`, plus the `crates/pmcp-package/CHANGELOG.md` gap at
+`[0.2.0] - Unreleased` while shipping 0.3.0) and 4 (`124-expected-release.json`). Both must
+name the final shipped versions, so both remain blocked on row 2.
+
+### New ledger entries this round
+
+| # | Kind | Subject |
+|---|---|---|
+| 53 | deviation | `render_xlsx` arity change makes `pmcp-workbook-runtime` a breaking bump; three documents called it additive; semver-checks per crate against the published baseline is the check that catches it |
+| 54 | deviation | A third compiler-invisible emitter (`PMCP_VERSION`) that no plan's `files_modified` lists, with the build-0/test-101 negative control |
+| 55 | stub | Eight unguarded stale pmcp-family version floors across five scaffold templates — found, deliberately not changed, recorded so they stop being invisible |
+
+---
 
 ## Performance
 

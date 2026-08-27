@@ -470,6 +470,110 @@ may rely on it.
 
 **Stated non-decision (settled, not open):** `pmcp` 2.19.0 → 2.19.1 requires **no** downstream pin bumps. `crates/mcp-tester/Cargo.toml:21` and `cargo-pmcp/Cargo.toml:68` pin `pmcp = "2.19.0"`, and the caret requirement `^2.19.0` already admits 2.19.1. CLAUDE.md's blanket Version Bump Rule over-fires on patch bumps; plan 04 Task 2 records the caret exception in the ledger.
 
+### ADDENDUM — amended 2026-08-27 by the user, one row only
+
+> **This APPENDS to the decision above; it does not rewrite it.** The record is meant to show
+> what was decided, what it collided with, and how it was resolved.
+
+**What collided.** Plan 05's executor, before editing any version literal, ran the
+workspace-wide requirement search Task 1 mandates and found that row 2 —
+`pmcp-workbook-runtime` 0.1.0 → **0.2.0** — is not executable as recorded. On a 0.x line
+Cargo reads `^0.1.0` as `>=0.1.0, <0.2.0`, so a MINOR bump is the *breaking* axis, and four
+in-workspace sites pin the crate at `"0.1.0"`: `crates/pmcp-server-toolkit/Cargo.toml:81` and
+`:202`, `crates/pmcp-workbook-compiler/Cargo.toml:41`,
+`crates/pmcp-workbook-dialect/Cargo.toml:25`.
+
+**The measurement that established it** (bump applied temporarily, full resolve run, tree
+restored):
+
+```
+CONTROL (unmodified tree)    cargo metadata --format-version 1 --offline   EXIT=0
+PROBE   (runtime at 0.2.0)   cargo metadata --format-version 1 --offline   EXIT=101
+error: failed to select a version for the requirement `pmcp-workbook-runtime = "^0.1.0"`
+candidate versions found which didn't match: 0.2.0
+required by package `pmcp-server-toolkit v0.1.2`
+```
+
+Moving those pins would then have forced a FIFTH version number — `pmcp-workbook-dialect`
+0.1.0 → 0.1.1, since that crate is 0.1.0 in-tree AND 0.1.0 published — which this closed list
+did not authorise. Plan 05 halted rather than consume it.
+
+**The amendment.** `pmcp-workbook-runtime` ships **0.1.1**, not 0.2.0.
+
+The reasoning is that **0.2.0 was the error, not the cost.** The change is purely additive — a
+new `pub mod reconcile` plus six re-exports, breaking nothing — so `0.1.1` states the truth
+while `0.2.0` announces a break to every consumer. This decision chose "pre-1.0 additive →
+minor" as a convention without checking who pinned the crate; the resolve probe is what
+exposed it. The Phase-122 precedent cited above does **not** transfer: `pmcp-package`
+0.2 → 0.3 carried five genuinely breaking changes, which is why the minor axis was right
+*there*.
+
+**The amended list — closed and exhaustive, superseding the table above in exactly one row:**
+
+| # | Crate | From | To | Status |
+|---|---|---|---|---|
+| 1 | `pmcp` | 2.19.0 | **2.19.1** | unchanged from the original decision |
+| 2 | `pmcp-workbook-runtime` | 0.1.0 | **0.1.1** | **AMENDED — was 0.2.0** |
+| 3 | `pmcp-code-mode-derive` | 0.2.0 | **0.2.1** | unchanged |
+| 4 | `pmcp-workbook-compiler` | 0.1.0 | **0.1.1** | unchanged |
+
+**Explicitly NOT bumped:** `pmcp-workbook-dialect` stays **0.1.0** — option A's fifth number
+is not consumed. The standing prohibitions are unaffected: `mcp-tester`, `mcp-preview`,
+`pmcp-sql-server`, `pmcp-widget-utils`.
+
+**Pin consequence under 0.1.1:** `^0.1.0` admits 0.1.1, so no pin is *forced* to move.
+`pmcp-server-toolkit:81` and `:202` are nevertheless tightened to `"0.1.1"` because that
+crate's `src/workbook/handler.rs` genuinely uses API absent from the published 0.1.0; the
+compiler and dialect pins are left alone because measurement shows they do not.
+
+#### ADDENDUM 2 — the amendment's premise was refuted by measurement, same day
+
+> Appended, not rewritten: the two addenda together are the record of a decision, the
+> evidence that contradicted it, and what that leaves open.
+
+Executing the amendment above, plan 05 ran `cargo semver-checks check-release` against the
+**published** baseline — the per-crate verdict Task 1 requires, and which no earlier step had
+run for this crate. Result:
+
+```
+$ cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0
+    Checking pmcp-workbook-runtime v0.1.0 -> v0.1.1 (minor change)
+--- failure function_parameter_count_changed: pub fn parameter count changed ---
+  pmcp_workbook_runtime::render::render_xlsx now takes 3 parameters instead of 2,
+  in crates/pmcp-workbook-runtime/src/render/mod.rs:270
+     Summary semver requires new major version: 1 major and 0 minor checks failed
+EXIT=100
+```
+
+**The change is NOT purely additive.** `pub fn render_xlsx` gained a third parameter,
+`mode: RenderMode` — and `RenderMode` is itself one of the symbols absent from the published
+0.1.0. It is public (`pub mod render` at `lib.rs:65`) and called across a crate boundary
+(`crates/pmcp-server-toolkit/src/workbook/render_resource.rs:42,108`). On a 0.x line "requires
+new major" means bumping the leftmost non-zero component: **0.1.0 -> 0.2.0**.
+
+So `0.1.1` would be actively wrong rather than merely conservative: `^0.1.0` admits `0.1.1`,
+so every consumer pinned to the published 0.1.0 that calls `render_xlsx` would silently
+receive the incompatible version on a fresh resolve and fail to compile. That is precisely the
+harm the minor axis exists to prevent on a 0.x line.
+
+**Both stated rationales for this row were wrong, in opposite directions.** The original
+decision said "additive public API -> minor" (right answer, wrong reason). The amendment said
+"purely additive, breaking nothing -> patch" (wrong answer, same wrong premise). Neither cited
+`render_xlsx`. The tool did.
+
+The other three rows are confirmed by the same measurement and are unaffected:
+
+| Crate | Move | `cargo semver-checks` verdict |
+|---|---|---|
+| `pmcp` | 2.19.0 -> 2.19.1 | EXIT 0 — classified "(patch change)", 223 pass / 30 skip, "no semver update required" |
+| `pmcp-code-mode-derive` | 0.2.0 -> 0.2.1 | EXIT 101 — **not checkable**: proc-macro crate, no library target, so it has no API surface the tool can compare. The change is in *emitted* code; plan 03's reasoning (the macro's own API does not move) stands, unverified by tooling. |
+| `pmcp-workbook-compiler` | 0.1.0 -> 0.1.1 | EXIT 0 — "no semver update required" |
+
+**Status: row 2 is OPEN again.** Restoring 0.2.0 restores the original collision — all four
+`^0.1.0` pin sites are forced to move, and `pmcp-workbook-dialect` (0.1.0 in-tree AND 0.1.0
+published) then needs a version number this list does not authorise. Option C is eliminated;
+options A and B from `124-05-SUMMARY.md` remain.
+
 ## Decisions Made
 
 1. **The sweep is permanent, not phase-local.** CONTEXT left this to Claude's discretion. Permanence is cheap (one shell file, no new dependency) and it is the only mechanism that can detect a phantom delta — a class this repo has now hit at least seven times.
