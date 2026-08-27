@@ -2446,7 +2446,7 @@ Plans:
   4. The platform half is contract-first and offline-blocking: **`getPackageArtifact`** is validated against the vendored `contracts/pmcp-run/portability-v1.graphql` by a test in the default `cargo test` gate, and invoking `pull` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error, with the underlying cause preserved in the `anyhow` chain (PKGX-02)
   5. The artifact's **tar framing rule** — entry inventory, no wrapper directory, no absolute or `..` paths, no symlinks, no duplicates, uncompressed, reproducible headers — is documented normatively in `crates/pmcp-package` (the crate both sides read) and pinned by checked-in golden fixtures that the writer under test never regenerates; and a `save`/`load`/`pull` whose artifact fails verification leaves the destination **byte-for-byte unchanged** (PKGX-02)
 
-**Plans**: 6/7 plans executed
+**Plans**: 7/7 plans executed
 
 Plans:
 **Wave 1**
@@ -2472,7 +2472,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the end-to-end proof that the gate executes all eight named test binaries
+- [x] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the end-to-end proof that the gate executes all eight named test binaries
 
 > **Wave layout revised 2026-08-26** by `/gsd-plan-phase 123 --reviews`, from five waves to six. Two
 > causes, both from the cross-AI review: each creator plan now registers its own test binary in
@@ -2512,7 +2512,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 8/8 | Complete    | 2026-08-25 |
-| 123. Export/Import Verbs *(parked)* | PKGX-02 | 6/7 | In Progress|  |
+| 123. Export/Import Verbs *(parked)* | PKGX-02 | 7/7 | In Progress|  |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
