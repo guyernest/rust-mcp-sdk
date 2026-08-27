@@ -11,9 +11,34 @@
 # A crate that should NOT publish declares `publish = false` in its Cargo.toml.
 # That is the single opt-out — there is no allowlist here on purpose.
 #
-# KNOWN BLIND SPOT: workspace-EXCLUDED crates (pmcp-package) carry their own
-# [workspace] table, so root `cargo metadata --no-deps` cannot see them and this
-# check does not cover them. Phase 124 (PKGR-01) extends the gate to close that.
+# TWO DISCOVERY SOURCES, ONE CLASSIFICATION PREDICATE:
+#   1. Root workspace MEMBERS, from `cargo metadata --no-deps`.
+#   2. Workspace-EXCLUDED crates, from a scan of `$CRATES_DIR/*/Cargo.toml` for
+#      manifests carrying their own `[workspace]` table. Root metadata
+#      structurally cannot see those; `crates/pmcp-package` is the live case.
+# Both halves classify with Cargo's OWN `.publish == null`, so a filesystem
+# heuristic can never disagree with Cargo about what "publishable" means, and
+# both feed one shared reporting block.
+#
+# TWO MATCHER FORMS, because the two kinds publish differently: `-p <name>` for
+# members, `--manifest-path <path>` for workspace-excluded crates — the crate
+# NAME never appears in that second command, so matching on the name would find
+# nothing. Plus a bounded ORDER assertion (see the D-10 region below): the
+# excluded crate's publish step must precede its in-repo consumers', each of
+# which pins it.
+#
+# SCAN SCOPE is deliberately `crates/` rather than repo-wide, and it is CHECKED
+# rather than assumed. Measured: 26 TRACKED manifests carry their own
+# `[workspace]` table, and all but the root manifest, `crates/pmcp-package` and
+# three declared deploy/example manifests opt out with `publish = false`.
+# Widening the glob repo-wide was REJECTED: it self-matches the root manifest
+# (re-enumerating every member through a second path) and sweeps in untracked
+# spike copies, `fuzz/` and macro test fixtures, making the gate's behaviour
+# depend on which untracked directories a given developer happens to have.
+# Instead the narrow scope is PROVEN sufficient by a repo-wide scan-scope
+# tripwire over `git ls-files` that fails naming any qualifying manifest outside
+# it. That tripwire is what stops this glob from being the allowlist the rule
+# above forbids.
 #
 # Failure discipline (a gate that cannot see must say so, never pass):
 # - `cargo metadata` / `jq` failures are EXPLICIT failures — the pipeline is not
@@ -27,6 +52,17 @@
 #   as coverage.
 # - No bash-4-isms (`mapfile`, empty-array `"${a[@]}"` under `set -u`): this is
 #   chained into the local `make quality-gate`, and stock macOS bash is 3.2.
+# - A ZERO-RESULT SCAN is a failure for the same reason a zero-length member
+#   list is: a reading of zero means the scan scope or the working directory is
+#   wrong far more often than it means coverage legitimately holds. Every
+#   zero-length reading here — zero members, zero discovered manifests, a
+#   publish step that cannot be located — is an explicit failure, never a pass.
+# - Every publish-step matcher carries an explicit END BOUNDARY, and no matcher
+#   pipes into an early-exiting reader (`... | head -1`). Those are the two
+#   shapes that return a WRONG answer rather than an error, which is strictly
+#   worse than failing: a boundary-less match silently resolves a crate name to
+#   a longer name's step, and an early-exiting reader takes SIGPIPE under
+#   `pipefail` and aborts mid-assignment.
 set -euo pipefail
 
 WORKFLOW="${1:-.github/workflows/release.yml}"
