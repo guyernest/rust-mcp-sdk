@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 36
+open_count: 39
 waived_count: 0
 fixed_count: 9
-total_count: 45
-last_updated: 2026-08-27T18:19:24.378Z
+total_count: 48
+last_updated: 2026-08-27T18:57:37.690Z
 ---
 
 # Broken Windows Ledger
@@ -60,6 +60,9 @@ last_updated: 2026-08-27T18:19:24.378Z
 | 43 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | RESEARCH Pitfall 2 describes the pmcp-workbook-compiler delta as 'RESERVED_TOOL_NAMES gained a 5th entry (doc + test assertion)'. It also carries a published-manifest constraint change the table omits: umya-spreadsheet '3.0' -> '=3.0.0', which the in-tree comment says exists because 3.0.1 forks Cargo.lock onto a second quick-xml and regresses a data-validation ingest test. The published 0.1.0 still carries the caret range, so the published crate cold-resolves onto the version the project rejected. | open |  | 2026-08-27T18:19:09.198Z |  |
 | 44 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 acceptance criterion 'cargo public-api --simplified > f && grep -c jsonwebtoken f returns 0' passes VACUOUSLY as written: jwt-auth is a NON-default feature, so a default-features run never compiles the jwt modules and the zero is guaranteed regardless of the truth. Discharged by additionally running --all-features (26801 API lines, 286 mentioning jwt, 0 mentioning jsonwebtoken). A future D-03-style guard must name the feature set. | open |  | 2026-08-27T18:19:16.385Z |  |
 | 45 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 Step E states cargo-pmcp publishes at release.yml:525 and pmcp-server at :543 -- both correct, but an UNBOUNDED grep for 'cargo publish -p pmcp-server' resolves to line 263 (the pmcp-server-toolkit step), a prefix collision. Any re-measurement of these ordinals must use the bounded matcher '( \|$)' that check-release-coverage.sh already uses; measured both ways here. | open |  | 2026-08-27T18:19:24.378Z |  |
+| 46 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Task 1 acceptance criteria address the publish-order comment block by FIXED line window (sed -n '80,110p'), but this plan's own Region A edit grows that block from 19 to 39 lines, pushing cargo-pmcp past line 110 — the criterion would have compared ordinals in a window no longer containing both crates. Discharged with a heading-anchored awk extraction, the same fix the plan already applied to Task 2's three regions. A plan must not address by fixed line numbers a region it edits. | open |  | 2026-08-27T18:57:21.473Z |  |
+| 47 | 124 | deviation | Makefile |  | The rtk output proxy TRUNCATES captured command output and writes its own truncation marker into the redirect target, then reports its own exit status: 'RUSTFLAGS= make quality-gate > log 2>&1; echo $?' printed EXIT=0 with a 908-line log ending mid-clippy-echo in the literal text '... (9166 lines truncated)'. The real run is 11551 lines ending 'ALL TOYOTA WAY QUALITY CHECKS PASSED'. A green exit read this way is not evidence the gate ran to completion. Capture the status inside a script that writes $? to a file (done here), or use absolute binary paths. | open |  | 2026-08-27T18:57:29.751Z |  |
+| 48 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Two Task 2 acceptance greps cannot distinguish PRESCRIBING a thing from FORBIDDING it, and one is self-defeating: (a) 'grep -c cargo search /tmp/124-preflight.txt returns 0' fails if the Pre-Flight step names the forbidden command in order to forbid it — resolved by pointing at item 13's naming instead of repeating it, losing a little in-place force; (b) 'grep -c "Nine were measured" CLAUDE.md returns 1' fails if the correction note quotes the phrase it is correcting — resolved by paraphrasing. Both are the literal-grep-vs-intent class this phase keeps finding. | open |  | 2026-08-27T18:57:37.690Z |  |
 
 ````json
 [
@@ -601,6 +604,42 @@ last_updated: 2026-08-27T18:19:24.378Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T18:19:24.378Z",
+    "resolved_at": null
+  },
+  {
+    "id": 46,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-04-PLAN.md",
+    "line": null,
+    "description": "Task 1 acceptance criteria address the publish-order comment block by FIXED line window (sed -n '80,110p'), but this plan's own Region A edit grows that block from 19 to 39 lines, pushing cargo-pmcp past line 110 — the criterion would have compared ordinals in a window no longer containing both crates. Discharged with a heading-anchored awk extraction, the same fix the plan already applied to Task 2's three regions. A plan must not address by fixed line numbers a region it edits.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:21.473Z",
+    "resolved_at": null
+  },
+  {
+    "id": 47,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "Makefile",
+    "line": null,
+    "description": "The rtk output proxy TRUNCATES captured command output and writes its own truncation marker into the redirect target, then reports its own exit status: 'RUSTFLAGS= make quality-gate > log 2>&1; echo $?' printed EXIT=0 with a 908-line log ending mid-clippy-echo in the literal text '... (9166 lines truncated)'. The real run is 11551 lines ending 'ALL TOYOTA WAY QUALITY CHECKS PASSED'. A green exit read this way is not evidence the gate ran to completion. Capture the status inside a script that writes $? to a file (done here), or use absolute binary paths.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:29.751Z",
+    "resolved_at": null
+  },
+  {
+    "id": 48,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-04-PLAN.md",
+    "line": null,
+    "description": "Two Task 2 acceptance greps cannot distinguish PRESCRIBING a thing from FORBIDDING it, and one is self-defeating: (a) 'grep -c cargo search /tmp/124-preflight.txt returns 0' fails if the Pre-Flight step names the forbidden command in order to forbid it — resolved by pointing at item 13's naming instead of repeating it, losing a little in-place force; (b) 'grep -c \"Nine were measured\" CLAUDE.md returns 1' fails if the correction note quotes the phrase it is correcting — resolved by paraphrasing. Both are the literal-grep-vs-intent class this phase keeps finding.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:37.690Z",
     "resolved_at": null
   }
 ]
