@@ -185,6 +185,27 @@ async fn try_render_and_deploy(
         .map_err(|e| RenderOrDeployError::Render(e.to_string()))?;
     println!("✅ CloudFormation template rendered (pmcp-cfn-renderer)");
 
+    // `[server] memory_mb` divergence (debug session
+    // `deploy-server-memory-timeout`). This engine pins `MemorySize` to
+    // `AWS_LAMBDA_MEMORY_SIZE_MB` regardless of what the descriptor declares,
+    // so a declared `memory_mb` is dropped here — say so instead of dropping
+    // it in silence. `timeout_seconds` passes `None`/`None` because this
+    // engine DOES thread it from the descriptor (`timeout_seconds:
+    // d.server.timeout_seconds`), so there is nothing to warn about.
+    if let Some(warning) = crate::deployment::config::sizing_divergence_warning(
+        "aws-lambda pmcp-cfn-renderer",
+        (config.server.memory_mb, None),
+        (
+            u32::try_from(pmcp_cfn_renderer::resources::lambda::AWS_LAMBDA_MEMORY_SIZE_MB).ok(),
+            None,
+        ),
+        "This engine pins the MCP function's memory. Deploy to the pmcp-run target, which honors \
+         the declared sizing.",
+    ) {
+        eprintln!("{warning}");
+        println!();
+    }
+
     let engine_params = EngineParams {
         stack_name: params.stack_name,
         region,

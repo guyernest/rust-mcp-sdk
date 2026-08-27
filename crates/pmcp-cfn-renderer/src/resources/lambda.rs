@@ -16,17 +16,39 @@ use pmcp_package::package::DeployDescriptor;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-/// Fixed memory size for `pmcp-run`-target Lambdas. NOT driven by
-/// `[server].memory_mb` — the TS scaffold hardcodes `memorySize: 256` for
-/// this target (`memory_mb` is meaningful only for the google-cloud-run
-/// target's separate `[server].memory` string field, a non-CFN target this
-/// renderer never touches).
-const MEMORY_SIZE_MB: i64 = 256;
+/// Fixed memory size for `pmcp-run`-target Lambdas.
+///
+/// NOT driven by the descriptor's `[server].memory_mb`. The only recorded
+/// reason is byte-parity with the TypeScript scaffold, which hardcodes
+/// `memorySize: 256` for this target — there is no cost guard, quota or
+/// platform limit behind the number (the introducing commit, `6ab0bb1d`, is
+/// an OAuth-integration commit whose message never mentions sizing).
+///
+/// The previous wording here claimed `memory_mb` "is meaningful only for the
+/// google-cloud-run target's separate `[server].memory` string field", which
+/// was incoherent — it named a DIFFERENT field as the reason this one is
+/// ignored — and contradicted `cargo-pmcp`'s own `ServerConfig::memory_mb`
+/// doc, which asserted the field was used by AWS targets. Neither was true.
+/// The truth, and the current contract: this renderer still pins memory, and
+/// `cargo-pmcp`'s pmcp-run deploy path rewrites `Properties.MemorySize`
+/// AFTER rendering when `[server].memory_mb` is declared, so the declared
+/// value is what actually deploys. See debug session
+/// `deploy-server-memory-timeout`. Moving the const behind the descriptor
+/// (making the renderer itself honor `memory_mb`) is a tracked follow-up,
+/// deliberately not taken yet because it would require regenerating the
+/// `cdk synth`-derived golden corpus.
+pub const MEMORY_SIZE_MB: i64 = 256;
 
 /// Fixed memory size for `aws-lambda`-target Lambdas — the TS scaffold
 /// hardcodes `memorySize: 512` for this branch (vs. `pmcp-run`'s
-/// [`MEMORY_SIZE_MB`] = 256). Also NOT driven by `[server].memory_mb`.
-const AWS_LAMBDA_MEMORY_SIZE_MB: i64 = 512;
+/// [`MEMORY_SIZE_MB`] = 256). Also NOT driven by `[server].memory_mb`; same
+/// rationale and same follow-up as [`MEMORY_SIZE_MB`].
+///
+/// Unlike the pmcp-run path, `cargo-pmcp`'s `aws-lambda` target has no
+/// post-render seam wired, so a declared `memory_mb` is NOT honored there —
+/// it prints a divergence warning quoting this value instead. `cargo-pmcp`
+/// reads this const directly rather than keeping its own copy of `512`.
+pub const AWS_LAMBDA_MEMORY_SIZE_MB: i64 = 512;
 
 /// AWS account that publishes the [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter)'s
 /// public Lambda Layers (T8 review fix — see [`RuntimeAdapterConfig`]'s doc
