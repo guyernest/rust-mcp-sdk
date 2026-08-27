@@ -78,7 +78,7 @@ regex = { version = "1.11", optional = true }
 # in the runtime (Codex MEDIUM #6 — the runtime stays base64-free). The bare
 # `workbook` feature carries LocalDirSource only; `workbook-embedded` layers the
 # runtime's `embedded` (include_dir) EmbeddedSource on top.
-pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime", optional = true }
+pmcp-workbook-runtime = { version = "0.2.0", path = "../pmcp-workbook-runtime", optional = true }
 # Why: the `workbook-embedded` feature lets a Shape A/B server bake a bundle into
 # the binary via the `include_dir!` macro for an `EmbeddedSource` (WBSV-09). The
 # macro emits UNQUALIFIED `include_dir::` paths, so the crate must be a DIRECT,
@@ -199,7 +199,7 @@ wiremock = "0.6"
 # the `embedded` feature OFF (the generator only needs the model + hasher, not
 # include_dir). `tests/` is excluded from the published artifact, so this never
 # enters the downstream dependency graph.
-pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+pmcp-workbook-runtime = { version = "0.2.0", path = "../pmcp-workbook-runtime" }
 # Why: Phase 92 Plan 02 — the byte-stability test regenerates the golden into a
 # tempdir and the tamper helpers copy-then-corrupt the golden in a tempdir
 # (D-05: no committed corrupt fixtures). Dev-only.

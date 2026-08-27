@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.1] - 2026-08-27
+
+**A release-hygiene release.** No `pmcp` source changed since 2.19.0 — this tag exists to
+ship a set of crate deltas that had landed under already-published version numbers and would
+otherwise never have reached crates.io, and to close the gaps in the release machinery that
+let that happen.
+
+### Fixed
+
+- **`pmcp` 2.19.1** — ships the in-tree `jsonwebtoken` requirement move (`10.3` → `11.0`) that
+  had landed under an already-published 2.19.0. No `pmcp` source moved: `git diff v2.19.0..HEAD
+  -- src/` is empty. The patch axis is verified rather than assumed — `cargo public-api
+  --simplified --all-features` enumerates 26,801 public API lines containing **zero**
+  `jsonwebtoken` occurrences (with 286 lines mentioning `jwt` as a positive control, so the
+  enumeration is not vacuous), and `cargo semver-checks check-release --baseline-version
+  2.19.0` classifies it a patch change with 223/223 checks passing.
+
+### Changed
+
+- **`pmcp-workbook-runtime` 0.1.0 → 0.2.0 (BREAKING)** — adds `pub mod reconcile` (reference
+  reconciliation: `reconcile_reference`, `seed_reference_inputs`, `ReconcileReport`,
+  `ToolReport`, `OutputRow`) and the `RenderMode` render control. **`render_xlsx` gained a
+  third parameter, `mode: RenderMode`** — a source-breaking change for any caller of the
+  published 0.1.0, which is why this takes the minor (breaking, on a 0.x line) axis rather
+  than a patch. Callers must pass `RenderMode::Filled` to preserve the previous behaviour;
+  `RenderMode::InputsOnly` writes bare formulas so Excel recomputes every output.
+- **`pmcp-workbook-compiler` 0.1.0 → 0.1.1** — pins `umya-spreadsheet` to `=3.0.0`. The
+  published 0.1.0 carried `^3.0`, so a cold resolve of it lands on 3.0.1, which forks
+  `Cargo.lock` onto a second `quick-xml` (0.37 → 0.41, failing the workspace purity gate) and
+  regresses a data-validation-list ingest test. Also re-pins `pmcp-workbook-runtime` to
+  `0.2.0`.
+- **`pmcp-workbook-dialect` 0.1.0 → 0.1.1** — re-pin release only: `pmcp-workbook-runtime`
+  moves to `0.2.0`. No source change.
+- **`pmcp-code-mode-derive` 0.2.0 → 0.2.1** — the `"sql"` arm of the derive now emits
+  `validate_sql_query_async(...).await` where the published 0.2.0 emitted the synchronous
+  `validate_sql_query(...)`. Both methods still exist on the pipeline, so the published macro
+  compiled — it simply generated the wrong path, which is why nothing surfaced it. The macro's
+  own public API is unchanged.
+- **`pmcp-server-toolkit`** — its `pmcp-workbook-runtime` requirement moves to `0.2.0`. This
+  is a correctness fix, not bookkeeping: `src/workbook/handler.rs` uses `RenderMode`,
+  `reconcile_reference` and `ReconcileReport`, none of which exist in the published 0.1.0,
+  while the manifest requested `^0.1.0`. Because `workbook` is not a default feature, a
+  publish-verification build would not have caught it.
+
+### Also riding this tag
+
+Crates whose versions were already ahead of the registry and ship as-is: `cargo-pmcp` 0.23.0,
+`pmcp-package` 0.3.0, `pmcp-agent` 0.3.0, `pmcp-team-servers` 0.2.0, `pmcp-cfn-renderer` 0.2.0,
+`pmcp-openapi-server` 0.1.1, `pmcp-server-toolkit` 0.1.2, `pmcp-workbook-server` 0.1.1,
+`pmcp-tasks` 0.1.1. Between them they carry the v2.6 AI-Package portability work from phases
+120–123: config-server packaging and the local pack/unpack round-trip, attestation carriage
+(with `cargo pmcp package inspect` rendering all three carriage states and exiting non-zero on
+a subject-digest mismatch), and the `package save` / `load` / `pull` verbs.
+
+### Release machinery
+
+- `scripts/check-release-coverage.sh` now discovers workspace-**excluded** publishable crates
+  by filesystem scan, closing the blind spot that had let `pmcp-tasks` go unpublished
+  unnoticed; coverage went from 24 to 25 crates, and the red direction is a permanent
+  self-test rather than a one-off demonstration.
+- The publish **order** for the `pmcp-package` cluster is machine-checked: its step must
+  precede `pmcp-cfn-renderer`, `pmcp-agent`, `pmcp-team-servers` and `cargo-pmcp`.
+- `make release-sweep` reports three-way version drift (in-tree vs crates.io vs source delta
+  since the publishing tag) across all 25 publishable crates. It is deliberately not part of
+  `quality-gate`. It is what found every crate delta listed above.
+- Both publish ledgers — `.github/workflows/release.yml`'s comments and CLAUDE.md's crate
+  list — were reconciled against the workflow's own steps and against the manifests.
+
 ## [2.19.0] - 2026-08-20
 
 ### ⚠ WIRE CHANGE — embedded resources now serialize as the spec's `EmbeddedResource`
