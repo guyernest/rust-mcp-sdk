@@ -886,11 +886,143 @@ lint-plans:
 	./scripts/lint-plan-verify-commands.sh
 	@echo "$(GREEN)✓ No verification command masks the status of what it verifies$(NC)"
 
+# Fixture-driven self-test for the release-ledger coverage gate, mirroring
+# no-crypto-allowlist-guard-selftest and test-openapi-server-guard-selftest. It
+# is a declared PREREQUISITE of check-release-coverage below, so the gate's RED
+# direction is proven before the gate's green reading is trusted — the gate and
+# the proof of the gate cannot drift.
+#
+# Adaptation from both precedents: their logic lives in an extracted `awk` file
+# that can be fed inline fixtures. This gate's logic is not extracted, so each
+# fixture is instead a DOCTORED COPY of the real release.yml built in a
+# `mktemp -d` scratch directory, and the assertion is on EXIT STATUS plus (for
+# the red fixtures) the offending crate's name appearing in captured output —
+# never on full message text, so rewording the gate does not break its proof.
+#
+# Each fixture pins a distinct way the gate can pass vacuously:
+#
+#   intact                       -> 0   the gate still passes on good input; the
+#                                       extension introduced no false red.
+#   excluded_step_removed        -> !=0 THE HEADLINE BLIND SPOT. Before this
+#                                       phase the SAME input printed "all 24
+#                                       publishable workspace members have a
+#                                       publish step." and exited 0 (measured).
+#                                       This is the fixture that matters most.
+#   root_step_removed            -> !=0 the ORIGINAL half still works after the
+#                                       extension — the new loop did not break
+#                                       the member loop it shares state with.
+#   excluded_step_commented      -> !=0 COMMENT BLINDNESS. The comment-strip
+#                                       discipline must extend to the new
+#                                       --manifest-path matcher, so a
+#                                       commented-out step never counts as
+#                                       coverage.
+#   order_inverted               -> !=0 the D-10 order assertion is LIVE, not
+#                                       decorative: the step is present, so the
+#                                       coverage half passes and only the order
+#                                       half can catch it.
+#   workflow_absent              -> !=0 the pre-existing `[ -f "$$WORKFLOW" ]`
+#                                       guard survives the extension.
+#   synthetic_excluded_uncovered -> !=0 THE ONLY FIXTURE THAT PROVES DISCOVERY.
+#                                       Every other fixture doctors release.yml,
+#                                       so they prove only that the MATCHER
+#                                       works against today's repository layout.
+#                                       This one plants a previously-unknown
+#                                       workspace-excluded crate in a synthetic
+#                                       tree and runs against the INTACT
+#                                       workflow: the gate must find it by scan.
+#   prefix_shadow                -> !=0 the matcher's WORD BOUNDARY. Renaming
+#                                       `-p pmcp-agent` to `-p pmcp-agent-extra`
+#                                       must be reported as pmcp-agent missing.
+#                                       A boundary-less matcher resolves
+#                                       pmcp-agent to the -extra line and passes,
+#                                       silently reading the wrong step — the
+#                                       failure mode check-release-coverage.sh
+#                                       documents for the root loop.
+#
+# Every doctored fixture is checked to have ACTUALLY been doctored: the line
+# delta must equal the expected one AND the copy must differ from the source.
+# Without that, a future rename of a publish command would silently make a
+# "removed" fixture byte-identical to `intact`, and this target would go green
+# having proven nothing — the false-green class this repo has hit before.
+.PHONY: check-release-coverage-guard-selftest
+check-release-coverage-guard-selftest:
+	@echo "$(BLUE)Self-testing the release-ledger coverage gate (red direction)...$(NC)"
+	@fail=0; ran=0; \
+	SRC=.github/workflows/release.yml; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	doctored_ok() { \
+		fixture="$$1"; expected="$$2"; doctored="$$3"; \
+		before_lines=$$(wc -l < "$$SRC"); \
+		after_lines=$$(wc -l < "$$doctored"); \
+		d=$$((before_lines - after_lines)); \
+		if [ "$$d" -ne "$$expected" ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': doctoring changed the line count by $$d, expected $$expected — the fixture does not doctor what it claims$(NC)"; \
+			fail=1; \
+		fi; \
+		if cmp -s "$$SRC" "$$doctored"; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': the doctored copy is BYTE-IDENTICAL to the source — this fixture proves nothing$(NC)"; \
+			fail=1; \
+		fi; \
+	}; \
+	check() { \
+		fixture="$$1"; expected="$$2"; doctored="$$3"; needle="$$4"; cdir="$$5"; \
+		ran=$$((ran + 1)); \
+		actual=0; \
+		CRATES_DIR="$$cdir" ./scripts/check-release-coverage.sh "$$doctored" >"$$tmp/out" 2>&1 || actual=$$?; \
+		if [ "$$expected" = "0" ] && [ "$$actual" -ne 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected exit 0, got $$actual$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ "$$expected" != "0" ] && [ "$$actual" -eq 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected NON-ZERO exit, got 0 — the gate passed input it must reject$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ -n "$$needle" ] && ! grep -q "$$needle" "$$tmp/out"; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': failed for the wrong reason — output never names '$$needle'$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		return 0; \
+	}; \
+	PKG_STEP='cargo publish --manifest-path crates/pmcp-package/Cargo.toml'; \
+	cp "$$SRC" "$$tmp/intact.yml"; \
+	grep -v "$$PKG_STEP" "$$SRC" > "$$tmp/excluded_removed.yml"; \
+	doctored_ok excluded_step_removed 1 "$$tmp/excluded_removed.yml"; \
+	grep -v 'cargo publish -p pmcp-widget-utils' "$$SRC" > "$$tmp/root_removed.yml"; \
+	doctored_ok root_step_removed 1 "$$tmp/root_removed.yml"; \
+	sed 's|^\(.*'"$$PKG_STEP"'.*\)$$|#\1|' "$$SRC" > "$$tmp/excluded_commented.yml"; \
+	doctored_ok excluded_step_commented 0 "$$tmp/excluded_commented.yml"; \
+	grep -v "$$PKG_STEP" "$$SRC" > "$$tmp/order_inverted.yml"; \
+	grep "$$PKG_STEP" "$$SRC" >> "$$tmp/order_inverted.yml"; \
+	doctored_ok order_inverted 0 "$$tmp/order_inverted.yml"; \
+	sed 's|cargo publish -p pmcp-agent |cargo publish -p pmcp-agent-extra |' "$$SRC" > "$$tmp/prefix_shadow.yml"; \
+	doctored_ok prefix_shadow 0 "$$tmp/prefix_shadow.yml"; \
+	mkdir -p "$$tmp/crates/zz-synthetic/src"; \
+	: > "$$tmp/crates/zz-synthetic/src/lib.rs"; \
+	printf '%s\n' '[workspace]' '' '[package]' 'name = "zz-synthetic-uncovered"' 'version = "0.0.0"' 'edition = "2021"' > "$$tmp/crates/zz-synthetic/Cargo.toml"; \
+	check intact 0 "$$tmp/intact.yml" '' ''; \
+	check excluded_step_removed nonzero "$$tmp/excluded_removed.yml" 'pmcp-package' ''; \
+	check root_step_removed nonzero "$$tmp/root_removed.yml" 'pmcp-widget-utils' ''; \
+	check excluded_step_commented nonzero "$$tmp/excluded_commented.yml" 'pmcp-package' ''; \
+	check order_inverted nonzero "$$tmp/order_inverted.yml" 'pmcp-package' ''; \
+	check workflow_absent nonzero "$$tmp/does-not-exist.yml" '' ''; \
+	check synthetic_excluded_uncovered nonzero "$$tmp/intact.yml" 'zz-synthetic-uncovered' "$$tmp/crates"; \
+	check prefix_shadow nonzero "$$tmp/prefix_shadow.yml" 'pmcp-agent' ''; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	if [ "$$ran" -ne 8 ]; then \
+		echo "$(RED)✗ coverage gate self-test executed $$ran fixtures, expected 8 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ release-coverage gate self-test passed ($$ran fixtures)$(NC)"
+
 # Release-ledger coverage: every publishable workspace member must have a
 # publish step in release.yml. Sub-second, chained into `quality-gate` below
 # and invoked by the CI quality-gate job so local and CI stay aligned.
+#
+# The self-test above is a PREREQUISITE, not a sibling: a gate whose red
+# direction is unproven is indistinguishable from a gate that always passes.
 .PHONY: check-release-coverage
-check-release-coverage:
+check-release-coverage: check-release-coverage-guard-selftest
 	@echo "$(BLUE)Checking release-ledger coverage...$(NC)"
 	./scripts/check-release-coverage.sh
 	@echo "$(GREEN)✓ Every publishable workspace member has a publish step$(NC)"
