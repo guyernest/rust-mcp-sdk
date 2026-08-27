@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: AI-Package Portability
 current_phase: 124
-current_phase_name: release-publish-order
+current_phase_name: Release & Publish Order
 status: executing
 stopped_at: Phase 124 context gathered
-last_updated: "2026-08-27T05:42:56.698Z"
-last_activity: 2026-08-26
-last_activity_desc: Phase 123 complete, transitioned to Phase 124
-state_head: 7344a5c00563155994a05a93d2c204be90d6c39d
+last_updated: "2026-08-27T16:32:28.237Z"
+last_activity: 2026-08-27
+last_activity_desc: Phase 124 execution started
+state_head: e094f01104471682610b296520d0233e8bca6b5f
 progress:
   total_phases: 5
   completed_phases: 4
@@ -27,14 +27,14 @@ See: .planning/PROJECT.md (updated 2026-08-22, milestone v2.6 open) · .planning
 > `.planning/v2.6-REQUIREMENTS-STAGED.md` was consumed and removed when v2.6 opened — its content is now `.planning/REQUIREMENTS.md`. Do not look for it.
 
 **Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
-**Current focus:** Phase 123 — Export/Import Verbs
+**Current focus:** Phase 124 — Release & Publish Order
 
 ## Current Position
 
-Phase: 124 (release-publish-order) — READY TO EXECUTE
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-26 — Phase 123 complete, transitioned to Phase 124
+Phase: 124 (Release & Publish Order) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 124
+Last activity: 2026-08-27 — Phase 124 execution started
 Next: Execute Phase 123 — `/gsd-execute-phase 123`. 7 plans across 6 waves
 (1:{01} 2:{02,03} 3:{04} 4:{05} 5:{06} 6:{07}), all carrying PKGX-02.
 
