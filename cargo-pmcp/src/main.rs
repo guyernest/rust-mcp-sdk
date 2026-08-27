@@ -206,10 +206,50 @@ enum Commands {
         command: commands::team::TeamCommand,
     },
 
-    /// Inspect and capture portable AI-Package bundles
+    /// Move AI-Package bundles between a working layout, a local file, and pmcp.run
     ///
-    /// `package show` prints an AI-Package manifest; `package capture` captures
-    /// a bundle for a platform target selected by the capture-local `--target`.
+    /// The group spans THREE directions, in the vocabulary agreed with the pmcp.run
+    /// platform team on 2026-08-26 (D-09). It follows Docker's split deliberately —
+    /// `save`/`load` for the local file round trip, `push`/`pull` for the registry,
+    /// `import` for admitting something into the system — so a reader who has used a
+    /// container CLI already knows what the three directions mean:
+    ///
+    ///   LOCAL FILE      `save` writes a package out to one movable tar file, and
+    ///                   `load` reads one back into a working layout. `inspect`
+    ///                   reads a working layout in place. None touch the network.
+    ///
+    ///   PUBLISHED       `pull` fetches a published artifact from pmcp.run and
+    ///   ARTIFACT        installs it through the same verification `load` uses.
+    ///                   `show` fetches and renders a published WORKFLOW manifest;
+    ///                   `capture` submits a capture job that produces a package
+    ///                   platform-side. There is no upload direction — `push` and
+    ///                   `export` are retired (D-01), because `capture` already
+    ///                   does that job.
+    ///
+    ///   ENVIRONMENT     `import` ADMITS a package into an environment, and
+    ///                   `approve` records an approval for one. Both are
+    ///                   operations on the pmcp.run control plane, not on files.
+    ///
+    /// Eight verbs, three directions. `import`'s meaning is fixed across the CLI,
+    /// the pmcp.run API and its admin UI (D-03) — this preamble describes it, it
+    /// does not restate or narrow it.
+    //
+    // PLACEMENT: this is the variant's doc comment, which clap renders as
+    // `long_about` ABOVE the `Usage:` line — measured by executing the built
+    // binary. `#[command(after_long_help = "...")]`, used by `Dev` below, was the
+    // alternative and would render BELOW `Commands:`. The doc comment was chosen
+    // for two reasons: D-09 asks for a PREAMBLE, and a legend that frames the verb
+    // list should be read before it, not after; and the text it replaces was itself
+    // the `long_about` and was factually wrong (it claimed `show` prints an
+    // AI-Package manifest — it fetches a published WORKFLOW manifest — and it named
+    // two of the eight verbs). Splitting the correction across two attributes would
+    // have left a stale `long_about` above a correct legend below.
+    //
+    // `verbatim_doc_comment` is required: without it clap joins consecutive
+    // non-empty doc lines into one paragraph, which would collapse the three
+    // direction blocks into a single unreadable run-on. `verb_help.rs` asserts the
+    // three direction phrases are present in the rendered output.
+    #[command(verbatim_doc_comment)]
     Package {
         #[command(subcommand)]
         command: commands::package::PackageCommand,

@@ -348,6 +348,19 @@ test-cargo-pmcp:
 # change parks the last non-ignored test in that file, this gate goes red BY
 # DESIGN; unpark or replace the test, do not relax the guard.
 #
+# `verb_help` (appended by Phase 123 plan 06, 2026-08-26) is the one append here
+# that was NOT a new file. `cargo-pmcp/tests/verb_help.rs` has existed since
+# Phase 110 and, measured on the date of that commit, was executed by NOTHING:
+# `grep -c 'verb_help' Makefile` returned 0, and the four candidate gates all
+# miss it — `make test-cargo-pmcp` is `--lib` (which excludes `tests/`
+# entirely), this target's `--test` selector list omitted it, its
+# `REQUIRED_TEST_BINARIES` omitted it, and `test-all` chains only those two
+# cargo-pmcp legs. It was registered in BOTH lists in the SAME commit that made
+# its `EXPECTED_VERBS` pin an exact-set assertion, because an exact-set pin in a
+# file no gate runs reads green forever — including after the drift it exists to
+# catch. The general lesson for the next person adding a `cargo-pmcp/tests/`
+# file: the default is NOT reached. Register it here or it does not run.
+#
 # WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
 # interchangeable and the distinction is easy to get backwards:
 #
@@ -393,7 +406,7 @@ test-cargo-pmcp:
 .PHONY: test-cargo-pmcp-integration
 test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
-	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin --test package_save_load --test package_portability_contract --test package_artifact_framing -- --test-threads=1 2>&1); \
+	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin --test package_save_load --test package_portability_contract --test package_artifact_framing --test verb_help -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
@@ -402,7 +415,7 @@ test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin package_save_load package_portability_contract package_artifact_framing"; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin package_save_load package_portability_contract package_artifact_framing verb_help"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
