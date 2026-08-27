@@ -137,18 +137,18 @@ status: halted
 
 **A committed three-way version-drift sweep (`make release-sweep`) measures all 25 publishable crates against the crates.io API and finds seven phantom deltas — of which artifact corroboration confirms six and REFUTES one — while `cargo public-api --all-features` discharges D-03's patch axis with zero `jsonwebtoken` occurrences across pmcp's 26,801-line public surface.**
 
-> **STATUS: HALTED at the Task 3 checkpoint (`gate="blocking-human"`).**
-> Tasks 1 and 2 are complete and committed. Task 3 is a one-way-door user decision
-> on which version numbers this release consumes. The `## Task 3 Decision` section
-> below is **PENDING** and must be filled with the user's verbatim answers before
-> plan 05 may bump anything. Plan 05 executes exactly that list and nothing else.
+> **STATUS: COMPLETE.** Tasks 1 and 2 were committed before the checkpoint; Task 3's
+> one-way-door decision was taken by the user on 2026-08-27 at the `gate="blocking-human"`
+> checkpoint and is recorded verbatim in `## Task 3 Decision — DECIDED` below.
+> Chosen: **`bump-all-source-visible`** + **`mcp-tester` left unbumped**. Plan 05 executes
+> that closed four-crate list and nothing else.
 
 ## Performance
 
 - **Duration:** ~75 min
 - **Started:** 2026-08-27T18:00Z (approx.)
 - **Completed (Tasks 1–2):** 2026-08-27T18:25Z
-- **Tasks:** 2 of 3 complete; Task 3 awaiting a user decision
+- **Tasks:** 3 of 3 complete
 - **Files modified:** 4 (1 created, 3 modified)
 
 ## Accomplishments
@@ -163,7 +163,7 @@ status: halted
 
 1. **Task 1: Build the three-way version-drift sweep as a committed tool** — `f5e9ef91` (feat)
 2. **Task 2: Run the sweep, run D-03's public-API guard, produce the decision table** — no code changes by design (measurement only); its measured defects landed as `05d2af71` (docs, WINDOWS ledger)
-3. **Task 3: DECISION checkpoint** — no commit; awaiting the user
+3. **Task 3: DECISION checkpoint** — no code commit by design; the user's decision is recorded in `## Task 3 Decision — DECIDED` above
 
 **Plan metadata:** _(this SUMMARY's own commit)_
 
@@ -354,19 +354,91 @@ All six are `[dev-dependencies]` entries carrying **both** `path` and `version`.
 
 It is green today **only** because `0.8.0` is already on crates.io (verified: in-tree `0.8.0` == published `0.8.0`, and the sweep classifies `mcp-tester` **clean** with no delta). Bumping `mcp-tester` to, say, `0.9.0` without moving all four before-publish pins in the same change kills the release job at `pmcp-server-toolkit`, the first of them.
 
-## Task 3 Decision — PENDING
+## Task 3 Decision — DECIDED
 
-> **This section is intentionally unfilled.** Task 3 is a `checkpoint:decision` with
-> `gate="blocking-human"`. It is never auto-approved, in any mode. The executor
-> halted here and returned the decision table to the user.
->
-> When the user answers, this section must record, verbatim:
-> - a decision line for **every** open row (bump-at-which-version, or leave);
-> - the exact closed set of `(crate, target version)` pairs plan 05 is authorised to bump;
-> - an explicit `mcp-tester` line (not bumped, or bumped with a stated resolution for the four before-publish pins);
-> - the caret non-decision (`pmcp` 2.19.1 needs no downstream pin change; `^2.19.0` admits 2.19.1);
-> - the baseline provenance and corroboration state of every authorised bump;
-> - for every crate left, the statement that the delta stays unshipped and that `make release-sweep` is the only thing that will surface it again.
+> **Decided 2026-08-27 by the user at the `gate="blocking-human"` checkpoint.**
+> Option chosen: **`bump-all-source-visible`**, plus **`mcp-tester` = (a) leave unbumped**.
+> Plan 05 executes the closed list below and nothing else.
+
+### The authorised bump set — closed, exhaustive, `(crate, from, to)`
+
+| # | Crate | From | To | Axis | Baseline provenance | Corroboration |
+|---|---|---|---|---|---|---|
+| 1 | `pmcp` | 2.19.0 | **2.19.1** | patch | `tag:v2.19.0+confirmed` | D-03 guard clean — `cargo public-api --all-features`, 0 `jsonwebtoken` in 26,801 lines, 286 `jwt` as positive control |
+| 2 | `pmcp-workbook-runtime` | 0.1.0 | **0.2.0** | minor (pre-1.0 additive) | `tag:v2.9.2+confirmed` | published `.crate` artifact |
+| 3 | `pmcp-code-mode-derive` | 0.2.0 | **0.2.1** | patch | `tag:v2.3.1+confirmed` | published `.crate` artifact; **orchestrator-verified** at `crates/pmcp-code-mode-derive/src/lib.rs:274` |
+| 4 | `pmcp-workbook-compiler` | 0.1.0 | **0.1.1** | patch | `tag:v2.9.2+confirmed` | published `.crate` artifact; **orchestrator-verified** against the crates.io dependencies API |
+
+No other crate's version may be touched by plan 05.
+
+### Decision line per open row
+
+- **`pmcp-workbook-runtime` → 0.2.0 (BUMP).** Additive public API: a new `pub mod reconcile`
+  (590 lines) plus six crate-root re-exports (`RenderMode`, `reconcile_reference`,
+  `seed_reference_inputs`, `OutputRow`, `ReconcileReport`, `ToolReport`). Pre-1.0 additive
+  takes the minor axis. Left unbumped, no downstream consumer could reach the new module.
+- **`pmcp-code-mode-derive` → 0.2.1 (BUMP).** The published 0.2.0 macro emits
+  `validate_sql_query(...)` where in-tree emits `validate_sql_query_async(...).await`. Both
+  methods still exist, so the generated code *compiles* — it is simply the wrong path, which
+  is exactly why nothing has noticed. A wrong published artifact, not a missing feature.
+- **`pmcp-workbook-compiler` → 0.1.1 (BUMP).** In-tree pins `umya-spreadsheet = "=3.0.0"`;
+  the published 0.1.0 carries `^3.0`. A cold resolve of the published crate therefore lands
+  on 3.0.1, which forks `Cargo.lock` onto a second `quick-xml` — the purity gate fails
+  closed — and regresses an ingest test. RESEARCH classified this as "doc + test assertion"
+  and **missed the pin**; the sweep caught it.
+- **`mcp-preview` — LEAVE.** Manifest-only (`tower-http "0.6"` → `"0.7"`). No source moved.
+- **`pmcp-sql-server` — LEAVE.** `[dev-dependencies]` only (`mcp-tester "0.7.0"` → `"0.8.0"`,
+  `rusqlite "0.39"` → `"0.40"`). Does not affect the published library surface.
+- **`pmcp-widget-utils` — LEAVE. Not a delta at all.** Its published 0.1.0 `src/lib.rs` is
+  byte-identical to the in-tree file. The `tag:v1.3` baseline is over-early and
+  **uncorroborated**: the `fmt` reflow landed in `eb7e4bf1`, whose earliest containing tag is
+  `v1.11.0`, and `git diff v1.11.0..HEAD` is empty. RESEARCH Pitfall 2 lists it as a phantom
+  delta; that finding is **REFUTED**. This is a measured instance of T-124-23 — tag
+  containment is not a publication oracle (WINDOWS #42).
+
+### `mcp-tester` — explicit line
+
+**NOT bumped.** The sweep classifies it **clean**: in-tree `0.8.0` == published `0.8.0`, no
+delta. It is presented as its own decision row only because bumping it carries a consequence
+no other row has — six in-repo crates pin it by version and **four publish before it**
+(`pmcp-server-toolkit` :263, `pmcp-sql-server` :329, `pmcp-openapi-server` :344,
+`pmcp-workbook-server` :383, against `mcp-tester` at :401), each a `[dev-dependencies]` entry
+carrying **both** `path` and `version`, which Cargo **retains** in the published manifest
+(measured: published `pmcp-sql-server` 0.1.0 contains `[dev-dependencies.mcp-tester]
+version = "0.7.0"`). It is green today only because 0.8.0 is already on crates.io.
+
+**Prohibition for plan 05:** do not bump `mcp-tester`. Bumping it without moving all four
+before-publish pins in the same change kills the release job at `pmcp-server-toolkit`, the
+first of them.
+
+### The caret non-decision (settled, not open)
+
+`pmcp` 2.19.0 → 2.19.1 requires **no** downstream pin bumps. `crates/mcp-tester/Cargo.toml:21`
+and `cargo-pmcp/Cargo.toml:68` pin `pmcp = "2.19.0"`, and `^2.19.0` already admits 2.19.1.
+CLAUDE.md's blanket Version Bump Rule ("downstream crates that pin a bumped dependency must
+also be bumped") over-fires on patch bumps; plan 04 Task 2 records the caret exception.
+
+### Consequence of every row left unbumped
+
+For `mcp-preview`, `pmcp-sql-server`, `pmcp-widget-utils` and `mcp-tester`: **the delta stays
+unshipped indefinitely.** `release.yml` skips an already-published version gracefully and
+silently, so nothing fails and nothing reports it. `make release-sweep` is the only mechanism
+that will ever surface these again. For `pmcp-widget-utils` this costs nothing — there is no
+delta to ship. For the other three the omission is deliberate and measured.
+
+### Ships as-is at this tag, already bumped ahead of the registry (9)
+
+`cargo-pmcp` 0.23.0 · `pmcp-agent` 0.3.0 · `pmcp-cfn-renderer` 0.2.0 · `pmcp-openapi-server`
+0.1.1 · `pmcp-package` 0.3.0 · `pmcp-server-toolkit` 0.1.2 · `pmcp-tasks` 0.1.1 ·
+`pmcp-team-servers` 0.2.0 · `pmcp-workbook-server` 0.1.1. No decision was required for these.
+
+### Bounding argument — why the nine `clean` readings are trustworthy
+
+"Earliest tag containing the bump commit" is always at-or-before the true publishing tag, so
+the heuristic can only **over**-report a delta, never under-report one. A crate the sweep
+reads as `clean` therefore cannot be hiding a real unshipped change. This is what makes the
+sweep a decision instrument rather than merely suggestive, and plan 05 and the phase verifier
+may rely on it.
 
 ### The table presented to the user
 
@@ -455,7 +527,7 @@ None — no external service configuration required. The sweep needs only outbou
 
 ## Next Phase Readiness
 
-**Blocked on the Task 3 user decision.** Plan 05 must not bump any crate until the `## Task 3 Decision` section above names the closed `(crate, target version)` list.
+**Unblocked.** The `## Task 3 Decision — DECIDED` section above names the closed four-crate `(crate, from, to)` list plan 05 is authorised to execute, and the `mcp-tester` prohibition.
 
 Ready for downstream once decided:
 - `make release-sweep` and `/tmp/124-release-sweep-corroborated.tsv` are the inputs plans 05 and 07 consume.
@@ -464,7 +536,7 @@ Ready for downstream once decided:
 
 ---
 *Phase: 124-release-publish-order*
-*Completed: 2026-08-27 (Tasks 1–2; Task 3 pending user decision)*
+*Completed: 2026-08-27 (all 3 tasks; Task 3 decided by the user at the blocking-human checkpoint)*
 
 ## Self-Check: PASSED
 
