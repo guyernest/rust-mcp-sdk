@@ -712,8 +712,50 @@ test-fuzz:
 # is no longer the whole truth — `tests/docs04_examples_run.rs` and
 # `tests/docs06_v2_examples_run.rs` do run several of them, under
 # `test-integration`, against the binaries this target produces.
+# The GATE's reach into `cargo-pmcp/examples/`, added by Phase 123 plan 07
+# alongside the example it gates — the same "register it in the commit that
+# creates it" discipline recorded at the APPEND-ONLY block near
+# `test-cargo-pmcp-integration`.
+#
+# MEASURED on the date this landed (2026-08-26), before the leg existed:
+# `cargo-pmcp/examples/` was compiled by NOTHING in `make quality-gate`.
+# Three ways, all read from this file and one script:
+#   - `scripts/run-example-builds.sh` covers exactly three trees (the root
+#     `pmcp` package, `pmcp-agent`, `pmcp-team-servers`) and its own header
+#     names `cargo-pmcp` under "ALSO NOT COVERED" — 87 examples built, none of
+#     them cargo-pmcp's.
+#   - `make build` is `cargo build --all-features` with no `-p` and no
+#     `--examples`, so it resolves to the root `pmcp` package's lib+bins.
+#   - `make lint` is `cargo clippy --features full --lib --tests`, also
+#     root-scoped, and `--lib --tests` excludes examples by construction.
+# So a new `cargo-pmcp` example — including the CLAUDE.md ALWAYS
+# `cargo run --example` deliverable for `package save`/`load` — could rot
+# without any gate noticing. That is the same shape as the `verb_help` hole
+# this phase closed one directory over: the default is NOT reached.
+#
+# RUSTFLAGS is pinned EMPTY here for the same three reasons spelled out at
+# `test-cargo-pmcp-integration`: make re-exports an environment-sourced
+# RUSTFLAGS using the MAKEFILE's value, so this recipe is warning-free locally
+# and `-D warnings` in CI. `cargo-pmcp/examples/deploy_stack_metadata.rs`
+# carries one PRE-EXISTING `unused_imports` warning (measured; not introduced
+# by this leg), which under an inherited `-D warnings` would turn this into a
+# red gate over rot it was never meant to lint. This leg's job is to prove the
+# examples are REACHED and COMPILE. Linting belongs in `make lint`; widening
+# that is a separate, deliberate decision.
+#
+# Scope is deliberately `-p cargo-pmcp` and not `--workspace --examples`.
+# `scripts/run-example-builds.sh`'s header records that the wider form "is
+# cheap to attempt but was not measured, so it is not claimed here"; this
+# narrower form WAS measured (exit 0) and is claimed. Widening further is a
+# separate change that must measure the other members first.
+.PHONY: build-cargo-pmcp-examples
+build-cargo-pmcp-examples:
+	@echo "$(BLUE)Building cargo-pmcp's examples...$(NC)"
+	@RUSTFLAGS= $(CARGO) build -p cargo-pmcp --examples
+	@echo "$(GREEN)✓ cargo-pmcp examples built$(NC)"
+
 .PHONY: test-examples
-test-examples:
+test-examples: build-cargo-pmcp-examples
 	./scripts/run-example-builds.sh
 
 # MCP Tester Integration
