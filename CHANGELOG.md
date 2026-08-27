@@ -38,11 +38,15 @@ let that happen.
   `0.2.0`.
 - **`pmcp-workbook-dialect` 0.1.0 → 0.1.1** — re-pin release only: `pmcp-workbook-runtime`
   moves to `0.2.0`. No source change.
-- **`pmcp-code-mode-derive` 0.2.0 → 0.2.1** — the `"sql"` arm of the derive now emits
-  `validate_sql_query_async(...).await` where the published 0.2.0 emitted the synchronous
-  `validate_sql_query(...)`. Both methods still exist on the pipeline, so the published macro
-  compiled — it simply generated the wrong path, which is why nothing surfaced it. The macro's
-  own public API is unchanged.
+- **`pmcp-code-mode-derive` 0.2.0 → 0.3.0 (BREAKING)** — the `"sql"` arm of the derive now
+  emits `validate_sql_query_async(...).await` where the published 0.2.0 emitted the
+  synchronous `validate_sql_query(...)`. The macro's own input surface is unchanged, but the
+  **emitted code is part of its contract**: `validate_sql_query_async` does not exist in
+  `pmcp-code-mode` 0.4.x (it arrived in 0.5.0), and this crate declares no runtime dependency
+  on `pmcp-code-mode` — the pairing is unconstrained by the published manifest. A patch bump
+  would therefore have been taken automatically by anyone on `^0.2` and broken their build
+  with "no method named `validate_sql_query_async`". The minor axis stops that. **Users
+  upgrading to 0.3.0 must be on `pmcp-code-mode` >= 0.5.0.**
 - **`pmcp-server-toolkit`** — its `pmcp-workbook-runtime` requirement moves to `0.2.0`. This
   is a correctness fix, not bookkeeping: `src/workbook/handler.rs` uses `RenderMode`,
   `reconcile_reference` and `ReconcileReport`, none of which exist in the published 0.1.0,

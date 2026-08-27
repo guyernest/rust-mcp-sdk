@@ -703,3 +703,48 @@ All created files verified present on disk (`scripts/release-version-sweep.sh`,
 present in `git log --oneline --all` (`f5e9ef91`, `05d2af71`, `93165d8e`).
 No `git stash` operation was performed (the shared stack was left at its 14
 pre-existing entries).
+
+---
+
+### ADDENDUM 4 — `pmcp-code-mode-derive` axis corrected to 0.3.0 (2026-08-27, pre-PR gate)
+
+**Appended, not rewritten.** Rows above recording `0.2.1` are the historical record of what was
+decided in each round; this addendum supersedes them.
+
+The user elected, before Wave 6 opened the PR, to close the one row this phase had knowingly
+left resting on reasoning alone. `pmcp-code-mode-derive` was the only crate in the release whose
+axis no tool could verify — a proc-macro with no library target, so `cargo semver-checks` exits
+101. It was resolved by hand instead, and **the reasoning was wrong**.
+
+Measured:
+
+- The published `0.2.0` `.crate` differs from in-tree by **exactly one code line** (doc comments
+  excluded): the emitted call moves from `validate_sql_query(code, &context)` to
+  `validate_sql_query_async(code, &context).await`.
+- `validate_sql_query_async` is **absent from `pmcp-code-mode` 0.4.0** and present from `0.5.0`
+  (both `.crate` artifacts downloaded and grepped).
+- `pmcp-code-mode-derive` declares **no runtime dependency** on `pmcp-code-mode` — its
+  `[dependencies]` are `syn`, `quote`, `proc-macro2`, `darling` only. The `pmcp-code-mode`
+  entry is a **dev-dependency**, which Cargo strips from the published manifest.
+
+Therefore nothing constrains the pairing. A user on `pmcp-code-mode` 0.4.x with
+`pmcp-code-mode-derive = "0.2"` would have received `0.2.1` **automatically** on their next
+resolve and failed to compile with *no method named `validate_sql_query_async`*. A breaking
+change delivered on a patch number is the worst case, because patch upgrades are silent.
+
+**Corrected axis: `0.2.0 -> 0.3.0`.** On a 0.x line the minor is the breaking axis, so `^0.2`
+users are no longer auto-upgraded. Users adopting 0.3.0 must be on `pmcp-code-mode >= 0.5.0`.
+
+**A required consequence the sweep had missed:** root `Cargo.toml:257` pinned
+`pmcp-code-mode-derive = { version = "0.2.0", ... }`. That is compatible with `0.2.1` but **not**
+with `0.3.0` — left alone, `pmcp` itself would have failed to resolve at publish time. Moved to
+`"0.3.0"`. Three documentation pins were also moved for consistency
+(`pmcp-book/src/ch12-9-code-mode.md:90`, `pmcp-course/src/part8-advanced/ch22-code-mode.md:68`,
+`pmcp-course/src/part8-advanced/ch22-exercises.md:17`), which the 81-series audit requires to be
+byte-equal between book and course.
+
+**Why this matters beyond the row.** This is the **third** version-axis error the phase caught
+and the **second** that prose reasoning produced. `pmcp-workbook-runtime` was caught by
+`cargo semver-checks`; this one had no tool and needed a manual artifact diff. The pattern is
+consistent: on this codebase, an axis argued from a description of *what was added* has been
+wrong every time it was checked. Check what *changed shape*, against the published artifact.

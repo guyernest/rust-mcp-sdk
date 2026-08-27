@@ -20,10 +20,10 @@
     },
     {
       "crate": "pmcp-code-mode-derive",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "manifest_path": "crates/pmcp-code-mode-derive/Cargo.toml",
       "previously_published": "0.2.0",
-      "source": "authorised bump (plan 03 decision as amended)"
+      "source": "authorised bump (plan 03 decision as amended; axis corrected to minor at the pre-PR verification gate \u2014 emitted code requires pmcp-code-mode >=0.5.0, unconstrained by the manifest)"
     },
     {
       "crate": "pmcp-workbook-compiler",
@@ -222,7 +222,7 @@
     "pmcp-workbook-dialect 0.1.0 -> 0.1.1 is a PURE RE-PIN release with no source change. It is authorised (Option A) because pmcp-workbook-runtime 0.1.0 -> 0.2.0 is semver-incompatible, so its ^0.1.0 requirement is forced to move, and a changed published artifact needs a new version.",
     "pmcp-workbook-compiler's and pmcp-workbook-dialect's runtime pins move ONLY because Cargo forces them (0 new-symbol uses each, measured against a pmcp-server-toolkit positive control with 3 imports / 10 qualified refs). pmcp-server-toolkit's two pins move on CODE grounds.",
     "pmcp-package ships 0.3.0 AS-IS. The D-04 audit found 0 added non-doc, non-blank lines in both source files touched since 6430afae, so no emitter moves and none of its four consumers needs a consequence bump.",
-    "pmcp-code-mode-derive 0.2.1 is UNVERIFIED by cargo semver-checks: it is a proc-macro with no library target, so the tool exits 101 with 'no library target' and there is no API surface to compare. Its patch axis rests on plan 03's reasoning that the macro's own public API does not move, only the code it emits. Recorded as unverified deliberately -- this phase twice found that class of reasoning wrong about an axis.",
+    "pmcp-code-mode-derive ships 0.3.0, NOT the 0.2.1 plan 03 authorised. The axis was corrected at the pre-PR verification gate on 2026-08-27. semver-checks still cannot check it (proc-macro, no library target, exit 101), so it was resolved by hand: the published 0.2.0 .crate differs from in-tree by exactly one code line -- the emitted call moves from validate_sql_query to validate_sql_query_async(...).await. That method is ABSENT from pmcp-code-mode 0.4.0 and present from 0.5.0, and the derive declares no RUNTIME dependency on pmcp-code-mode (its dev-dependency is stripped from the published manifest), so nothing constrains the pairing. A 0.2.1 patch would have been taken AUTOMATICALLY by every ^0.2 user and broken their build. Users of 0.3.0 must be on pmcp-code-mode >= 0.5.0. This is the third axis error this phase caught, and the second that prose reasoning got wrong.",
     "mcp-preview, pmcp-sql-server and pmcp-widget-utils are left unbumped by explicit decision; for the first two the delta stays unshipped indefinitely, and for the third there is no delta to ship."
   ],
   "semver_verdicts": [
@@ -256,10 +256,10 @@
     },
     {
       "crate": "pmcp-code-mode-derive",
-      "move": "0.2.0 -> 0.2.1",
+      "move": "0.2.0 -> 0.3.0",
       "tool_exit": 101,
-      "classification": "UNVERIFIABLE",
-      "detail": "proc-macro, no library target -- semver-checks cannot compare an API surface"
+      "classification": "RESOLVED BY MANUAL DIFF (tool still cannot check it)",
+      "detail": "proc-macro, no library target -- semver-checks cannot compare an API surface (exit 101). Resolved instead by diffing the published 0.2.0 .crate against in-tree: exactly one code line differs, the emitted call validate_sql_query -> validate_sql_query_async(...).await. validate_sql_query_async is ABSENT from pmcp-code-mode 0.4.0 and present from 0.5.0; the derive declares NO runtime dependency on pmcp-code-mode (only a dev-dependency, which is stripped from the published manifest), so the incompatible pairing is unconstrained. A 0.2.1 patch would have been taken automatically by ^0.2 users and broken their build. Axis corrected to minor (0.3.0) at the pre-PR verification gate."
     }
   ]
 }
