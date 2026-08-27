@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 39
+open_count: 43
 waived_count: 0
 fixed_count: 9
-total_count: 48
-last_updated: 2026-08-27T18:57:37.690Z
+total_count: 52
+last_updated: 2026-08-27T19:12:33.481Z
 ---
 
 # Broken Windows Ledger
@@ -63,6 +63,10 @@ last_updated: 2026-08-27T18:57:37.690Z
 | 46 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Task 1 acceptance criteria address the publish-order comment block by FIXED line window (sed -n '80,110p'), but this plan's own Region A edit grows that block from 19 to 39 lines, pushing cargo-pmcp past line 110 — the criterion would have compared ordinals in a window no longer containing both crates. Discharged with a heading-anchored awk extraction, the same fix the plan already applied to Task 2's three regions. A plan must not address by fixed line numbers a region it edits. | open |  | 2026-08-27T18:57:21.473Z |  |
 | 47 | 124 | deviation | Makefile |  | The rtk output proxy TRUNCATES captured command output and writes its own truncation marker into the redirect target, then reports its own exit status: 'RUSTFLAGS= make quality-gate > log 2>&1; echo $?' printed EXIT=0 with a 908-line log ending mid-clippy-echo in the literal text '... (9166 lines truncated)'. The real run is 11551 lines ending 'ALL TOYOTA WAY QUALITY CHECKS PASSED'. A green exit read this way is not evidence the gate ran to completion. Capture the status inside a script that writes $? to a file (done here), or use absolute binary paths. | open |  | 2026-08-27T18:57:29.751Z |  |
 | 48 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Two Task 2 acceptance greps cannot distinguish PRESCRIBING a thing from FORBIDDING it, and one is self-defeating: (a) 'grep -c cargo search /tmp/124-preflight.txt returns 0' fails if the Pre-Flight step names the forbidden command in order to forbid it — resolved by pointing at item 13's naming instead of repeating it, losing a little in-place force; (b) 'grep -c "Nine were measured" CLAUDE.md returns 1' fails if the correction note quotes the phrase it is correcting — resolved by paraphrasing. Both are the literal-grep-vs-intent class this phase keeps finding. | open |  | 2026-08-27T18:57:37.690Z |  |
+| 49 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-SUMMARY.md |  | Plan 03's authorised bump list is INCOMPLETE for pmcp-workbook-runtime 0.1.0 -> 0.2.0. That move is semver-INCOMPATIBLE (pre-1.0 minor) and four requirement sites in three manifests pin the crate at "0.1.0": pmcp-server-toolkit:81 (optional dep) and :202 (dev-dep), pmcp-workbook-compiler:41, pmcp-workbook-dialect:25. Measured: with runtime at 0.2.0 and the pins unmoved, 'cargo metadata --offline' exits 101 with 'failed to select a version for the requirement pmcp-workbook-runtime = "^0.1.0"' -- so the pins MUST move. CLAUDE.md's Version Bump Rules then require each pinning crate to be bumped (plan 04's caret exception covers PATCH only). pmcp-server-toolkit (0.1.2 vs published 0.1.1) and pmcp-workbook-compiler (authorised 0.1.1) already satisfy it; pmcp-workbook-dialect is 0.1.0 == published 0.1.0 and is NOT on the closed authorised list. Plan 05 halted at a blocking-human checkpoint rather than consume an unauthorised version number. | open |  | 2026-08-27T19:10:05.493Z |  |
+| 50 | 124 | deviation | crates/pmcp-server-toolkit/Cargo.toml | 81 | LATENT PUBLISHED-ARTIFACT DEFECT, independent of Phase 124's bumps. pmcp-server-toolkit 0.1.2 pins pmcp-workbook-runtime = "0.1.0" while src/workbook/handler.rs makes 42 references to API absent from the PUBLISHED runtime 0.1.0 (RenderMode, reconcile_reference, ReconcileReport, reconcile::TOL); plan 03 corroborated that the published 0.1.0 .crate has no reconcile module and no RenderMode. Locally the path dep hides it. 'workbook' is NOT a default feature (default = ["code-mode"]), so cargo publish's default-feature verification build would NOT catch it: 0.1.2 would publish green and fail to build for any consumer enabling 'workbook'. Moving the pin to the shipped runtime version is the fix, which is why 'leave the pins alone' is not an available option. | open |  | 2026-08-27T19:10:05.565Z |  |
+| 51 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 1's replacement acceptance criterion is defective as written. It requires the set of differing (manifest_path, field, before, after) rows to equal EXACTLY the authorised (crate, version) map from plan 03's checkpoint. But the same task's <action> instructs the executor to search every workspace manifest for requirements on each bumped crate and move the affected ones -- and those requirement-string rows are differing rows that appear in NO (crate, version) map. Applied literally the criterion forbids the downstream pin moves the task mandates. Correct form: partition the rows into [package].version rows (must equal the authorised map exactly) and dependency-requirement rows (must equal the discovered consequence set, recorded and justified). Same literal-assertion-vs-intent class as WINDOWS #46 and #48. | open |  | 2026-08-27T19:10:05.636Z |  |
+| 52 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 2's CR-01 acceptance criterion returns a FALSE FAILURE at the unmodified base. It runs 'grep -n pmcp-package crates/pmcp-openapi-server/Cargo.toml > /tmp/124-cr01.txt' then requires 'grep -c version /tmp/124-cr01.txt' to be 0. Measured: it returns 1, matching line 100 -- a COMMENT ('# crates/pmcp-package/Cargo.toml's own version field stays on the 0.3 line'), not the dependency. The actual dep at line 124 is 'pmcp-package = { path = "../pmcp-package" }', path-only and correct; restricting to non-comment 'pmcp-package =' lines gives the intended 0, and the real tripwire (cargo test -p pmcp-openapi-server --test pmcp_package_pin) passes 2/2. An executor trusting the literal criterion would 'fix' a compliant manifest. Same literal-grep-vs-intent class as WINDOWS #46, #48 and #51. | open |  | 2026-08-27T19:12:33.481Z |  |
 
 ````json
 [
@@ -640,6 +644,54 @@ last_updated: 2026-08-27T18:57:37.690Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T18:57:37.690Z",
+    "resolved_at": null
+  },
+  {
+    "id": 49,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-SUMMARY.md",
+    "line": null,
+    "description": "Plan 03's authorised bump list is INCOMPLETE for pmcp-workbook-runtime 0.1.0 -> 0.2.0. That move is semver-INCOMPATIBLE (pre-1.0 minor) and four requirement sites in three manifests pin the crate at \"0.1.0\": pmcp-server-toolkit:81 (optional dep) and :202 (dev-dep), pmcp-workbook-compiler:41, pmcp-workbook-dialect:25. Measured: with runtime at 0.2.0 and the pins unmoved, 'cargo metadata --offline' exits 101 with 'failed to select a version for the requirement pmcp-workbook-runtime = \"^0.1.0\"' -- so the pins MUST move. CLAUDE.md's Version Bump Rules then require each pinning crate to be bumped (plan 04's caret exception covers PATCH only). pmcp-server-toolkit (0.1.2 vs published 0.1.1) and pmcp-workbook-compiler (authorised 0.1.1) already satisfy it; pmcp-workbook-dialect is 0.1.0 == published 0.1.0 and is NOT on the closed authorised list. Plan 05 halted at a blocking-human checkpoint rather than consume an unauthorised version number.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.493Z",
+    "resolved_at": null
+  },
+  {
+    "id": 50,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "crates/pmcp-server-toolkit/Cargo.toml",
+    "line": 81,
+    "description": "LATENT PUBLISHED-ARTIFACT DEFECT, independent of Phase 124's bumps. pmcp-server-toolkit 0.1.2 pins pmcp-workbook-runtime = \"0.1.0\" while src/workbook/handler.rs makes 42 references to API absent from the PUBLISHED runtime 0.1.0 (RenderMode, reconcile_reference, ReconcileReport, reconcile::TOL); plan 03 corroborated that the published 0.1.0 .crate has no reconcile module and no RenderMode. Locally the path dep hides it. 'workbook' is NOT a default feature (default = [\"code-mode\"]), so cargo publish's default-feature verification build would NOT catch it: 0.1.2 would publish green and fail to build for any consumer enabling 'workbook'. Moving the pin to the shipped runtime version is the fix, which is why 'leave the pins alone' is not an available option.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.565Z",
+    "resolved_at": null
+  },
+  {
+    "id": 51,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 1's replacement acceptance criterion is defective as written. It requires the set of differing (manifest_path, field, before, after) rows to equal EXACTLY the authorised (crate, version) map from plan 03's checkpoint. But the same task's <action> instructs the executor to search every workspace manifest for requirements on each bumped crate and move the affected ones -- and those requirement-string rows are differing rows that appear in NO (crate, version) map. Applied literally the criterion forbids the downstream pin moves the task mandates. Correct form: partition the rows into [package].version rows (must equal the authorised map exactly) and dependency-requirement rows (must equal the discovered consequence set, recorded and justified). Same literal-assertion-vs-intent class as WINDOWS #46 and #48.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.636Z",
+    "resolved_at": null
+  },
+  {
+    "id": 52,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 2's CR-01 acceptance criterion returns a FALSE FAILURE at the unmodified base. It runs 'grep -n pmcp-package crates/pmcp-openapi-server/Cargo.toml > /tmp/124-cr01.txt' then requires 'grep -c version /tmp/124-cr01.txt' to be 0. Measured: it returns 1, matching line 100 -- a COMMENT ('# crates/pmcp-package/Cargo.toml's own version field stays on the 0.3 line'), not the dependency. The actual dep at line 124 is 'pmcp-package = { path = \"../pmcp-package\" }', path-only and correct; restricting to non-comment 'pmcp-package =' lines gives the intended 0, and the real tripwire (cargo test -p pmcp-openapi-server --test pmcp_package_pin) passes 2/2. An executor trusting the literal criterion would 'fix' a compliant manifest. Same literal-grep-vs-intent class as WINDOWS #46, #48 and #51.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:12:33.481Z",
     "resolved_at": null
   }
 ]
