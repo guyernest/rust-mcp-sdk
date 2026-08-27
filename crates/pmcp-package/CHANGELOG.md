@@ -5,6 +5,50 @@ All notable changes to `pmcp-package` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-27
+
+Phase 122 (attestation carriage). Five source-breaking changes; `PackageError` is
+**not** `#[non_exhaustive]`, so the two new variants break exhaustive downstream
+matches as well. Ships at tag `v2.19.1`.
+
+> The 0.2.0 line below was never published — crates.io went 0.1.1 -> 0.3.0. Its
+> entry is retained because the wire-shape break it records is real and 0.3.0
+> inherits it.
+
+### Changed (BREAKING)
+
+- `pack_server` takes a sixth positional parameter,
+  `attestation: Option<AttestationFile<'_>>` (`src/oci/pack.rs`).
+- `pack_team` takes the same as its second parameter, and can now REFUSE input
+  that previously packed: an attestation over a team whose components are not
+  fully resolved is rejected up front (Gate A, D-09).
+- `unpack_team` returns `Result<UnpackedTeam>` instead of `Result<TeamPackage>`
+  (`src/oci/unpack.rs`), so the carriage state is reported as data rather than
+  discarded.
+- `PinnedRef` gains a fifth public field, `resolved_from: Option<semver::VersionReq>`,
+  breaking every struct literal. It is serde-optional, so the WIRE format is
+  unchanged — only Rust construction sites break.
+- `PackageError` gains `AttestationSubjectMismatch` and
+  `AttestationAnnotationInvalid`. The enum is not `#[non_exhaustive]`, so
+  downstream exhaustive `match` arms must be extended.
+
+### Added
+
+- Attestation carriage as a single OCI layer, with all three states distinguishable
+  on read: attested-and-matching, attested-but-mismatched, and unattested.
+- A subject-digest mismatch is refused before any write, and reported as data on
+  the unpack side rather than raised as an error.
+
+### Notes
+
+- The crate's no-crypto boundary is unchanged and still machine-enforced by the
+  crate-local `[bans].allow` allowlist in `deny.toml`: carriage is opaque
+  transport, and this crate verifies no signatures.
+- Also in this line, without a version move of their own: the normative
+  artifact-tar framing rule (`src/oci/mod.rs`, docs only) and the golden fixture
+  corpus at `tests/golden_fixtures/artifact_tar_v1/`, whose bytes are checked in
+  and never regenerated from the writer under test.
+
 ## [0.2.0] - Unreleased
 
 Phase 120 (config-server packaging). The first declared break of the wire

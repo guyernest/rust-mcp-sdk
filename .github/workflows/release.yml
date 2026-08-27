@@ -31,11 +31,24 @@ jobs:
         # Extract the latest version's changelog
         VERSION="${{ steps.get_version.outputs.VERSION }}"
         VERSION_NO_V="${VERSION#v}"
-        CHANGELOG=$(awk -v ver="## \\[$VERSION_NO_V\\]" '
-          $0 ~ ver {p=1; next}
+        # Match the heading with index(), NOT a regex built from a -v value.
+        # awk applies string-literal escape processing to -v assignments, and
+        # `\[` is an UNDEFINED escape: BSD awk (measured) drops the backslash, so
+        # `ver` became `## [2.19.1]` and `$0 ~ ver` read `[2.19.1]` as a CHARACTER
+        # CLASS. `## [` never matched it, the extraction returned EMPTY, and the
+        # release was created with blank notes at exit 0 -- silently. Measured
+        # 2026-08-27 against v2.19.1, v2.19.0 and v2.18.0: 0 bytes for all three.
+        # Passing the bare version (no backslashes, so nothing to escape) and
+        # comparing with index() removes the hazard entirely.
+        CHANGELOG=$(awk -v ver="$VERSION_NO_V" '
+          index($0, "## [" ver "]") == 1 {p=1; next}
           /^## \[/ && p {exit}
           p {print}
         ' CHANGELOG.md)
+        if [ -z "$CHANGELOG" ]; then
+          echo "::error::CHANGELOG.md has no '## [$VERSION_NO_V]' section - refusing to create a release with empty notes" >&2
+          exit 1
+        fi
         echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
         echo "$CHANGELOG" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
