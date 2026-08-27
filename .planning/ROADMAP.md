@@ -2495,7 +2495,18 @@ Plans:
   3. `pmcp-package` ships a new version carrying the Phase 120 layer and media-type additions, and `cargo-pmcp`'s caret pin plus the `cargo-pmcp/tests/pmcp_package_pin.rs` tripwire move in the same change, so the CLI cannot ship pinned to a `pmcp-package` version that cannot read the packages it writes. Targets are the next bump from HEAD, not the stale 0.2.0 / 0.19.0 pair named at scoping (PKGR-01)
   4. CLAUDE.md's publish order and `release.yml`'s step order agree that `pmcp-package` precedes `pmcp-cfn-renderer`, `pmcp-agent` and `cargo-pmcp`, with the constraint stated in the ledger rather than left implicit in step ordering (PKGR-01)
 
-**Plans**: TBD
+**Plans**: 7 plans across 7 waves (1:{01} 2:{02} 3:{03} 4:{04} 5:{05} 6:{06} 7:{07}), all carrying PKGR-01.
+
+Plans:
+- [ ] 124-01-PLAN.md — Coverage gate sees the workspace-excluded crate: D-01 two-source discovery, D-10 cluster order assertion, six-fixture red-direction self-test declared as the gate's prerequisite
+- [ ] 124-02-PLAN.md — Sync `main` into the milestone branch (D-08), resolving the squash-merge conflict set BEFORE any version bump
+- [ ] 124-03-PLAN.md — D-05 three-way version-drift sweep as a committed tool, D-03's public-API guard, and a blocking-human decision on every phantom delta
+- [ ] 124-04-PLAN.md — D-09 ledger reconciliation: release.yml's four stale comment regions and CLAUDE.md's scattered ordering constraint plus its Pre-Flight contradiction
+- [ ] 124-05-PLAN.md — Version bumps for exactly the authorised set, the D-04 pmcp-package audit with its nine-emitter one-set rule, and the CHANGELOG section the release workflow can extract
+- [ ] 124-06-PLAN.md — Open the release PR, drive CI green, human-action checkpoint for the merge
+- [ ] 124-07-PLAN.md — Pre-tag re-verification, one-way-door decision checkpoint, human-action tag push, per-crate registry verification and phase close-out
+
+> **Waves are one plan wide by design.** This is a release pipeline: measure -> gate -> sync -> reconcile -> decide versions -> ship, and every step's output is the next step's input. Two ordering constraints are load-bearing and must not be "optimised" back into parallelism: the `main` sync (plan 02) precedes every version bump, because a conflict resolution that silently reverts a bumped manifest is the worst possible ordering; and the phantom-delta decision (plan 03) precedes the bumps it authorises, because published version numbers are consumed permanently.
 
 ## Progress — Current Milestone
 
@@ -2513,7 +2524,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 8/8 | Complete    | 2026-08-25 |
 | 123. Export/Import Verbs *(parked)* | PKGX-02 | 7/7 | Complete    | 2026-08-26 |
-| 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
+| 124. Release & Publish Order | PKGR-01 | 0/7 | Planned | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
 > capabilities — package import and attestation issuance — that were not confirmed as scheduled at
