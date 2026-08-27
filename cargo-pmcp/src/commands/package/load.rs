@@ -325,8 +325,15 @@ pub fn execute(args: LoadArgs, global_flags: &GlobalFlags) -> Result<()> {
             "\n{} {} {}@{}",
             "Loaded".bright_green().bold(),
             loaded.kind().label().bright_green().bold(),
-            loaded.name(),
-            loaded.version()
+            // Package-supplied and therefore attacker-controlled, exactly like
+            // every field `render_report` escapes below. Without this, a name
+            // carrying ESC could repaint the terminal from the SUCCESS banner
+            // while the report printed immediately after it stayed safe —
+            // the same forgery `untrusted()` exists to prevent, one line
+            // earlier. `kind` is a fixed label from our own enum, so it is not
+            // attacker-controlled and is left alone.
+            render::untrusted(loaded.name()),
+            render::untrusted(&loaded.version())
         );
         // ONE renderer, shared with `pull`. `should_output()` gates ONLY this
         // decorative rendering — never the unpack, never the subject check and

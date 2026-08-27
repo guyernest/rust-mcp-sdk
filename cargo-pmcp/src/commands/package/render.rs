@@ -396,7 +396,7 @@ fn field(out: &mut String, indent: &str, label: &str, value: &str) {
 /// including ESC — are rendered as escapes rather than emitted, because an ANSI
 /// sequence smuggled through an annotation could otherwise repaint the terminal
 /// and forge a verdict line the renderer never wrote.
-fn untrusted(s: &str) -> String {
+pub(crate) fn untrusted(s: &str) -> String {
     let mut out = String::with_capacity(s.len().min(UNTRUSTED_MAX));
     let mut clipped = false;
     for (taken, ch) in s.chars().enumerate() {

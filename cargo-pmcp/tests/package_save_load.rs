@@ -427,6 +427,78 @@ fn two_saves_of_identical_inputs_are_byte_identical() {
 }
 
 /// A config declaring no `[[config_slots]]` at all is legal — such a package
+/// A control character in a package NAME is refused at `load`, and nothing is
+/// written.
+///
+/// This pins a MEASURED limitation rather than an aspiration, and it is not the
+/// test originally intended here. Phase-123 verification found that `load`'s
+/// success banner printed the package-supplied name raw; the fix routes it
+/// through `render::untrusted()`. Trying to prove that end to end revealed why
+/// the `save` -> `load` route cannot carry a control character at all:
+///
+/// `write_canonical_index` serializes `index.json` with `olpc_cjson`'s
+/// `CanonicalFormatter`, and OLPC Canonical JSON escapes only `"` and `\`.
+/// A control byte is therefore emitted RAW, and the resulting `index.json` is
+/// not valid JSON — measured directly: olpc-cjson's output for such a string
+/// fails to re-parse, while `serde_json`'s (which escapes it) round-trips.
+///
+/// So `save` produces an artifact `load` refuses. That fails CLOSED — the
+/// destination is never created — which is why this is pinned as a contract
+/// rather than treated as a vulnerability. The value of the test is that a
+/// future change which makes this path SILENTLY succeed, or which corrupts the
+/// destination instead of refusing, turns it red.
+///
+/// The terminal-forgery risk `untrusted()` addresses is reached through `pull`,
+/// not here: a platform-produced tar writes standard JSON, where `\u001b` is a
+/// legal escape that decodes to a real ESC in memory and flows on to the
+/// renderer and the banner.
+#[test]
+fn a_control_character_in_a_package_name_is_refused_at_load_writing_nothing() {
+    let project = tempfile::tempdir().unwrap();
+    let config = project.path().join("hostile.toml");
+    // `\u001b` is a TOML basic-string escape, so the file on disk carries a
+    // real ESC byte in `[server] name`.
+    std::fs::write(
+        &config,
+        "[server]\nname = \"eve\\u001b[2Jpwned\"\nversion = \"0.1.0\"\n\n[[tools]]\nname = \"ping\"\n\
+         description = \"Answers pong.\"\n",
+    )
+    .unwrap();
+    write_deploy_toml(
+        project.path(),
+        &LONDON_TUBE_DEPLOY_TOML.replace("london-tube", "eve"),
+    );
+
+    let output = project.path().join("hostile-name.tar");
+    Command::cargo_bin("cargo-pmcp")
+        .unwrap()
+        .args([
+            "package",
+            "save",
+            "--config",
+            config.to_str().unwrap(),
+            "--project-root",
+            project.path().to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--binary-digest",
+            &referenced_binary_digest(),
+        ])
+        .assert()
+        .success();
+
+    let dest = project.path().join("layout");
+    load_artifact(&output, &dest, false)
+        .failure()
+        .stderr(contains("does not deserialize as an OCI ImageIndex"));
+
+    assert!(
+        !dest.exists(),
+        "the load was refused but {} exists — a refused artifact must write nothing",
+        dest.display()
+    );
+}
+
 /// simply claims no slots.
 #[test]
 fn save_succeeds_for_a_config_declaring_no_config_slots() {
