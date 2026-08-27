@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 32
+open_count: 36
 waived_count: 0
 fixed_count: 9
-total_count: 41
-last_updated: 2026-08-27T17:50:18.406Z
+total_count: 45
+last_updated: 2026-08-27T18:19:24.378Z
 ---
 
 # Broken Windows Ledger
@@ -56,6 +56,10 @@ last_updated: 2026-08-27T17:50:18.406Z
 | 39 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Plan 124-02 unsatisfiable acceptance criterion: 'git status --porcelain produces no output'. Unsatisfiable in this repo regardless of the merge — .pmat/* (4 tracked, tool-written) and ~10 untracked paths (.agents/ .codex/ .gsd/ .serena/ .superpowers/ AGENTS.md, presentations/*.pptx) are pre-existing user/tool state unrelated to the plan. Scoped at execution to: no unresolved merge paths, and no unexpected changes among the 12 conflicted files. | open |  | 2026-08-27T17:49:39.975Z |  |
 | 40 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | Correction to RESEARCH Pitfall 4 (rtk shell proxy): the proxy is not merely 'corrupting output' — 'grep' is a shell FUNCTION sourced from ~/.claude/shell-snapshots/, so `command -v grep` returns the bare word 'grep', not a path. Any plan step saying 'resolve the binary via command -v' therefore silently fails to resolve grep. Real binary found via 'which -a grep' = /usr/bin/grep. git was unaffected (command -v git = /opt/homebrew/bin/git). | open |  | 2026-08-27T17:50:11.133Z |  |
 | 41 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Process defect: worktree isolation does not survive a checkpoint round-trip. The harness force-removes the agent worktree when an executor returns at a gate, and resuming does NOT restore it — the resumed agent lands in the main checkout with its spawn-time base assertion stale. Any plan that asks a question mid-flight loses its isolation at that moment. Observed twice in 124-02; cost a full detour. Either keep gated plans autonomous, or expect execution to continue in the main checkout. | open |  | 2026-08-27T17:50:18.406Z |  |
+| 42 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | RESEARCH Pitfall 2 lists pmcp-widget-utils as a phantom delta; corroboration against the PUBLISHED 0.1.0 .crate proves its src/lib.rs is byte-identical to the in-tree file. The v1.3 baseline (earliest tag containing the version-bump commit) is over-early; the true publishing tag is >= v1.11.0. Measured instance of T-124-23: tag containment is not a publication oracle. The crate is CLEAN and must not be bumped. | open |  | 2026-08-27T18:19:00.697Z |  |
+| 43 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | RESEARCH Pitfall 2 describes the pmcp-workbook-compiler delta as 'RESERVED_TOOL_NAMES gained a 5th entry (doc + test assertion)'. It also carries a published-manifest constraint change the table omits: umya-spreadsheet '3.0' -> '=3.0.0', which the in-tree comment says exists because 3.0.1 forks Cargo.lock onto a second quick-xml and regresses a data-validation ingest test. The published 0.1.0 still carries the caret range, so the published crate cold-resolves onto the version the project rejected. | open |  | 2026-08-27T18:19:09.198Z |  |
+| 44 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 acceptance criterion 'cargo public-api --simplified > f && grep -c jsonwebtoken f returns 0' passes VACUOUSLY as written: jwt-auth is a NON-default feature, so a default-features run never compiles the jwt modules and the zero is guaranteed regardless of the truth. Discharged by additionally running --all-features (26801 API lines, 286 mentioning jwt, 0 mentioning jsonwebtoken). A future D-03-style guard must name the feature set. | open |  | 2026-08-27T18:19:16.385Z |  |
+| 45 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 Step E states cargo-pmcp publishes at release.yml:525 and pmcp-server at :543 -- both correct, but an UNBOUNDED grep for 'cargo publish -p pmcp-server' resolves to line 263 (the pmcp-server-toolkit step), a prefix collision. Any re-measurement of these ordinals must use the bounded matcher '( \|$)' that check-release-coverage.sh already uses; measured both ways here. | open |  | 2026-08-27T18:19:24.378Z |  |
 
 ````json
 [
@@ -549,6 +553,54 @@ last_updated: 2026-08-27T17:50:18.406Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T17:50:18.406Z",
+    "resolved_at": null
+  },
+  {
+    "id": 42,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "RESEARCH Pitfall 2 lists pmcp-widget-utils as a phantom delta; corroboration against the PUBLISHED 0.1.0 .crate proves its src/lib.rs is byte-identical to the in-tree file. The v1.3 baseline (earliest tag containing the version-bump commit) is over-early; the true publishing tag is >= v1.11.0. Measured instance of T-124-23: tag containment is not a publication oracle. The crate is CLEAN and must not be bumped.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:00.697Z",
+    "resolved_at": null
+  },
+  {
+    "id": 43,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "RESEARCH Pitfall 2 describes the pmcp-workbook-compiler delta as 'RESERVED_TOOL_NAMES gained a 5th entry (doc + test assertion)'. It also carries a published-manifest constraint change the table omits: umya-spreadsheet '3.0' -> '=3.0.0', which the in-tree comment says exists because 3.0.1 forks Cargo.lock onto a second quick-xml and regresses a data-validation ingest test. The published 0.1.0 still carries the caret range, so the published crate cold-resolves onto the version the project rejected.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:09.198Z",
+    "resolved_at": null
+  },
+  {
+    "id": 44,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-PLAN.md",
+    "line": null,
+    "description": "Task 2 acceptance criterion 'cargo public-api --simplified > f && grep -c jsonwebtoken f returns 0' passes VACUOUSLY as written: jwt-auth is a NON-default feature, so a default-features run never compiles the jwt modules and the zero is guaranteed regardless of the truth. Discharged by additionally running --all-features (26801 API lines, 286 mentioning jwt, 0 mentioning jsonwebtoken). A future D-03-style guard must name the feature set.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:16.385Z",
+    "resolved_at": null
+  },
+  {
+    "id": 45,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-PLAN.md",
+    "line": null,
+    "description": "Task 2 Step E states cargo-pmcp publishes at release.yml:525 and pmcp-server at :543 -- both correct, but an UNBOUNDED grep for 'cargo publish -p pmcp-server' resolves to line 263 (the pmcp-server-toolkit step), a prefix collision. Any re-measurement of these ordinals must use the bounded matcher '( |$)' that check-release-coverage.sh already uses; measured both ways here.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:24.378Z",
     "resolved_at": null
   }
 ]

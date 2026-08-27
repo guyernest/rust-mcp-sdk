@@ -886,6 +886,38 @@ lint-plans:
 	./scripts/lint-plan-verify-commands.sh
 	@echo "$(GREEN)✓ No verification command masks the status of what it verifies$(NC)"
 
+# Phase 124 (D-05) — the three-way release version-drift sweep: in-tree version
+# vs the crates.io-published version vs the source delta since the tag that
+# published that version.
+#
+# What it catches: a PHANTOM DELTA — a crate whose in-tree version EQUALS its
+# published version while its source has moved since. `release.yml` skips an
+# already-published version gracefully and silently, so such a crate does not
+# FAIL the release, it just never ships. Seven were carrying one when this
+# target was written.
+#
+# UNLIKE `lint-plans` above, `release-sweep` is deliberately NOT chained into
+# `quality-gate`. Two reasons, and both are about false red rather than cost:
+#   1. It needs NETWORK access to the crates.io API, which is the only valid
+#      published-version oracle (Cargo reports the in-tree path override), so
+#      in `quality-gate` it would fail offline for a reason unrelated to the
+#      change under test.
+#   2. A version delta is LEGITIMATE right up until a release. Every ordinary
+#      branch carries one by construction, so gating on it would make the gate
+#      red on essentially every branch — and a gate that is red for unrelated
+#      reasons is a gate people learn to ignore.
+# Run it from the release Pre-Flight Checklist, not from the dev loop.
+#
+# It still exits NON-ZERO on a failed probe, an unparseable registry body, an
+# unresolvable diff baseline or a never-published crate: that status reports
+# "did this sweep measure everything it claims to have measured", never "is
+# there a delta". See the script header, section 5.
+.PHONY: release-sweep
+release-sweep:
+	@echo "$(BLUE)Sweeping release version drift against crates.io (D-05)...$(NC)"
+	./scripts/release-version-sweep.sh
+	@echo "$(GREEN)✓ Every publishable crate measured against the registry$(NC)"
+
 # Fixture-driven self-test for the release-ledger coverage gate, mirroring
 # no-crypto-allowlist-guard-selftest and test-openapi-server-guard-selftest. It
 # is a declared PREREQUISITE of check-release-coverage below, so the gate's RED
