@@ -408,12 +408,12 @@ fn verify_blob_integrity(blobs: &BTreeMap<String, Vec<u8>>) -> Result<()> {
 /// Resolve `descriptor` against the archive's blobs, cross-checking its
 /// declared size and recording its media type. `role` names the descriptor in
 /// any refusal so two failures never share a message.
-fn resolve_descriptor(
+fn resolve_descriptor<'a>(
     descriptor: &Descriptor,
-    raw: &BTreeMap<String, Vec<u8>>,
+    raw: &'a BTreeMap<String, Vec<u8>>,
     resolved: &mut BTreeMap<String, VerifiedBlob>,
     role: &str,
-) -> Result<Vec<u8>> {
+) -> Result<&'a [u8]> {
     let digest = ManifestDigest::try_from(descriptor.digest())
         .with_context(|| format!("the {role} descriptor carries an unusable digest"))?;
     let hex = digest
@@ -444,7 +444,7 @@ fn resolve_descriptor(
         size: actual,
     });
 
-    Ok(bytes.clone())
+    Ok(bytes)
 }
 
 /// Walk the descriptor graph from `index.json` and close it in BOTH directions.
@@ -480,7 +480,7 @@ fn resolve_graph(raw: RawArchive) -> Result<VerifiedArtifact> {
     let mut resolved: BTreeMap<String, VerifiedBlob> = BTreeMap::new();
     let manifest_bytes =
         resolve_descriptor(&manifest_descriptor, &raw.blobs, &mut resolved, "manifest")?;
-    let manifest: ImageManifest = serde_json::from_slice(&manifest_bytes)
+    let manifest: ImageManifest = serde_json::from_slice(manifest_bytes)
         .context("the artifact's manifest blob does not deserialize as an OCI ImageManifest")?;
 
     resolve_descriptor(manifest.config(), &raw.blobs, &mut resolved, "config")?;
@@ -505,7 +505,7 @@ fn resolve_graph(raw: RawArchive) -> Result<VerifiedArtifact> {
         }
     }
 
-    let manifest_digest = ManifestDigest::from_bytes(&manifest_bytes);
+    let manifest_digest = ManifestDigest::from_bytes(manifest_bytes);
 
     Ok(VerifiedArtifact {
         index,
@@ -515,6 +515,115 @@ fn resolve_graph(raw: RawArchive) -> Result<VerifiedArtifact> {
         blobs: resolved,
         manifest_digest,
     })
+}
+
+/// How much of an artifact file may be reserved UP FRONT from its declared
+/// length, before a byte has been read.
+///
+/// Sized to cover the realistic worst case — an embedded server binary is tens
+/// of megabytes, per [`ArtifactLimits::per_entry`]'s own reasoning — in ONE
+/// allocation, while still being an order of magnitude below
+/// [`ArtifactLimits::total`]. The clamp is what keeps a declared length from
+/// choosing an allocation as large as the cap: the length is only a hint, and
+/// the bounded read is the control.
+const FILE_RESERVE_CEILING: u64 = 64 * 1024 * 1024;
+
+/// Read an artifact tar off disk into memory, refusing an over-cap file WITHOUT
+/// ever buffering more than the cap.
+///
+/// The local counterpart of `download_artifact_bytes`' pre-read refusal, and
+/// the reason it lives HERE rather than in the `package load` command: the caps
+/// belong to this module (see [`ArtifactLimits`]), and a command handler that
+/// reached in to read `ArtifactLimits::DEFAULT.total` for itself would be a
+/// second, unfalsifiable copy of the policy — the next disk reader would make a
+/// third.
+///
+/// # Bounded by the READ, never by a prior `metadata()`
+///
+/// The obvious shape — stat the path, compare `len()` against the cap, then
+/// `fs::read` — does not enforce anything, and the ways it fails are not
+/// exotic:
+///
+/// - `metadata().len()` is **0** for a FIFO and for a character device, so
+///   `--input /dev/zero` (or a named pipe planted in a shared drop directory)
+///   sails past the comparison and the read that follows never terminates. That
+///   is exactly the unbounded allocation the check exists to prevent, so a
+///   stat-based gate closes the class it is easiest to trip and leaves the class
+///   an attacker would actually pick.
+/// - The stat and the read are two syscalls on a PATH, so a file that grows (or
+///   is swapped) in between is read at its new size regardless of what the stat
+///   said.
+///
+/// Taking `cap + 1` bytes from an opened handle and refusing when that extra
+/// byte arrives has neither hole, needs no stat at all, and bounds the buffer at
+/// the cap for EVERY input shape rather than only for a static regular file.
+///
+/// # What `cap` measures here
+///
+/// This bounds the TAR FILE's bytes, while [`ArtifactLimits::total`] bounds the
+/// cumulative size of the entries [`read_verified`] admits. A tar is the larger
+/// of the two (a 512-byte header per entry, per-entry padding, a 1024-byte
+/// trailer), so this refusal is strictly conservative and its message says
+/// "artifact file" rather than naming the entry budget. `read_verified` remains
+/// the authority on what an artifact may CONTAIN; this only bounds what may be
+/// buffered to ask it.
+///
+/// # Errors
+///
+/// Returns `Err` when the path cannot be opened, when reading it fails, or when
+/// it yields more than [`ArtifactLimits::total`] bytes.
+pub fn read_artifact_file(path: &Path) -> Result<Vec<u8>> {
+    read_artifact_file_with_limits(path, &ArtifactLimits::DEFAULT)
+}
+
+/// [`read_artifact_file`] with an injectable budget, so the bound is
+/// FALSIFIABLE by a deterministic test rather than by producing a 1 GiB file.
+///
+/// # Errors
+///
+/// See [`read_artifact_file`].
+#[doc(hidden)]
+pub fn read_artifact_file_with_limits(path: &Path, limits: &ArtifactLimits) -> Result<Vec<u8>> {
+    let file =
+        fs::File::open(path).with_context(|| format!("open the artifact {}", path.display()))?;
+
+    let cap = limits.total;
+
+    // Pre-size from the OPEN HANDLE's metadata, clamped to the reserve ceiling.
+    //
+    // `Take` does not forward a size hint, so `read_to_end` on it starts from a
+    // 32-byte probe and grows by doubling — for a large artifact that is a
+    // couple of dozen reallocations, each copying the whole buffer, with both
+    // the old and new allocation live across the last one. This is a HINT only:
+    // the `take` below is still the bound, so a lying or absent length costs a
+    // wrong-sized first allocation and nothing else. Clamped for the same reason
+    // its network sibling clamps `Content-Length` — an unclamped hint lets the
+    // input choose an allocation as large as the cap.
+    //
+    // Reading the metadata off the handle rather than the path is what keeps
+    // this free of the race the stat-then-read shape has: it describes the very
+    // file that is about to be read.
+    let hint = file
+        .metadata()
+        .map(|m| m.len().min(FILE_RESERVE_CEILING))
+        .unwrap_or(0);
+    let mut bytes = Vec::with_capacity(usize::try_from(hint).unwrap_or(0));
+
+    // `cap + 1` is what makes "exceeded" observable: reading exactly `cap` is
+    // indistinguishable from a file that happens to be that long.
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read the artifact {}", path.display()))?;
+
+    if bytes.len() as u64 > cap {
+        bail!(
+            "artifact refused: {} exceeds the {cap}-byte artifact-file cap. Nothing was parsed \
+             and nothing was written.",
+            path.display()
+        );
+    }
+
+    Ok(bytes)
 }
 
 /// Read an artifact tar into a fully validated in-memory model. Writes NOTHING,
@@ -1084,6 +1193,132 @@ mod tests {
         let tar_path = out_dir.path().join("artifact.tar");
         write_tar(&layout, &tar_path).expect("tar the layout");
         std::fs::read(&tar_path).expect("read the artifact")
+    }
+
+    // -----------------------------------------------------------------
+    // The pre-read file bound (`read_artifact_file`)
+    // -----------------------------------------------------------------
+
+    /// Budgets small enough to trip on a handful of bytes, so the file bound is
+    /// falsifiable without producing a gibibyte.
+    fn tiny_file_limits(total: u64) -> ArtifactLimits {
+        ArtifactLimits {
+            per_entry: ArtifactLimits::DEFAULT.per_entry,
+            total,
+        }
+    }
+
+    /// A file over the cap is refused, and the refusal names the cap and the
+    /// path — a bound that refuses anonymously is one nobody can diagnose.
+    #[test]
+    fn a_file_over_the_cap_is_refused_naming_the_cap_and_the_path() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let path = dir.path().join("oversized.tar");
+        std::fs::write(&path, vec![0u8; 64]).expect("write the oversized file");
+
+        let err = read_artifact_file_with_limits(&path, &tiny_file_limits(16)).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("16-byte artifact-file cap"),
+            "the refusal must name the cap: {message}"
+        );
+        assert!(
+            message.contains("oversized.tar"),
+            "the refusal must name the file: {message}"
+        );
+    }
+
+    /// The boundary is INCLUSIVE: a file of exactly `total` bytes is admitted.
+    /// An off-by-one here would refuse a legitimate artifact sitting on the cap.
+    #[test]
+    fn a_file_of_exactly_the_cap_is_admitted_whole() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let path = dir.path().join("at-cap.tar");
+        std::fs::write(&path, vec![7u8; 16]).expect("write the at-cap file");
+
+        let bytes =
+            read_artifact_file_with_limits(&path, &tiny_file_limits(16)).expect("cap is inclusive");
+        assert_eq!(bytes, vec![7u8; 16], "the whole file must come back");
+    }
+
+    /// One byte over is refused — the pair that makes the previous test mean
+    /// something rather than merely pass.
+    #[test]
+    fn one_byte_over_the_cap_is_refused() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let path = dir.path().join("one-over.tar");
+        std::fs::write(&path, vec![7u8; 17]).expect("write the one-over file");
+
+        assert!(
+            read_artifact_file_with_limits(&path, &tiny_file_limits(16)).is_err(),
+            "cap + 1 bytes must be refused"
+        );
+    }
+
+    /// The bound is enforced by the READ, not by a prior `metadata()` stat.
+    ///
+    /// This is the test that distinguishes the two designs. `/dev/zero` reports
+    /// `metadata().len() == 0`, so a stat-then-read gate compares 0 against the
+    /// cap, passes, and then reads forever — the process dies with no refusal
+    /// and no output. A FIFO behaves the same way. Because the budget is applied
+    /// to the read itself, the endless input is refused in bounded time and
+    /// bounded memory instead.
+    ///
+    /// The tiny cap is what keeps this a unit test: it bounds the buffer at 16
+    /// bytes, so a regression does not hang CI at a gibibyte before failing.
+    #[cfg(unix)]
+    #[test]
+    fn an_endless_input_is_refused_by_the_read_bound_not_by_a_stat() {
+        let path = Path::new("/dev/zero");
+        assert_eq!(
+            fs::metadata(path).expect("stat /dev/zero").len(),
+            0,
+            "the premise: a stat-based gate would see 0 here and let this through"
+        );
+
+        let err = read_artifact_file_with_limits(path, &tiny_file_limits(16)).unwrap_err();
+        assert!(
+            err.to_string().contains("artifact-file cap"),
+            "an endless input must trip the file cap: {err}"
+        );
+    }
+
+    /// A missing path fails with a named refusal rather than a panic, and says
+    /// which path it could not open.
+    #[test]
+    fn a_missing_artifact_path_is_a_named_refusal() {
+        let dir = tempfile::tempdir().expect("scratch dir");
+        let path = dir.path().join("absent.tar");
+
+        let err = read_artifact_file(&path).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("absent.tar"),
+            "the refusal must name the path: {err:#}"
+        );
+    }
+
+    proptest! {
+        /// Any file at or under the cap round-trips byte-for-byte, and any file
+        /// over it is refused. The bound never truncates silently — returning a
+        /// clipped prefix as if it were the whole artifact would hand
+        /// `read_verified` a tar that is not the one on disk.
+        #[test]
+        fn the_file_bound_either_returns_every_byte_or_refuses(
+            content in proptest::collection::vec(any::<u8>(), 0..256usize),
+            cap in 1u64..256,
+        ) {
+            let dir = tempfile::tempdir().expect("scratch dir");
+            let path = dir.path().join("prop.tar");
+            std::fs::write(&path, &content).expect("write the fixture");
+
+            match read_artifact_file_with_limits(&path, &tiny_file_limits(cap)) {
+                Ok(bytes) => {
+                    prop_assert!(content.len() as u64 <= cap, "admitted an over-cap file");
+                    prop_assert_eq!(bytes, content, "admitted bytes must be the file's bytes");
+                },
+                Err(_) => prop_assert!(content.len() as u64 > cap, "refused an at-cap file"),
+            }
+        }
     }
 
     /// Falsification pair 1a: under a tiny PER-ENTRY cap the artifact is

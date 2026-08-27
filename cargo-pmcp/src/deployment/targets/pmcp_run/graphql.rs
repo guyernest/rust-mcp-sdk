@@ -11,19 +11,25 @@ use super::auth::{
 /// Reuses connections across calls — the capture poll loop hits this every 2s,
 /// and a per-call client would redo TCP+TLS each time. It lives at MODULE scope
 /// rather than inside `execute_graphql_at`'s body (where it used to be) so that
-/// every operation here, including the artifact download, gets the same TLS
-/// configuration and the same connect budget. A function-scoped static is
-/// unreachable from any other function, which is what would otherwise force a
-/// second client into existence.
+/// every operation here — the GraphQL POST, the artifact download AND the
+/// presigned S3 upload — gets the same TLS configuration and the same connect
+/// budget. A function-scoped static is unreachable from any other function,
+/// which is what would otherwise force a second client into existence.
+///
+/// The upload reaches a DIFFERENT origin than the GraphQL endpoint, and that is
+/// safe here only because this client carries no `default_headers`, no cookie
+/// store (the `cookies` feature is off) and no credential of any kind: the
+/// pmcp.run bearer is attached per-request by `execute_graphql_at` alone. Do NOT
+/// add a default header to this builder — it would travel to the presigned host.
 ///
 /// # Why the whole-request budget is NOT on the client
 ///
 /// One `timeout(..)` on the client would have to be right for BOTH a small
-/// GraphQL POST and a multi-megabyte artifact download, and no single number
+/// GraphQL POST and a multi-megabyte bulk transfer, and no single number
 /// is. Only the CONNECT cost is genuinely shared — it does not vary by
 /// operation — so that is the only budget set here. The per-operation budgets
 /// are applied at their call sites with [`reqwest::RequestBuilder::timeout`],
-/// as [`GRAPHQL_REQUEST_TIMEOUT`] and [`ARTIFACT_DOWNLOAD_TIMEOUT`]. Do not
+/// as [`GRAPHQL_REQUEST_TIMEOUT`] and [`ARTIFACT_TRANSFER_TIMEOUT`]. Do not
 /// "simplify" this by moving either one onto the client.
 ///
 /// `.expect` matches the semantics of the infallible constructor this replaced:
@@ -46,9 +52,10 @@ fn http_client() -> &'static reqwest::Client {
 
 /// How long a TCP+TLS connection may take to establish, for EVERY operation.
 ///
-/// Matches `upload_to_s3`'s own client (10s). Connect cost is a property of the
-/// network path rather than of the operation, so unlike the request budgets
-/// below it is genuinely shared and belongs on the client.
+/// Connect cost is a property of the NETWORK PATH rather than of the operation,
+/// so unlike the request budgets below it is genuinely shared and belongs on
+/// the client. 10s is long enough for a cold TLS handshake over a slow link and
+/// short enough that an unreachable endpoint reports rather than hangs.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whole-request budget for a GraphQL POST.
@@ -56,19 +63,49 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A GraphQL call here carries a few kilobytes each way and is answered by a
 /// resolver, not by a bulk transfer; 30s is generous for that shape while still
 /// failing fast enough that an operator sees an error rather than a hang. It is
-/// deliberately far below `upload_to_s3`'s 300s, which is sized for
-/// multi-megabyte binaries and would be the wrong budget for a query.
+/// deliberately an order of magnitude below [`ARTIFACT_TRANSFER_TIMEOUT`],
+/// which is sized for multi-megabyte payloads and would be the wrong budget for
+/// a query.
 const GRAPHQL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Whole-request budget for the presigned artifact download.
+/// Whole-request budget for a BULK PRESIGNED TRANSFER, in EITHER direction.
 ///
-/// An artifact may be an embedded server binary of tens of megabytes, so this
-/// is sized like `upload_to_s3`'s transfer budget (300s) rather than like a
-/// query budget. The download is ALSO bounded by
-/// [`cargo_pmcp::package_pull_pipeline::ARTIFACT_DOWNLOAD_MAX_BYTES`] while
-/// streaming; the two bounds answer different questions — this one bounds how
-/// long a slow transfer may take, that one bounds how much may arrive.
-const ARTIFACT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// Both the artifact download (`download_artifact_bytes`) and the template /
+/// bootstrap upload (`upload_to_s3`) read this one constant, so the name is
+/// deliberately direction-neutral: it was `ARTIFACT_DOWNLOAD_TIMEOUT` while the
+/// upload built its own client with a numerically identical 300s literal, and a
+/// download-shaped name on a shared budget is how somebody retunes the download
+/// ("a presigned GET should not take five minutes") and silently caps a
+/// multi-megabyte bootstrap PUT at the same number.
+///
+/// A payload may be an embedded server binary of tens of megabytes, so this is
+/// sized for a slow bulk transfer rather than for a query. The DOWNLOAD is ALSO
+/// bounded by [`cargo_pmcp::package_pull_pipeline::ARTIFACT_DOWNLOAD_MAX_BYTES`]
+/// while streaming; the two bounds answer different questions — this one bounds
+/// how long a slow transfer may take, that one bounds how much may arrive. No
+/// byte cap applies on the upload side: the payload is already in memory and
+/// this process produced it.
+const ARTIFACT_TRANSFER_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How much of a download body may be reserved UP FRONT from the server's
+/// declared `Content-Length`.
+///
+/// `Content-Length` is ATTACKER-INFLUENCED, so sizing the buffer from it
+/// directly hands a remote host a single allocation as large as the download
+/// cap: a host answering `Content-Length: <cap>` and then sending nothing would
+/// cost a gibibyte of resident memory before the first chunk arrived, and
+/// `Vec::with_capacity` ABORTS the process on allocation failure rather than
+/// returning the `Err` this module is written to return. The running total in
+/// `download_artifact_bytes` is the real control, so the reservation only has
+/// to be large enough to absorb the reallocation churn of a normal artifact.
+///
+/// 64 MiB, matching `package_artifact`'s `FILE_RESERVE_CEILING` and sized by the
+/// same reasoning: [`ARTIFACT_TRANSFER_TIMEOUT`] above describes a payload as
+/// "an embedded server binary of tens of megabytes", so a ceiling BELOW that
+/// figure would not actually cover the common case in one allocation and the two
+/// docs would assert different sizes for one payload. It is still an order of
+/// magnitude under the download cap, which is the property that matters.
+const DOWNLOAD_RESERVE_CEILING: u64 = 64 * 1024 * 1024;
 
 /// The explicit endpoint override, when it is set to something usable.
 ///
@@ -228,15 +265,15 @@ pub async fn upload_to_s3(
     let content_len = content.len();
     let max_attempts: u32 = 5;
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(300)) // 5 min for large binaries
-        .build()
-        .context("Failed to create HTTP client")?;
+    // Share the module client (see `HTTP_CLIENT` for the rule this follows).
+    // The two literals this used to build its own client with were already
+    // numerically identical to CONNECT_TIMEOUT and ARTIFACT_TRANSFER_TIMEOUT.
+    let client = http_client();
 
     for attempt in 1..=max_attempts {
         let response = client
             .put(url)
+            .timeout(ARTIFACT_TRANSFER_TIMEOUT)
             .header("Content-Type", content_type)
             .header("Content-Length", content_len)
             .body(content.clone())
@@ -251,7 +288,11 @@ pub async fn upload_to_s3(
                 let status = resp.status();
                 let error_body = resp.text().await.unwrap_or_default();
                 // Extract meaningful S3 error (e.g., AccessDenied, RequestTimeout)
-                let s3_error = extract_s3_error(&error_body).unwrap_or(error_body.clone());
+                // `unwrap_or` evaluates its argument eagerly, so cloning here
+                // would allocate a copy of the error body even when
+                // `extract_s3_error` returned `Some`. `error_body` is dead
+                // after this line, so it can simply be moved.
+                let s3_error = extract_s3_error(&error_body).unwrap_or(error_body);
 
                 if attempt < max_attempts {
                     let backoff = Duration::from_secs(2u64.pow(attempt));
@@ -1973,7 +2014,7 @@ async fn download_artifact_bytes(url: &str, cap: u64) -> Result<Vec<u8>> {
         .get(url)
         // NO `Authorization` header. See this function's docs — the header would
         // send a pmcp.run credential to another origin.
-        .timeout(ARTIFACT_DOWNLOAD_TIMEOUT)
+        .timeout(ARTIFACT_TRANSFER_TIMEOUT)
         .send()
         .await
         .context("send the artifact download request (URL withheld: bearer credential)")?;
@@ -1986,7 +2027,11 @@ async fn download_artifact_bytes(url: &str, cap: u64) -> Result<Vec<u8>> {
         );
     }
 
-    if let Some(declared) = response.content_length() {
+    // Read the declared length ONCE. It is sampled before any `chunk()` call,
+    // so a second read could only ever agree with this one; binding it makes
+    // that structural instead of incidental.
+    let declared = response.content_length();
+    if let Some(declared) = declared {
         if declared > cap {
             bail!(
                 "artifact download refused before reading: the response declares {declared} \
@@ -1995,7 +2040,14 @@ async fn download_artifact_bytes(url: &str, cap: u64) -> Result<Vec<u8>> {
         }
     }
 
-    let mut body: Vec<u8> = Vec::new();
+    // The declared length only sizes the FIRST allocation, and only up to
+    // DOWNLOAD_RESERVE_CEILING — never up to `cap`. The refusal above rejects a
+    // declaration OVER the cap; it does not make a declaration AT the cap safe
+    // to allocate, which is the distinction that matters here. The running
+    // total below remains the control over how much may actually arrive.
+    let mut body: Vec<u8> = Vec::with_capacity(
+        usize::try_from(declared.unwrap_or(0).min(DOWNLOAD_RESERVE_CEILING)).unwrap_or(0),
+    );
     let mut total: u64 = 0;
     while let Some(chunk) = response
         .chunk()

@@ -75,7 +75,7 @@ use crate::package_artifact::{
     install_layout, read_verified_with_limits, ArtifactLimits, InstalledLayout, VerifiedArtifact,
 };
 use crate::package_kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
-use crate::package_render::{render_report, PackageReport};
+use crate::package_render::{render_report, untrusted, PackageReport};
 use crate::pmcp_run_graphql::get_package_artifact_request_body;
 
 /// The outermost context frame every failure of the pull path carries (D-05).
@@ -515,9 +515,17 @@ fn subject_mismatch_diagnostic(attestation: Option<&UnpackedAttestation>) -> Opt
         return None;
     }
     Some(format!(
+        // ESCAPED, like every string `render_report` prints beside it. `pull` is
+        // the one route by which a real ESC actually reaches a claimed subject
+        // (a platform-produced tar writes standard JSON, where `\u001b` is a
+        // legal escape that decodes to a real ESC in memory), so an unescaped
+        // diagnostic here would be forgeable in exactly the verb that fetches
+        // from somewhere else. `unattested_digest` is a `ManifestDigest` this
+        // process derived; the type is already the guarantee.
         "attestation subject mismatch: the attestation names {}, but this package's unattested \
          manifest digest is {}",
-        attestation.subject.claimed, attestation.subject.unattested_digest
+        untrusted(&attestation.subject.claimed),
+        attestation.subject.unattested_digest
     ))
 }
 
@@ -611,6 +619,19 @@ async fn run_pipeline(
     let request_body = build_artifact_request(reference)?;
     let fetched = fetch_artifact_bytes(transport, &request_body).await?;
     let artifact = verify_downloaded_artifact(&fetched, limits)?;
+    // The downloaded tar is fully consumed by verification above — including the
+    // payloadDigest cross-check, which is why this is safe to release here and
+    // not one line earlier. Doing so takes the WRITE phase from two copies of
+    // the artifact (the tar plus the resolved blobs) down to one.
+    //
+    // It does NOT lower the process PEAK, and should not be read as OOM
+    // headroom: the peak is reached inside `verify_downloaded_artifact`, where
+    // `fetched.tar_bytes`, `collect_entries`' `raw.blobs` and `resolve_graph`'s
+    // cloned `resolved` map are all live at once — roughly three copies, all
+    // before this line runs. Lowering THAT means moving blobs out of `raw.blobs`
+    // instead of cloning them (`artifact.rs`'s `resolve_descriptor`), which is a
+    // change to the verifier, not to this call site.
+    drop(fetched);
     let installed = install_verified_artifact(&artifact, destination, force)?;
 
     let destination_text = installed.layout.root().display().to_string();

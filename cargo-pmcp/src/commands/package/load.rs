@@ -227,9 +227,16 @@ fn refuse_a_subject_that_does_not_name_this_package(
         return Ok(());
     }
     bail!(
+        // ESCAPED, like every other package-supplied string this verb prints.
+        // `claimed` is raw annotation text — `SubjectVerdict` says on the type
+        // that it "may be any bytes an annotation can hold" — and this refusal
+        // is the ONE sink that survives `--quiet`, so leaving it raw would put
+        // the forgeable string on the only stream an automated run still reads.
+        // `unattested_digest` is a `ManifestDigest` this process derived, so the
+        // type already guarantees it and it is left alone.
         "attestation subject mismatch: the attestation names {}, but this package's unattested \
          manifest digest is {}",
-        attestation.subject.claimed,
+        render::untrusted(&attestation.subject.claimed),
         attestation.subject.unattested_digest
     );
 }
@@ -306,8 +313,12 @@ fn detect_and_unpack(layout: &OciLayout) -> Result<LoadedPackage> {
 
 /// Read a movable artifact back into a working layout directory.
 pub fn execute(args: LoadArgs, global_flags: &GlobalFlags) -> Result<()> {
-    let tar_bytes = std::fs::read(&args.input)
-        .with_context(|| format!("read the artifact {}", args.input.display()))?;
+    // A BOUNDED read, not `fs::read`: an unbounded one turns any oversized (or
+    // endless — a FIFO, `/dev/zero`) input into an allocation this process
+    // cannot survive, before `read_verified` has been handed a single byte to
+    // refuse. The bound and its rationale live on `artifact::read_artifact_file`
+    // beside the caps themselves, so this command never restates the policy.
+    let tar_bytes = artifact::read_artifact_file(&args.input)?;
 
     let verified = artifact::read_verified(&tar_bytes)
         .with_context(|| format!("verify the artifact {}", args.input.display()))?;

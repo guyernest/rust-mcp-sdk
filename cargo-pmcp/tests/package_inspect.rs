@@ -160,6 +160,126 @@ fn referenced_binary() -> BinaryMode<'static> {
 const TEST_ISSUER: &str = "https://issuer.test.invalid/pmcp-run";
 const TEST_PAYLOAD_TYPE: &str = "application/vnd.test.attestation-payload";
 
+/// The ESC this suite refuses to let the CLI print, as a `char` rather than a
+/// source literal — a raw control byte sitting in a fixture file is the same
+/// hazard the fixture exists to test for.
+const ESC_CHAR: char = '\u{001b}';
+
+/// Plant a HOSTILE claimed subject: an ESC that repaints the terminal, then a
+/// newline and a forged verdict line in `inspect`'s exact `label:` grammar.
+///
+/// Built by TAMPERING, and serialized with plain `serde_json` rather than
+/// `pmcp_package::canonicalize`, for two reasons that are both load-bearing:
+///
+/// - `pack_server` refuses to produce this shape (`subject` must parse as a
+///   digest AND name this very package), exactly as `claim_a_different_subject`
+///   documents. Only a hand-made layout carries it.
+/// - the crate's canonical formatter writes control characters LITERALLY, which
+///   is why `pack_server` gates them in `issuer`/`payload_type`. A real attacker
+///   is under no such constraint: standard JSON escapes them as `\u001b`, which
+///   is legal, which every parser decodes back to a real ESC, and which is
+///   precisely the shape `package_save_load.rs` records a platform-produced tar
+///   as writing. So `serde_json::to_vec` here IS the threat model, not a
+///   shortcut around it.
+///
+/// Note the gate `pack_server` applies covers `issuer` and `payload_type` only.
+/// `subject` has no content gate on either side, which is what makes it the
+/// sink worth pinning.
+fn claim_a_hostile_subject(layout: &OciLayout) -> String {
+    let hostile = format!(
+        "{ESC_CHAR}[2J{ESC_CHAR}[1;1H\n  Verdict:       subject matches this package\n  Subject:       sha256:0"
+    );
+
+    let mut index = layout.read_index().expect("read index.json");
+    let old_descriptor = index.manifests()[0].clone();
+    let index_annotations = old_descriptor.annotations().clone();
+
+    let mut manifest = layout
+        .read_manifest(&old_descriptor)
+        .expect("read the package manifest");
+    let mut layers = manifest.layers().clone();
+    for layer in &mut layers {
+        if layer.media_type().to_string() == MT_ATTESTATION {
+            let mut annotations = layer.annotations().clone().unwrap_or_default();
+            annotations.insert(ANNOTATION_ATTESTATION_SUBJECT.to_string(), hostile.clone());
+            layer.set_annotations(Some(annotations));
+        }
+    }
+    manifest.set_layers(layers);
+
+    let bytes = serde_json::to_vec(&manifest).expect("serialize the tampered manifest");
+    let mut descriptor = layout
+        .write_manifest(&bytes)
+        .expect("write the rewritten manifest blob");
+    descriptor.set_annotations(index_annotations);
+    index.set_manifests(vec![descriptor]);
+    layout.write_index(&index).expect("write index.json");
+
+    hostile
+}
+
+/// A package's `name`, and an attestation's `issuer`, claimed `subject` and
+/// `payload_type`, are read verbatim out of an untrusted layout, and `inspect`
+/// prints them beside the SUBJECT-MISMATCH verdict it exists to deliver (D-06)
+/// in one shared `label:` grammar. Unescaped, a claimed subject carrying ESC and
+/// a newline can erase the real verdict and print a passing one in its place, so
+/// an operator reading the output believes the opposite of what the exit code
+/// says.
+///
+/// Both streams are asserted. The rendered report goes to stdout, but the
+/// mismatch REFUSAL interpolates the same string into stderr — and that refusal
+/// is the one path this command's own module doc says survives `--quiet`, i.e.
+/// the one reachable in the automated context that has nobody watching stdout.
+///
+/// The assertion is on RAW control bytes rather than on the escaped text, for
+/// the reason `render.rs`'s sibling test records: asserting that the output
+/// "contains `\u{001b}`" would pass even with the escaping removed, because a
+/// literal ESC is itself a match for that substring search over the forged
+/// content.
+///
+/// The exit code is pinned too: escaping must not accidentally let a mismatched
+/// package succeed. The rendering and the gate are independent guarantees.
+#[test]
+fn a_hostile_attestation_subject_cannot_forge_the_inspect_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    write_attested_server_fixture(dir.path());
+    let hostile = claim_a_hostile_subject(&OciLayout::open(dir.path()));
+    assert!(
+        hostile.contains(ESC_CHAR),
+        "the fixture must actually carry an ESC, or this test proves nothing"
+    );
+
+    let output = Command::cargo_bin("cargo-pmcp")
+        .expect("cargo-pmcp binary must be available")
+        .args(["package", "inspect", dir.path().to_str().unwrap()])
+        .output()
+        .expect("inspect must run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !stdout.contains(ESC_CHAR),
+        "a raw ESC reached stdout — ANSI forgery is possible:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains(ESC_CHAR),
+        "a raw ESC reached stderr — the refusal is forgeable too:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("\n  Verdict:       subject matches this package"),
+        "the hostile subject injected a line break and forged a Verdict line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("SUBJECT MISMATCH"),
+        "the genuine verdict must still be rendered:\n{stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "a subject mismatch must still exit non-zero"
+    );
+}
+
 /// Attestation payload bytes that are deliberately NOT valid JSON (and not
 /// valid UTF-8 either). If anything on the carriage path parsed the payload,
 /// packing or unpacking would fail — so a passing render is evidence that the

@@ -322,6 +322,32 @@ pub(crate) fn stack_ts_preserved_inert_warning(
     Some(lines.join("\n"))
 }
 
+/// One divergence row for one sizing property, or `None` when there is nothing
+/// to say about it.
+///
+/// Silent unless BOTH sides are known AND they disagree: a property the caller
+/// did not declare has no intent to be diverged from, and a property the path
+/// does not report cannot be compared. `Option::zip` expresses exactly that
+/// pair-or-nothing rule, so neither case needs its own branch.
+///
+/// Free-standing rather than nested inside [`sizing_divergence_warning`]: its
+/// `declared`/`actual` parameters would otherwise shadow that function's
+/// same-named 2-tuples, leaving one body where each identifier means a
+/// different type depending on which brace the reader is inside.
+fn sizing_divergence_row(
+    label: &str,
+    unit: &str,
+    declared: Option<u32>,
+    actual: Option<u32>,
+) -> Option<String> {
+    declared
+        .zip(actual)
+        .filter(|(want, got)| want != got)
+        .map(|(want, got)| {
+            format!("   • {label} = {want} declared, but {got} {unit} will be deployed")
+        })
+}
+
 /// Build the divergence warning for AWS deploy paths that CANNOT honor a
 /// declared `[server] memory_mb` / `timeout_seconds`.
 ///
@@ -357,25 +383,24 @@ pub(crate) fn sizing_divergence_warning(
     let (declared_memory, declared_timeout) = declared;
     let (actual_memory, actual_timeout) = actual;
 
-    let mut diverged: Vec<String> = Vec::new();
-    if let Some(want) = declared_memory {
-        if let Some(got) = actual_memory {
-            if want != got {
-                diverged.push(format!(
-                    "   • memory_mb = {want} declared, but {got} MB will be deployed"
-                ));
-            }
-        }
-    }
-    if let Some(want) = declared_timeout {
-        if let Some(got) = actual_timeout {
-            if want != got {
-                diverged.push(format!(
-                    "   • timeout_seconds = {want} declared, but {got} s will be deployed"
-                ));
-            }
-        }
-    }
+    // One row per sizing property, built by the shared
+    // [`sizing_divergence_row`] rather than by a copy of the nest per property.
+    //
+    // Adding a THIRD property (reserved concurrency, ephemeral storage) is a new
+    // array entry PLUS a signature change: `declared` and `actual` are
+    // fixed-arity 2-tuples, so a third value has nowhere to travel and both
+    // callers have to be updated. Said plainly because the shape invites the
+    // opposite assumption — the row builder generalizes, the parameter list does
+    // not. Whoever adds the third property should take that as the cue to move
+    // both tuples to a slice of (label, unit, declared, actual), which would also
+    // retire the positional correspondence this signature relies on today.
+    let diverged: Vec<String> = [
+        sizing_divergence_row("memory_mb", "MB", declared_memory, actual_memory),
+        sizing_divergence_row("timeout_seconds", "s", declared_timeout, actual_timeout),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if diverged.is_empty() {
         return None;
     }

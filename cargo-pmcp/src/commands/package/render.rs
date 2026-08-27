@@ -66,7 +66,14 @@ use pmcp_package::{required_slots, ComponentRef, ConfigSlot, SlotClass, SlotType
 
 /// Width of the `label:` column, matching `inspect.rs`'s `field` helper so the
 /// two commands line up visually.
-const LABEL_WIDTH: usize = 14;
+///
+/// `pub(crate)` so `inspect.rs` READS this one rather than repeating the
+/// literal: the coupling above is deliberate, and while it existed as two
+/// independent `14`s nothing failed when one of them moved — no test compares
+/// `inspect`'s output to `load`'s (the only cross-verb pin, in
+/// `package_portability_contract.rs`, compares `pull` to `load`, and both of
+/// those come through THIS file).
+pub(crate) const LABEL_WIDTH: usize = 14;
 
 /// Maximum rendered length of an ATTACKER-CONTROLLED string.
 ///

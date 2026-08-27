@@ -224,6 +224,47 @@ pub fn verify_attestation_request_body(
     Ok(Value::Object(body))
 }
 
+/// The envelope prologue every single-payload decoder in this leaf shares:
+/// refuse a GraphQL `errors` array, locate `data.<operation>`, and refuse a
+/// null payload. `null_meaning` completes the sentence "which the SDK must not
+/// read as ___", so each caller keeps its own operator-facing wording while the
+/// three probes exist once.
+///
+/// Sibling of [`required_response_str`], which was parameterized by operation
+/// for the same reason: this leaf now decodes more than one operation.
+#[allow(dead_code)]
+fn required_response_payload<'a>(
+    body: &'a Value,
+    operation: &str,
+    null_meaning: &str,
+) -> Result<&'a Value> {
+    if let Some(first) = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|errors| errors.first())
+    {
+        let message = first
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("<error entry carried no message>");
+        anyhow::bail!("{operation} returned a GraphQL error: {message}");
+    }
+
+    let payload = body
+        .get("data")
+        .and_then(|data| data.get(operation))
+        .with_context(|| format!("{operation} response has no `data.{operation}` field"))?;
+
+    if payload.is_null() {
+        anyhow::bail!(
+            "{operation} returned null with no GraphQL errors — the platform answered \
+             nothing, which the SDK must not read as {null_meaning}"
+        );
+    }
+
+    Ok(payload)
+}
+
 /// Decode a `verifyAttestation` GraphQL response body into a typed
 /// [`VerifyAttestationOutcome`].
 ///
@@ -243,29 +284,7 @@ pub fn verify_attestation_request_body(
 /// declares non-null is missing or is not a string.
 #[allow(dead_code)]
 pub fn decode_verify_attestation_response(body: &Value) -> Result<VerifyAttestationOutcome> {
-    if let Some(first) = body
-        .get("errors")
-        .and_then(Value::as_array)
-        .and_then(|errors| errors.first())
-    {
-        let message = first
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("<error entry carried no message>");
-        anyhow::bail!("verifyAttestation returned a GraphQL error: {message}");
-    }
-
-    let payload = body
-        .get("data")
-        .and_then(|data| data.get("verifyAttestation"))
-        .context("verifyAttestation response has no `data.verifyAttestation` field")?;
-
-    if payload.is_null() {
-        anyhow::bail!(
-            "verifyAttestation returned null with no GraphQL errors — the platform answered \
-             nothing, which the SDK must not read as a pass"
-        );
-    }
+    let payload = required_response_payload(body, "verifyAttestation", "a pass")?;
 
     Ok(VerifyAttestationOutcome {
         verdict: required_response_str(payload, "verifyAttestation", "verdict")?,
@@ -434,29 +453,7 @@ pub fn get_package_artifact_request_body(reference: &str) -> Result<Value> {
 /// missing or is not a string (naming the field).
 #[allow(dead_code)]
 pub fn decode_get_package_artifact_response(body: &Value) -> Result<GetPackageArtifactOutcome> {
-    if let Some(first) = body
-        .get("errors")
-        .and_then(Value::as_array)
-        .and_then(|errors| errors.first())
-    {
-        let message = first
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("<error entry carried no message>");
-        anyhow::bail!("getPackageArtifact returned a GraphQL error: {message}");
-    }
-
-    let payload = body
-        .get("data")
-        .and_then(|data| data.get("getPackageArtifact"))
-        .context("getPackageArtifact response has no `data.getPackageArtifact` field")?;
-
-    if payload.is_null() {
-        anyhow::bail!(
-            "getPackageArtifact returned null with no GraphQL errors — the platform \
-             answered nothing, which the SDK must not read as an artifact location"
-        );
-    }
+    let payload = required_response_payload(body, "getPackageArtifact", "an artifact location")?;
 
     Ok(GetPackageArtifactOutcome {
         payload_digest: required_response_str(payload, "getPackageArtifact", "payloadDigest")?,
@@ -1130,7 +1127,17 @@ mod tests {
 
     /// A null payload with no GraphQL errors is its OWN failure mode, and its
     /// message must be distinguishable from a malformed-shape error — the
-    /// platform answered nothing, which the SDK must not read as a location.
+    /// platform answered nothing, which the SDK must not read as
+    /// "an artifact location".
+    ///
+    /// That closing fragment is asserted, not just quoted here. Since
+    /// `required_response_payload` was extracted, the sentence is assembled from
+    /// a SHARED prologue plus a `null_meaning` argument supplied at the call
+    /// site, so "answered nothing" alone pins only the half that every decoder
+    /// gets for free. Without the second assertion this operation's half could
+    /// be changed to the sibling's ("a pass") — a live copy-paste risk the
+    /// moment a third caller is added — and the whole suite would stay green
+    /// while telling an operator the wrong thing about an artifact fetch.
     #[test]
     fn decode_get_package_artifact_response_rejects_null_payload() {
         let null_payload = serde_json::json!({ "data": { "getPackageArtifact": null } });
@@ -1140,6 +1147,10 @@ mod tests {
         assert!(
             rendered.contains("answered nothing"),
             "the null case has its own message: {rendered}"
+        );
+        assert!(
+            rendered.contains("must not read as an artifact location"),
+            "the operation's own null_meaning must survive the shared prologue: {rendered}"
         );
         assert!(
             !rendered.contains("is missing the non-null"),
