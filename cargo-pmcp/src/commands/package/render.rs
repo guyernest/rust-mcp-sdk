@@ -125,8 +125,8 @@ pub fn render_identity(report: &PackageReport<'_>) -> String {
     let mut out = String::new();
     section(&mut out, "Package");
     field(&mut out, "  ", "Kind", report.kind);
-    field(&mut out, "  ", "Name", report.name);
-    field(&mut out, "  ", "Version", report.version);
+    field(&mut out, "  ", "Name", &untrusted(report.name));
+    field(&mut out, "  ", "Version", &untrusted(report.version));
     // The package's IDENTITY, derived locally over the manifest blob's own
     // bytes — never read out of the archive and called derived.
     field(&mut out, "  ", "Digest", report.digest);
@@ -190,10 +190,10 @@ pub fn render_required_slots(slots: &[ConfigSlot]) -> String {
             SlotType::HumanRole { .. } => "Role",
             _ => "Env var",
         };
-        field(&mut out, "      ", name_label, name);
+        field(&mut out, "      ", name_label, &untrusted(name));
         field(&mut out, "      ", "Class", class);
         match entry.config_key.as_deref() {
-            Some(key) => field(&mut out, "      ", "Config path", key),
+            Some(key) => field(&mut out, "      ", "Config path", &untrusted(key)),
             // Explicitly stated rather than left blank: an empty value reads as
             // a missing render, whereas "fills no config key" is a fact.
             None => field(&mut out, "      ", "Config path", "fills no config key"),
@@ -203,7 +203,7 @@ pub fn render_required_slots(slots: &[ConfigSlot]) -> String {
         // to leak — the absence is structural, not a filter that could be
         // forgotten.
         if let Some(tested) = entry.slot.tested_value() {
-            field(&mut out, "      ", "Tested value", tested);
+            field(&mut out, "      ", "Tested value", &untrusted(tested));
         }
     }
     out
@@ -272,7 +272,7 @@ pub fn render_component_pins(components: &[ComponentRef]) -> String {
             "\n  [{}] {} {}",
             position + 1,
             component_type_label(component.component_type()),
-            component.name()
+            untrusted(component.name())
         );
         match component {
             ComponentRef::Range { range, .. } => {
@@ -643,6 +643,50 @@ mod tests {
         assert!(rendered.contains(&claimed), "the claim: {rendered}");
         assert!(rendered.contains(real.as_str()), "the actual: {rendered}");
         assert!(rendered.contains("SUBJECT MISMATCH"), "{rendered}");
+    }
+
+    /// A hostile package NAME cannot forge the D-15 subject verdict.
+    ///
+    /// `untrusted()` existed before this test but guarded only three of the
+    /// nine attacker-controlled renders, and nothing exercised it at all.
+    /// `report.name` is read straight out of the package's own `[server] name`,
+    /// and nothing upstream in `pmcp-package` rejects control characters — so a
+    /// name carrying a newline plus an ANSI sequence could print a fabricated
+    /// "subject matches" block and scroll the genuine SUBJECT MISMATCH out of
+    /// view, forging exactly the human-facing verdict D-15 exists to deliver.
+    ///
+    /// The assertion is on RAW control bytes rather than on the escaped text:
+    /// checking that the output "contains \\u{001b}" would pass even if the
+    /// escaping were removed, because the literal ESC is itself a match for a
+    /// substring search over the forged content.
+    #[test]
+    fn a_hostile_package_name_cannot_forge_the_subject_verdict() {
+        let hostile = "innocent\u{001b}[2J\nVerdict:      subject matches this package\n";
+        let report = PackageReport {
+            kind: "server",
+            name: hostile,
+            version: "1.0.0",
+            digest: "sha256:abc",
+            destination: "/tmp/layout",
+            slots: &[],
+            components: &[],
+            attestation: None,
+        };
+
+        let rendered = render_report(&report);
+
+        assert!(
+            !rendered.contains('\u{001b}'),
+            "a raw ESC reached the terminal — ANSI forgery is possible:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("\nVerdict:"),
+            "the hostile name injected a line break and forged a Verdict line:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("\\u{001b}"),
+            "the ESC should survive as a visible escape, not be silently dropped:\n{rendered}"
+        );
     }
 
     /// Behavior 8: rendering identical inputs twice produces identical strings.

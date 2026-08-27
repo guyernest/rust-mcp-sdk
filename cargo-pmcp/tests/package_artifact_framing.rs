@@ -43,7 +43,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cargo_pmcp::package_artifact::{read_verified, write_layout, write_tar};
+use cargo_pmcp::package_artifact::{install_layout, read_verified, write_layout, write_tar};
 use pmcp_package::oci::OciLayout;
 
 // ---------------------------------------------------------------------
@@ -82,7 +82,22 @@ fn assert_refused_writing_nothing(name: &str, needle: &str) {
     let tmp = tempfile::tempdir().expect("create a temp dir");
     let dest = untouched_destination(tmp.path());
 
-    let error = read_verified(&fixture(name)).expect_err("this fixture must be refused");
+    // Drive the WHOLE install sequence, not the reader alone.
+    //
+    // `read_verified` takes tar bytes and NO destination, so it has no way to
+    // create `dest` — which means asserting "dest was not created" after
+    // calling it by itself cannot fail, whatever the reader does. That is a
+    // test that certifies a property while never exercising it.
+    //
+    // `install_layout` is the only function here that writes. Chaining it is
+    // what gives the assertion below something to catch: were verification
+    // ever reordered to run AFTER installation, `dest` would exist and this
+    // test would go red. The refusal is still expected to come from
+    // `read_verified` — `install_layout` never runs for a refused fixture,
+    // which is precisely the invariant being asserted.
+    let error = read_verified(&fixture(name))
+        .and_then(|artifact| install_layout(&artifact, &dest, false, |_layout| Ok(())).map(|_| ()))
+        .expect_err("this fixture must be refused");
     let rendered = format!("{error:#}");
     assert!(
         rendered.contains(needle),
