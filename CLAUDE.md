@@ -337,7 +337,17 @@ cross-references stay valid.**
    `PMCP_PACKAGE_VERSION_REQ`; and both pin tripwires' constants
    (`cargo-pmcp/tests/pmcp_package_pin.rs`'s `EXPECTED_PIN`,
    `crates/pmcp-openapi-server/tests/pmcp_package_pin.rs`'s
-   `EXPECTED_VERSION_LINE`). The four manifests fail `cargo build` if left behind
+   `EXPECTED_VERSION_LINE`); **and, ninth,
+   `crates/pmcp-openapi-server/Cargo.toml:124` — recorded in that inventory as row 6,
+   marked UNCHANGED because it is path-only under CR-01 (item 9b).** The ninth is
+   listed precisely BECAUSE its correct action is to do nothing: an emitter whose
+   right move is inaction is the one a reader silently drops from the list, and
+   dropping it is how someone later "restores a pin" there and breaks the publish
+   order. An earlier revision of this paragraph stated the count of nine correctly
+   and then enumerated only eight — the row it dropped was exactly this one, and a
+   Phase-124 reviewer read that omission as evidence the count was wrong. It was
+   not: `122-08-SUMMARY.md:464-476` is the authority and it lists nine.
+   The four manifests fail `cargo build` if left behind
    and the two tripwires fail `cargo test`, so a partial bump cannot commit green —
    **except** `PMCP_PACKAGE_VERSION_REQ`, which is invisible to the compiler
    because it is emitted into projects created by `cargo pmcp agent new`. Measured
@@ -372,8 +382,50 @@ cross-references stay valid.**
    Phase 122 `cargo info pmcp-package` printed `version: 0.3.0 (from
    ./crates/pmcp-package)`, which is the workspace path dep and not a published fact.
 
-   **⚠ ORDERING CONSTRAINT FOR PHASE 124 (deferred from Phase 122).** `cargo-pmcp`
-   depends on `pmcp-package` **directly** AND transitively through `pmcp-agent`,
+   **⚠ AUTHORITATIVE ORDERING CONSTRAINT (owned here; items 13a, 14, 15 and 15a point
+   at this statement rather than restating it).**
+
+   > `pmcp-package` publishes BEFORE `pmcp-cfn-renderer`, `pmcp-agent`,
+   > `pmcp-team-servers` and `cargo-pmcp`. All four declare a `pmcp-package`
+   > dependency carrying a version requirement, so it must already exist on
+   > crates.io at a matching version or their publish fails with "no matching
+   > package named `...`". `cargo-pmcp` additionally pins the other three, which is
+   > why it is last of the five.
+
+   `.github/workflows/release.yml` is the AUTHORITY on that order; this ledger is its
+   prose mirror. Where the two have ever disagreed the workflow was right and the
+   prose was wrong — items 2, 12 and PR #303 are all corrections of exactly that
+   class. **As of Phase 124 the order is machine-checked:**
+   `scripts/check-release-coverage.sh` asserts `pmcp-package`'s publish step precedes
+   all four consumers' steps (D-10), and that gate runs inside `make quality-gate`
+   and the CI quality-gate job. A prose-versus-workflow order bug is now a build
+   failure rather than a discovery. The gate also discovers workspace-EXCLUDED
+   publishable crates by filesystem scan, so `pmcp-package` itself is covered.
+
+   **Version half of the constraint: `pmcp-package` and the three crates that pin it
+   must move as one set, or not at all.** This is the *Version Bump Rules* entry
+   ("Downstream crates that pin a bumped dependency must also be bumped") applied
+   here, and it is not optional, because `pmcp-package` types cross between the
+   crates in production code (see the type crossings enumerated below). Note the
+   caret exception recorded in *Version Bump Rules* does NOT rescue this case: it
+   covers PATCH bumps only, and `pmcp-package`'s moves have been minor ones on a
+   pre-1.0 line, which are semver-incompatible.
+
+   **Phase 124's obligation is DISCHARGED (2026-08-27).** The check this block asked
+   for was performed against the manifests: all four consumers carry
+   `pmcp-package = "0.3"` (`crates/pmcp-cfn-renderer/Cargo.toml:10`,
+   `crates/pmcp-agent/Cargo.toml:18`, `crates/pmcp-team-servers/Cargo.toml:24`,
+   `cargo-pmcp/Cargo.toml:88`), matching the `0.3.0` that `pmcp-package` ships at
+   this tag — the set is self-consistent and no consumer pin needs to move. The
+   `pmcp-cfn-renderer = "0.2"` pin at `cargo-pmcp/Cargo.toml:92` likewise matches.
+   The reason the set is self-consistent is recorded two paragraphs down: those three
+   crates are still unpublished and will publish fresh carrying `^0.3`. A future
+   releaser inherits a **discharged** obligation, not an open one — but must re-run
+   the same check on the next `pmcp-package` move, because the discharge is a
+   measurement of this tag, not a standing guarantee.
+
+   **The original Phase-122 statement of the hazard, retained for its reasoning.**
+   `cargo-pmcp` depends on `pmcp-package` **directly** AND transitively through `pmcp-agent`,
    `pmcp-team-servers` and `pmcp-cfn-renderer`, which each carry their own
    `pmcp-package` requirement. Locally this is invisible — every entry carries a
    `path`, `path` wins locally, and the workspace unifies on the single in-tree copy,
@@ -392,10 +444,8 @@ cross-references stay valid.**
    `pmcp_package::AgentPackage`; `commands/agent/dev.rs:29` pairs
    `pmcp_package::AgentPackage` with `pmcp_agent`. This did NOT bite in Phase 122
    precisely because those three were unpublished and will publish fresh carrying
-   `^0.3`, which is self-consistent. **The rule: `pmcp-package` and the three crates
-   that pin it must move as one set, or not at all.** This is CLAUDE.md's own
-   *Version Bump Rules* ("Downstream crates that pin a bumped dependency must also be
-   bumped") applied here, and the type crossings above are why it is not optional.
+   `^0.3`, which is self-consistent. The one-set rule those type crossings justify is
+   stated once, above — see the authoritative statement under item 13.
 
    **Unguarded version literals rot here — two live examples.**
    `cargo-pmcp/tests/support/scaffold_patch.rs:59` and
@@ -407,30 +457,35 @@ cross-references stay valid.**
    own evidence for why every emitter that DOES carry a requirement needs a guard.
 13a. `pmcp-cfn-renderer` (the pure `DeployDescriptor -> CloudFormation` template
    renderer crate at `crates/pmcp-cfn-renderer/`, CFN-renderer extraction). Depends
-   on `pmcp-package = "0.3"` (item 13, moved from `"0.2"` by Phase 122), so it must publish AFTER `pmcp-package`
-   — hence its slot here,
+   on `pmcp-package` (item 13), so it must publish AFTER it — hence its slot here,
    just ahead of `pmcp-agent` (item 14). `cargo-pmcp` (item 15a) pins
-   `pmcp-cfn-renderer = "0.2"` (it replaces `npx cdk synth`/`cdk deploy` for
+   `pmcp-cfn-renderer` (it replaces `npx cdk synth`/`cdk deploy` for
    unmodified scaffolds on the `pmcp-run` and `aws-lambda` deploy targets), so
-   this must ALSO publish before `cargo-pmcp` reaches crates.io. 0.x/
-   experimental — a failure here must not gate the core SDK release.
+   this must ALSO publish before `cargo-pmcp` reaches crates.io. For the full
+   constraint and the current requirement values, see the authoritative statement
+   under item 13. 0.x/experimental — a failure here must not gate the core SDK
+   release.
 14. `pmcp-agent` (the experimental 0.x agent-loop crate at `crates/pmcp-agent/`,
-   Phase 108). A regular root workspace member that pins `pmcp = "2.17"` (item 2)
-   and `pmcp-package = "0.3"` (item 13, moved from `"0.2"` by Phase 122) via path
-   deps, so it must publish AFTER both. 0.x/experimental — a failure here must not gate the core SDK release. Its
+   Phase 108). A regular root workspace member that pins `pmcp` (item 2)
+   and `pmcp-package` (item 13) via path deps, so it must publish AFTER both;
+   see the authoritative statement under item 13 for the constraint and the
+   current requirement values. 0.x/experimental — a failure here must not gate the core SDK release. Its
    `openai-compat`/`anthropic`/`url-connector` features are all non-default, so the
    default publish build is reqwest-free and wasm-clean.
 15. `pmcp-team-servers` (the experimental 0.x reference-team-server crate at
    `crates/pmcp-team-servers/`, Phase 109). A regular root workspace member that
-   pins `pmcp = "2.17"` (item 2), `pmcp-agent = "0.3"` (item 14), and
-   `pmcp-package = "0.3"` (item 13, moved from `"0.2"` by Phase 122) via path deps,
-   so it must publish AFTER all three (i.e. after `pmcp-agent`). 0.x/experimental — a failure here must not
+   pins `pmcp` (item 2), `pmcp-agent` (item 14), and
+   `pmcp-package` (item 13) via path deps,
+   so it must publish AFTER all three (i.e. after `pmcp-agent`);
+   see the authoritative statement under item 13 for the constraint and the
+   current requirement values. 0.x/experimental — a failure here must not
    gate the core SDK release. Its `webhook` (reqwest) and `http`
    (`pmcp/streamable-http`) features are non-default, so the default publish
    build is reqwest-free and wasm-clean.
 15a. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview — and pins
    `pmcp-package`, `pmcp-cfn-renderer`, `pmcp-agent` and `pmcp-team-servers`, so it
-   must publish AFTER items 13, 13a, 14 and 15). Formerly listed as item 12, which
+   must publish AFTER items 13, 13a, 14 and 15 — see the authoritative statement
+   under item 13). Formerly listed as item 12, which
    put it four slots too early; `release.yml` publishes it here, after
    `pmcp-team-servers`.
 
@@ -447,9 +502,9 @@ cross-references stay valid.**
 
    Its pins on `pmcp-agent` (`:79`), `pmcp-team-servers` (`:83`) and
    `pmcp-cfn-renderer` (`:92`) were deliberately **left unchanged** by Phase 122 —
-   see the ORDERING CONSTRAINT under item 13 for why that is safe today (those three
-   are unpublished and will publish fresh carrying `^0.3`) and what Phase 124 must
-   check before it stops being safe.
+   why that is safe (those three are unpublished and will publish fresh carrying
+   `^0.3`), and Phase 124's discharge of the check it asked for, are both recorded
+   in the authoritative statement under item 13.
 16. `pmcp-server` (the docs/resources MCP server at `crates/pmcp-server/`). A root
    workspace member pinning `pmcp` (item 2) and `mcp-tester` (item 10), so it must
    publish AFTER both. **This entry was missing from this list until 2026-08-21** —
@@ -465,8 +520,11 @@ cross-references stay valid.**
    until 0.1.0 was published by hand. The `release.yml` ledger is now machine-checked
    by `scripts/check-release-coverage.sh` (chained into `make quality-gate` and the CI
    quality-gate job), which is what makes a third recurrence a build failure rather
-   than a discovery. This prose list remains hand-maintained, and workspace-excluded
-   crates (`pmcp-package`) are a known blind spot of the check until Phase 124 (PKGR-01).
+   than a discovery. This prose list remains hand-maintained. Workspace-excluded
+   crates (`pmcp-package`) **were** a blind spot of that check; Phase 124 closed it
+   (PKGR-01): the gate now discovers them by filesystem scan, its member count moved
+   24 -> 25, and a repo-wide scan-scope tripwire proves the narrow `crates/` glob is
+   a checked scope rather than an implicit allowlist.
 
 The three per-backend connector crates (`pmcp-toolkit-postgres`, `-mysql`, `-athena`)
 have no inter-dependencies — they may publish in any order relative to each other,
@@ -486,11 +544,21 @@ Before starting a release, verify:
    rustup update stable
    rustc --version  # Must match or exceed CI's version
    ```
-2. **Check crates.io versions** — know what's already published vs what needs bumping:
+2. **Check crates.io versions** — know what's already published vs what needs bumping.
+   Use the crates.io API, which is the only valid published-version oracle. Do **not**
+   use Cargo's own registry search/info subcommands: they report the in-tree path
+   override as though it were published state. Item 13's Phase-122 note names those
+   commands, forbids them, and records the measurement. The `User-Agent` header is
+   **mandatory**; without it the endpoint returns an empty body and every probe looks
+   like a fetch failure.
    ```bash
-   cargo search pmcp --limit 5
-   cargo search mcp-tester --limit 1
-   cargo search mcp-preview --limit 1
+   # One crate, by hand:
+   curl -s -H 'User-Agent: pmcp-release-preflight' \
+     https://crates.io/api/v1/crates/pmcp/versions | jq -r '.versions[].num' | head -5
+
+   # Or sweep EVERY publishable crate in one run — registry version vs in-tree
+   # version vs git diff since the last release tag (D-05):
+   make release-sweep
    ```
 3. **Identify changed crates** — compare against the last release tag:
    ```bash
@@ -499,9 +567,20 @@ Before starting a release, verify:
 
 ### Version Bump Rules
 - Only bump crates that have changed since their last publish
-- Downstream crates that pin a bumped dependency must also be bumped
-  (e.g., if `pmcp` bumps, update the `pmcp = { version = "..." }` line in
-  `mcp-tester/Cargo.toml` and `cargo-pmcp/Cargo.toml`, and bump their versions)
+- Downstream crates that pin a bumped dependency must also be bumped **when the bump
+  is semver-INCOMPATIBLE with the existing requirement** — i.e. a major bump, or a
+  minor bump on a pre-1.0 (`0.x`) line, where `0.2` and `0.3` are incompatible.
+  Then update the `pmcp = { version = "..." }`-style line in each pinning manifest
+  and bump those crates' own versions. Item 13's authoritative ordering constraint
+  depends on this rule and is the worked example: `pmcp-package` and the three
+  crates pinning it move as one set, or not at all.
+- **Caret exception — a PATCH bump requires no downstream pin bumps.** Cargo version
+  requirements are carets by default, and `^X.Y.Z` already admits `X.Y.Z+1`, so
+  nothing that pins the crate needs to change. The blanket form of the rule above
+  over-fires here. Live instance in this release: `pmcp` moves **2.19.0 -> 2.19.1**,
+  and `crates/mcp-tester/Cargo.toml:21` and `cargo-pmcp/Cargo.toml:68` both pin
+  `pmcp = "2.19.0"` — `^2.19.0` admits 2.19.1, so **neither pin moves and neither
+  crate is bumped**. Do not extend this exception to minor or major bumps.
 - Semver: new features = minor bump, breaking changes = major bump, fixes = patch
 
 ### Release Steps
@@ -534,6 +613,21 @@ git checkout main && git pull upstream main
 git tag -a vX.Y.Z -m "pmcp vX.Y.Z - <summary>"
 git push upstream vX.Y.Z
 ```
+
+**⚠ Inherited release risk — bumping `mcp-tester` is not a free move.** Recorded here
+as **standing release risk, not as part of any phase's completion** (Phase 124 measured
+it; PKGR-01 does not close it). **Six** in-repo crates carry an `mcp-tester`
+`[dev-dependencies]` entry with BOTH a `path` and a `version` key, and **four of the six
+publish BEFORE `mcp-tester` itself** (`mcp-tester` at `release.yml:401`;
+`pmcp-server-toolkit` `:263`, `pmcp-sql-server` `:329`, `pmcp-openapi-server` `:344` and
+`pmcp-workbook-server` `:383` all ahead of it; `cargo-pmcp` `:525` and `pmcp-server`
+`:543` safely after). Cargo **retains** a dev-dep carrying a version requirement in the
+published manifest, so those four must resolve `mcp-tester` against crates.io at publish
+time. It is green today only because the pinned `0.8.0` is already published. A future
+`mcp-tester` bump must therefore either leave those four pins alone or resolve the
+ordering in the same change; moving them without doing so fails the release job at
+`pmcp-server-toolkit`, the first of them. The general rule this is an instance of is
+stated in-tree at `crates/pmcp-openapi-server/Cargo.toml:112-119`.
 
 ### Why `make quality-gate` (not individual cargo commands)
 CI runs `make quality-gate` which invokes `make lint` with `--features "full"`,
