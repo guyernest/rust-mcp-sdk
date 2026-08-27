@@ -2498,12 +2498,32 @@ Plans:
 **Plans**: 7 plans across 7 waves (1:{01} 2:{02} 3:{03} 4:{04} 5:{05} 6:{06} 7:{07}), all carrying PKGR-01.
 
 Plans:
+**Wave 1**
+
 - [ ] 124-01-PLAN.md — Coverage gate sees the workspace-excluded crate: D-01 two-source discovery, D-10 cluster order assertion, six-fixture red-direction self-test declared as the gate's prerequisite
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 124-02-PLAN.md — Sync `main` into the milestone branch (D-08), resolving the squash-merge conflict set BEFORE any version bump
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 124-03-PLAN.md — D-05 three-way version-drift sweep as a committed tool, D-03's public-API guard, and a blocking-human decision on every phantom delta
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 124-04-PLAN.md — D-09 ledger reconciliation: release.yml's four stale comment regions and CLAUDE.md's scattered ordering constraint plus its Pre-Flight contradiction
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 124-05-PLAN.md — Version bumps for exactly the authorised set, the D-04 pmcp-package audit with its nine-emitter one-set rule, and the CHANGELOG section the release workflow can extract
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 124-06-PLAN.md — Open the release PR, drive CI green, human-action checkpoint for the merge
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 124-07-PLAN.md — Pre-tag re-verification, one-way-door decision checkpoint, human-action tag push, per-crate registry verification and phase close-out
 
 > **Waves are one plan wide by design.** This is a release pipeline: measure -> gate -> sync -> reconcile -> decide versions -> ship, and every step's output is the next step's input. Two ordering constraints are load-bearing and must not be "optimised" back into parallelism: the `main` sync (plan 02) precedes every version bump, because a conflict resolution that silently reverts a bumped manifest is the worst possible ordering; and the phantom-delta decision (plan 03) precedes the bumps it authorises, because published version numbers are consumed permanently.
