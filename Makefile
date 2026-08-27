@@ -361,6 +361,55 @@ test-cargo-pmcp:
 # catch. The general lesson for the next person adding a `cargo-pmcp/tests/`
 # file: the default is NOT reached. Register it here or it does not run.
 #
+# PHASE 123 (PKGX-02) — FOUR NAMES, FOUR COMMITS, ON PURPOSE. Consolidated by
+# plan 07 (2026-08-26) so the record sits at the edit point rather than only in
+# four separate SUMMARYs. Each binary was registered in BOTH lists below by the
+# plan that CREATED it, in that plan's own commit:
+#
+#   - `package_save_load`            plan 123-01, wave 1  (5ba3a8b4)
+#   - `package_portability_contract` plan 123-02, wave 2  (bfea2a95), extended
+#                                    by plan 123-05 with the `pull` pipeline
+#   - `package_artifact_framing`     plan 123-04, wave 3  (e34c5354)
+#   - `verb_help`                    plan 123-06, wave 5  (2147fb96) — the
+#                                    pre-existing-but-ungated one, above
+#
+# The four arrived across FOUR commits rather than one deferred batch, and that
+# is the correct reading of the APPEND-ONLY rule, not an exception to it. The
+# hazard the rule guards against is a name landing BEFORE its binary — which
+# turns this gate red for every commit in between. A name landing WITH its
+# binary cannot produce that state, and it is exactly what plan 122-04 did (see
+# the paragraph above). Batching all four here instead would have left waves 1
+# through 5 running `make quality-gate` green WITHOUT the gate ever executing
+# that wave's own new tests — a false green of precisely the class this whole
+# comment block exists to prevent.
+#
+# STANDING INSTRUCTION, restated because this is where someone will be standing
+# when they are tempted: removing a name to quiet a red gate DELETES THE PROOF
+# instead of fixing the failure. Fix the binary, or explain in a commit message
+# why the proof is no longer owed.
+#
+# `package_portability_contract` carries the same ignored-test hazard as
+# `package_attestation_contract`: offline tests plus one `#[ignore]`d live leg
+# parked on a pmcp.run backend that does not exist yet. The OFFLINE tests are
+# what keep its passed count nonzero. If a future change parks the last
+# non-ignored test in that file, this gate goes red BY DESIGN — unpark or
+# replace it, do not relax the guard.
+#
+# MEASURED END STATE (plan 123-07, 2026-08-26), over the complete eight-binary
+# set with every binary present — the configuration in which the gate's real end
+# state is observable, and which no single creator plan could reach on its own:
+#   package_capture_contract 3, package_attestation_contract 3,
+#   package_inspect 12, pmcp_package_pin 1, package_save_load 36,
+#   package_portability_contract 22, package_artifact_framing 14, verb_help 4
+#   — 95 tests, exit 0.
+# Both negative controls were re-run over that complete set: dropping
+# `verb_help` from the `--test` selector list while leaving it in
+# `REQUIRED_TEST_BINARIES` produced the -1 "never RAN" verdict and exit 2 with
+# the summed total still a comfortable 91 (which is why the sum cannot catch
+# it); renaming `cargo-pmcp/tests/package_artifact_framing.rs` produced
+# `error: no test target named 'package_artifact_framing'` and exit 2 from cargo
+# itself, before any output reached the extractor.
+#
 # WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
 # interchangeable and the distinction is easy to get backwards:
 #
