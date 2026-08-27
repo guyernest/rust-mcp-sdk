@@ -2500,7 +2500,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 124-01-PLAN.md — Coverage gate sees the workspace-excluded crate: D-01 two-source discovery, D-10 cluster order assertion, six-fixture red-direction self-test declared as the gate's prerequisite
+- [ ] 124-01-PLAN.md — Coverage gate sees the workspace-excluded crate: D-01 two-source discovery plus a repo-wide scan-scope tripwire, D-10 cluster order assertion with a word-boundary matcher, eight-fixture red-direction self-test declared as the gate's prerequisite
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -2516,7 +2516,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 124-05-PLAN.md — Version bumps for exactly the authorised set, the D-04 pmcp-package audit with its nine-emitter one-set rule, and the CHANGELOG section the release workflow can extract
+- [ ] 124-05-PLAN.md — Version bumps for exactly the authorised set in one atomic commit, the D-04 pmcp-package audit with its nine-emitter one-set rule plus the separate row-C1 consequence set, the CHANGELOG section the release workflow can extract, and the committed `124-expected-release.json` release manifest that plans 06 and 07 verify against
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -2524,7 +2524,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 124-07-PLAN.md — Pre-tag re-verification, one-way-door decision checkpoint, human-action tag push, per-crate registry verification and phase close-out
+- [ ] 124-07-PLAN.md — Pre-tag re-verification of two disjoint sets (expected-new vs expected-skips), one-way-door decision checkpoint, human-action tag push, per-crate registry verification with retry, and a closeout PR that delivers the planning record to `upstream/main`
 
 > **Waves are one plan wide by design.** This is a release pipeline: measure -> gate -> sync -> reconcile -> decide versions -> ship, and every step's output is the next step's input. Two ordering constraints are load-bearing and must not be "optimised" back into parallelism: the `main` sync (plan 02) precedes every version bump, because a conflict resolution that silently reverts a bumped manifest is the worst possible ordering; and the phantom-delta decision (plan 03) precedes the bumps it authorises, because published version numbers are consumed permanently.
 
