@@ -886,11 +886,73 @@ lint-plans:
 	./scripts/lint-plan-verify-commands.sh
 	@echo "$(GREEN)✓ No verification command masks the status of what it verifies$(NC)"
 
+# Fixture-driven self-test for the release-ledger coverage gate, mirroring
+# no-crypto-allowlist-guard-selftest and test-openapi-server-guard-selftest. It
+# is a declared PREREQUISITE of check-release-coverage below, so the gate's RED
+# direction is proven before the gate's green reading is trusted — the gate and
+# the proof of the gate cannot drift.
+#
+# Adaptation from both precedents: their logic lives in an extracted `awk` file
+# that can be fed inline fixtures. This gate's logic is not extracted, so each
+# fixture is instead a DOCTORED COPY of the real release.yml built in a
+# `mktemp -d` scratch directory, and the assertion is on EXIT STATUS plus (for
+# the red fixtures) the offending crate's name appearing in captured output —
+# never on full message text, so rewording the gate does not break its proof.
+#
+# Each fixture pins a distinct way the gate can pass vacuously:
+#
+#   intact                    -> 0   the gate still passes on good input; the
+#                                    extension introduced no false red.
+#   pmcp_package_step_removed -> !=0 THE HEADLINE BLIND SPOT. Before this phase
+#                                    the SAME input printed "all 24 publishable
+#                                    workspace members have a publish step." and
+#                                    exited 0 (measured). This is the fixture
+#                                    that matters most.
+.PHONY: check-release-coverage-guard-selftest
+check-release-coverage-guard-selftest:
+	@echo "$(BLUE)Self-testing the release-ledger coverage gate (red direction)...$(NC)"
+	@fail=0; ran=0; \
+	SRC=.github/workflows/release.yml; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	check() { \
+		fixture="$$1"; expected="$$2"; doctored="$$3"; needle="$$4"; cdir="$$5"; \
+		ran=$$((ran + 1)); \
+		actual=0; \
+		CRATES_DIR="$$cdir" ./scripts/check-release-coverage.sh "$$doctored" >"$$tmp/out" 2>&1 || actual=$$?; \
+		if [ "$$expected" = "0" ] && [ "$$actual" -ne 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected exit 0, got $$actual$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ "$$expected" != "0" ] && [ "$$actual" -eq 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected NON-ZERO exit, got 0 — the gate passed input it must reject$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ -n "$$needle" ] && ! grep -q "$$needle" "$$tmp/out"; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': failed for the wrong reason — output never names '$$needle'$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		return 0; \
+	}; \
+	cp "$$SRC" "$$tmp/intact.yml"; \
+	grep -v 'cargo publish --manifest-path crates/pmcp-package/Cargo.toml' "$$SRC" > "$$tmp/pkg_removed.yml"; \
+	check intact 0 "$$tmp/intact.yml" '' ''; \
+	check pmcp_package_step_removed nonzero "$$tmp/pkg_removed.yml" 'pmcp-package' ''; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	if [ "$$ran" -ne 2 ]; then \
+		echo "$(RED)✗ coverage gate self-test executed $$ran fixtures, expected 2 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ release-coverage gate self-test passed ($$ran fixtures)$(NC)"
+
 # Release-ledger coverage: every publishable workspace member must have a
 # publish step in release.yml. Sub-second, chained into `quality-gate` below
 # and invoked by the CI quality-gate job so local and CI stay aligned.
+#
+# The self-test above is a PREREQUISITE, not a sibling: a gate whose red
+# direction is unproven is indistinguishable from a gate that always passes.
 .PHONY: check-release-coverage
-check-release-coverage:
+check-release-coverage: check-release-coverage-guard-selftest
 	@echo "$(BLUE)Checking release-ledger coverage...$(NC)"
 	./scripts/check-release-coverage.sh
 	@echo "$(GREEN)✓ Every publishable workspace member has a publish step$(NC)"

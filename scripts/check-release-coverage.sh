@@ -77,6 +77,128 @@ while IFS= read -r crate; do
   fi
 done <<<"$PUBLISHABLE"
 
+# ---------------------------------------------------------------------------
+# SECOND DISCOVERY SOURCE: workspace-EXCLUDED publishable crates.
+#
+# A crate that carries its own `[workspace]` table is not a root workspace
+# member, so the `cargo metadata --no-deps` above structurally cannot see it.
+# Such a crate publishes with `cargo publish --manifest-path <path>`, never
+# `cargo publish -p <name>` — its NAME never appears in the command, so the
+# root loop's matcher would find nothing even if the name were known.
+#
+# The RULE is: a manifest carrying its own `[workspace]` table that has not
+# opted out with `publish = false`. There is no list of crate names and no list
+# of paths here, deliberately — a hand-maintained list is the thing this gate
+# exists to replace.
+#
+# Classification is delegated to Cargo (`.publish == null`), the SAME predicate
+# the root half uses, so a filesystem heuristic can never disagree with Cargo
+# about what "publishable" means.
+#
+# CRATES_DIR is overridable from the environment for exactly one reason: the
+# Make self-test points discovery at a synthetic tree to prove that DISCOVERY
+# works, not merely that the matcher works against today's repository layout.
+# It is a scope, never a list of crates.
+CRATES_DIR_DEFAULT="crates"
+CRATES_DIR="${CRATES_DIR:-$CRATES_DIR_DEFAULT}"
+
+excluded_seen=0
+for m in "$CRATES_DIR"/*/Cargo.toml; do
+  [ -f "$m" ] || continue
+  # Whitespace-tolerant: `[ workspace ]` is valid TOML even though no in-tree
+  # manifest spells it that way today.
+  grep -qE '^[[:space:]]*\[[[:space:]]*workspace[[:space:]]*\]' "$m" || continue
+  excluded_seen=$((excluded_seen + 1))
+
+  EX_META="$(cargo metadata --no-deps --format-version 1 --manifest-path "$m")" || {
+    echo "::error::cargo metadata failed for $m — release-ledger coverage was NOT checked"
+    exit 1
+  }
+  EX_NAME="$(printf '%s' "$EX_META" \
+    | jq -r '.packages[] | select(.publish == null) | .name')" || {
+    echo "::error::jq failed over cargo metadata for $m — release-ledger coverage was NOT checked"
+    exit 1
+  }
+  # Empty means the crate declared `publish = false`; a publish-restricted crate
+  # is correctly not this gate's problem.
+  [ -n "$EX_NAME" ] || continue
+
+  total=$((total + 1))
+  # `$m` is used VERBATIM in both the scan and the matcher, so the two cannot
+  # disagree about how the path is spelled. Fixed-string (`-F`): a path contains
+  # `.` and `/`, which are regex-live. The trailing space is the end boundary.
+  if ! grep -qF "cargo publish --manifest-path ${m} " <<<"$PUBLISH_LINES"; then
+    missing_count=$((missing_count + 1))
+    missing_list="${missing_list}  - ${EX_NAME} (workspace-excluded; needs 'cargo publish --manifest-path ${m}')
+"
+  fi
+done
+
+# A zero-result scan is a FAILURE, for the same reason a zero-length member list
+# is: this repo has had at least one workspace-excluded publishable crate since
+# Phase 108, so zero hits means the glob or the working directory is wrong, not
+# that coverage holds. If the last such crate is ever legitimately removed, this
+# arm is a deliberate one-line edit — which is the point.
+if [ "$excluded_seen" -eq 0 ]; then
+  echo "::error::scanned '$CRATES_DIR/' and found ZERO manifests carrying their own [workspace] table —"
+  echo "::error::this repo has had at least one workspace-excluded publishable crate since Phase 108,"
+  echo "::error::so the scan scope or the working directory is wrong; refusing to pass a check that verified nothing"
+  exit 1
+fi
+
+# --- scan-scope tripwire ---------------------------------------------------
+# The loop above scans `$CRATES_DIR/*/Cargo.toml`, which is NARROWER than the
+# rule it implements. Without this assertion that narrow glob would BE the
+# allowlist the rule forbids: a qualifying manifest placed anywhere else stays
+# invisible while the gate prints full coverage — the exact failure class this
+# script exists to prevent, one layer up.
+#
+# So assert repo-wide that every TRACKED manifest carrying its own [workspace]
+# table either lives inside the scanned scope or has explicitly opted out.
+# TRACKED (`git ls-files`), not `find`: the check must read identically for
+# every developer and in CI, regardless of which untracked spike copies,
+# scratch directories or vendored trees happen to exist locally.
+#
+# Skips are STATED, never silent — a skipped assertion that looks like a pass is
+# the same defect as a gate that cannot see.
+if [ "$CRATES_DIR" != "$CRATES_DIR_DEFAULT" ]; then
+  echo "notice: scan-scope tripwire SKIPPED — CRATES_DIR is overridden to '$CRATES_DIR'."
+  echo "notice: the repo-wide scope assertion is only meaningful against the real tree."
+elif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "notice: scan-scope tripwire SKIPPED — not inside a git work tree, so the repo-wide"
+  echo "notice: tracked-manifest enumeration is unavailable."
+else
+  tracked_manifests="$(git ls-files '*Cargo.toml')" || {
+    echo "::error::git ls-files failed — the scan SCOPE of this gate was NOT checked"
+    exit 1
+  }
+  scope_violations=""
+  while IFS= read -r sm; do
+    [ -n "$sm" ] || continue
+    [ -f "$sm" ] || continue
+    # The root workspace manifest itself: it IS the root metadata source above,
+    # so re-enumerating it here would double-count all of its members.
+    if [ "$sm" = "Cargo.toml" ]; then continue; fi
+    # Already inside the scanned scope — the loop above covered it.
+    case "$sm" in "$CRATES_DIR"/*) continue ;; esac
+    if ! grep -qE '^[[:space:]]*\[[[:space:]]*workspace[[:space:]]*\]' "$sm"; then continue; fi
+    if grep -qE '^[[:space:]]*publish[[:space:]]*=[[:space:]]*false' "$sm"; then continue; fi
+    scope_violations="${scope_violations}  - ${sm}
+"
+  done <<<"$tracked_manifests"
+
+  if [ -n "$scope_violations" ]; then
+    echo "::error::scan-scope violation — the following tracked manifest(s) carry their own"
+    echo "::error::[workspace] table, do NOT declare 'publish = false', and lie OUTSIDE the"
+    echo "::error::scanned scope ('$CRATES_DIR/'), so this gate cannot see them at all:"
+    printf '%s' "$scope_violations"
+    echo ""
+    echo "Fix by EITHER adding 'publish = false' to the [package] table (if the crate is not"
+    echo "meant to ship), OR moving the crate under '$CRATES_DIR/' so discovery reaches it."
+    exit 1
+  fi
+fi
+
 if [ "$missing_count" -gt 0 ]; then
   echo "::error::${missing_count} publishable workspace member(s) have no publish step in $WORKFLOW:"
   printf '%s' "$missing_list"
