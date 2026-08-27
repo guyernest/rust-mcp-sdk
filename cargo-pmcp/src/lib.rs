@@ -193,6 +193,36 @@ pub mod package_artifact;
 #[path = "commands/package/render.rs"]
 pub mod package_render;
 
+// PKGX-02 (Phase 123-05): expose the `package pull` PIPELINE — stages 2 through
+// 6 plus the ONE transport seam — to the lib target, mirroring the
+// `package_artifact` / `package_render` `#[path]` convention immediately above.
+//
+// This mount is what makes the seam REACHABLE, and that is not a style point.
+// `lib.rs` declares no `mod commands`, so a pipeline declared only under
+// `commands/package/` is compiled into the BIN target and nowhere else; a file
+// under `cargo-pmcp/tests/` is an external crate linking the LIB and can neither
+// see a bin-private module nor implement a trait declared in one. Without this
+// line `tests/package_portability_contract.rs` cannot substitute a fake
+// transport, and `pull`'s verification half — the security-relevant half —
+// would be claimed rather than exercised.
+//
+// It is mounted into the LIB ONLY, and deliberately NOT declared in
+// `commands/package/mod.rs`. A second declaration would compile the file twice
+// and split `ArtifactTransport` into two incompatible types, so the bin's live
+// implementation and the test's fake one would stop being interchangeable —
+// which is the whole point of having one seam.
+//
+// `pull_pipeline.rs` references only `anyhow`, `serde_json`, `pmcp_package`,
+// `async-trait`, std and the sibling lib mounts (`package_artifact`,
+// `package_kind`, `package_render`, `pmcp_run_graphql`) — NO `clap`, NO
+// `GlobalFlags`, NO `reqwest`, NO `crate::commands::*` — which is exactly what
+// lets it compile in the lib target, where the crate root declares no `commands`
+// module. It is also why the file may never name `super::`.
+// `#[doc(hidden)]`: an internal support surface, not a stable public API.
+#[doc(hidden)]
+#[path = "commands/package/pull_pipeline.rs"]
+pub mod package_pull_pipeline;
+
 // Package-capture contract test seam (170-08 Task 3; extended in the
 // final-review fix wave with pure SDL-extraction helpers): expose the two
 // dependency-light capture GraphQL query consts, plus the pure,

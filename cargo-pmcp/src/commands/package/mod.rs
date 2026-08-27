@@ -9,7 +9,11 @@
 //!   `save` writes a package out to one tar file; `load` reads one back into a
 //!   working layout. Neither touches the network (D-11).
 //! - **REMOTE, against the pmcp.run platform:** `capture`/`show`/`import`/
-//!   `approve`.
+//!   `approve`/`pull`. `pull` is the remote sibling of `load`: it fetches a
+//!   published artifact and installs it through the same verification and the
+//!   same transactional install `load` uses, then renders the same report.
+//!   There is no upload direction — `export`/`push` are retired (D-01), and
+//!   `import` stays the platform's own dry-run pre-flight (D-03).
 //!
 //! Mirrors the `workbook` command-group shape (D-01) with an ASYNC `execute`.
 //! `inspect` is a LOCAL, offline OCI-layout inspector (unchanged by this
@@ -30,6 +34,13 @@ pub mod import;
 pub mod inspect;
 pub mod kind;
 pub mod load;
+pub mod pull;
+// NOTE: `pull_pipeline` is deliberately NOT declared here. It is mounted into
+// the LIB ONLY, as `cargo_pmcp::package_pull_pipeline` (see `lib.rs`). A second
+// declaration in this bin tree would compile the file twice and split its
+// `ArtifactTransport` trait into two incompatible types, so the live transport
+// and the offline test double would stop being interchangeable — which is the
+// entire reason the seam exists.
 pub mod render;
 pub mod save;
 pub mod show;
@@ -48,6 +59,9 @@ pub enum PackageCommand {
     Save(save::SaveArgs),
     /// Read a local tar file back into a working layout (local, offline)
     Load(load::LoadArgs),
+    /// Fetch a published artifact from pmcp.run and install it into a working
+    /// layout (remote, platform-side — the remote sibling of `load`)
+    Pull(pull::PullArgs),
     /// Submit an async capture job for a team's workflow dependency graph
     /// (remote, platform-side — polls to a terminal status)
     Capture(capture::CaptureArgs),
@@ -71,6 +85,7 @@ impl PackageCommand {
             PackageCommand::Inspect(args) => inspect::execute(args, global_flags),
             PackageCommand::Save(args) => save::execute(args, global_flags),
             PackageCommand::Load(args) => load::execute(args, global_flags),
+            PackageCommand::Pull(args) => pull::execute(args, global_flags).await,
             PackageCommand::Capture(args) => capture::execute(args, global_flags).await,
             PackageCommand::Show(args) => show::execute(args, global_flags).await,
             PackageCommand::Import(args) => import::execute(args, global_flags).await,
