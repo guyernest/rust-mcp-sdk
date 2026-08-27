@@ -208,4 +208,73 @@ if [ "$missing_count" -gt 0 ]; then
   exit 1
 fi
 
+: 'BEGIN D-10 ORDER ASSERTION'
+# ^ That sentinel is a shell no-op, NOT a comment, on purpose: the phase-124
+# no-allowlist check strips comments first and then excises this region, so a
+# commented sentinel would vanish before the excision could use it.
+#
+# THIS REGION IS THE SINGLE SANCTIONED HARD-CODED LIST IN THIS SCRIPT. The
+# no-allowlist rule above governs DISCOVERY; here the cluster is named on
+# purpose (CONTEXT D-10 bounds the machine-checked order to pmcp-package and its
+# four in-repo consumers). Do NOT "fix" these five names into a scan — a general
+# topological model of all 25 crates is explicitly deferred.
+#
+# Why the order is load-bearing rather than cosmetic: all four consumers pin
+# pmcp-package, so if it published after any of them `cargo publish` fails with
+# "no matching package named `pmcp-package`". Worse, a consumer that publishes
+# early and is later skipped as "already published" can leave a released
+# cargo-pmcp resolving two semver-incompatible pmcp-package copies, which Cargo
+# permits and the type checker does not. CLAUDE.md item 13's ORDERING CONSTRAINT
+# records the production type-crossings that make this concrete.
+
+# Resolve the 1-based ordinal of a publish step within the COMMENT-STRIPPED
+# text, so a prose comment naming a crate above a step can never shift the
+# reading.
+#
+# `awk ... exit`, never `... | head -1`: under `set -o pipefail` an early-exiting
+# reader makes the still-writing producer take SIGPIPE and return 141, which
+# `set -e` then turns into a mid-assignment abort. That is the SAME hazard the
+# root loop's here-string comment above documents; a self-terminating awk stops
+# reading at the first match and never writes into a closed pipe.
+step_line() {      # $1 = exact FIXED-STRING fragment (paths contain . and /)
+  awk -v target="$1" 'index($0, target) { print NR; exit }' <<<"$PUBLISH_LINES"
+}
+step_line_re() {   # $1 = ERE; used wherever a crate NAME needs an end boundary
+  awk -v re="$1" '$0 ~ re { print NR; exit }' <<<"$PUBLISH_LINES"
+}
+
+pkg_line="$(step_line 'cargo publish --manifest-path crates/pmcp-package/Cargo.toml')"
+if [ -z "$pkg_line" ]; then
+  echo "::error::could not locate the 'cargo publish --manifest-path crates/pmcp-package/Cargo.toml'"
+  echo "::error::step in $WORKFLOW — the publish ORDER was NOT checked. A gate that cannot see must say so."
+  exit 1
+fi
+
+# The boundary on `-p ${consumer}` is not decoration. Prefix collisions are live
+# in this workflow today (`pmcp-server` <= `pmcp-server-toolkit`,
+# `pmcp-code-mode` <= `pmcp-code-mode-derive`, `pmcp-macros` <=
+# `pmcp-macros-support`, `pmcp` <= ten-plus others), and a boundary-less match
+# returns a silently WRONG ordinal rather than an error — the worse failure.
+for consumer in pmcp-cfn-renderer pmcp-agent pmcp-team-servers cargo-pmcp; do
+  cl="$(step_line_re "cargo publish -p ${consumer}( |\$)")"
+  if [ -z "$cl" ]; then
+    echo "::error::could not locate the 'cargo publish -p ${consumer}' step in $WORKFLOW —"
+    echo "::error::the publish ORDER was NOT checked. A gate that cannot see must say so."
+    exit 1
+  fi
+  # `-ge`, not `-gt`: two publish steps cannot occupy one ordinal, so an EQUAL
+  # reading means both fragments resolved to the same line — a matcher fault,
+  # which must fail rather than pass.
+  if [ "$pkg_line" -ge "$cl" ]; then
+    echo "::error::pmcp-package publishes AT OR AFTER ${consumer} in $WORKFLOW"
+    echo "::error::(comment-stripped ordinals: pmcp-package=${pkg_line}, ${consumer}=${cl})."
+    echo "::error::${consumer} pins pmcp-package, so 'cargo publish -p ${consumer}' would fail"
+    echo "::error::with \"no matching package named \`pmcp-package\`\"."
+    echo ""
+    echo "Fix by moving the pmcp-package publish step ahead of ${consumer}'s in $WORKFLOW."
+    exit 1
+  fi
+done
+: 'END D-10 ORDER ASSERTION'
+
 echo "release-coverage: all ${total} publishable workspace members have a publish step."
