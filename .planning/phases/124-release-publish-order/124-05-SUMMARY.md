@@ -17,9 +17,9 @@ provides:
 affects: [124-05, 124-06, 124-07, release-workflow]
 
 actuals:
-  tokens: 48000
-  tasks: 1
-  commits: 2
+  tokens: 79000
+  tasks: 4
+  commits: 6
 
 tech-stack:
   added: []
@@ -43,7 +43,7 @@ key-decisions:
 patterns-established:
   - "A closed authorised list is only closed with respect to what its author could see; an executor that discovers a mechanically-forced fifth member must escalate, not extend it"
 
-requirements-completed: []
+requirements-completed: [PKGR-01]
 
 coverage:
   - id: D1
@@ -77,11 +77,13 @@ coverage:
     description: "The authorised bump set is NOT executable as recorded — pmcp-workbook-dialect needs a version number plan 03's closed list does not authorise"
     verification: []
     human_judgment: true
+    resolution: "RESOLVED round 3 — Option A. See ROUND 3."
     rationale: "Consuming a crates.io version number is permanent and one-way (CONTEXT D-07). Plan 03 reserved this class of decision to the user at a gate=\"blocking-human\" checkpoint, and plan 05's own Task 2 Step C2 instructs the executor to stop rather than extend the list. Three distinct resolutions exist with different permanent costs; choosing among them is the user's call, not the executor's."
   - id: D5
     description: "Tasks 1 (bumps), 3 (CHANGELOG) and 4 (release manifest) are NOT delivered"
     verification: []
     human_judgment: true
+    resolution: "RESOLVED round 3 — Tasks 1, 3 and 4 all delivered. See ROUND 3."
     rationale: "Blocked on D4. The CHANGELOG section must name every crate that ships and the release manifest's expected_new set is the authorised list plus consequence bumps — both are unwritable until the bump set is final."
   - id: D6
     description: "Round 2: the amended axis (pmcp-workbook-runtime 0.1.1) is refuted by the published-baseline semver verdict — render_xlsx changed arity, so the crate needs a breaking bump"
@@ -107,15 +109,65 @@ coverage:
     description: "Round 2: row 2 of the authorised set is OPEN again; options A and B remain, C is eliminated"
     verification: []
     human_judgment: true
+    resolution: "RESOLVED round 3 — Option A; runtime ships 0.2.0."
     rationale: "Option C was chosen on a premise measurement refutes. Restoring 0.2.0 restores the round-1 collision, which needs the user's call on whether pmcp-workbook-dialect 0.1.1 is authorised. Version-number consumption is one-way (CONTEXT D-07)."
 
+  - id: D9
+    description: "Round 3: the five authorised versions and all ten of their emitters land in ONE commit, with the [package].version axis matching the authorised map exactly and the requirement axis matching the Cargo-forced consequence set exactly"
+    requirement: "PKGR-01"
+    verification:
+      - kind: integration
+        ref: "per-manifest keyed table -> 9 rows: 5 [package].version (the authorised map) + 4 pmcp-workbook-runtime requirement rows; cross-check confirms exactly {pmcp, pmcp-workbook-runtime, pmcp-code-mode-derive, pmcp-workbook-compiler, pmcp-workbook-dialect} moved vs HEAD"
+        status: pass
+      - kind: integration
+        ref: "cargo metadata --offline full resolve EXIT 0; five scaffold/pin tripwires EXIT 0 with non-zero test counts; RUSTFLAGS='' make quality-gate EXIT 0 via status file, 13214-line log, banner present, 0 truncation markers"
+        status: pass
+      - kind: integration
+        ref: "semver-checks per crate vs crates.io baseline: pmcp EXIT 0 'patch change'; pmcp-workbook-runtime EXIT 0 'major change'; pmcp-workbook-compiler EXIT 0; pmcp-workbook-dialect EXIT 0"
+        status: pass
+    human_judgment: false
+  - id: D10
+    description: "Round 3 Task 3: the 2.19.1 CHANGELOG section exists AND release.yml can actually extract it — the extractor was broken and is fixed"
+    requirement: "PKGR-01"
+    verification:
+      - kind: integration
+        ref: "workflow's ORIGINAL awk -> 0 bytes for v2.19.1, v2.19.0 and v2.18.0 (undefined \\[ escape in -v makes [2.19.1] a character class under BSD awk 20200816)"
+        status: pass
+      - kind: integration
+        ref: "FIXED extractor (index(), bare version, fail-closed guard) -> v2.19.1 4499 bytes/67 lines; v2.19.0 8112; v2.18.0 6365; negative control 9.9.9 -> 0 bytes; boundary: '## [2.19.0]' count 0 inside the extraction"
+        status: pass
+      - kind: integration
+        ref: "crates/pmcp-package/CHANGELOG.md gains '## [0.3.0]'; headings now 0.3.0 / 0.2.0 / 0.1.0"
+        status: pass
+    human_judgment: false
+  - id: D11
+    description: "Round 3 Task 4: 124-expected-release.json is committed, parses, and its two crate sets are disjoint and complete"
+    requirement: "PKGR-01"
+    verification:
+      - kind: integration
+        ref: "plan verify: tag == v2.19.1, expected_new 14, expected_skips 11, disjoint, union 25; every expected_skips entry carries a non-empty reason"
+        status: pass
+      - kind: integration
+        ref: "cross-check vs on-disk manifests: 25/25 crates match the version the JSON claims, and exactly the five authorised crates differ from HEAD"
+        status: pass
+    human_judgment: false
+  - id: D12
+    description: "pmcp-code-mode-derive 0.2.1's semver axis is UNVERIFIABLE by tooling and is recorded as such rather than left silent"
+    verification: []
+    human_judgment: true
+    rationale: "cargo semver-checks exits 101 with 'no library target' — a proc-macro has no API surface to compare, and the change is in emitted code. The patch axis rests on plan 03's reasoning alone, and this phase twice found that class of reasoning wrong about an axis. A human should confirm the axis before the tag if it matters."
+  - id: D13
+    description: "The historical blast radius of the release.yml awk bug on CI is unmeasured"
+    verification: []
+    human_judgment: true
+    rationale: "Only BSD awk 20200816 was measured (0 bytes for three past releases). CI runs ubuntu-latest/mawk; neither mawk nor gawk is installed here, so whether past GitHub Releases actually shipped empty notes is not established. The fix is implementation-independent; the historical question needs a Linux runner. WINDOWS #56."
 
-duration: ~110 min (two rounds)
+duration: ~165 min (three rounds)
 completed: 2026-08-27
-status: halted
+status: complete
 ---
 
-# Phase 124 Plan 05: Consume the Authorised Versions — HALTED at an Unauthorised Consequence Bump
+# Phase 124 Plan 05: Consume the Authorised Versions — COMPLETE (after two measured halts)
 
 **ROUND 2 (Option C): `cargo semver-checks` refutes Option C's premise — `render_xlsx` changed arity from 2 to 3 parameters, so `pmcp-workbook-runtime` needs a BREAKING bump (0.2.0 on a 0.x line), not 0.1.1; shipping 0.1.1 would silently break every `^0.1.0` consumer. Row 2 is open again and options A/B remain. ROUND 1: the list is not executable as recorded — `pmcp-workbook-runtime` 0.1.0 -> 0.2.0 is semver-INCOMPATIBLE with four in-workspace requirement sites (measured: `cargo metadata` exits 101), and moving them forces a fifth crate — `pmcp-workbook-dialect` — to consume a version number nobody authorised. No version literal was edited. Separately, D-04 is fully discharged by measurement: `pmcp-package` ships 0.3.0 as-is, all nine emitters consistent, all three tripwires green.**
 
@@ -125,6 +177,299 @@ status: halted
 > is empty and the per-manifest keyed table reports NO DIFFERING ROWS.
 
 ---
+
+# ROUND 3 — resumed under Option A: COMPLETE
+
+> Rounds 1 and 2 are preserved below. Read this section for what shipped; read those for how
+> the number was arrived at, which is the part worth keeping.
+
+**Option A.** `pmcp-workbook-runtime` returns to **0.2.0** — the number plan 03 originally
+chose, now for the demonstrated reason rather than the convention — and
+`pmcp-workbook-dialect` **0.1.0 → 0.1.1** is authorised as the fifth row. All four tasks are
+complete.
+
+## The final set, as consumed
+
+| # | Crate | From | To | `cargo semver-checks` (baseline built from crates.io) |
+|---|---|---|---|---|
+| 1 | `pmcp` | 2.19.0 | **2.19.1** | EXIT 0 — "(patch change)", 223 checks: 223 pass / 30 skip |
+| 2 | `pmcp-workbook-runtime` | 0.1.0 | **0.2.0** | EXIT 0 — **"(major change)"**; 0.1.1 refuted at EXIT 100 |
+| 3 | `pmcp-code-mode-derive` | 0.2.0 | **0.2.1** | EXIT 101 — **UNVERIFIABLE** (see below) |
+| 4 | `pmcp-workbook-compiler` | 0.1.0 | **0.1.1** | EXIT 0 — "no semver update required" |
+| 5 | `pmcp-workbook-dialect` | 0.1.0 | **0.1.1** | EXIT 0 — pure re-pin, no source change |
+
+**`pmcp-code-mode-derive` remains UNVERIFIED and the other four rows' green verdicts do not
+launder it.** It is a proc-macro with no library target, so `semver-checks` exits 101 —
+there is no API surface to compare, and its change is in *emitted* code, which no API check
+can see. The patch axis rests on plan 03's reasoning alone (the macro's own API does not
+move). This phase has now twice found that class of reasoning wrong about an axis, so the
+honest record is "unverified, and here is why it cannot be verified".
+
+## I re-derived the edit set rather than replaying it — and it is TEN, not eight
+
+The instruction to re-derive was worth following: restoring 0.2.0 adds not only the dialect
+`[package].version` but **two further Cargo-forced pin moves** (`pmcp-workbook-compiler:41`
+and `pmcp-workbook-dialect:25`) that 0.1.1 did not require. Round 2's seven became **ten**,
+not eight.
+
+| Group | Count | Edits |
+|---|---|---|
+| `[package].version` | 5 | `Cargo.toml:3`; `pmcp-workbook-runtime:3`; `pmcp-code-mode-derive:3`; `pmcp-workbook-compiler:3`; `pmcp-workbook-dialect:3` |
+| `pmcp-workbook-runtime` requirement pins | 4 | `pmcp-server-toolkit:81`, `:202`; `pmcp-workbook-compiler:41`; `pmcp-workbook-dialect:25` — all → `"0.2.0"` |
+| Compiler-invisible constant | 1 | `cargo-pmcp/src/templates/workbook_server.rs:53` `PMCP_VERSION` → `"2.19.1"` |
+
+### Two of the four pins are necessary; two are superstitious-looking but Cargo-forced
+
+`^0.1.0` does not admit `0.2.0`, so Cargo forces all four (round 1 measured `cargo metadata`
+EXIT 101 otherwise). But *why* they move differs, and the distinction is the difference
+between a necessary bound and a superstitious one:
+
+| Site | Moves because | new-symbol imports / qualified refs |
+|---|---|---|
+| `pmcp-server-toolkit/Cargo.toml:81` | **CODE** — its source needs the new API | **3 / 10** |
+| `pmcp-server-toolkit/Cargo.toml:202` | **CODE** — same | same |
+| `pmcp-workbook-compiler/Cargo.toml:41` | Cargo-forced only | **0 / 0** |
+| `pmcp-workbook-dialect/Cargo.toml:25` | Cargo-forced only | **0 / 0** |
+
+The 0/0 readings were taken with `pmcp-server-toolkit` as a **positive control**, so the
+enumeration is not vacuous — and only after catching a false positive in my own first grep,
+which reported a spurious **9** for the compiler because `grep -n` prefixes each line with its
+path and the pattern matched `reconcile` in `.../src/reconcile/drift.rs:17:` rather than in
+the import list. The compiler has its own crate-local `reconcile` module, which is what made
+the wrong number plausible. Re-run with `grep -h` (path prefix stripped) it is 0. A reader who
+knows the first grep was wrong has grounds to trust the second: the control is what exposed
+it, since 9-vs-3 against a control known to be *larger* was the wrong shape.
+
+`pmcp-server-toolkit`'s move also fixes the latent publish defect found in round 1: 0.1.2
+requested `^0.1.0` while `src/workbook/handler.rs` used `RenderMode`, `reconcile_reference`
+and `ReconcileReport`, none of which exist in the published 0.1.0. `workbook` is not a default
+feature (`default = ["code-mode"]`), so a publish-verification build would not have caught it.
+
+### Deliberately unchanged, asserted line by line
+
+`cargo-pmcp:68` and `crates/mcp-tester:21` still pin `pmcp = "2.19.0"` (caret exception,
+patch-only). All four `mcp-tester` before-publish pins still read `0.8.0`. `cargo-pmcp:75`
+(`pmcp-workbook-compiler ^0.1.0`) and `pmcp-workbook-compiler:45`
+(`pmcp-workbook-dialect ^0.1.0`) stay — both already admit their crate's 0.1.1.
+`pmcp-package` 0.3.0 and all nine of its emitters stay. `PMCP_AGENT_VERSION`,
+`PMCP_PACKAGE_VERSION_REQ` and `TOOLKIT_VERSION` stay, all three guarded and green.
+
+## Task 3 — the CHANGELOG, and the extractor that could never have read it
+
+The plan asks for the section **and** for proof that `release.yml` can extract it. I ran the
+workflow's own program. It returned **zero bytes**.
+
+**The bug, and it is not specific to this release.** `release.yml:34` built the matcher as
+`awk -v ver="## \[$VERSION_NO_V\]"`. awk applies string-literal escape processing to `-v`
+assignments, and `\[` is an **undefined** escape. BSD awk 20200816 (measured) drops the
+backslash, so `ver` arrived as `## [2.19.1]` and `$0 ~ ver` read `[2.19.1]` as a **character
+class** matching one of `{2,.,1,9}`. The heading has `[` in that position, so it never
+matched. Proof it is the matcher and not the heading: the literal regex `/^## \[2.19.1\]/`
+matches the same line.
+
+```
+workflow awk for v2.19.1 -> 0 bytes
+workflow awk for v2.19.0 -> 0 bytes
+workflow awk for v2.18.0 -> 0 bytes
+awk -v ver="## \\[2.19.1\\]" 'BEGIN{print ver}'   ->   ## [2.19.1]
+```
+
+Every past release, not just this one. This is threat **T-124-08** realised exactly as the
+plan describes it: an empty-notes GitHub Release created at exit 0, silently.
+
+**Caveat, stated because it bounds the claim.** Only **one** awk was measured. CI runs
+`ubuntu-latest`, whose `awk` is mawk; neither mawk nor gawk is installed here. So whether CI
+has actually been shipping empty release notes is **not established** — only that the
+construction is unsafe and fails on the implementation I could test. Recorded as WINDOWS #56
+with that residual named.
+
+**The fix** (deviation Rule 1) passes the bare version — no backslashes, so nothing to escape
+— and matches with `index()` rather than a regex, plus a fail-closed guard:
+
+```awk
+CHANGELOG=$(awk -v ver="$VERSION_NO_V" '
+  index($0, "## [" ver "]") == 1 {p=1; next}
+  /^## \[/ && p {exit}
+  p {print}
+' CHANGELOG.md)
+if [ -z "$CHANGELOG" ]; then
+  echo "::error::CHANGELOG.md has no '## [$VERSION_NO_V]' section - refusing to create a release with empty notes" >&2
+  exit 1
+fi
+```
+
+Verified with the fixed program, including a negative control and a boundary check:
+
+| Input | Result |
+|---|---|
+| `v2.19.1` | **4,499 bytes / 67 lines** — `test -s` PASS |
+| `v2.19.0` | 8,112 bytes — the fix repairs the past too |
+| `v2.18.0` | 6,365 bytes |
+| `9.9.9` (negative control) | **0 bytes** |
+| `## [2.19.0]` inside the 2.19.1 extraction | **0** — stops at the next heading |
+
+> **My own first verification was a false green, and it is worth recording.** I wrapped the
+> extraction as `CHANGELOG=$(awk ...)` then `printf '%s\n' "$CHANGELOG"`, which writes a
+> 1-byte newline when the extraction is empty — so `test -s` PASSED on zero content and
+> reported "1 byte, non-empty: YES". The plan's own `<verify>` for Task 3 uses both the broken
+> awk construction and a bare `test -s`, so it could not have caught the bug it exists to
+> catch. WINDOWS #57. Extraction checks must write raw output and assert a realistic byte
+> count, not merely non-emptiness.
+
+**`crates/pmcp-package/CHANGELOG.md`** gained its missing `## [0.3.0]` section. It stopped at
+`[0.2.0] - Unreleased` while the crate ships 0.3.0, so the attestation-carriage line's five
+source-breaking changes had **no entry at all** — including that `PackageError` is not
+`#[non_exhaustive]`, so its two new variants break downstream exhaustive matches. The retained
+0.2.0 entry now carries a note that crates.io went 0.1.1 → 0.3.0 and that line never
+published.
+
+## Task 4 — the committed release manifest
+
+`.planning/phases/124-release-publish-order/124-expected-release.json`, generated from this
+wave's measurements and **committed**, so it travels into the release PR and is readable from
+merged `main` — unlike the plan summaries plan 07 would otherwise have to read, which are
+written after the events they describe.
+
+| Set | Count | Contents |
+|---|---|---|
+| `expected_new` | **14** | the 5 authorised bumps + the 9 already ahead of the registry |
+| `expected_skips` | **11** | in-tree == published; `release.yml` skips them deliberately, each with a `reason` |
+| union | **25** | every publishable crate the plan-03 sweep enumerated; the sets are disjoint |
+
+Also carries `registry_baselines` with per-crate provenance (including the deliberately
+**uncorroborated** `pmcp-widget-utils` baseline, so its refutation stays visible),
+`semver_verdicts` with `pmcp-code-mode-derive` marked UNVERIFIABLE, and
+`authorised_exceptions` naming the `mcp-tester` disposition, the caret non-bump, the dialect
+re-pin authorisation, and the code-vs-Cargo-forced pin distinction.
+
+**Cross-checked rather than asserted:** every crate named in either set exists in the
+workspace with exactly the version the JSON claims (**25/25**), and the set of crates whose
+`[package].version` differs from `HEAD` is **exactly** the five authorised.
+
+## Verification
+
+**Per-manifest keyed table**, partitioned per WINDOWS #51 — 9 rows, and each axis matches its
+own authority exactly:
+
+```
+[package].version rows (5) — EQUAL the authorised map, no extras, no omissions:
+  Cargo.toml                                2.19.0 -> 2.19.1
+  crates/pmcp-workbook-runtime/Cargo.toml    0.1.0 -> 0.2.0
+  crates/pmcp-code-mode-derive/Cargo.toml    0.2.0 -> 0.2.1
+  crates/pmcp-workbook-compiler/Cargo.toml   0.1.0 -> 0.1.1
+  crates/pmcp-workbook-dialect/Cargo.toml    0.1.0 -> 0.1.1
+dependency-requirement rows (4) — EQUAL the forced consequence set:
+  pmcp-server-toolkit    dependencies.pmcp-workbook-runtime      0.1.0 -> 0.2.0
+  pmcp-server-toolkit    dev-dependencies.pmcp-workbook-runtime  0.1.0 -> 0.2.0
+  pmcp-workbook-compiler dependencies.pmcp-workbook-runtime      0.1.0 -> 0.2.0
+  pmcp-workbook-dialect  dependencies.pmcp-workbook-runtime      0.1.0 -> 0.2.0
+```
+
+| Check | Result |
+|---|---|
+| `cargo metadata --format-version 1 --offline` (full resolve) | EXIT 0 |
+| `cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches_workspace_pin` | EXIT 0, `1 passed; 524 filtered out` |
+| `cargo test -p cargo-pmcp --lib emitted_toolkit_version_matches_workspace_pin` | EXIT 0, `1 passed; 524 filtered out` |
+| `cargo test -p cargo-pmcp --lib emitted_package_requirement_matches_workspace_major_minor_line` | EXIT 0, `1 passed; 524 filtered out` |
+| `cargo test -p cargo-pmcp --test pmcp_package_pin` | EXIT 0, `1 passed` |
+| `cargo test -p pmcp-openapi-server --test pmcp_package_pin` | EXIT 0, `2 passed` |
+| CR-01: non-comment `pmcp-package =` lines carrying a version key | **0** |
+| `RUSTFLAGS="" make quality-gate` | **EXIT 0** |
+
+**The gate result is trustworthy on three independent conditions**, per WINDOWS #47 — a
+redirect alone is not sufficient, because the output proxy truncates a capture *and*
+substitutes its own status:
+
+1. status file, written by the same process that ran `make`: **0**
+2. `ALL TOYOTA WAY QUALITY CHECKS PASSED` present: **1 occurrence**
+3. **13,214 lines / 861,784 bytes**, `lines truncated` marker count **0**, log ends in the
+   success banner
+
+> **One caveat on that green.** The gate's `1. FUZZ Testing validation` leg is **vacuous on a
+> stable toolchain**: it emits `error: the option Z is only accepted on the nightly compiler`
+> (cargo-fuzz needs `-Zsanitizer=address`) and the gate still reports PASSED. Pre-existing and
+> out of scope, but the banner should not be read as fuzz coverage. WINDOWS #58.
+
+## Task Commits
+
+| # | Task | Commit | What |
+|---|---|---|---|
+| 1 | — | `d0ccccde` | `docs(124-03)`: addendum 3 — the Option A resolution record |
+| 2 | **Task 1** | `f1216928` | `chore(124-05)`: **all ten version edits in ONE commit** (Step G one-set rule) |
+| 3 | **Task 3** | `1b4bb9ae` | `docs(124-05)`: the 2.19.1 CHANGELOG, the pmcp-package 0.3.0 section, and the release.yml awk fix |
+| 4 | **Task 4** | `363b100f` | `docs(124-05)`: `124-expected-release.json` |
+
+Round 1 `8f1c2dee` and round 2 `e6c9e2b7` recorded the two halts.
+
+**Task 2 produced no commit by design** — its audit verdict is "ship `pmcp-package` 0.3.0
+as-is", so there was nothing to change. Its findings are in round 1 below and stand
+unmodified.
+
+## Files Created/Modified in round 3
+
+- `Cargo.toml`, `crates/pmcp-workbook-runtime/Cargo.toml`,
+  `crates/pmcp-code-mode-derive/Cargo.toml`, `crates/pmcp-workbook-compiler/Cargo.toml`,
+  `crates/pmcp-workbook-dialect/Cargo.toml` — the five `[package].version` bumps.
+- `crates/pmcp-server-toolkit/Cargo.toml` — two runtime pins → `0.2.0` (code grounds).
+- `cargo-pmcp/src/templates/workbook_server.rs` — `PMCP_VERSION` → `2.19.1`.
+- `CHANGELOG.md` — new `## [2.19.1] - 2026-08-27` section.
+- `crates/pmcp-package/CHANGELOG.md` — new `## [0.3.0]` section.
+- `.github/workflows/release.yml` — the extractor fix plus a fail-closed empty-notes guard.
+- `.planning/phases/124-release-publish-order/124-expected-release.json` — **new**.
+- `.planning/phases/124-release-publish-order/124-03-SUMMARY.md` — addendum 3.
+- `.planning/WINDOWS.md` — entries #56–#58.
+
+## Round-3 deviations
+
+**1. [Rule 1 — Bug] `release.yml`'s changelog extractor never matched any heading**
+- **Found during:** Task 3, running the workflow's own program as the plan requires
+- **Issue / Fix / Verification:** as above. Fixed in `.github/workflows/release.yml`.
+- **Committed in:** `1b4bb9ae` · **Recorded in:** WINDOWS #56 (with the mawk residual)
+
+**2. [Rule 1 — Bug] My own first extraction check was a false green**
+- **Issue:** `printf '%s\n' "$CHANGELOG"` turns an empty extraction into a 1-byte file, so
+  `test -s` passes on zero content. The plan's `<verify>` has the same shape.
+- **Fix:** write raw output; assert a realistic byte count and a negative control.
+- **Recorded in:** WINDOWS #57
+
+**3. [Rule 2 — Missing Critical] `crates/pmcp-package/CHANGELOG.md` had no 0.3.0 entry**
+- **Fix:** added, with the five breaking changes and the never-published-0.2.0 note.
+- **Committed in:** `1b4bb9ae`
+
+**4. [Rule 1 — Bug] A false positive in my own pin-necessity grep**
+- **Issue:** `grep -n` path prefixes made `reconcile` in a *file path* look like a new-symbol
+  import, reporting 9 for `pmcp-workbook-compiler` instead of 0.
+- **Fix:** re-run with `grep -h`; a positive control is what made the wrong shape visible.
+- **Recorded in:** the round-3 narrative above, deliberately, so the corrected number is
+  trustworthy rather than merely asserted.
+
+**5. [Rule 2 — Missing Critical] The gate's fuzz leg is vacuous on stable**
+- **Fix:** none — pre-existing and out of scope. Documented so the banner is not over-read.
+- **Recorded in:** WINDOWS #58
+
+**Total round-3 deviations:** 5 (3 Rule 1, 2 Rule 2). One is a real workflow bug fixed; two
+are corrections to verification method, including one of my own; one is an out-of-scope
+finding documented rather than fixed.
+
+## Next Phase Readiness
+
+**Plan 05 is complete and plan 06 is unblocked.**
+
+- The tag to push is **`v2.19.1`**, matching the CHANGELOG heading with the leading `v`
+  removed, and matching `124-expected-release.json`'s `tag`.
+- Release notes are non-empty and were **read before the tag exists** — 4,499 bytes, proven
+  with the workflow's own (now working) extractor.
+- `124-expected-release.json` is committed, so plans 06 and 07 verify against an artifact that
+  survives the merge.
+- Carried forward for plan 07's pre-tag check: `expected_new` and `expected_skips` are
+  **separate** sets. A crate in `expected_skips` having an unchanged version is CORRECT, not a
+  defect — that was the flaw in the original pre-tag criterion.
+- **Open, and named rather than left silent:** `pmcp-code-mode-derive` 0.2.1's axis is
+  unverifiable by tooling; and whether CI's mawk shares BSD awk's escape behaviour — i.e. how
+  many past releases actually shipped empty notes — is unmeasured (WINDOWS #56).
+
+---
+
 
 # ROUND 2 — resumed under Option C, halted again: Option C's premise is false
 
@@ -773,7 +1118,7 @@ Ready and unaffected by the decision:
 *Phase: 124-release-publish-order*
 *Halted: 2026-08-27 at a `gate="blocking-human"` decision checkpoint*
 
-## Self-Check: PASSED
+## Self-Check (round 1): PASSED
 
 - Artifacts on disk: `.planning/phases/124-release-publish-order/124-05-SUMMARY.md` FOUND;
   `.planning/WINDOWS.md` FOUND with entries #49–#52.
@@ -785,3 +1130,39 @@ Ready and unaffected by the decision:
   their reasons: `make quality-gate` (nothing changed to gate), `make no-crypto-check`
   (manifest unedited), and Tasks 3/4 (blocked).
 - No `git stash` operation was performed.
+
+---
+
+## Self-Check (final, round 3): PASSED
+
+- **Artifacts on disk:** all eight FOUND — `124-expected-release.json`, `124-05-SUMMARY.md`,
+  `124-03-SUMMARY.md`, `WINDOWS.md`, `CHANGELOG.md`, `crates/pmcp-package/CHANGELOG.md`,
+  `.github/workflows/release.yml`, `cargo-pmcp/src/templates/workbook_server.rs`.
+- **Commits:** all six FOUND in `git log --oneline --all` — `8f1c2dee`, `e6c9e2b7`,
+  `d0ccccde`, `f1216928`, `1b4bb9ae`, `363b100f`.
+- **The five shipped versions read back from disk**, not from these tables: `pmcp` 2.19.1,
+  `pmcp-workbook-runtime` 0.2.0, `pmcp-code-mode-derive` 0.2.1, `pmcp-workbook-compiler`
+  0.1.1, `pmcp-workbook-dialect` 0.1.1.
+- **Plan `<verification>` re-run at close:** `## [2.19.1] - ` count 1; extraction **4,499
+  bytes**; CR-01 non-comment version-key count **0**; the two `pmcp` caret pins still read
+  `2.19.0`; `pmcp-package` still 0.3.0.
+- **One self-check assertion was itself wrong, and is recorded rather than quietly adjusted.**
+  "`mcp-tester` before-publish pins still 0.8.0" expected 4 and measured **5**. The fifth is
+  `crates/pmcp-openapi-server/Cargo.toml:117` — a **comment** quoting the pin form as
+  documentation, not a dependency. The four real sites are `pmcp-server-toolkit:192`,
+  `pmcp-sql-server:57`, `pmcp-openapi-server:63`, `pmcp-workbook-server:58`, all at `0.8.0`
+  and all unchanged, matching plan 03's table exactly. This is the fourth instance this phase
+  of a grep that cannot distinguish a declaration from prose describing one (WINDOWS #46, #48,
+  #52), and it happened in my own check — which is the point of writing it down.
+- Every verification reported above was executed; none is asserted from reading. All
+  temporary probe edits were restored and each restoration verified.
+- No stubs, no skipped tests. Deferred verifications are named with reasons: `make
+  no-crypto-check` (not run — `crates/pmcp-package/Cargo.toml` was never edited, so its
+  dependency surface cannot have changed), `pmcp-code-mode-derive`'s semver axis
+  (unverifiable — proc-macro, no library target), and CI's awk behaviour (unmeasurable here —
+  no mawk/gawk installed).
+- The gate's fuzz leg is vacuous on stable and is recorded as such (WINDOWS #58); the
+  `ALL TOYOTA WAY QUALITY CHECKS PASSED` banner should not be read as fuzz coverage.
+- Working tree carries only pre-existing `.pmat/*` tool caches, which were already modified at
+  session start and were never staged.
+- No `git stash` operation was performed at any point across the three rounds.

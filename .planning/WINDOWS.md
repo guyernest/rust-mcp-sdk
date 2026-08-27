@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 46
+open_count: 49
 waived_count: 0
 fixed_count: 9
-total_count: 55
-last_updated: 2026-08-27T19:32:48.985Z
+total_count: 58
+last_updated: 2026-08-27T19:57:06.610Z
 ---
 
 # Broken Windows Ledger
@@ -70,6 +70,9 @@ last_updated: 2026-08-27T19:32:48.985Z
 | 53 | 124 | deviation | crates/pmcp-workbook-runtime/src/render/mod.rs | 270 | pmcp-workbook-runtime 0.1.0 -> next is a BREAKING change, not an additive one, and three separate documents said otherwise. 'cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0' exits 100: function_parameter_count_changed -- pub fn render_xlsx now takes 3 parameters instead of 2 (the new third is mode: RenderMode, itself absent from published 0.1.0). It is public via 'pub mod render' (lib.rs:65) and called cross-crate at pmcp-server-toolkit/src/workbook/render_resource.rs:42,108. On a 0.x line 'requires new major' means bumping the leftmost non-zero component, i.e. 0.2.0. Plan 03's RESEARCH described the delta as 'additive public API'; plan 03's decision adopted that; the plan-05 amendment inverted the axis on the same false premise. None cited render_xlsx. Running semver-checks per bumped crate against the PUBLISHED baseline is the check that catches this class, and it was not run for this crate until plan 05 Task 1. | open |  | 2026-08-27T19:32:48.839Z |  |
 | 54 | 124 | deviation | cargo-pmcp/src/templates/workbook_server.rs | 53 | A THIRD compiler-invisible version emitter exists beyond the two the phase documents track, and no plan's files_modified lists it: const PMCP_VERSION: &str = "2.19.0" at cargo-pmcp/src/templates/workbook_server.rs:53, emitted into projects from 'cargo pmcp new --kind workbook-server'. It is guarded by exact equality against the ROOT Cargo.toml [package].version in emitted_pmcp_version_matches_workspace_pin, so bumping pmcp without moving it fails a test. Negative control run in plan 05: with the constant left at 2.19.0 and the root at 2.19.1, 'cargo build -p cargo-pmcp' EXIT=0 while 'cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches_workspace_pin' EXIT=101 -- a verbatim reproduction of the Phase-122 PMCP_PACKAGE_VERSION_REQ class. Its sibling TOOLKIT_VERSION (:59, tracks pmcp-server-toolkit) is guarded the same way. Enumerate scaffold constants by grepping 'const [A-Z_]*VERSION[A-Z_]*: &str = "[0-9]' rather than trusting a plan's file list. | open |  | 2026-08-27T19:32:48.912Z |  |
 | 55 | 124 | stub | cargo-pmcp/src/templates |  | UNGUARDED stale pmcp-family version floors in five scaffold templates, found by plan 05's emitter sweep and deliberately NOT changed (out of scope, and tightening an unnecessary bound is its own defect): sql_server.rs:57 'pmcp = 2.8.1' and :58 'pmcp-server-toolkit = 0.1.0'; openapi_server.rs:73 'pmcp = 2.8.1', :74 'pmcp-server-toolkit = 0.1.0', :78 'pmcp-openapi-server = 0.1.0'; mcp_app.rs:348 'pmcp = 1.10'; oauth/proxy.rs:468 and oauth/authorizer.rs:216 'pmcp = 0.3'. All are caret floors that still resolve, so nothing breaks -- but unlike workbook_server.rs's PMCP_VERSION and agent.rs's two constants, none has a drift test, so they rot silently. Same class as the memory note about scaffold_patch.rs:59 still describing pmcp-package 0.1.0 since Phase 120. | open |  | 2026-08-27T19:32:48.985Z |  |
+| 56 | 124 | deviation | .github/workflows/release.yml | 34 | RESIDUAL AFTER FIX: release.yml's changelog extractor was measured returning ZERO bytes for v2.19.1, v2.19.0 AND v2.18.0 -- every past release -- because 'awk -v ver="## \\[VER\\]"' undergoes string-literal escape processing, '\\[' is an UNDEFINED escape, and BSD awk 20200816 drops the backslash so '[2.19.1]' became a CHARACTER CLASS that '## [' cannot match. Threat T-124-08 realised: an empty-notes GitHub Release at exit 0, silently. Fixed here by passing the bare version and matching with index(), plus a fail-closed guard that exits 1 on an empty extraction. THE RESIDUAL: only ONE awk implementation was measured. CI runs ubuntu-latest (mawk) and neither mawk nor gawk is installed on this machine, so whether CI has actually been shipping empty release notes is NOT established -- gawk and mawk may differ from BSD awk on undefined escapes. Someone with a Linux runner should confirm the historical blast radius; the fix itself is implementation-independent. | open |  | 2026-08-27T19:57:06.470Z |  |
+| 57 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 3's <verify> could not have detected the awk bug it exists to detect, and my first run of it produced a false green. The plan's verify is: awk ... > /tmp/124-notes.txt; test -s /tmp/124-notes.txt. It uses the SAME broken '-v ver="## \\\\[2.19.1\\\\]"' construction as release.yml, so it returns empty against a perfectly good CHANGELOG. Worse, wrapping the extraction as CHANGELOG=$(awk ...) then 'printf "%s\\n" "$CHANGELOG"' writes a 1-byte newline when the extraction is EMPTY, so 'test -s' PASSES on zero content -- which is exactly what happened on the first attempt here (reported '1 byte, non-empty: YES'). Any extraction check must write raw output (awk ... > file) and assert a realistic byte count, not merely non-emptiness. | open |  | 2026-08-27T19:57:06.540Z |  |
+| 58 | 124 | unrun-verify | Makefile |  | make quality-gate's FUZZ leg is vacuous on a stable toolchain, so its green tells you nothing about fuzzing. Measured during plan 05's gate run (13,214-line log, overall EXIT 0, banner present): the 'Validating ALWAYS requirements / 1. FUZZ Testing validation' section emits repeated 'error: failed to run rustc to learn about target-specific information ... error: the option Z is only accepted on the nightly compiler' -- cargo-fuzz needs -Zsanitizer=address. The gate prints these errors and still reports ALL TOYOTA WAY QUALITY CHECKS PASSED. Pre-existing and out of scope for this phase (it corroborates the project-memory note that make validate-always fuzzes NOTHING on stable), recorded so a reader does not read the banner as fuzz coverage. | open |  | 2026-08-27T19:57:06.610Z |  |
 
 ````json
 [
@@ -731,6 +734,42 @@ last_updated: 2026-08-27T19:32:48.985Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T19:32:48.985Z",
+    "resolved_at": null
+  },
+  {
+    "id": 56,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".github/workflows/release.yml",
+    "line": 34,
+    "description": "RESIDUAL AFTER FIX: release.yml's changelog extractor was measured returning ZERO bytes for v2.19.1, v2.19.0 AND v2.18.0 -- every past release -- because 'awk -v ver=\"## \\[VER\\]\"' undergoes string-literal escape processing, '\\[' is an UNDEFINED escape, and BSD awk 20200816 drops the backslash so '[2.19.1]' became a CHARACTER CLASS that '## [' cannot match. Threat T-124-08 realised: an empty-notes GitHub Release at exit 0, silently. Fixed here by passing the bare version and matching with index(), plus a fail-closed guard that exits 1 on an empty extraction. THE RESIDUAL: only ONE awk implementation was measured. CI runs ubuntu-latest (mawk) and neither mawk nor gawk is installed on this machine, so whether CI has actually been shipping empty release notes is NOT established -- gawk and mawk may differ from BSD awk on undefined escapes. Someone with a Linux runner should confirm the historical blast radius; the fix itself is implementation-independent.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.470Z",
+    "resolved_at": null
+  },
+  {
+    "id": 57,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 3's <verify> could not have detected the awk bug it exists to detect, and my first run of it produced a false green. The plan's verify is: awk ... > /tmp/124-notes.txt; test -s /tmp/124-notes.txt. It uses the SAME broken '-v ver=\"## \\\\[2.19.1\\\\]\"' construction as release.yml, so it returns empty against a perfectly good CHANGELOG. Worse, wrapping the extraction as CHANGELOG=$(awk ...) then 'printf \"%s\\n\" \"$CHANGELOG\"' writes a 1-byte newline when the extraction is EMPTY, so 'test -s' PASSES on zero content -- which is exactly what happened on the first attempt here (reported '1 byte, non-empty: YES'). Any extraction check must write raw output (awk ... > file) and assert a realistic byte count, not merely non-emptiness.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.540Z",
+    "resolved_at": null
+  },
+  {
+    "id": 58,
+    "kind": "unrun-verify",
+    "phase": "124",
+    "file": "Makefile",
+    "line": null,
+    "description": "make quality-gate's FUZZ leg is vacuous on a stable toolchain, so its green tells you nothing about fuzzing. Measured during plan 05's gate run (13,214-line log, overall EXIT 0, banner present): the 'Validating ALWAYS requirements / 1. FUZZ Testing validation' section emits repeated 'error: failed to run rustc to learn about target-specific information ... error: the option Z is only accepted on the nightly compiler' -- cargo-fuzz needs -Zsanitizer=address. The gate prints these errors and still reports ALL TOYOTA WAY QUALITY CHECKS PASSED. Pre-existing and out of scope for this phase (it corroborates the project-memory note that make validate-always fuzzes NOTHING on stable), recorded so a reader does not read the banner as fuzz coverage.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.610Z",
     "resolved_at": null
   }
 ]
