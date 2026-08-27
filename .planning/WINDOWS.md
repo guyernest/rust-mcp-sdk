@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 28
+open_count: 32
 waived_count: 0
 fixed_count: 9
-total_count: 37
-last_updated: 2026-08-27T16:57:04.300Z
+total_count: 41
+last_updated: 2026-08-27T17:50:18.406Z
 ---
 
 # Broken Windows Ledger
@@ -52,6 +52,10 @@ last_updated: 2026-08-27T16:57:04.300Z
 | 35 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 1 criteria 'grep -c mapfile' and the SIGPIPE-shape grep read the RAW file; both hits are pre-existing COMMENT lines (identical counts on the pre-phase file). Correct measurement is over comment-stripped lines, where both are 0. | open |  | 2026-08-27T16:56:56.528Z |  |
 | 36 | 124 | deviation | scripts/check-release-coverage.sh |  | D-10 sentinels are shell no-ops (: 'BEGIN D-10 ORDER ASSERTION'), not comments as the plan prescribed: Task 1's excision criterion strips comments BEFORE the awk excision, so a commented sentinel would vanish and the criterion could never pass. | open |  | 2026-08-27T16:57:02.271Z |  |
 | 37 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 2's word-boundary criterion (two grep -c counts must be EQUAL) cannot hold: 2 of the 4 executable 'cargo publish -p' hits are error-message echoes, not matchers, and the criterion's BRE backslash-dollar does not match the text's literal backslash-dollar. Intent verified directly instead: both matchers carry the ( \|$) boundary. | open |  | 2026-08-27T16:57:04.300Z |  |
+| 38 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Plan 124-02 defective acceptance criterion: `grep -c 'Cargo.toml' /tmp/124-merge-tree.txt` returns 0 is a false positive by construction — it greps the WHOLE merge-tree transcript, so it matches the clean 'Auto-merging cargo-pmcp/Cargo.toml' line. Measured 1, with zero actual manifest conflicts. Correct form greps the '^CONFLICT' lines only. | open |  | 2026-08-27T17:49:33.603Z |  |
+| 39 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Plan 124-02 unsatisfiable acceptance criterion: 'git status --porcelain produces no output'. Unsatisfiable in this repo regardless of the merge — .pmat/* (4 tracked, tool-written) and ~10 untracked paths (.agents/ .codex/ .gsd/ .serena/ .superpowers/ AGENTS.md, presentations/*.pptx) are pre-existing user/tool state unrelated to the plan. Scoped at execution to: no unresolved merge paths, and no unexpected changes among the 12 conflicted files. | open |  | 2026-08-27T17:49:39.975Z |  |
+| 40 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | Correction to RESEARCH Pitfall 4 (rtk shell proxy): the proxy is not merely 'corrupting output' — 'grep' is a shell FUNCTION sourced from ~/.claude/shell-snapshots/, so `command -v grep` returns the bare word 'grep', not a path. Any plan step saying 'resolve the binary via command -v' therefore silently fails to resolve grep. Real binary found via 'which -a grep' = /usr/bin/grep. git was unaffected (command -v git = /opt/homebrew/bin/git). | open |  | 2026-08-27T17:50:11.133Z |  |
+| 41 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Process defect: worktree isolation does not survive a checkpoint round-trip. The harness force-removes the agent worktree when an executor returns at a gate, and resuming does NOT restore it — the resumed agent lands in the main checkout with its spawn-time base assertion stale. Any plan that asks a question mid-flight loses its isolation at that moment. Observed twice in 124-02; cost a full detour. Either keep gated plans autonomous, or expect execution to continue in the main checkout. | open |  | 2026-08-27T17:50:18.406Z |  |
 
 ````json
 [
@@ -497,6 +501,54 @@ last_updated: 2026-08-27T16:57:04.300Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-27T16:57:04.300Z",
+    "resolved_at": null
+  },
+  {
+    "id": 38,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Plan 124-02 defective acceptance criterion: `grep -c 'Cargo.toml' /tmp/124-merge-tree.txt` returns 0 is a false positive by construction — it greps the WHOLE merge-tree transcript, so it matches the clean 'Auto-merging cargo-pmcp/Cargo.toml' line. Measured 1, with zero actual manifest conflicts. Correct form greps the '^CONFLICT' lines only.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:49:33.603Z",
+    "resolved_at": null
+  },
+  {
+    "id": 39,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Plan 124-02 unsatisfiable acceptance criterion: 'git status --porcelain produces no output'. Unsatisfiable in this repo regardless of the merge — .pmat/* (4 tracked, tool-written) and ~10 untracked paths (.agents/ .codex/ .gsd/ .serena/ .superpowers/ AGENTS.md, presentations/*.pptx) are pre-existing user/tool state unrelated to the plan. Scoped at execution to: no unresolved merge paths, and no unexpected changes among the 12 conflicted files.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:49:39.975Z",
+    "resolved_at": null
+  },
+  {
+    "id": 40,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "Correction to RESEARCH Pitfall 4 (rtk shell proxy): the proxy is not merely 'corrupting output' — 'grep' is a shell FUNCTION sourced from ~/.claude/shell-snapshots/, so `command -v grep` returns the bare word 'grep', not a path. Any plan step saying 'resolve the binary via command -v' therefore silently fails to resolve grep. Real binary found via 'which -a grep' = /usr/bin/grep. git was unaffected (command -v git = /opt/homebrew/bin/git).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:50:11.133Z",
+    "resolved_at": null
+  },
+  {
+    "id": 41,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Process defect: worktree isolation does not survive a checkpoint round-trip. The harness force-removes the agent worktree when an executor returns at a gate, and resuming does NOT restore it — the resumed agent lands in the main checkout with its spawn-time base assertion stale. Any plan that asks a question mid-flight loses its isolation at that moment. Observed twice in 124-02; cost a full detour. Either keep gated plans autonomous, or expect execution to continue in the main checkout.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:50:18.406Z",
     "resolved_at": null
   }
 ]
