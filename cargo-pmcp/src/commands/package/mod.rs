@@ -2,18 +2,26 @@
 //! capture/show/import/approve remote workflow packages against the pmcp.run
 //! platform.
 //!
-//! The group now spans THREE directions, and each verb belongs to exactly one:
+//! The group spans THREE directions, and each verb belongs to exactly one.
+//! These are the same three the group's `--help` preamble names, in the same
+//! vocabulary agreed with the pmcp.run platform team on 2026-08-26 (D-09) —
+//! Docker's split: `save`/`load` for the local file round trip, `push`/`pull`
+//! for the registry, `import` for admitting something into the system. Keep
+//! this header and `main.rs`'s `Package` preamble saying the same thing.
 //!
-//! - **LOCAL, offline, on a layout directory:** `inspect`.
-//! - **LOCAL, offline, between a layout directory and a movable `.tar`:**
-//!   `save` writes a package out to one tar file; `load` reads one back into a
-//!   working layout. Neither touches the network (D-11).
-//! - **REMOTE, against the pmcp.run platform:** `capture`/`show`/`import`/
-//!   `approve`/`pull`. `pull` is the remote sibling of `load`: it fetches a
-//!   published artifact and installs it through the same verification and the
-//!   same transactional install `load` uses, then renders the same report.
-//!   There is no upload direction — `export`/`push` are retired (D-01), and
-//!   `import` stays the platform's own dry-run pre-flight (D-03).
+//! - **LOCAL FILE — offline, no network:** `save` writes a package out to one
+//!   movable tar file; `load` reads one back into a working layout (D-11).
+//!   `inspect` reads a working layout in place.
+//! - **PUBLISHED ARTIFACT — a fetch from pmcp.run:** `pull` is the remote
+//!   sibling of `load`: it fetches a published artifact and installs it through
+//!   the same verification and the same transactional install `load` uses, then
+//!   renders the same report. `show` fetches and renders a published workflow
+//!   manifest; `capture` submits a job that produces a package platform-side.
+//!   There is no upload direction — `export`/`push` are retired (D-01),
+//!   because `capture` already does that job.
+//! - **ENVIRONMENT — admission to the pmcp.run control plane:** `import`
+//!   admits a package into an environment (and stays the platform's own
+//!   dry-run pre-flight, D-03); `approve` records an approval for one.
 //!
 //! Mirrors the `workbook` command-group shape (D-01) with an ASYNC `execute`.
 //! `inspect` is a LOCAL, offline OCI-layout inspector (unchanged by this
