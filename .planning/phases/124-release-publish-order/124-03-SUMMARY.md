@@ -574,6 +574,60 @@ The other three rows are confirmed by the same measurement and are unaffected:
 published) then needs a version number this list does not authorise. Option C is eliminated;
 options A and B from `124-05-SUMMARY.md` remain.
 
+#### ADDENDUM 3 — RESOLVED 2026-08-27: Option A, and the final closed set
+
+> Third and last append. The trail above is deliberately preserved in full: the right answer
+> reached by the wrong argument, then the wrong answer reached from the same argument, then
+> the measured truth. It shows a future releaser exactly which kind of reasoning to distrust.
+
+**Resolution: Option A.** `pmcp-workbook-runtime` returns to **0.2.0** — the number the
+original decision chose, now for the demonstrated reason rather than the convention — and
+`pmcp-workbook-dialect` **0.1.0 -> 0.1.1** is authorised as the fifth row.
+
+### The final authorised set — closed and exhaustive, five rows
+
+| # | Crate | From | To | `cargo semver-checks` (baseline built from crates.io) |
+|---|---|---|---|---|
+| 1 | `pmcp` | 2.19.0 | **2.19.1** | EXIT 0 — "(patch change)", 223 checks: 223 pass / 30 skip |
+| 2 | `pmcp-workbook-runtime` | 0.1.0 | **0.2.0** | EXIT 0 — "(major change)". 0.1.1 was refuted at EXIT 100 |
+| 3 | `pmcp-code-mode-derive` | 0.2.0 | **0.2.1** | EXIT 101 — **UNVERIFIABLE**, see below |
+| 4 | `pmcp-workbook-compiler` | 0.1.0 | **0.1.1** | EXIT 0 — "no semver update required" |
+| 5 | `pmcp-workbook-dialect` | 0.1.0 | **0.1.1** | EXIT 0 — "no semver update required" (pure re-pin) |
+
+**`pmcp-code-mode-derive` stays marked UNVERIFIED, and the other four rows' green verdicts do
+not launder it.** It is a proc-macro crate with no library target, so `semver-checks` exits
+101 with "no library target" — there is no API surface for the tool to compare, and the change
+is in *emitted* code, which no API check can see. Its patch axis rests on plan 03's reasoning
+alone (the macro's own public API does not move). Given that this phase twice found exactly
+that class of reasoning wrong about an axis, the honest record is "unverified, and here is why
+it cannot be verified" rather than silence.
+
+### The four forced pin moves, and why two of them are not the same as the other two
+
+`0.1.0 -> 0.2.0` is semver-incompatible, so every `^0.1.0` requirement is forced to `0.2.0` —
+Cargo refuses to resolve otherwise (measured: EXIT 101). But the four sites divide:
+
+| Site | Moves because | Evidence |
+|---|---|---|
+| `crates/pmcp-server-toolkit/Cargo.toml:81` | **CODE** — its source needs the new API | 3 new-symbol imports, 10 path-qualified refs |
+| `crates/pmcp-server-toolkit/Cargo.toml:202` | **CODE** — same | same |
+| `crates/pmcp-workbook-compiler/Cargo.toml:41` | Cargo forces it; the source does not need it | **0** and **0** |
+| `crates/pmcp-workbook-dialect/Cargo.toml:25` | Cargo forces it; the source does not need it | **0** and **0** |
+
+The 0/0 readings were taken against `pmcp-server-toolkit` as a **positive control**, so the
+enumeration is not vacuous — and after a false positive in the first attempt at that grep,
+which matched `reconcile` in the *file path* (`.../src/reconcile/drift.rs:17:`) rather than in
+the import list and reported a spurious 9 for the compiler. Re-run with the path prefix
+stripped, it is 0. The distinction matters: it is the difference between a necessary bound and
+a superstitious one.
+
+### Not consumed, and not moved
+
+`pmcp-workbook-compiler`'s `pmcp-workbook-dialect` pin at `:45` stays `"0.1.0"` — dialect's
+own move is 0.1.0 -> 0.1.1, which `^0.1.0` already admits. `cargo-pmcp:75`'s
+`pmcp-workbook-compiler = "0.1.0"` stays for the same reason. The `pmcp` caret non-bump
+(`cargo-pmcp:68`, `crates/mcp-tester:21`) and the `mcp-tester` prohibition are unaffected.
+
 ## Decisions Made
 
 1. **The sweep is permanent, not phase-local.** CONTEXT left this to Claude's discretion. Permanence is cheap (one shell file, no new dependency) and it is the only mechanism that can detect a phantom delta — a class this repo has now hit at least seven times.
