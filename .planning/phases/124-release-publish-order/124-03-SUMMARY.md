@@ -465,3 +465,11 @@ Ready for downstream once decided:
 ---
 *Phase: 124-release-publish-order*
 *Completed: 2026-08-27 (Tasks 1–2; Task 3 pending user decision)*
+
+## Self-Check: PASSED
+
+All created files verified present on disk (`scripts/release-version-sweep.sh`,
+`124-03-SUMMARY.md`, the corroborated TSV) and all three task commits verified
+present in `git log --oneline --all` (`f5e9ef91`, `05d2af71`, `93165d8e`).
+No `git stash` operation was performed (the shared stack was left at its 14
+pre-existing entries).
