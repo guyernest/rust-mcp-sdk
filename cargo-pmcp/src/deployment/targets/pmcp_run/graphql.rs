@@ -6,6 +6,107 @@ use super::auth::{
     discover_graphql_url, load_cached_config, refresh_graphql_url, DEFAULT_GRAPHQL_URL,
 };
 
+/// The process-wide HTTP client every pmcp.run operation in this file shares.
+///
+/// Reuses connections across calls — the capture poll loop hits this every 2s,
+/// and a per-call client would redo TCP+TLS each time. It lives at MODULE scope
+/// rather than inside `execute_graphql_at`'s body (where it used to be) so that
+/// every operation here — the GraphQL POST, the artifact download AND the
+/// presigned S3 upload — gets the same TLS configuration and the same connect
+/// budget. A function-scoped static is unreachable from any other function,
+/// which is what would otherwise force a second client into existence.
+///
+/// The upload reaches a DIFFERENT origin than the GraphQL endpoint, and that is
+/// safe here only because this client carries no `default_headers`, no cookie
+/// store (the `cookies` feature is off) and no credential of any kind: the
+/// pmcp.run bearer is attached per-request by `execute_graphql_at` alone. Do NOT
+/// add a default header to this builder — it would travel to the presigned host.
+///
+/// # Why the whole-request budget is NOT on the client
+///
+/// One `timeout(..)` on the client would have to be right for BOTH a small
+/// GraphQL POST and a multi-megabyte bulk transfer, and no single number
+/// is. Only the CONNECT cost is genuinely shared — it does not vary by
+/// operation — so that is the only budget set here. The per-operation budgets
+/// are applied at their call sites with [`reqwest::RequestBuilder::timeout`],
+/// as [`GRAPHQL_REQUEST_TIMEOUT`] and [`ARTIFACT_TRANSFER_TIMEOUT`]. Do not
+/// "simplify" this by moving either one onto the client.
+///
+/// `.expect` matches the semantics of the infallible constructor this replaced:
+/// that constructor panics on the same condition (a TLS backend that cannot be
+/// initialized), so no new failure mode is introduced here. The literal name is
+/// deliberately NOT written out — SC3's gate counts construction sites by
+/// grepping this tree for it, and a comment naming it would make the gate count
+/// prose about the rule as a violation of the rule.
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Borrow the shared client, building it on first use.
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .expect("HTTP client construction (TLS backend initialization) must succeed")
+    })
+}
+
+/// How long a TCP+TLS connection may take to establish, for EVERY operation.
+///
+/// Connect cost is a property of the NETWORK PATH rather than of the operation,
+/// so unlike the request budgets below it is genuinely shared and belongs on
+/// the client. 10s is long enough for a cold TLS handshake over a slow link and
+/// short enough that an unreachable endpoint reports rather than hangs.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whole-request budget for a GraphQL POST.
+///
+/// A GraphQL call here carries a few kilobytes each way and is answered by a
+/// resolver, not by a bulk transfer; 30s is generous for that shape while still
+/// failing fast enough that an operator sees an error rather than a hang. It is
+/// deliberately an order of magnitude below [`ARTIFACT_TRANSFER_TIMEOUT`],
+/// which is sized for multi-megabyte payloads and would be the wrong budget for
+/// a query.
+const GRAPHQL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whole-request budget for a BULK PRESIGNED TRANSFER, in EITHER direction.
+///
+/// Both the artifact download (`download_artifact_bytes`) and the template /
+/// bootstrap upload (`upload_to_s3`) read this one constant, so the name is
+/// deliberately direction-neutral: it was `ARTIFACT_DOWNLOAD_TIMEOUT` while the
+/// upload built its own client with a numerically identical 300s literal, and a
+/// download-shaped name on a shared budget is how somebody retunes the download
+/// ("a presigned GET should not take five minutes") and silently caps a
+/// multi-megabyte bootstrap PUT at the same number.
+///
+/// A payload may be an embedded server binary of tens of megabytes, so this is
+/// sized for a slow bulk transfer rather than for a query. The DOWNLOAD is ALSO
+/// bounded by [`cargo_pmcp::package_pull_pipeline::ARTIFACT_DOWNLOAD_MAX_BYTES`]
+/// while streaming; the two bounds answer different questions — this one bounds
+/// how long a slow transfer may take, that one bounds how much may arrive. No
+/// byte cap applies on the upload side: the payload is already in memory and
+/// this process produced it.
+const ARTIFACT_TRANSFER_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How much of a download body may be reserved UP FRONT from the server's
+/// declared `Content-Length`.
+///
+/// `Content-Length` is ATTACKER-INFLUENCED, so sizing the buffer from it
+/// directly hands a remote host a single allocation as large as the download
+/// cap: a host answering `Content-Length: <cap>` and then sending nothing would
+/// cost a gibibyte of resident memory before the first chunk arrived, and
+/// `Vec::with_capacity` ABORTS the process on allocation failure rather than
+/// returning the `Err` this module is written to return. The running total in
+/// `download_artifact_bytes` is the real control, so the reservation only has
+/// to be large enough to absorb the reallocation churn of a normal artifact.
+///
+/// 64 MiB, matching `package_artifact`'s `FILE_RESERVE_CEILING` and sized by the
+/// same reasoning: [`ARTIFACT_TRANSFER_TIMEOUT`] above describes a payload as
+/// "an embedded server binary of tens of megabytes", so a ceiling BELOW that
+/// figure would not actually cover the common case in one allocation and the two
+/// docs would assert different sizes for one payload. It is still an order of
+/// magnitude under the download cap, which is the property that matters.
+const DOWNLOAD_RESERVE_CEILING: u64 = 64 * 1024 * 1024;
+
 /// The explicit endpoint override, when it is set to something usable.
 ///
 /// An EMPTY (or whitespace-only) `PMCP_RUN_GRAPHQL_URL` is treated as ABSENT,
@@ -164,15 +265,15 @@ pub async fn upload_to_s3(
     let content_len = content.len();
     let max_attempts: u32 = 5;
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(300)) // 5 min for large binaries
-        .build()
-        .context("Failed to create HTTP client")?;
+    // Share the module client (see `HTTP_CLIENT` for the rule this follows).
+    // The two literals this used to build its own client with were already
+    // numerically identical to CONNECT_TIMEOUT and ARTIFACT_TRANSFER_TIMEOUT.
+    let client = http_client();
 
     for attempt in 1..=max_attempts {
         let response = client
             .put(url)
+            .timeout(ARTIFACT_TRANSFER_TIMEOUT)
             .header("Content-Type", content_type)
             .header("Content-Length", content_len)
             .body(content.clone())
@@ -187,7 +288,11 @@ pub async fn upload_to_s3(
                 let status = resp.status();
                 let error_body = resp.text().await.unwrap_or_default();
                 // Extract meaningful S3 error (e.g., AccessDenied, RequestTimeout)
-                let s3_error = extract_s3_error(&error_body).unwrap_or(error_body.clone());
+                // `unwrap_or` evaluates its argument eagerly, so cloning here
+                // would allocate a copy of the error body even when
+                // `extract_s3_error` returned `Some`. `error_body` is dead
+                // after this line, so it can simply be moved.
+                let s3_error = extract_s3_error(&error_body).unwrap_or(error_body);
 
                 if attempt < max_attempts {
                     let backoff = Duration::from_secs(2u64.pow(attempt));
@@ -476,10 +581,10 @@ async fn execute_graphql_at<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
-    // Process-wide client: reuses connections across calls (the capture poll
-    // loop hits this every 2s — a per-call client would redo TCP+TLS each time).
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = CLIENT.get_or_init(reqwest::Client::new);
+    // The process-wide client now lives at module scope (see HTTP_CLIENT), so
+    // the artifact download reaches the same TLS configuration and connect
+    // budget this call does.
+    let client = http_client();
 
     let request = GraphQLRequest {
         query: query.to_string(),
@@ -488,6 +593,9 @@ where
 
     let response = client
         .post(graphql_url)
+        // The per-operation budget belongs HERE, not on the client: a GraphQL
+        // POST and a multi-megabyte artifact download cannot share one number.
+        .timeout(GRAPHQL_REQUEST_TIMEOUT)
         // The header NAME comes from `graphql_contract.rs` so the shipped
         // client and the parked live-verification leg
         // (`tests/package_attestation_contract.rs`) cannot drift into two
@@ -1787,6 +1895,176 @@ pub async fn set_package_binding(
     response
         .set_package_binding
         .context("setPackageBinding returned null - check pmcp.run service logs")
+}
+
+// ===========================================================================
+// PKGX-02 — the `package pull` transport (Phase 123-05)
+// ===========================================================================
+
+/// The LIVE implementation of `package pull`'s one transport seam.
+///
+/// Its counterpart is the offline double in
+/// `cargo-pmcp/tests/package_portability_contract.rs`. Both implement
+/// [`cargo_pmcp::package_pull_pipeline::ArtifactTransport`] — ONE trait, because
+/// the pipeline is mounted into the lib exactly once — which is what makes them
+/// interchangeable and the whole verification tail testable with no backend.
+///
+/// Holds the access token so the token is available to the GraphQL POST and to
+/// nothing else. `download_artifact_bytes` below cannot see it: it takes no
+/// credential parameter.
+pub struct PmcpRunArtifactTransport {
+    access_token: String,
+    download_cap: u64,
+}
+
+impl PmcpRunArtifactTransport {
+    /// Build a transport that authenticates with `access_token` and refuses a
+    /// download larger than `download_cap` bytes.
+    #[must_use]
+    pub fn new(access_token: String, download_cap: u64) -> Self {
+        Self {
+            access_token,
+            download_cap,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl cargo_pmcp::package_pull_pipeline::ArtifactTransport for PmcpRunArtifactTransport {
+    async fn fetch_artifact(
+        &self,
+        request_body: &serde_json::Value,
+    ) -> Result<cargo_pmcp::package_pull_pipeline::FetchedArtifact> {
+        // The body arrived already built by the PURE production builder, so the
+        // request-shaping half runs inside the offline-tested pipeline rather
+        // than here. Split it back into the two arguments `execute_graphql`
+        // takes; reusing that function (rather than hand-rolling a POST) is what
+        // gives this operation the stale-endpoint refresh-and-retry-once
+        // behaviour and the ONE path that attaches the Authorization header.
+        let query = request_body
+            .get("query")
+            .and_then(serde_json::Value::as_str)
+            .context("the getPackageArtifact request body carries no `query`")?;
+        let variables = request_body
+            .get("variables")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        let data: serde_json::Value = execute_graphql(&self.access_token, query, variables).await?;
+
+        // `execute_graphql` returns the `data` object; the decoder wants the
+        // whole envelope, so re-wrap rather than teach the decoder a second
+        // shape. It stays the ONE decoder the offline contract test validates.
+        let envelope = serde_json::json!({ "data": data });
+        let outcome = super::graphql_contract::decode_get_package_artifact_response(&envelope)?;
+
+        // The presigned URL is a BEARER CREDENTIAL to a DIFFERENT origin. It is
+        // handed to a function that takes no credential parameter, so attaching
+        // the pmcp.run Authorization header is structurally impossible rather
+        // than merely forbidden by a comment. It is also never printed, logged
+        // or persisted — including inside error messages.
+        let tar_bytes = download_artifact_bytes(&outcome.download_url, self.download_cap).await?;
+
+        Ok(cargo_pmcp::package_pull_pipeline::FetchedArtifact {
+            tar_bytes,
+            declared_payload_digest: outcome.payload_digest,
+        })
+    }
+}
+
+/// Fetch the artifact tar from a presigned URL with a PLAIN, UNAUTHENTICATED
+/// GET, bounded by `cap` bytes enforced while streaming.
+///
+/// # The signature is the control
+///
+/// There is no token, credential or header-map parameter here, and that absence
+/// is deliberate: a function that cannot see a credential cannot attach one. The
+/// next contributor who wants to "helpfully" add the pmcp.run `Authorization`
+/// header has to change this signature, which is a visible act in review. A
+/// comment saying not to attach it would not be.
+///
+/// The URL is presigned and is therefore a bearer credential in its own right,
+/// to a DIFFERENT origin than pmcp.run. It is never interpolated into any
+/// message this function produces — note that every error below names the
+/// operation rather than the location.
+///
+/// # The cap is enforced WHILE STREAMING
+///
+/// `Response::chunk()` in a loop with a running total, refusing the moment the
+/// total exceeds `cap`. Deliberately NOT a whole-body collect followed by a
+/// length check: collecting an over-cap body performs exactly the unbounded
+/// allocation the cap exists to prevent. And deliberately NOT
+/// `Response::bytes_stream()`, which is `#[cfg(feature = "stream")]` in reqwest
+/// while `cargo-pmcp` enables only `json`, `multipart`, `rustls` and `form`;
+/// enabling that feature would pull `futures-core` into the graph for no
+/// capability this loop needs. `chunk()` is ungated and gives the same
+/// incremental control.
+///
+/// A `Content-Length` that already exceeds the cap short-circuits before the
+/// first chunk is read. That header is an EARLY-REFUSAL OPTIMISATION and never
+/// the authority: it is attacker-influenced and may be absent or false, which is
+/// why the running total is the actual control.
+///
+/// # Errors
+///
+/// Returns `Err` when the request fails, when the response status is not a
+/// success, or when the body exceeds `cap`.
+async fn download_artifact_bytes(url: &str, cap: u64) -> Result<Vec<u8>> {
+    let mut response = http_client()
+        .get(url)
+        // NO `Authorization` header. See this function's docs — the header would
+        // send a pmcp.run credential to another origin.
+        .timeout(ARTIFACT_TRANSFER_TIMEOUT)
+        .send()
+        .await
+        .context("send the artifact download request (URL withheld: bearer credential)")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        bail!(
+            "artifact download failed with HTTP {} (URL withheld: bearer credential)",
+            status.as_u16()
+        );
+    }
+
+    // Read the declared length ONCE. It is sampled before any `chunk()` call,
+    // so a second read could only ever agree with this one; binding it makes
+    // that structural instead of incidental.
+    let declared = response.content_length();
+    if let Some(declared) = declared {
+        if declared > cap {
+            bail!(
+                "artifact download refused before reading: the response declares {declared} \
+                 bytes, over the {cap}-byte download cap"
+            );
+        }
+    }
+
+    // The declared length only sizes the FIRST allocation, and only up to
+    // DOWNLOAD_RESERVE_CEILING — never up to `cap`. The refusal above rejects a
+    // declaration OVER the cap; it does not make a declaration AT the cap safe
+    // to allocate, which is the distinction that matters here. The running
+    // total below remains the control over how much may actually arrive.
+    let mut body: Vec<u8> = Vec::with_capacity(
+        usize::try_from(declared.unwrap_or(0).min(DOWNLOAD_RESERVE_CEILING)).unwrap_or(0),
+    );
+    let mut total: u64 = 0;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("read the artifact download body (URL withheld: bearer credential)")?
+    {
+        total = total.saturating_add(chunk.len() as u64);
+        if total > cap {
+            bail!(
+                "artifact download refused mid-transfer: the body exceeded the {cap}-byte \
+                 download cap"
+            );
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
 }
 
 #[cfg(test)]

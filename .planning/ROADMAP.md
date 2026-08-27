@@ -2301,7 +2301,7 @@ regression.
 - [x] **Phase 120: Config-Server Packaging** — `pack_server` currently demands `bootstrap: &[u8]`, so a config-only server cannot be expressed. Add vendor media types for the server's own `config.toml` and its OpenAPI spec as layers, and make the binary **dual-mode**: embedded (bootstrap bytes, for a new server or a new version) or referenced (`BinaryRef { digest, media_type }` resolved in the target environment, for a server already deployed there). Both modes are required. Decide and document what is *baked* versus what is a *slot* — the working split is that the spec is baked (it defines the tool surface; change it and it is a different package) while endpoint, credentials and auth mode are slots. (completed 2026-08-23; checkbox ticked 2026-08-25 — the Progress table and `120-VERIFICATION.md` (`status: passed`) had recorded completion since 2026-08-23, but this checkbox was left `[ ]`, which made `phase.complete` route back to an already-finished phase twice)
 - [x] **Phase 121: Local Round-Trip E2E** — the regression net, and the piece that needs no backend. Using the London Tube fixture already in `crates/pmcp-openapi-server/tests/fixtures/`: pack in env A → unpack in env B → `required_slots` names **exactly** the slots B must fill (and `detect_deviation` separately reports B's endpoint drift) → fill them → assert **tool-list parity** with A via the existing `parity_replay.rs`. Parity is the property; byte round-tripping is not. This test must survive an arbitrary number of manifest-shape refactors, so assert on behaviour, not on manifest structure. (completed 2026-08-25)
 - [x] **Phase 122: Attestation Carriage** *(contract-first, parked on backend)* — a layer to hold a pmcp.run-issued attestation and a verification path against pmcp.run's identity. No signing, no crypto dependency. Vendor the attestation contract from the live platform and write the offline blocking contract test; the live half activates when the backend issues attestations. (completed 2026-08-25)
-- [ ] **Phase 123: Export/Import Verbs** *(contract-first, parked on backend)* — `cargo pmcp package pack | unpack | export | import`, resolving environments through `configure`'s existing resolver and reusing the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam (`PMCP_API_URL`, token cache + TTL) rather than inventing a second API path. `pack`/`unpack` are local and can land immediately; `export`/`import` are contract-first.
+- [x] **Phase 123: Export/Import Verbs** *(contract-first, parked on backend)* — `cargo pmcp package save | load | pull`, resolving environments through `configure`'s existing resolver and reusing the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam (`PMCP_API_URL`, token cache + TTL) rather than inventing a second API path. `save`/`load` are the local file round trip and can land immediately; `pull` is contract-first against `getPackageArtifact`. *(Verb set restated 2026-08-26 — `pack`/`unpack` became `save`/`load`, `export` is retired, and `import` stays the platform's, unchanged. See the Phase 123 detail section and `123-CONTEXT.md` D-01/D-02/D-03.)* (completed 2026-08-26)
 - [ ] **Phase 124: Release & Publish Order** — `pmcp-openapi-server` is **absent from CLAUDE.md's publish order** (zero occurrences) and would silently not publish, unlike its siblings `pmcp-sql-server` and `pmcp-workbook-server`. Add it, publish `pmcp-package` 0.2.0 and `cargo-pmcp` 0.19.0, and record the ordering constraint that `pmcp-package` precedes `pmcp-agent` and `cargo-pmcp`. *(Re-measured 2026-08-22: the absence was closed on `main` — slot 9b in CLAUDE.md plus a `release.yml` step and the `release-coverage` CI gate. Two residual gaps remain; see the Phase 124 reality check.)*
 
 ## Phase Details — Current Milestone
@@ -2423,25 +2423,64 @@ Plans:
 
 ### Phase 123: Export/Import Verbs *(contract-first — PARKED on the pmcp.run backend)*
 
-**Goal**: `cargo pmcp package` grows the portability verbs — `pack` and `unpack` are local and land immediately; `export` and `import` resolve their environment through `configure`'s existing resolver and reuse the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam rather than inventing a second API path, and are contract-first against the platform's import contract.
+**Goal**: `cargo pmcp package` grows the portability verbs — `save` and `load` are the local file round trip and land immediately; `pull` resolves its environment through `configure`'s existing resolver and reuses the working `deployment/targets/pmcp_run/{graphql,auth}.rs` seam rather than inventing a second API path, and is contract-first against the platform's `getPackageArtifact` contract. `export` is retired and `import` stays the platform's, unchanged.
+
+> **Verb set restated 2026-08-26 (supersedes the `pack | unpack | export | import` wording above and throughout this section).** The platform exchange settled all four names: `pack`/`unpack` became **`save`/`load`** (Docker's local-file split); `import` **stays the platform's**, meaning *admit a package into an environment*; `export` is **retired** — it was `push` under another name and `capture` already produces packages platform-side, so it had no defensible job. **`pull`** takes the remote slot. Authoritative record: `123-CONTEXT.md` D-01/D-02/D-03 and `docs/platform-requests/attestation-carriage-sdk-reply.md` §6(a).
 **Depends on**: Phase 120 (the pack/unpack package shape); runs in parallel with Phase 122
 **Requirements**: PKGX-02
 **Parked**: partially — `pack`/`unpack` are unblocked and land this milestone; `export`/`import` are contract-first, their live leg parked on pmcp.run package import.
 **Reality check 2 (2026-08-26, from the pmcp.run exchange — READ BEFORE PLANNING)**: two of this phase's four declared verbs changed meaning, and the verb count in Reality check 1 is itself measured against the wrong branch.
+
   - **`import` is NOT ours to take.** The platform answered the collision question: `import` stays theirs. It is not merely a CLI verb — it is `submitImport`/`getImportStatus` on their AppSync API, four data models, the Phase 173.5 admin UI, an ADR and a live D-14 acceptance. SC2's "resolve the collision" is answered: we do not rename theirs, we name ours differently.
   - **`pack`/`unpack` become `save`/`load`**, per Docker's split (`save`/`load` local file, `push`/`pull` registry, `import` admit-into-system). Verified free on both branches, as are `push`/`pull`. `install` is excluded — their Phase 184 admin UI already uses "Install App". SC1 should be restated in these terms.
   - **⚠ `export` has no defined job left, and this phase must decide its fate.** It was specified as a *remote* op alongside `import` (SC3/SC4), i.e. the inverse of `pull` — which is `push`. But `capture` already produces packages platform-side and `pull` (§5.1) covers the other direction. The platform asked directly: "if `export` is a new verb, what does it do that `capture` doesn't?" We have no defensible answer. **Analysis says drop it**; doing so changes this phase's declared verb set and SC3/SC4, so it is a planning decision, not a documentation fix.
   - **The five-verb count in Reality check 1 is branch-local.** `feat/package-172-cli` carries `f7ea3c4b` and `3425662d` (both 2026-07-21): `PackageCommand` has **eight** variants there and its `Import` is real, not dry-run. SC2's `verb_help.rs` pin would encode a list contradicting the platform's live control plane. **The platform asks that this branch merge BEFORE the verb list is pinned.** Their own qualifier: 172-10 was blocked before `activate` ever ran, so `activate`/`rollback`/`cancel` are wired but not exercised end to end — the test asserts the inventory, not the acceptance.
   - Full context: `docs/design/package-portability-pmcp-run-handoff.md` §5.2, and the three-message exchange in `docs/platform-requests/attestation-carriage-*.md`.
+
 **Reality check (measured 2026-08-22)**: the scoping line "`cargo pmcp package` today has exactly one verb: `inspect`" is stale. `cargo-pmcp/src/commands/package/mod.rs` on `main` enumerates **five** — `inspect | capture | show | import | approve` — and `import` is already taken by the remote *workflow-manifest dry-run* import (`cargo-pmcp/src/commands/package/import.rs`). The AI-Package import verb therefore collides with an existing, shipped verb, and this phase must resolve that explicitly.
 **Success Criteria** (what must be TRUE — all offline, in this repo, backend unavailable):
 
-  1. `cargo pmcp package pack` and `cargo pmcp package unpack` work fully offline against a local directory — `pack` produces an OCI layout from a `pmcp-openapi-server` `config.toml` + spec, `unpack` restores it and prints the slots the target environment must fill — and both appear in `cargo pmcp package --help`, asserted by `cargo-pmcp/tests/verb_help.rs` (PKGX-02)
-  2. The collision with the existing remote `package import` verb is resolved by an explicit, documented choice, the resolution is visible in `--help`, and no already-shipped verb silently changes meaning; `verb_help.rs` pins the complete post-change verb list so a later rename cannot slip through (PKGX-02)
-  3. The export/import path resolves its environment through `configure`'s existing resolver and the `pmcp_run` seam — `get_api_base_url()`'s `PMCP_API_URL` precedence (`cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs:114`) and the TTL'd, endpoint-keyed config cache (`auth.rs:198`) — with **no second API path**: no new base-URL environment variable and no second token cache, checkable by grep over `cargo-pmcp/src/` (PKGX-02)
-  4. The platform half is contract-first and offline-blocking: the export/import operations are validated against a vendored SDL under `contracts/pmcp-run/` by a test in the default `cargo test` gate, and invoking `export`/`import` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error (PKGX-02)
+  1. `cargo pmcp package save` and `cargo pmcp package load` work fully offline — `save` reads a `pmcp-openapi-server` `config.toml` plus `.pmcp/deploy.toml` and writes a **movable `.tar` file** (server kind only), `load` reads that tar back into a **working OCI layout directory** that `inspect` opens unchanged and prints the slots the target environment must fill (kind-agnostic) — and both appear in `cargo pmcp package --help`, asserted by `cargo-pmcp/tests/verb_help.rs` (PKGX-02)
+  2. The collision with the existing remote `package import` verb is resolved — externally, on 2026-08-26: `import` stays the platform's with its meaning unchanged, and ours are `save`/`load`/`pull`. This phase asserts the CONSEQUENCES: a group `--help` preamble names the three directions and is asserted by a test, no already-shipped verb changes meaning, and `verb_help.rs` pins the complete post-change verb list by set equality against one documented constant. Two qualifiers are part of the criterion: the pin covers the set **on this branch** and **breaks by design** when `feat/package-172-cli` merges, and it asserts the **inventory, not the acceptance** — `activate`/`rollback`/`cancel` are wired there but never exercised end to end (PKGX-02)
+  3. The **`pull`** path resolves its environment through `configure`'s existing resolver and the `pmcp_run` seam — `get_api_base_url()`'s `PMCP_API_URL` precedence (`cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs:113`) and the TTL'd, endpoint-keyed config cache (`auth.rs:201`) — with **no second API path**: no new base-URL environment variable, no second token cache and no second `reqwest::Client`, checkable by grep over `cargo-pmcp/src/` (PKGX-02)
+  4. The platform half is contract-first and offline-blocking: **`getPackageArtifact`** is validated against the vendored `contracts/pmcp-run/portability-v1.graphql` by a test in the default `cargo test` gate, and invoking `pull` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error, with the underlying cause preserved in the `anyhow` chain (PKGX-02)
+  5. The artifact's **tar framing rule** — entry inventory, no wrapper directory, no absolute or `..` paths, no symlinks, no duplicates, uncompressed, reproducible headers — is documented normatively in `crates/pmcp-package` (the crate both sides read) and pinned by checked-in golden fixtures that the writer under test never regenerates; and a `save`/`load`/`pull` whose artifact fails verification leaves the destination **byte-for-byte unchanged** (PKGX-02)
 
-**Plans**: TBD
+**Plans**: 7/7 plans executed
+
+Plans:
+**Wave 1**
+
+- [x] 123-01-PLAN.md — Tracer: the `save` → `load` artifact spine (tar codec, validated descriptor-graph model, framing gates, injectable byte caps, staged transactional install)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 123-02-PLAN.md — Contract-first `getPackageArtifact`: vendored SDL, pure codec, offline blocking test, parked live leg
+- [x] 123-03-PLAN.md — `load`'s report (slots, three-state pin facts, carriage states, exit-1 subject mismatch), the renderer lib mount, and `save`'s scope guards
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 123-04-PLAN.md — The tar framing rule in `pmcp-package` docs, its golden-fixture corpus, and the tests binding the rule to BOTH the reader and the writer
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 123-05-PLAN.md — `pull`: the six-stage pipeline in a lib-mounted module behind one transport seam, the module-scope HTTP client, and D-05's named-capability failure
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 123-06-PLAN.md — The verb-list pin plus its gate registration, the `--help` three-direction preamble, and the written note to the platform
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 123-07-PLAN.md — ALWAYS coverage (fuzz target, round-trip example) and the end-to-end proof that the gate executes all eight named test binaries
+
+> **Wave layout revised 2026-08-26** by `/gsd-plan-phase 123 --reviews`, from five waves to six. Two
+> causes, both from the cross-AI review: each creator plan now registers its own test binary in
+> `test-cargo-pmcp-integration` in the same commit that creates it (`Makefile:337-339`'s own
+> discipline — deferring all four to plan 07 left Waves 1-4 running a gate that executed none of their
+> own new tests), and same-wave plans must not share `files_modified`, so the four `Makefile` editors
+> are spread one per wave. Plan 04 also gained a real dependency on plan 02, whose vendored SDL its
+> framing-rule docs cross-reference. Plan numbering is unchanged.
 
 ### Phase 124: Release & Publish Order
 
@@ -2456,7 +2495,38 @@ Plans:
   3. `pmcp-package` ships a new version carrying the Phase 120 layer and media-type additions, and `cargo-pmcp`'s caret pin plus the `cargo-pmcp/tests/pmcp_package_pin.rs` tripwire move in the same change, so the CLI cannot ship pinned to a `pmcp-package` version that cannot read the packages it writes. Targets are the next bump from HEAD, not the stale 0.2.0 / 0.19.0 pair named at scoping (PKGR-01)
   4. CLAUDE.md's publish order and `release.yml`'s step order agree that `pmcp-package` precedes `pmcp-cfn-renderer`, `pmcp-agent` and `cargo-pmcp`, with the constraint stated in the ledger rather than left implicit in step ordering (PKGR-01)
 
-**Plans**: TBD
+**Plans**: 7 plans across 7 waves (1:{01} 2:{02} 3:{03} 4:{04} 5:{05} 6:{06} 7:{07}), all carrying PKGR-01.
+
+Plans:
+**Wave 1**
+
+- [ ] 124-01-PLAN.md — Coverage gate sees the workspace-excluded crate: D-01 two-source discovery plus a repo-wide scan-scope tripwire, D-10 cluster order assertion with a word-boundary matcher, eight-fixture red-direction self-test declared as the gate's prerequisite
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 124-02-PLAN.md — Sync `main` into the milestone branch (D-08), resolving the squash-merge conflict set BEFORE any version bump
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 124-03-PLAN.md — D-05 three-way version-drift sweep as a committed tool, D-03's public-API guard, and a blocking-human decision on every phantom delta
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 124-04-PLAN.md — D-09 ledger reconciliation: release.yml's four stale comment regions and CLAUDE.md's scattered ordering constraint plus its Pre-Flight contradiction
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 124-05-PLAN.md — Version bumps for exactly the authorised set in one atomic commit, the D-04 pmcp-package audit with its nine-emitter one-set rule plus the separate row-C1 consequence set, the CHANGELOG section the release workflow can extract, and the committed `124-expected-release.json` release manifest that plans 06 and 07 verify against
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 124-06-PLAN.md — Open the release PR, drive CI green, human-action checkpoint for the merge
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 124-07-PLAN.md — Pre-tag re-verification of two disjoint sets (expected-new vs expected-skips), one-way-door decision checkpoint, human-action tag push, per-crate registry verification with retry, and a closeout PR that delivers the planning record to `upstream/main`
+
+> **Waves are one plan wide by design.** This is a release pipeline: measure -> gate -> sync -> reconcile -> decide versions -> ship, and every step's output is the next step's input. Two ordering constraints are load-bearing and must not be "optimised" back into parallelism: the `main` sync (plan 02) precedes every version bump, because a conflict resolution that silently reverts a bumped manifest is the worst possible ordering; and the phantom-delta decision (plan 03) precedes the bumps it authorises, because published version numbers are consumed permanently.
 
 ## Progress — Current Milestone
 
@@ -2473,8 +2543,8 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 8/8 | Complete    | 2026-08-25 |
-| 123. Export/Import Verbs *(parked)* | PKGX-02 | 0/TBD | Not started | - |
-| 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
+| 123. Export/Import Verbs *(parked)* | PKGX-02 | 7/7 | Complete    | 2026-08-26 |
+| 124. Release & Publish Order | PKGR-01 | 0/7 | Planned | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
 > capabilities — package import and attestation issuance — that were not confirmed as scheduled at

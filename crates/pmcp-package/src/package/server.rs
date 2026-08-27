@@ -81,11 +81,28 @@ pub struct AwsSection {
     pub region: String,
 }
 
-/// `[server]` — the deployed function's identity + sizing. `memory_mb` is
-/// `Option` because at least one tracked descriptor (`approval-mcp`) omits it
-/// (cargo-pmcp v0.x historically ignored the field, so it was commented out
-/// rather than set). The `memory`/`cpu`/`ingress`/`allow_unauthenticated`/
-/// `binary` fields are google-cloud-run-target-only extras (observed in
+/// `[server]` — the deployed function's identity + sizing.
+///
+/// `memory_mb` is `Option` because at least one tracked descriptor
+/// (`approval-mcp`) omits it: cargo-pmcp v0.x ignored the field entirely, so
+/// it was commented out rather than set. **That is no longer true, and the
+/// `Option` now carries meaning rather than just tolerance.** cargo-pmcp's
+/// pmcp-run deploy path rewrites `Properties.MemorySize` post-synth when the
+/// field is present, on both of its synth engines; `None` means "leave the
+/// engine's own default alone". The parallel field on cargo-pmcp's own
+/// `ServerConfig` was changed from a defaulted `u32` to an `Option<u32>` for
+/// exactly this reason — with a serde default, "omitted" and "explicitly 512"
+/// are indistinguishable, and materializing the 512 would silently resize
+/// every Lambda that never asked. See debug session
+/// `deploy-server-memory-timeout`.
+///
+/// Not every AWS path honors it: `pmcp-cfn-renderer` still pins memory to a
+/// module const, and cargo-pmcp's `aws-lambda` target has no post-render seam,
+/// so both print a divergence warning instead. `timeout_seconds` is required
+/// here (every tracked descriptor sets it) and IS threaded by the renderer.
+///
+/// The `memory`/`cpu`/`ingress`/`allow_unauthenticated`/`binary` fields are
+/// google-cloud-run-target-only extras (observed in
 /// `built-in/test-harness/oauth-external-google/.pmcp/deploy.toml`) — ignored
 /// by the pmcp-run (AWS Lambda) target but must round-trip losslessly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

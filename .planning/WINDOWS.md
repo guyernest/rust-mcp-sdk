@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 49
 waived_count: 0
 fixed_count: 9
-total_count: 33
-last_updated: 2026-08-25T23:15:17.723Z
+total_count: 58
+last_updated: 2026-08-27T19:57:06.610Z
 ---
 
 # Broken Windows Ledger
@@ -48,6 +48,31 @@ last_updated: 2026-08-25T23:15:17.723Z
 | 31 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-03-PLAN.md |  | make quality-gate could not be completed for plan 122-03 - make doc-check aborted on machine-level disk exhaustion (13x No space left on device; df showed 117MiB free on a volume shared with a concurrent sibling worktree agent). Not a code defect. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (266 tests), test-cargo-pmcp-integration exit 0 (package_inspect 8), no-crypto-check exit 0, roundtrip_e2e 8 passed, fmt-check exit 0, lint-plans exit 0, check-release-coverage exit 0 | fixed |  | 2026-08-25T20:42:26.793Z | 2026-08-25T21:01:19.413Z |
 | 32 | 122 | deviation | crates/pmcp-package/src/oci/pack.rs |  | Canonical JSON (olpc-cjson) writes C0 control characters LITERALLY, so any string reaching the manifest can produce non-RFC-8259 JSON. Plan 122-06 closed this for the two attacker-controlled ATTESTATION annotations (issuer, payload_type) via a pack-time refusal. The same hazard remains UNGATED for ConfigFile/OpenApiSpecFile file_name (the org.opencontainers.image.title annotation) and for every String inside ServerPackage - a different trust class (author-supplied), deliberately out of 122-06 scope. | open |  | 2026-08-25T21:58:37.332Z |  |
 | 33 | 122 | unrun-verify | .planning/phases/122-attestation-carriage-contract-first-parked-on-the-pmcp-run-b/122-07-PLAN.md |  | make quality-gate could not be completed for plan 122-07 - the run reached make test-unit and aborted on machine-level disk exhaustion (QUALITY_GATE_EXIT=2; every error No space left on device / rustc-LLVM IO failure on output stream; free space fell 11 GiB -> 0 during the run, and the volume hit absolute zero so no further command could start). Not a code defect. The harness background notification falsely reported 'exit code 0' for this run - the explicit QUALITY_GATE_EXIT sentinel written into the log is what caught it, the same trap 122-02 recorded. Every leg this plan touches passed individually: pmcp-package-gate exit 0 (300 tests, up from the 286 baseline), test-cargo-pmcp-integration exit 0 (package_inspect 12, package_attestation_contract 3, package_capture_contract 3), no-crypto-check exit 0, cargo fmt --all --check exit 0, cargo doc --no-deps zero warnings, pmat complexity max cognitive 21 (no violation, non-vacuity confirmed at --max-cognitive 5), example attestation_carriage exit 0 | fixed |  | 2026-08-25T22:52:55.776Z | 2026-08-25T23:15:17.723Z |
+| 34 | 123 | unrun-verify | cargo-pmcp/src/deployment/targets/pmcp_run/graphql.rs | 1971 | download_artifact_bytes' streaming byte cap and URL-withholding live behind the transport seam, so the offline tests that substitute that seam cannot exercise them; pinned by signature, constants and reading only | open |  | 2026-08-27T00:00:46.520Z |  |
+| 35 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 1 criteria 'grep -c mapfile' and the SIGPIPE-shape grep read the RAW file; both hits are pre-existing COMMENT lines (identical counts on the pre-phase file). Correct measurement is over comment-stripped lines, where both are 0. | open |  | 2026-08-27T16:56:56.528Z |  |
+| 36 | 124 | deviation | scripts/check-release-coverage.sh |  | D-10 sentinels are shell no-ops (: 'BEGIN D-10 ORDER ASSERTION'), not comments as the plan prescribed: Task 1's excision criterion strips comments BEFORE the awk excision, so a commented sentinel would vanish and the criterion could never pass. | open |  | 2026-08-27T16:57:02.271Z |  |
+| 37 | 124 | deviation | scripts/check-release-coverage.sh |  | Task 2's word-boundary criterion (two grep -c counts must be EQUAL) cannot hold: 2 of the 4 executable 'cargo publish -p' hits are error-message echoes, not matchers, and the criterion's BRE backslash-dollar does not match the text's literal backslash-dollar. Intent verified directly instead: both matchers carry the ( \|$) boundary. | open |  | 2026-08-27T16:57:04.300Z |  |
+| 38 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Plan 124-02 defective acceptance criterion: `grep -c 'Cargo.toml' /tmp/124-merge-tree.txt` returns 0 is a false positive by construction — it greps the WHOLE merge-tree transcript, so it matches the clean 'Auto-merging cargo-pmcp/Cargo.toml' line. Measured 1, with zero actual manifest conflicts. Correct form greps the '^CONFLICT' lines only. | open |  | 2026-08-27T17:49:33.603Z |  |
+| 39 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Plan 124-02 unsatisfiable acceptance criterion: 'git status --porcelain produces no output'. Unsatisfiable in this repo regardless of the merge — .pmat/* (4 tracked, tool-written) and ~10 untracked paths (.agents/ .codex/ .gsd/ .serena/ .superpowers/ AGENTS.md, presentations/*.pptx) are pre-existing user/tool state unrelated to the plan. Scoped at execution to: no unresolved merge paths, and no unexpected changes among the 12 conflicted files. | open |  | 2026-08-27T17:49:39.975Z |  |
+| 40 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | Correction to RESEARCH Pitfall 4 (rtk shell proxy): the proxy is not merely 'corrupting output' — 'grep' is a shell FUNCTION sourced from ~/.claude/shell-snapshots/, so `command -v grep` returns the bare word 'grep', not a path. Any plan step saying 'resolve the binary via command -v' therefore silently fails to resolve grep. Real binary found via 'which -a grep' = /usr/bin/grep. git was unaffected (command -v git = /opt/homebrew/bin/git). | open |  | 2026-08-27T17:50:11.133Z |  |
+| 41 | 124 | deviation | .planning/phases/124-release-publish-order/124-02-PLAN.md |  | Process defect: worktree isolation does not survive a checkpoint round-trip. The harness force-removes the agent worktree when an executor returns at a gate, and resuming does NOT restore it — the resumed agent lands in the main checkout with its spawn-time base assertion stale. Any plan that asks a question mid-flight loses its isolation at that moment. Observed twice in 124-02; cost a full detour. Either keep gated plans autonomous, or expect execution to continue in the main checkout. | open |  | 2026-08-27T17:50:18.406Z |  |
+| 42 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | RESEARCH Pitfall 2 lists pmcp-widget-utils as a phantom delta; corroboration against the PUBLISHED 0.1.0 .crate proves its src/lib.rs is byte-identical to the in-tree file. The v1.3 baseline (earliest tag containing the version-bump commit) is over-early; the true publishing tag is >= v1.11.0. Measured instance of T-124-23: tag containment is not a publication oracle. The crate is CLEAN and must not be bumped. | open |  | 2026-08-27T18:19:00.697Z |  |
+| 43 | 124 | deviation | .planning/phases/124-release-publish-order/124-RESEARCH.md |  | RESEARCH Pitfall 2 describes the pmcp-workbook-compiler delta as 'RESERVED_TOOL_NAMES gained a 5th entry (doc + test assertion)'. It also carries a published-manifest constraint change the table omits: umya-spreadsheet '3.0' -> '=3.0.0', which the in-tree comment says exists because 3.0.1 forks Cargo.lock onto a second quick-xml and regresses a data-validation ingest test. The published 0.1.0 still carries the caret range, so the published crate cold-resolves onto the version the project rejected. | open |  | 2026-08-27T18:19:09.198Z |  |
+| 44 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 acceptance criterion 'cargo public-api --simplified > f && grep -c jsonwebtoken f returns 0' passes VACUOUSLY as written: jwt-auth is a NON-default feature, so a default-features run never compiles the jwt modules and the zero is guaranteed regardless of the truth. Discharged by additionally running --all-features (26801 API lines, 286 mentioning jwt, 0 mentioning jsonwebtoken). A future D-03-style guard must name the feature set. | open |  | 2026-08-27T18:19:16.385Z |  |
+| 45 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-PLAN.md |  | Task 2 Step E states cargo-pmcp publishes at release.yml:525 and pmcp-server at :543 -- both correct, but an UNBOUNDED grep for 'cargo publish -p pmcp-server' resolves to line 263 (the pmcp-server-toolkit step), a prefix collision. Any re-measurement of these ordinals must use the bounded matcher '( \|$)' that check-release-coverage.sh already uses; measured both ways here. | open |  | 2026-08-27T18:19:24.378Z |  |
+| 46 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Task 1 acceptance criteria address the publish-order comment block by FIXED line window (sed -n '80,110p'), but this plan's own Region A edit grows that block from 19 to 39 lines, pushing cargo-pmcp past line 110 — the criterion would have compared ordinals in a window no longer containing both crates. Discharged with a heading-anchored awk extraction, the same fix the plan already applied to Task 2's three regions. A plan must not address by fixed line numbers a region it edits. | open |  | 2026-08-27T18:57:21.473Z |  |
+| 47 | 124 | deviation | Makefile |  | The rtk output proxy TRUNCATES captured command output and writes its own truncation marker into the redirect target, then reports its own exit status: 'RUSTFLAGS= make quality-gate > log 2>&1; echo $?' printed EXIT=0 with a 908-line log ending mid-clippy-echo in the literal text '... (9166 lines truncated)'. The real run is 11551 lines ending 'ALL TOYOTA WAY QUALITY CHECKS PASSED'. A green exit read this way is not evidence the gate ran to completion. Capture the status inside a script that writes $? to a file (done here), or use absolute binary paths. | open |  | 2026-08-27T18:57:29.751Z |  |
+| 48 | 124 | deviation | .planning/phases/124-release-publish-order/124-04-PLAN.md |  | Two Task 2 acceptance greps cannot distinguish PRESCRIBING a thing from FORBIDDING it, and one is self-defeating: (a) 'grep -c cargo search /tmp/124-preflight.txt returns 0' fails if the Pre-Flight step names the forbidden command in order to forbid it — resolved by pointing at item 13's naming instead of repeating it, losing a little in-place force; (b) 'grep -c "Nine were measured" CLAUDE.md returns 1' fails if the correction note quotes the phrase it is correcting — resolved by paraphrasing. Both are the literal-grep-vs-intent class this phase keeps finding. | open |  | 2026-08-27T18:57:37.690Z |  |
+| 49 | 124 | deviation | .planning/phases/124-release-publish-order/124-03-SUMMARY.md |  | Plan 03's authorised bump list is INCOMPLETE for pmcp-workbook-runtime 0.1.0 -> 0.2.0. That move is semver-INCOMPATIBLE (pre-1.0 minor) and four requirement sites in three manifests pin the crate at "0.1.0": pmcp-server-toolkit:81 (optional dep) and :202 (dev-dep), pmcp-workbook-compiler:41, pmcp-workbook-dialect:25. Measured: with runtime at 0.2.0 and the pins unmoved, 'cargo metadata --offline' exits 101 with 'failed to select a version for the requirement pmcp-workbook-runtime = "^0.1.0"' -- so the pins MUST move. CLAUDE.md's Version Bump Rules then require each pinning crate to be bumped (plan 04's caret exception covers PATCH only). pmcp-server-toolkit (0.1.2 vs published 0.1.1) and pmcp-workbook-compiler (authorised 0.1.1) already satisfy it; pmcp-workbook-dialect is 0.1.0 == published 0.1.0 and is NOT on the closed authorised list. Plan 05 halted at a blocking-human checkpoint rather than consume an unauthorised version number. | open |  | 2026-08-27T19:10:05.493Z |  |
+| 50 | 124 | deviation | crates/pmcp-server-toolkit/Cargo.toml | 81 | LATENT PUBLISHED-ARTIFACT DEFECT, independent of Phase 124's bumps. pmcp-server-toolkit 0.1.2 pins pmcp-workbook-runtime = "0.1.0" while src/workbook/handler.rs makes 42 references to API absent from the PUBLISHED runtime 0.1.0 (RenderMode, reconcile_reference, ReconcileReport, reconcile::TOL); plan 03 corroborated that the published 0.1.0 .crate has no reconcile module and no RenderMode. Locally the path dep hides it. 'workbook' is NOT a default feature (default = ["code-mode"]), so cargo publish's default-feature verification build would NOT catch it: 0.1.2 would publish green and fail to build for any consumer enabling 'workbook'. Moving the pin to the shipped runtime version is the fix, which is why 'leave the pins alone' is not an available option. | open |  | 2026-08-27T19:10:05.565Z |  |
+| 51 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 1's replacement acceptance criterion is defective as written. It requires the set of differing (manifest_path, field, before, after) rows to equal EXACTLY the authorised (crate, version) map from plan 03's checkpoint. But the same task's <action> instructs the executor to search every workspace manifest for requirements on each bumped crate and move the affected ones -- and those requirement-string rows are differing rows that appear in NO (crate, version) map. Applied literally the criterion forbids the downstream pin moves the task mandates. Correct form: partition the rows into [package].version rows (must equal the authorised map exactly) and dependency-requirement rows (must equal the discovered consequence set, recorded and justified). Same literal-assertion-vs-intent class as WINDOWS #46 and #48. | open |  | 2026-08-27T19:10:05.636Z |  |
+| 52 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 2's CR-01 acceptance criterion returns a FALSE FAILURE at the unmodified base. It runs 'grep -n pmcp-package crates/pmcp-openapi-server/Cargo.toml > /tmp/124-cr01.txt' then requires 'grep -c version /tmp/124-cr01.txt' to be 0. Measured: it returns 1, matching line 100 -- a COMMENT ('# crates/pmcp-package/Cargo.toml's own version field stays on the 0.3 line'), not the dependency. The actual dep at line 124 is 'pmcp-package = { path = "../pmcp-package" }', path-only and correct; restricting to non-comment 'pmcp-package =' lines gives the intended 0, and the real tripwire (cargo test -p pmcp-openapi-server --test pmcp_package_pin) passes 2/2. An executor trusting the literal criterion would 'fix' a compliant manifest. Same literal-grep-vs-intent class as WINDOWS #46, #48 and #51. | open |  | 2026-08-27T19:12:33.481Z |  |
+| 53 | 124 | deviation | crates/pmcp-workbook-runtime/src/render/mod.rs | 270 | pmcp-workbook-runtime 0.1.0 -> next is a BREAKING change, not an additive one, and three separate documents said otherwise. 'cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0' exits 100: function_parameter_count_changed -- pub fn render_xlsx now takes 3 parameters instead of 2 (the new third is mode: RenderMode, itself absent from published 0.1.0). It is public via 'pub mod render' (lib.rs:65) and called cross-crate at pmcp-server-toolkit/src/workbook/render_resource.rs:42,108. On a 0.x line 'requires new major' means bumping the leftmost non-zero component, i.e. 0.2.0. Plan 03's RESEARCH described the delta as 'additive public API'; plan 03's decision adopted that; the plan-05 amendment inverted the axis on the same false premise. None cited render_xlsx. Running semver-checks per bumped crate against the PUBLISHED baseline is the check that catches this class, and it was not run for this crate until plan 05 Task 1. | open |  | 2026-08-27T19:32:48.839Z |  |
+| 54 | 124 | deviation | cargo-pmcp/src/templates/workbook_server.rs | 53 | A THIRD compiler-invisible version emitter exists beyond the two the phase documents track, and no plan's files_modified lists it: const PMCP_VERSION: &str = "2.19.0" at cargo-pmcp/src/templates/workbook_server.rs:53, emitted into projects from 'cargo pmcp new --kind workbook-server'. It is guarded by exact equality against the ROOT Cargo.toml [package].version in emitted_pmcp_version_matches_workspace_pin, so bumping pmcp without moving it fails a test. Negative control run in plan 05: with the constant left at 2.19.0 and the root at 2.19.1, 'cargo build -p cargo-pmcp' EXIT=0 while 'cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches_workspace_pin' EXIT=101 -- a verbatim reproduction of the Phase-122 PMCP_PACKAGE_VERSION_REQ class. Its sibling TOOLKIT_VERSION (:59, tracks pmcp-server-toolkit) is guarded the same way. Enumerate scaffold constants by grepping 'const [A-Z_]*VERSION[A-Z_]*: &str = "[0-9]' rather than trusting a plan's file list. | open |  | 2026-08-27T19:32:48.912Z |  |
+| 55 | 124 | stub | cargo-pmcp/src/templates |  | UNGUARDED stale pmcp-family version floors in five scaffold templates, found by plan 05's emitter sweep and deliberately NOT changed (out of scope, and tightening an unnecessary bound is its own defect): sql_server.rs:57 'pmcp = 2.8.1' and :58 'pmcp-server-toolkit = 0.1.0'; openapi_server.rs:73 'pmcp = 2.8.1', :74 'pmcp-server-toolkit = 0.1.0', :78 'pmcp-openapi-server = 0.1.0'; mcp_app.rs:348 'pmcp = 1.10'; oauth/proxy.rs:468 and oauth/authorizer.rs:216 'pmcp = 0.3'. All are caret floors that still resolve, so nothing breaks -- but unlike workbook_server.rs's PMCP_VERSION and agent.rs's two constants, none has a drift test, so they rot silently. Same class as the memory note about scaffold_patch.rs:59 still describing pmcp-package 0.1.0 since Phase 120. | open |  | 2026-08-27T19:32:48.985Z |  |
+| 56 | 124 | deviation | .github/workflows/release.yml | 34 | RESIDUAL AFTER FIX: release.yml's changelog extractor was measured returning ZERO bytes for v2.19.1, v2.19.0 AND v2.18.0 -- every past release -- because 'awk -v ver="## \\[VER\\]"' undergoes string-literal escape processing, '\\[' is an UNDEFINED escape, and BSD awk 20200816 drops the backslash so '[2.19.1]' became a CHARACTER CLASS that '## [' cannot match. Threat T-124-08 realised: an empty-notes GitHub Release at exit 0, silently. Fixed here by passing the bare version and matching with index(), plus a fail-closed guard that exits 1 on an empty extraction. THE RESIDUAL: only ONE awk implementation was measured. CI runs ubuntu-latest (mawk) and neither mawk nor gawk is installed on this machine, so whether CI has actually been shipping empty release notes is NOT established -- gawk and mawk may differ from BSD awk on undefined escapes. Someone with a Linux runner should confirm the historical blast radius; the fix itself is implementation-independent. | open |  | 2026-08-27T19:57:06.470Z |  |
+| 57 | 124 | deviation | .planning/phases/124-release-publish-order/124-05-PLAN.md |  | Task 3's <verify> could not have detected the awk bug it exists to detect, and my first run of it produced a false green. The plan's verify is: awk ... > /tmp/124-notes.txt; test -s /tmp/124-notes.txt. It uses the SAME broken '-v ver="## \\\\[2.19.1\\\\]"' construction as release.yml, so it returns empty against a perfectly good CHANGELOG. Worse, wrapping the extraction as CHANGELOG=$(awk ...) then 'printf "%s\\n" "$CHANGELOG"' writes a 1-byte newline when the extraction is EMPTY, so 'test -s' PASSES on zero content -- which is exactly what happened on the first attempt here (reported '1 byte, non-empty: YES'). Any extraction check must write raw output (awk ... > file) and assert a realistic byte count, not merely non-emptiness. | open |  | 2026-08-27T19:57:06.540Z |  |
+| 58 | 124 | unrun-verify | Makefile |  | make quality-gate's FUZZ leg is vacuous on a stable toolchain, so its green tells you nothing about fuzzing. Measured during plan 05's gate run (13,214-line log, overall EXIT 0, banner present): the 'Validating ALWAYS requirements / 1. FUZZ Testing validation' section emits repeated 'error: failed to run rustc to learn about target-specific information ... error: the option Z is only accepted on the nightly compiler' -- cargo-fuzz needs -Zsanitizer=address. The gate prints these errors and still reports ALL TOYOTA WAY QUALITY CHECKS PASSED. Pre-existing and out of scope for this phase (it corroborates the project-memory note that make validate-always fuzzes NOTHING on stable), recorded so a reader does not read the banner as fuzz coverage. | open |  | 2026-08-27T19:57:06.610Z |  |
 
 ````json
 [
@@ -446,6 +471,306 @@ last_updated: 2026-08-25T23:15:17.723Z
     "reason": "",
     "recorded_at": "2026-08-25T22:52:55.776Z",
     "resolved_at": "2026-08-25T23:15:17.723Z"
+  },
+  {
+    "id": 34,
+    "kind": "unrun-verify",
+    "phase": "123",
+    "file": "cargo-pmcp/src/deployment/targets/pmcp_run/graphql.rs",
+    "line": 1971,
+    "description": "download_artifact_bytes' streaming byte cap and URL-withholding live behind the transport seam, so the offline tests that substitute that seam cannot exercise them; pinned by signature, constants and reading only",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T00:00:46.520Z",
+    "resolved_at": null
+  },
+  {
+    "id": 35,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "Task 1 criteria 'grep -c mapfile' and the SIGPIPE-shape grep read the RAW file; both hits are pre-existing COMMENT lines (identical counts on the pre-phase file). Correct measurement is over comment-stripped lines, where both are 0.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:56:56.528Z",
+    "resolved_at": null
+  },
+  {
+    "id": 36,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "D-10 sentinels are shell no-ops (: 'BEGIN D-10 ORDER ASSERTION'), not comments as the plan prescribed: Task 1's excision criterion strips comments BEFORE the awk excision, so a commented sentinel would vanish and the criterion could never pass.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:57:02.271Z",
+    "resolved_at": null
+  },
+  {
+    "id": 37,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "scripts/check-release-coverage.sh",
+    "line": null,
+    "description": "Task 2's word-boundary criterion (two grep -c counts must be EQUAL) cannot hold: 2 of the 4 executable 'cargo publish -p' hits are error-message echoes, not matchers, and the criterion's BRE backslash-dollar does not match the text's literal backslash-dollar. Intent verified directly instead: both matchers carry the ( |$) boundary.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T16:57:04.300Z",
+    "resolved_at": null
+  },
+  {
+    "id": 38,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Plan 124-02 defective acceptance criterion: `grep -c 'Cargo.toml' /tmp/124-merge-tree.txt` returns 0 is a false positive by construction — it greps the WHOLE merge-tree transcript, so it matches the clean 'Auto-merging cargo-pmcp/Cargo.toml' line. Measured 1, with zero actual manifest conflicts. Correct form greps the '^CONFLICT' lines only.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:49:33.603Z",
+    "resolved_at": null
+  },
+  {
+    "id": 39,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Plan 124-02 unsatisfiable acceptance criterion: 'git status --porcelain produces no output'. Unsatisfiable in this repo regardless of the merge — .pmat/* (4 tracked, tool-written) and ~10 untracked paths (.agents/ .codex/ .gsd/ .serena/ .superpowers/ AGENTS.md, presentations/*.pptx) are pre-existing user/tool state unrelated to the plan. Scoped at execution to: no unresolved merge paths, and no unexpected changes among the 12 conflicted files.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:49:39.975Z",
+    "resolved_at": null
+  },
+  {
+    "id": 40,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "Correction to RESEARCH Pitfall 4 (rtk shell proxy): the proxy is not merely 'corrupting output' — 'grep' is a shell FUNCTION sourced from ~/.claude/shell-snapshots/, so `command -v grep` returns the bare word 'grep', not a path. Any plan step saying 'resolve the binary via command -v' therefore silently fails to resolve grep. Real binary found via 'which -a grep' = /usr/bin/grep. git was unaffected (command -v git = /opt/homebrew/bin/git).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:50:11.133Z",
+    "resolved_at": null
+  },
+  {
+    "id": 41,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-02-PLAN.md",
+    "line": null,
+    "description": "Process defect: worktree isolation does not survive a checkpoint round-trip. The harness force-removes the agent worktree when an executor returns at a gate, and resuming does NOT restore it — the resumed agent lands in the main checkout with its spawn-time base assertion stale. Any plan that asks a question mid-flight loses its isolation at that moment. Observed twice in 124-02; cost a full detour. Either keep gated plans autonomous, or expect execution to continue in the main checkout.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T17:50:18.406Z",
+    "resolved_at": null
+  },
+  {
+    "id": 42,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "RESEARCH Pitfall 2 lists pmcp-widget-utils as a phantom delta; corroboration against the PUBLISHED 0.1.0 .crate proves its src/lib.rs is byte-identical to the in-tree file. The v1.3 baseline (earliest tag containing the version-bump commit) is over-early; the true publishing tag is >= v1.11.0. Measured instance of T-124-23: tag containment is not a publication oracle. The crate is CLEAN and must not be bumped.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:00.697Z",
+    "resolved_at": null
+  },
+  {
+    "id": 43,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-RESEARCH.md",
+    "line": null,
+    "description": "RESEARCH Pitfall 2 describes the pmcp-workbook-compiler delta as 'RESERVED_TOOL_NAMES gained a 5th entry (doc + test assertion)'. It also carries a published-manifest constraint change the table omits: umya-spreadsheet '3.0' -> '=3.0.0', which the in-tree comment says exists because 3.0.1 forks Cargo.lock onto a second quick-xml and regresses a data-validation ingest test. The published 0.1.0 still carries the caret range, so the published crate cold-resolves onto the version the project rejected.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:09.198Z",
+    "resolved_at": null
+  },
+  {
+    "id": 44,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-PLAN.md",
+    "line": null,
+    "description": "Task 2 acceptance criterion 'cargo public-api --simplified > f && grep -c jsonwebtoken f returns 0' passes VACUOUSLY as written: jwt-auth is a NON-default feature, so a default-features run never compiles the jwt modules and the zero is guaranteed regardless of the truth. Discharged by additionally running --all-features (26801 API lines, 286 mentioning jwt, 0 mentioning jsonwebtoken). A future D-03-style guard must name the feature set.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:16.385Z",
+    "resolved_at": null
+  },
+  {
+    "id": 45,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-PLAN.md",
+    "line": null,
+    "description": "Task 2 Step E states cargo-pmcp publishes at release.yml:525 and pmcp-server at :543 -- both correct, but an UNBOUNDED grep for 'cargo publish -p pmcp-server' resolves to line 263 (the pmcp-server-toolkit step), a prefix collision. Any re-measurement of these ordinals must use the bounded matcher '( |$)' that check-release-coverage.sh already uses; measured both ways here.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:19:24.378Z",
+    "resolved_at": null
+  },
+  {
+    "id": 46,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-04-PLAN.md",
+    "line": null,
+    "description": "Task 1 acceptance criteria address the publish-order comment block by FIXED line window (sed -n '80,110p'), but this plan's own Region A edit grows that block from 19 to 39 lines, pushing cargo-pmcp past line 110 — the criterion would have compared ordinals in a window no longer containing both crates. Discharged with a heading-anchored awk extraction, the same fix the plan already applied to Task 2's three regions. A plan must not address by fixed line numbers a region it edits.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:21.473Z",
+    "resolved_at": null
+  },
+  {
+    "id": 47,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "Makefile",
+    "line": null,
+    "description": "The rtk output proxy TRUNCATES captured command output and writes its own truncation marker into the redirect target, then reports its own exit status: 'RUSTFLAGS= make quality-gate > log 2>&1; echo $?' printed EXIT=0 with a 908-line log ending mid-clippy-echo in the literal text '... (9166 lines truncated)'. The real run is 11551 lines ending 'ALL TOYOTA WAY QUALITY CHECKS PASSED'. A green exit read this way is not evidence the gate ran to completion. Capture the status inside a script that writes $? to a file (done here), or use absolute binary paths.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:29.751Z",
+    "resolved_at": null
+  },
+  {
+    "id": 48,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-04-PLAN.md",
+    "line": null,
+    "description": "Two Task 2 acceptance greps cannot distinguish PRESCRIBING a thing from FORBIDDING it, and one is self-defeating: (a) 'grep -c cargo search /tmp/124-preflight.txt returns 0' fails if the Pre-Flight step names the forbidden command in order to forbid it — resolved by pointing at item 13's naming instead of repeating it, losing a little in-place force; (b) 'grep -c \"Nine were measured\" CLAUDE.md returns 1' fails if the correction note quotes the phrase it is correcting — resolved by paraphrasing. Both are the literal-grep-vs-intent class this phase keeps finding.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T18:57:37.690Z",
+    "resolved_at": null
+  },
+  {
+    "id": 49,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-03-SUMMARY.md",
+    "line": null,
+    "description": "Plan 03's authorised bump list is INCOMPLETE for pmcp-workbook-runtime 0.1.0 -> 0.2.0. That move is semver-INCOMPATIBLE (pre-1.0 minor) and four requirement sites in three manifests pin the crate at \"0.1.0\": pmcp-server-toolkit:81 (optional dep) and :202 (dev-dep), pmcp-workbook-compiler:41, pmcp-workbook-dialect:25. Measured: with runtime at 0.2.0 and the pins unmoved, 'cargo metadata --offline' exits 101 with 'failed to select a version for the requirement pmcp-workbook-runtime = \"^0.1.0\"' -- so the pins MUST move. CLAUDE.md's Version Bump Rules then require each pinning crate to be bumped (plan 04's caret exception covers PATCH only). pmcp-server-toolkit (0.1.2 vs published 0.1.1) and pmcp-workbook-compiler (authorised 0.1.1) already satisfy it; pmcp-workbook-dialect is 0.1.0 == published 0.1.0 and is NOT on the closed authorised list. Plan 05 halted at a blocking-human checkpoint rather than consume an unauthorised version number.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.493Z",
+    "resolved_at": null
+  },
+  {
+    "id": 50,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "crates/pmcp-server-toolkit/Cargo.toml",
+    "line": 81,
+    "description": "LATENT PUBLISHED-ARTIFACT DEFECT, independent of Phase 124's bumps. pmcp-server-toolkit 0.1.2 pins pmcp-workbook-runtime = \"0.1.0\" while src/workbook/handler.rs makes 42 references to API absent from the PUBLISHED runtime 0.1.0 (RenderMode, reconcile_reference, ReconcileReport, reconcile::TOL); plan 03 corroborated that the published 0.1.0 .crate has no reconcile module and no RenderMode. Locally the path dep hides it. 'workbook' is NOT a default feature (default = [\"code-mode\"]), so cargo publish's default-feature verification build would NOT catch it: 0.1.2 would publish green and fail to build for any consumer enabling 'workbook'. Moving the pin to the shipped runtime version is the fix, which is why 'leave the pins alone' is not an available option.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.565Z",
+    "resolved_at": null
+  },
+  {
+    "id": 51,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 1's replacement acceptance criterion is defective as written. It requires the set of differing (manifest_path, field, before, after) rows to equal EXACTLY the authorised (crate, version) map from plan 03's checkpoint. But the same task's <action> instructs the executor to search every workspace manifest for requirements on each bumped crate and move the affected ones -- and those requirement-string rows are differing rows that appear in NO (crate, version) map. Applied literally the criterion forbids the downstream pin moves the task mandates. Correct form: partition the rows into [package].version rows (must equal the authorised map exactly) and dependency-requirement rows (must equal the discovered consequence set, recorded and justified). Same literal-assertion-vs-intent class as WINDOWS #46 and #48.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:10:05.636Z",
+    "resolved_at": null
+  },
+  {
+    "id": 52,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 2's CR-01 acceptance criterion returns a FALSE FAILURE at the unmodified base. It runs 'grep -n pmcp-package crates/pmcp-openapi-server/Cargo.toml > /tmp/124-cr01.txt' then requires 'grep -c version /tmp/124-cr01.txt' to be 0. Measured: it returns 1, matching line 100 -- a COMMENT ('# crates/pmcp-package/Cargo.toml's own version field stays on the 0.3 line'), not the dependency. The actual dep at line 124 is 'pmcp-package = { path = \"../pmcp-package\" }', path-only and correct; restricting to non-comment 'pmcp-package =' lines gives the intended 0, and the real tripwire (cargo test -p pmcp-openapi-server --test pmcp_package_pin) passes 2/2. An executor trusting the literal criterion would 'fix' a compliant manifest. Same literal-grep-vs-intent class as WINDOWS #46, #48 and #51.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:12:33.481Z",
+    "resolved_at": null
+  },
+  {
+    "id": 53,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "crates/pmcp-workbook-runtime/src/render/mod.rs",
+    "line": 270,
+    "description": "pmcp-workbook-runtime 0.1.0 -> next is a BREAKING change, not an additive one, and three separate documents said otherwise. 'cargo semver-checks check-release -p pmcp-workbook-runtime --baseline-version 0.1.0' exits 100: function_parameter_count_changed -- pub fn render_xlsx now takes 3 parameters instead of 2 (the new third is mode: RenderMode, itself absent from published 0.1.0). It is public via 'pub mod render' (lib.rs:65) and called cross-crate at pmcp-server-toolkit/src/workbook/render_resource.rs:42,108. On a 0.x line 'requires new major' means bumping the leftmost non-zero component, i.e. 0.2.0. Plan 03's RESEARCH described the delta as 'additive public API'; plan 03's decision adopted that; the plan-05 amendment inverted the axis on the same false premise. None cited render_xlsx. Running semver-checks per bumped crate against the PUBLISHED baseline is the check that catches this class, and it was not run for this crate until plan 05 Task 1.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:32:48.839Z",
+    "resolved_at": null
+  },
+  {
+    "id": 54,
+    "kind": "deviation",
+    "phase": "124",
+    "file": "cargo-pmcp/src/templates/workbook_server.rs",
+    "line": 53,
+    "description": "A THIRD compiler-invisible version emitter exists beyond the two the phase documents track, and no plan's files_modified lists it: const PMCP_VERSION: &str = \"2.19.0\" at cargo-pmcp/src/templates/workbook_server.rs:53, emitted into projects from 'cargo pmcp new --kind workbook-server'. It is guarded by exact equality against the ROOT Cargo.toml [package].version in emitted_pmcp_version_matches_workspace_pin, so bumping pmcp without moving it fails a test. Negative control run in plan 05: with the constant left at 2.19.0 and the root at 2.19.1, 'cargo build -p cargo-pmcp' EXIT=0 while 'cargo test -p cargo-pmcp --lib emitted_pmcp_version_matches_workspace_pin' EXIT=101 -- a verbatim reproduction of the Phase-122 PMCP_PACKAGE_VERSION_REQ class. Its sibling TOOLKIT_VERSION (:59, tracks pmcp-server-toolkit) is guarded the same way. Enumerate scaffold constants by grepping 'const [A-Z_]*VERSION[A-Z_]*: &str = \"[0-9]' rather than trusting a plan's file list.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:32:48.912Z",
+    "resolved_at": null
+  },
+  {
+    "id": 55,
+    "kind": "stub",
+    "phase": "124",
+    "file": "cargo-pmcp/src/templates",
+    "line": null,
+    "description": "UNGUARDED stale pmcp-family version floors in five scaffold templates, found by plan 05's emitter sweep and deliberately NOT changed (out of scope, and tightening an unnecessary bound is its own defect): sql_server.rs:57 'pmcp = 2.8.1' and :58 'pmcp-server-toolkit = 0.1.0'; openapi_server.rs:73 'pmcp = 2.8.1', :74 'pmcp-server-toolkit = 0.1.0', :78 'pmcp-openapi-server = 0.1.0'; mcp_app.rs:348 'pmcp = 1.10'; oauth/proxy.rs:468 and oauth/authorizer.rs:216 'pmcp = 0.3'. All are caret floors that still resolve, so nothing breaks -- but unlike workbook_server.rs's PMCP_VERSION and agent.rs's two constants, none has a drift test, so they rot silently. Same class as the memory note about scaffold_patch.rs:59 still describing pmcp-package 0.1.0 since Phase 120.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:32:48.985Z",
+    "resolved_at": null
+  },
+  {
+    "id": 56,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".github/workflows/release.yml",
+    "line": 34,
+    "description": "RESIDUAL AFTER FIX: release.yml's changelog extractor was measured returning ZERO bytes for v2.19.1, v2.19.0 AND v2.18.0 -- every past release -- because 'awk -v ver=\"## \\[VER\\]\"' undergoes string-literal escape processing, '\\[' is an UNDEFINED escape, and BSD awk 20200816 drops the backslash so '[2.19.1]' became a CHARACTER CLASS that '## [' cannot match. Threat T-124-08 realised: an empty-notes GitHub Release at exit 0, silently. Fixed here by passing the bare version and matching with index(), plus a fail-closed guard that exits 1 on an empty extraction. THE RESIDUAL: only ONE awk implementation was measured. CI runs ubuntu-latest (mawk) and neither mawk nor gawk is installed on this machine, so whether CI has actually been shipping empty release notes is NOT established -- gawk and mawk may differ from BSD awk on undefined escapes. Someone with a Linux runner should confirm the historical blast radius; the fix itself is implementation-independent.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.470Z",
+    "resolved_at": null
+  },
+  {
+    "id": 57,
+    "kind": "deviation",
+    "phase": "124",
+    "file": ".planning/phases/124-release-publish-order/124-05-PLAN.md",
+    "line": null,
+    "description": "Task 3's <verify> could not have detected the awk bug it exists to detect, and my first run of it produced a false green. The plan's verify is: awk ... > /tmp/124-notes.txt; test -s /tmp/124-notes.txt. It uses the SAME broken '-v ver=\"## \\\\[2.19.1\\\\]\"' construction as release.yml, so it returns empty against a perfectly good CHANGELOG. Worse, wrapping the extraction as CHANGELOG=$(awk ...) then 'printf \"%s\\n\" \"$CHANGELOG\"' writes a 1-byte newline when the extraction is EMPTY, so 'test -s' PASSES on zero content -- which is exactly what happened on the first attempt here (reported '1 byte, non-empty: YES'). Any extraction check must write raw output (awk ... > file) and assert a realistic byte count, not merely non-emptiness.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.540Z",
+    "resolved_at": null
+  },
+  {
+    "id": 58,
+    "kind": "unrun-verify",
+    "phase": "124",
+    "file": "Makefile",
+    "line": null,
+    "description": "make quality-gate's FUZZ leg is vacuous on a stable toolchain, so its green tells you nothing about fuzzing. Measured during plan 05's gate run (13,214-line log, overall EXIT 0, banner present): the 'Validating ALWAYS requirements / 1. FUZZ Testing validation' section emits repeated 'error: failed to run rustc to learn about target-specific information ... error: the option Z is only accepted on the nightly compiler' -- cargo-fuzz needs -Zsanitizer=address. The gate prints these errors and still reports ALL TOYOTA WAY QUALITY CHECKS PASSED. Pre-existing and out of scope for this phase (it corroborates the project-memory note that make validate-always fuzzes NOTHING on stable), recorded so a reader does not read the banner as fuzz coverage.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-27T19:57:06.610Z",
+    "resolved_at": null
   }
 ]
 ````

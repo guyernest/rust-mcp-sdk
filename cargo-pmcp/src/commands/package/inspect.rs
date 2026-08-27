@@ -63,6 +63,43 @@
 //! **These two behaviours must NOT be harmonized in a later cleanup.** The
 //! difference is the decision (D-03), and the same instruction is recorded at
 //! the other site it lives, `pmcp_package::oci::SubjectVerdict`.
+//!
+//! # Every PACKAGE-SUPPLIED string is escaped before it is printed
+//!
+//! A package's `name`, and an attestation's `issuer`, claimed `subject` and
+//! `payload_type`, are read VERBATIM out of an untrusted layout —
+//! `pmcp_package::oci::UnpackedAttestation` says so on the type: they "may be
+//! any bytes an annotation can hold", and "a caller that acts on them is
+//! responsible for validating them first". Nothing upstream rejects control
+//! characters, and a platform-produced tar carries standard JSON where
+//! `\u001b` is a legal escape that decodes to a real ESC in memory.
+//!
+//! `field` renders `"  {label:<14} {value}"` — the SAME two-space,
+//! fixed-width grammar `render_attestation` uses for its `Verdict` line. So a
+//! `name` carrying ESC plus a newline can print a fabricated
+//! `Verdict:      subject matches this package` and scroll the genuine
+//! `SUBJECT MISMATCH` out of view, forging precisely the human-facing verdict
+//! this command exists to deliver — on the one verb documented as CI-gateable
+//! (D-06). Every such value therefore goes through `super::render::untrusted`,
+//! the SAME escaper `load`/`pull` use, so the two cannot drift; `render.rs`'s
+//! `a_hostile_package_name_cannot_forge_the_subject_verdict` records the attack.
+//!
+//! `version` goes through it too, even though every `version` rendered here is
+//! a `semver::Version` whose parser has already excluded every control
+//! character. Exempting it would be correct TODAY and would put this file and
+//! `render.rs` — which escapes the same value — on opposite policies for one
+//! field, so "one escaper, no drift" would stop being true the moment a package
+//! kind carried a `String` version. The type guarantee makes the call cheap, not
+//! unnecessary.
+//!
+//! # What this section does NOT claim
+//!
+//! It covers what this module PRINTS: every `field` value and the two `bail!`
+//! diagnostics below. It does not cover text that reaches stderr from inside
+//! `pmcp_package` — a serde `unknown field` error, for instance, formats the
+//! offending key with `Display` and no escaping. Escaping there belongs at that
+//! error boundary, not here, and the distinction is written down so a reader
+//! does not mistake this heading for a whole-command guarantee.
 
 use std::path::PathBuf;
 
@@ -76,6 +113,11 @@ use pmcp_package::oci::{
 use pmcp_package::{AgentPackage, WorkflowManifest};
 
 use super::kind::{artifact_type_from_manifest_json, detect_kind, PackageKind};
+// ONE escaper, shared with the `load`/`pull` renderer, rather than a second
+// implementation that merely looks alike. This module's header section "Every
+// PACKAGE-SUPPLIED string is escaped before it is printed" says which values go
+// through it, and what that guarantee does not extend to.
+use super::render::untrusted;
 use crate::commands::GlobalFlags;
 
 /// Arguments for `cargo pmcp package inspect`.
@@ -145,10 +187,15 @@ pub fn execute(args: InspectArgs, global_flags: &GlobalFlags) -> Result<()> {
         .iter()
         .find_map(|c| detect_kind(c))
         .ok_or_else(|| {
-            anyhow!(
-                "unknown package kind: candidates=[{}]",
-                candidates.join(", ")
-            )
+            // Escaped PER CANDIDATE, not over the joined string. `untrusted`
+            // also CLIPS at 72 chars, and the joined list of a real layout runs
+            // to several hundred (one artifactType plus a media type per layer)
+            // — clipping it would cut the list to roughly one entry, and that
+            // list is the only information this error carries. Each individual
+            // media type is far under the clip, so escaping first and joining
+            // after keeps every entry AND escapes every entry.
+            let listed: Vec<String> = candidates.iter().map(|c| untrusted(c)).collect();
+            anyhow!("unknown package kind: candidates=[{}]", listed.join(", "))
         })?;
 
     render_kind(&layout, kind, global_flags.should_output())
@@ -227,14 +274,24 @@ fn refuse_a_subject_that_does_not_name_this_package(
     bail!(
         "attestation subject mismatch: the attestation names {}, but this package's unattested \
          manifest digest is {}",
-        attestation.subject.claimed,
+        untrusted(&attestation.subject.claimed),
         attestation.subject.unattested_digest
     );
 }
 
 /// Print a `label: value` line with a consistent, colored layout.
+///
+/// The column width comes from [`super::render::LABEL_WIDTH`] rather than from a
+/// second `14`: that constant's whole reason for existing is to match THIS
+/// helper, and while the two were independent literals nothing failed when one
+/// of them moved.
 fn field(label: &str, value: impl std::fmt::Display) {
-    println!("  {:<14} {}", format!("{label}:").bright_black(), value);
+    println!(
+        "  {:<width$} {}",
+        format!("{label}:").bright_black(),
+        value,
+        width = super::render::LABEL_WIDTH
+    );
 }
 
 /// Print the `Kind:` header line (lowercase kind label — matched by tests).
@@ -245,9 +302,9 @@ fn header(kind: PackageKind) {
 
 fn render_agent(pkg: &AgentPackage) {
     header(PackageKind::Agent);
-    field("Name", &pkg.name);
-    field("Version", &pkg.version);
-    field("Instructions", truncate(&pkg.instructions, 72));
+    field("Name", untrusted(&pkg.name));
+    field("Version", untrusted(&pkg.version.to_string()));
+    field("Instructions", untrusted(&pkg.instructions));
     field("Max tokens", pkg.max_tokens);
     field("Max iterations", pkg.max_iterations);
     field("Connectors", pkg.connectors.len());
@@ -256,8 +313,8 @@ fn render_agent(pkg: &AgentPackage) {
 fn render_team(unpacked: &UnpackedTeam) {
     let pkg = &unpacked.package;
     header(PackageKind::Team);
-    field("Name", &pkg.name);
-    field("Version", &pkg.version);
+    field("Name", untrusted(&pkg.name));
+    field("Version", untrusted(&pkg.version.to_string()));
     field("Members", pkg.members.len());
     field("Human roles", pkg.human_roles.len());
     field("Built-in", pkg.built_in_servers.len());
@@ -270,8 +327,8 @@ fn render_team(unpacked: &UnpackedTeam) {
 fn render_server(unpacked: &UnpackedServer) {
     let pkg = &unpacked.package;
     header(PackageKind::Server);
-    field("Name", &pkg.name);
-    field("Version", &pkg.version);
+    field("Name", untrusted(&pkg.name));
+    field("Version", untrusted(&pkg.version.to_string()));
     field("Config slots", pkg.config_slots.len());
     render_attestation(unpacked.attestation.as_ref());
 }
@@ -301,9 +358,9 @@ fn render_attestation(attestation: Option<&UnpackedAttestation>) {
         return;
     };
     println!("\n{}", "Attestation".bright_cyan().bold());
-    field("Issuer", &attestation.issuer);
-    field("Subject", &attestation.subject.claimed);
-    field("Payload type", &attestation.payload_type);
+    field("Issuer", untrusted(&attestation.issuer));
+    field("Subject", untrusted(&attestation.subject.claimed));
+    field("Payload type", untrusted(&attestation.payload_type));
 
     // Emphasised like `header` so the verdict reads as a verdict rather than
     // as one more data line.
@@ -325,17 +382,8 @@ fn render_attestation(attestation: Option<&UnpackedAttestation>) {
 
 fn render_workflow(manifest: &WorkflowManifest) {
     header(PackageKind::Workflow);
-    field("Name", &manifest.name);
-    field("Version", &manifest.version);
+    field("Name", untrusted(&manifest.name));
+    field("Version", untrusted(&manifest.version.to_string()));
     field("Components", manifest.components.len());
     field("Slots", manifest.aggregated_slots.len());
-}
-
-/// Truncate `s` to at most `max` chars, appending an ellipsis when clipped.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let head: String = s.chars().take(max).collect();
-    format!("{head}…")
 }

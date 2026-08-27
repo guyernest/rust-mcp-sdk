@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.19.0"
+version = "2.19.1"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -254,7 +254,7 @@ env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-macros = { version = "0.6.1", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
 pmcp-code-mode = { version = "0.5.3", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
-pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
+pmcp-code-mode-derive = { version = "0.3.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
 # For the CLNT-03 agent example (s53_v2_agent_client): the era-aware connector
 # factory lives behind pmcp-agent's non-default `url-connector` feature.
 #

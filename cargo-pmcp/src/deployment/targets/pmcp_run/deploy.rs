@@ -130,21 +130,9 @@ pub async fn deploy_to_pmcp_run(
     let upload = read_bootstrap_upload(artifact)?;
     println!();
 
-    // Step 4: The synthesized template, ready for the environment merge below.
-    let template = synth.template_json;
-
-    // Step 4b: Construct-agnostic `[environment]` delivery
-    // (`environment-inert-for-shared-cdk-constructs`). FIX #2 exported
-    // `[environment]` only as `process.env` to the `cdk synth` child, so
-    // shared/managed constructs that ignore `process.env` (e.g.
-    // `OpenApiMcpServerStack`) silently dropped the declared keys. Merge the
-    // declared `[environment]` directly into every `AWS::Lambda::Function`'s
-    // `Environment.Variables` in the synthesized template — construct-agnostic,
-    // guaranteed delivery regardless of how the stack.ts was authored. Secrets
-    // are EXCLUDED (they keep their server-side injection path per D-08).
-    // Precedence: `[environment]` OVERRIDES a construct's hardcoded value on
-    // key collision (locked product decision).
-    let template = apply_environment_merge(template, &config.environment, &config.secrets)?;
+    // Step 4: apply every post-synth template merge (see
+    // `apply_post_synth_merges`), then upload.
+    let template = apply_post_synth_merges(synth.template_json, config)?;
 
     log_upload_sizes(template.len(), upload.data.len(), upload.has_assets);
     println!();
@@ -948,6 +936,50 @@ fn find_template_file(cdk_out: &Path) -> Result<PathBuf> {
     bail!("No CloudFormation template found in {}", cdk_out.display());
 }
 
+/// Apply every post-synth CloudFormation template merge, in order, to the
+/// template `synth_template` produced.
+///
+/// This exists as its own function so the WIRING is unit-testable: the async
+/// `deploy_to_pmcp_run` that calls it needs OAuth credentials, S3 presigned
+/// URLs and a live GraphQL endpoint, so nothing can assert from there that a
+/// merge is actually reached in production. Deleting a merge call inside this
+/// function fails `post_synth_merges_apply_environment_and_sizing` — deleting
+/// it from an inline chain inside `deploy_to_pmcp_run` would fail nothing.
+///
+/// # Why post-synth
+///
+/// Both merges run AFTER engine routing, so they cover `SynthPath::Renderer`
+/// and `SynthPath::LegacyCdk` alike. That is the whole point: a hand-modified
+/// `deploy/lib/stack.ts` always routes to `npx cdk synth` (see
+/// [`custom_stack_ts_reason`]), and hand-edited stacks are exactly the
+/// population that reported both of these bugs.
+///
+/// 1. `[environment]` — construct-agnostic env-var delivery into EVERY
+///    `AWS::Lambda::Function`'s `Environment.Variables`
+///    (`environment-inert-for-shared-cdk-constructs`). FIX #2 exported
+///    `[environment]` only as `process.env` to the `cdk synth` child, so
+///    shared/managed constructs that ignore `process.env` (e.g.
+///    `OpenApiMcpServerStack`) silently dropped the declared keys. Secrets are
+///    EXCLUDED (they keep their server-side injection path per D-08).
+///    Precedence: `[environment]` OVERRIDES a construct's hardcoded value on
+///    key collision (locked product decision).
+/// 2. `[server]` sizing — `Properties.MemorySize`/`Timeout` on the MCP
+///    function ONLY (debug session `deploy-server-memory-timeout`). Threading
+///    these into the stack.ts template instead was measured and rejected; see
+///    `init::AWS_LAMBDA_SCAFFOLD_MEMORY_MB`'s doc comment for the byte-match
+///    fallout. Unlike (1) this one must NOT touch every Lambda: an
+///    OAuth-enabled stack renders three functions at three different sizings,
+///    and resizing the 10-second authorizer would be a regression.
+fn apply_post_synth_merges(template: String, config: &DeployConfig) -> Result<String> {
+    let template = apply_environment_merge(template, &config.environment, &config.secrets)?;
+    apply_sizing_merge(
+        template,
+        &config.server.name,
+        config.server.memory_mb,
+        config.server.timeout_seconds,
+    )
+}
+
 /// Outcome of merging `[environment]` into a synthesized CloudFormation
 /// template. See [`merge_environment_into_template`].
 #[derive(Debug)]
@@ -1131,6 +1163,221 @@ fn environment_no_lambda_warning(
     )
 }
 
+// ── [server] sizing: post-synth MemorySize/Timeout merge ────────────────────
+// (debug session `deploy-server-memory-timeout`)
+
+/// Outcome of merging `[server]` sizing into a synthesized CloudFormation
+/// template. See [`merge_sizing_into_template`].
+#[derive(Debug)]
+struct SizingMergeOutcome {
+    /// The re-serialized template JSON with the declared sizing applied.
+    template: String,
+    /// One human-readable line per MCP-function resource that was rewritten,
+    /// naming the before/after values (e.g.
+    /// `"McpFunction: MemorySize 256 -> 1024"`). Empty means no matching
+    /// Lambda was found — the caller uses this for the fail-loud warning.
+    ///
+    /// A property already carrying the declared value produces no entry for
+    /// that property, so an idempotent re-deploy stays quiet about it while
+    /// the resource is still reported as matched.
+    changes: Vec<String>,
+    /// `true` when at least one `AWS::Lambda::Function` whose
+    /// `Properties.FunctionName` equals the configured server name was found.
+    /// Distinct from `changes` being non-empty: a matched-but-already-correct
+    /// template yields `matched = true` with no changes, which must NOT trip
+    /// the fail-loud path.
+    matched: bool,
+}
+
+/// Merge the synthesized template with the declared `[server]` sizing and emit
+/// operator feedback.
+///
+/// Thin deploy-time wrapper around the pure [`merge_sizing_into_template`]
+/// helper: it prints either a per-property before/after summary or the
+/// fail-loud "no matching Lambda" warning, and returns the (possibly modified)
+/// template string. When neither `memory_mb` nor `timeout_seconds` is declared
+/// the template is returned unchanged and nothing is printed.
+///
+/// # Precedence — a DELIBERATE divergence from the `[environment]` fix
+///
+/// The sibling session (`deploy-toml-inert-for-preserved-stack`) ruled that a
+/// `stack.ts` literal WINS over `deploy.toml` for `[environment]`. That rule
+/// is deliberately NOT followed here: declared sizing OVERRIDES the stack.ts
+/// literal. The two cases are not analogous — `[environment]` is a MAP, where
+/// "the literal wins" is a coherent additive-fill (deploy.toml contributes
+/// keys the construct did not set), whereas `memorySize` is a SCALAR the
+/// construct always sets, so "the literal wins" would degenerate to "the
+/// config is inert", which is the bug being fixed. The sibling already broke
+/// its own rule once, for construct collisions. The divergence and this
+/// rationale are documented in `cargo-pmcp/docs/commands/deploy.md`.
+fn apply_sizing_merge(
+    template: String,
+    function_name: &str,
+    memory_mb: Option<u32>,
+    timeout_seconds: Option<u32>,
+) -> Result<String> {
+    if memory_mb.is_none() && timeout_seconds.is_none() {
+        return Ok(template);
+    }
+
+    let outcome = merge_sizing_into_template(&template, function_name, memory_mb, timeout_seconds)?;
+
+    if outcome.matched {
+        if outcome.changes.is_empty() {
+            println!("   ✅ [server] sizing already matches the synthesized template");
+        } else {
+            for change in &outcome.changes {
+                println!("   ✅ Applied [server] sizing — {change}");
+            }
+        }
+    } else {
+        // Fail-loud: sizing was declared but no Lambda in the synthesized
+        // template carries this server's FunctionName, so there is nothing to
+        // apply it to. Warn prominently instead of dropping it silently — the
+        // silence is precisely what made this bug survive three sessions.
+        eprintln!(
+            "{}",
+            sizing_no_lambda_warning(function_name, memory_mb, timeout_seconds)
+        );
+    }
+
+    Ok(outcome.template)
+}
+
+/// Rewrite `Properties.MemorySize` / `Properties.Timeout` on the MCP function
+/// in a synthesized CloudFormation template. Pure and unit-testable — no
+/// synth, no I/O.
+///
+/// # Which resource is targeted
+///
+/// ONLY `AWS::Lambda::Function` resources whose `Properties.FunctionName`
+/// equals `function_name`. Matching on `Type` alone (the way the
+/// `[environment]` merge does) would be a regression: an OAuth-enabled stack
+/// renders THREE Lambdas at three different sizings — `<name>-oauth-proxy`
+/// at 256/30, `<name>` at 512/30, and `<name>-authorizer` at 256/**10** — and
+/// resizing the authorizer to the MCP function's memory and timeout would
+/// silently reconfigure infrastructure the operator never mentioned. Both
+/// synth engines set the discriminating property the same way (the renderer
+/// via `function_name: d.server.name`, the TS scaffold via
+/// `functionName: serverId`), so this is exact on either path. Logical IDs
+/// are deliberately NOT used: they are CDK-generated and unknowable for
+/// hand-authored or shared constructs.
+///
+/// # Precedence
+/// A declared value OVERRIDES whatever the construct emitted — see
+/// [`apply_sizing_merge`]'s doc comment for why this deliberately diverges
+/// from the `[environment]` merge's additive-fill rule. A `None` argument
+/// leaves that property exactly as synthesized.
+fn merge_sizing_into_template(
+    template_json: &str,
+    function_name: &str,
+    memory_mb: Option<u32>,
+    timeout_seconds: Option<u32>,
+) -> Result<SizingMergeOutcome> {
+    let mut template: serde_json::Value = serde_json::from_str(template_json)
+        .context("Failed to parse synthesized CloudFormation template JSON")?;
+
+    let mut changes: Vec<String> = Vec::new();
+    let mut matched = false;
+
+    if let Some(resources) = template
+        .get_mut("Resources")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (logical_id, resource) in resources.iter_mut() {
+            if !is_mcp_lambda_function(resource, function_name) {
+                continue;
+            }
+            matched = true;
+            apply_sizing_to_lambda(
+                resource,
+                logical_id,
+                memory_mb,
+                timeout_seconds,
+                &mut changes,
+            );
+        }
+    }
+
+    changes.sort();
+
+    let merged = serde_json::to_string_pretty(&template)
+        .context("Failed to re-serialize merged CloudFormation template")?;
+
+    Ok(SizingMergeOutcome {
+        template: merged,
+        changes,
+        matched,
+    })
+}
+
+/// True when `resource` is an `AWS::Lambda::Function` whose
+/// `Properties.FunctionName` equals `function_name` — the MCP function, as
+/// opposed to an OAuth proxy or authorizer sharing the same stack.
+fn is_mcp_lambda_function(resource: &serde_json::Value, function_name: &str) -> bool {
+    is_lambda_function(resource)
+        && resource
+            .get("Properties")
+            .and_then(|p| p.get("FunctionName"))
+            .and_then(serde_json::Value::as_str)
+            == Some(function_name)
+}
+
+/// Write the declared sizing onto one matched Lambda resource, appending a
+/// `"<logical id>: <Property> <before> -> <after>"` line to `changes` for each
+/// property whose value actually moved. Creates `Properties` if absent.
+fn apply_sizing_to_lambda(
+    resource: &mut serde_json::Value,
+    logical_id: &str,
+    memory_mb: Option<u32>,
+    timeout_seconds: Option<u32>,
+    changes: &mut Vec<String>,
+) {
+    let Some(properties) = resource
+        .as_object_mut()
+        .and_then(|r| ensure_object(r, "Properties"))
+    else {
+        return;
+    };
+
+    for (key, declared) in [("MemorySize", memory_mb), ("Timeout", timeout_seconds)] {
+        let Some(declared) = declared else { continue };
+        let before = properties.get(key).and_then(serde_json::Value::as_u64);
+        if before == Some(u64::from(declared)) {
+            continue;
+        }
+        let before_label = before.map_or_else(|| "(unset)".to_string(), |v| v.to_string());
+        changes.push(format!("{logical_id}: {key} {before_label} -> {declared}"));
+        properties.insert(key.to_string(), serde_json::Value::from(declared));
+    }
+}
+
+/// Build the fail-loud warning shown when `[server]` sizing is declared but the
+/// synthesized template contains no `AWS::Lambda::Function` whose
+/// `FunctionName` matches the configured server name.
+fn sizing_no_lambda_warning(
+    function_name: &str,
+    memory_mb: Option<u32>,
+    timeout_seconds: Option<u32>,
+) -> String {
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(m) = memory_mb {
+        declared.push(format!("memory_mb = {m}"));
+    }
+    if let Some(t) = timeout_seconds {
+        declared.push(format!("timeout_seconds = {t}"));
+    }
+    let declared = declared.join(", ");
+    format!(
+        "⚠️  [server] sizing declared but NOT applied — the synthesized CloudFormation \
+         template contains no AWS::Lambda::Function whose FunctionName is \
+         '{function_name}'.\n     \
+         Declared: {declared}\n     \
+         Check that [server] name matches the function your stack.ts creates; otherwise the \
+         deployed function keeps whatever size the template hardcodes."
+    )
+}
+
 /// Run the fail-closed IAM validator and rewrite `deploy/lib/stack.ts` from
 /// the loaded [`DeployConfig`], so `[iam]` declared in `.pmcp/deploy.toml`
 /// lands in the synthesized CloudFormation template. Mirrors
@@ -1161,9 +1408,16 @@ fn validate_and_regenerate_stack_ts(config: &DeployConfig) -> Result<()> {
         // preserved stack.ts means declared [iam]/[environment] are not
         // auto-applied. Mirrors the aws-lambda path
         // (commands/deploy/deploy.rs) so the signal is target-uniform.
+        // `sizing_inert = false`: unlike the aws-lambda target, this one
+        // rewrites `Properties.MemorySize`/`Timeout` post-synth (see
+        // `apply_sizing_merge`), on BOTH synth engines — so a preserved
+        // stack.ts does not make `[server]` sizing inert here and warning
+        // about it would be false (debug session
+        // `deploy-server-memory-timeout`).
         if let Some(warning) = crate::deployment::config::stack_ts_preserved_inert_warning(
             config.iam.is_empty(),
             config.environment.is_empty(),
+            false,
         ) {
             eprintln!("{warning}");
         }
@@ -1935,6 +2189,468 @@ mod env_merge_tests {
             &secret_keys(&[]),
         )
         .expect_err("invalid JSON must error");
+        assert!(
+            err.to_string().contains("parse synthesized CloudFormation"),
+            "error must name the parse failure"
+        );
+    }
+}
+
+// ── [server] sizing: post-synth MemorySize/Timeout merge ────────────────────
+// (debug session `deploy-server-memory-timeout`)
+#[cfg(test)]
+mod sizing_merge_tests {
+    use super::{
+        apply_sizing_merge, is_mcp_lambda_function, merge_sizing_into_template,
+        sizing_no_lambda_warning,
+    };
+    use serde_json::{json, Value};
+
+    const SERVER: &str = "okf-demo";
+
+    /// A single-Lambda pmcp-run template as the scaffold/`cdk synth` engine
+    /// emits it: `memorySize: 256`, `timeout: cdk.Duration.seconds(30)`.
+    fn scaffold_template() -> String {
+        json!({
+            "Resources": {
+                "McpFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": SERVER,
+                        "MemorySize": 256,
+                        "Timeout": 30,
+                        "Runtime": "provided.al2023"
+                    }
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn props(v: &Value, logical_id: &str) -> Value {
+        v["Resources"][logical_id]["Properties"].clone()
+    }
+
+    fn merged(
+        template: &str,
+        memory_mb: Option<u32>,
+        timeout_seconds: Option<u32>,
+    ) -> (Value, Vec<String>, bool) {
+        let out = merge_sizing_into_template(template, SERVER, memory_mb, timeout_seconds)
+            .expect("merge must parse and re-serialize valid template JSON");
+        let parsed: Value =
+            serde_json::from_str(&out.template).expect("merged template must be valid JSON");
+        (parsed, out.changes, out.matched)
+    }
+
+    /// (1) No-op when nothing is declared: `apply_sizing_merge` returns the
+    /// template BYTE-IDENTICALLY rather than round-tripping it through serde.
+    ///
+    /// This is the case that protects the installed base. `memory_mb` /
+    /// `timeout_seconds` are `Option` precisely so a `deploy.toml` that never
+    /// mentioned sizing leaves the engine's own default alone, instead of
+    /// materializing the schema default (512) over the pmcp-run engine's 256
+    /// and silently doubling every Lambda nobody asked to resize.
+    #[test]
+    fn no_op_when_nothing_declared() {
+        let template = scaffold_template();
+        let out =
+            apply_sizing_merge(template.clone(), SERVER, None, None).expect("no-op merge succeeds");
+        assert_eq!(
+            out, template,
+            "an undeclared sizing must return the template untouched, byte for byte"
+        );
+    }
+
+    /// (2) Declared sizing lands on the MCP function's `MemorySize`/`Timeout`.
+    #[test]
+    fn applies_declared_memory_and_timeout() {
+        let (parsed, changes, matched) = merged(&scaffold_template(), Some(1024), Some(60));
+        assert!(matched, "the MCP function must be matched");
+        assert_eq!(props(&parsed, "McpFunction")["MemorySize"], json!(1024));
+        assert_eq!(props(&parsed, "McpFunction")["Timeout"], json!(60));
+        assert_eq!(
+            changes,
+            vec![
+                "McpFunction: MemorySize 256 -> 1024".to_string(),
+                "McpFunction: Timeout 30 -> 60".to_string(),
+            ],
+            "both moves must be reported with before/after values"
+        );
+    }
+
+    /// (3) A Lambda with no `Properties` at all gets one created.
+    #[test]
+    fn creates_properties_when_absent() {
+        // A resource with no Properties cannot carry a FunctionName, so it is
+        // not the MCP function and must NOT be matched. Give it the name and
+        // nothing else to exercise the create-the-nested-object branch.
+        let template = json!({
+            "Resources": {
+                "Fn": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": { "FunctionName": SERVER }
+                }
+            }
+        })
+        .to_string();
+
+        let (parsed, changes, matched) = merged(&template, Some(1024), Some(60));
+        assert!(matched);
+        assert_eq!(props(&parsed, "Fn")["MemorySize"], json!(1024));
+        assert_eq!(props(&parsed, "Fn")["Timeout"], json!(60));
+        assert_eq!(
+            changes,
+            vec![
+                "Fn: MemorySize (unset) -> 1024".to_string(),
+                "Fn: Timeout (unset) -> 60".to_string(),
+            ],
+            "an absent property must report `(unset)` as its before value"
+        );
+    }
+
+    /// (4) Every other property on the matched Lambda is preserved.
+    #[test]
+    fn other_properties_preserved() {
+        let template = json!({
+            "Resources": {
+                "McpFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": SERVER,
+                        "MemorySize": 256,
+                        "Timeout": 30,
+                        "Runtime": "provided.al2023",
+                        "Handler": "bootstrap",
+                        "Environment": { "Variables": { "RUST_LOG": "info" } }
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let (parsed, _, _) = merged(&template, Some(1024), None);
+        let p = props(&parsed, "McpFunction");
+        assert_eq!(p["Runtime"], json!("provided.al2023"));
+        assert_eq!(p["Handler"], json!("bootstrap"));
+        assert_eq!(
+            p["Environment"],
+            json!({ "Variables": { "RUST_LOG": "info" } })
+        );
+        assert_eq!(
+            p["Timeout"],
+            json!(30),
+            "an undeclared property must be left exactly as synthesized"
+        );
+    }
+
+    /// (5) THE REGRESSION GUARD. An OAuth-enabled stack renders THREE Lambdas
+    /// at three DIFFERENT sizings — measured from
+    /// `crates/pmcp-cfn-renderer/tests/goldens/oauth-cognito-dcr.golden.json`:
+    /// `<name>-oauth-proxy` 256/30, `<name>` 512/30, `<name>-authorizer`
+    /// 256/**10**. Matching on `Type == "AWS::Lambda::Function"` alone (the way
+    /// the `[environment]` merge does) would resize the 10-second authorizer to
+    /// the MCP function's timeout — a real regression, not a fix.
+    #[test]
+    fn discriminates_the_mcp_function_in_a_three_lambda_oauth_stack() {
+        let template = json!({
+            "Resources": {
+                "OAuthProxy": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": format!("{SERVER}-oauth-proxy"),
+                        "MemorySize": 256, "Timeout": 30
+                    }
+                },
+                "McpFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": SERVER,
+                        "MemorySize": 512, "Timeout": 30
+                    }
+                },
+                "Authorizer": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": format!("{SERVER}-authorizer"),
+                        "MemorySize": 256, "Timeout": 10
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let (parsed, changes, matched) = merged(&template, Some(3008), Some(900));
+        assert!(matched);
+        assert_eq!(
+            changes,
+            vec![
+                "McpFunction: MemorySize 512 -> 3008".to_string(),
+                "McpFunction: Timeout 30 -> 900".to_string(),
+            ],
+            "ONLY the MCP function may be reported as changed"
+        );
+
+        assert_eq!(props(&parsed, "McpFunction")["MemorySize"], json!(3008));
+        assert_eq!(props(&parsed, "McpFunction")["Timeout"], json!(900));
+
+        assert_eq!(
+            props(&parsed, "OAuthProxy"),
+            json!({ "FunctionName": format!("{SERVER}-oauth-proxy"), "MemorySize": 256, "Timeout": 30 }),
+            "the OAuth proxy must be byte-preserved"
+        );
+        assert_eq!(
+            props(&parsed, "Authorizer"),
+            json!({ "FunctionName": format!("{SERVER}-authorizer"), "MemorySize": 256, "Timeout": 10 }),
+            "the 10-second authorizer must be byte-preserved"
+        );
+    }
+
+    /// (6) Non-Lambda resources are never touched.
+    #[test]
+    fn non_lambda_resources_untouched() {
+        let template = json!({
+            "Resources": {
+                "McpFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": { "FunctionName": SERVER, "MemorySize": 256, "Timeout": 30 }
+                },
+                "ClientsTable": {
+                    "Type": "AWS::DynamoDB::Table",
+                    "Properties": { "TableName": SERVER, "MemorySize": 1 }
+                }
+            }
+        })
+        .to_string();
+
+        let (parsed, _, _) = merged(&template, Some(1024), Some(60));
+        assert_eq!(
+            props(&parsed, "ClientsTable"),
+            json!({ "TableName": SERVER, "MemorySize": 1 }),
+            "a non-Lambda resource must be byte-preserved even when its own \
+             properties collide by name and its FunctionName-equivalent matches"
+        );
+    }
+
+    /// (7) Fail-loud: sizing declared, but no Lambda carries this server's
+    /// FunctionName. `matched` stays false (the caller's warning trigger) and
+    /// the warning names the server and the declared values.
+    #[test]
+    fn fail_loud_when_no_matching_lambda() {
+        let template = json!({
+            "Resources": {
+                "SomeoneElse": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": { "FunctionName": "a-different-server", "MemorySize": 256 }
+                }
+            }
+        })
+        .to_string();
+
+        let (parsed, changes, matched) = merged(&template, Some(1024), Some(60));
+        assert!(
+            !matched,
+            "no FunctionName match must yield matched = false (fail-loud trigger)"
+        );
+        assert!(changes.is_empty());
+        assert_eq!(
+            props(&parsed, "SomeoneElse")["MemorySize"],
+            json!(256),
+            "the non-matching Lambda must be left alone"
+        );
+
+        let warning = sizing_no_lambda_warning(SERVER, Some(1024), Some(60));
+        assert!(warning.contains("NOT applied"), "warning is prominent");
+        assert!(
+            warning.contains(SERVER),
+            "warning names the expected function"
+        );
+        assert!(
+            warning.contains("memory_mb = 1024"),
+            "warning names the declared memory"
+        );
+        assert!(
+            warning.contains("timeout_seconds = 60"),
+            "warning names the declared timeout"
+        );
+    }
+
+    /// (8) A partial declaration touches only the declared property.
+    #[test]
+    fn partial_declaration_leaves_the_other_property_alone() {
+        let (parsed, changes, _) = merged(&scaffold_template(), None, Some(120));
+        assert_eq!(
+            changes,
+            vec!["McpFunction: Timeout 30 -> 120".to_string()],
+            "only the declared property may be reported"
+        );
+        assert_eq!(
+            props(&parsed, "McpFunction")["MemorySize"],
+            json!(256),
+            "an undeclared memory_mb must leave the engine's own value in place"
+        );
+        assert_eq!(props(&parsed, "McpFunction")["Timeout"], json!(120));
+    }
+
+    /// (9) Idempotent: a template already carrying the declared values is
+    /// matched with ZERO changes. `matched` and `changes.is_empty()` must stay
+    /// distinct signals — collapsing them would send an already-correct
+    /// re-deploy down the fail-loud path.
+    #[test]
+    fn idempotent_when_already_correct() {
+        let (parsed, changes, matched) = merged(&scaffold_template(), Some(256), Some(30));
+        assert!(matched, "an already-correct template is still a MATCH");
+        assert!(
+            changes.is_empty(),
+            "no property moved, so nothing may be reported as changed"
+        );
+        assert_eq!(props(&parsed, "McpFunction")["MemorySize"], json!(256));
+        assert_eq!(props(&parsed, "McpFunction")["Timeout"], json!(30));
+    }
+
+    /// (10) THE ENGINE-DIVERGENCE FIXTURE (and_gate condition C). Before this
+    /// fix the two pmcp-run synth engines emitted DIFFERENT timeouts for the
+    /// SAME `deploy.toml`: `pmcp-cfn-renderer` threaded
+    /// `timeout_seconds: d.server.timeout_seconds`, while the TypeScript
+    /// scaffold hardcoded `cdk.Duration.seconds(30)` — so whether a human had
+    /// ever touched `stack.ts` (which routes the deploy to `npx cdk synth`)
+    /// silently decided the deployed Timeout.
+    ///
+    /// The whole test corpus was blind to this because every golden fixture
+    /// declares the DEFAULT `timeout_seconds = 30`, where the two engines
+    /// agree by coincidence. This is that masking removed: a NON-default 60,
+    /// asserted to converge from BOTH engine outputs.
+    #[test]
+    fn both_synth_engines_converge_on_the_declared_timeout() {
+        // What `npx cdk synth` produces: the stack.ts literal, 30.
+        let legacy_cdk = scaffold_template();
+        // What `pmcp-cfn-renderer` produces: the descriptor's 60 for Timeout,
+        // but still its own module const for MemorySize.
+        let renderer = json!({
+            "Resources": {
+                "McpFunction": {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": {
+                        "FunctionName": SERVER,
+                        "MemorySize": 256,
+                        "Timeout": 60,
+                        "Runtime": "provided.al2023"
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let (from_legacy, legacy_changes, _) = merged(&legacy_cdk, Some(1024), Some(60));
+        let (from_renderer, renderer_changes, _) = merged(&renderer, Some(1024), Some(60));
+
+        assert_eq!(
+            from_legacy["Resources"]["McpFunction"]["Properties"]["Timeout"],
+            json!(60)
+        );
+        assert_eq!(
+            from_renderer["Resources"]["McpFunction"]["Properties"]["Timeout"],
+            json!(60)
+        );
+        assert_eq!(
+            from_legacy, from_renderer,
+            "the two synth engines must land on IDENTICAL sizing for the same deploy.toml"
+        );
+
+        // And the divergence is visible in what each engine needed corrected:
+        // only the legacy path had a Timeout to move.
+        assert!(
+            legacy_changes.contains(&"McpFunction: Timeout 30 -> 60".to_string()),
+            "the cdk-synth engine's hardcoded 30 must be corrected, got {legacy_changes:?}"
+        );
+        assert!(
+            !renderer_changes
+                .iter()
+                .any(|c| c.starts_with("McpFunction: Timeout")),
+            "the renderer already honored the descriptor timeout, got {renderer_changes:?}"
+        );
+    }
+
+    /// (11) `is_mcp_lambda_function` matches on BOTH the CFN type and the
+    /// FunctionName — neither alone is sufficient.
+    #[test]
+    fn is_mcp_lambda_function_requires_type_and_name() {
+        assert!(is_mcp_lambda_function(
+            &json!({ "Type": "AWS::Lambda::Function", "Properties": { "FunctionName": SERVER } }),
+            SERVER
+        ));
+        assert!(
+            !is_mcp_lambda_function(
+                &json!({ "Type": "AWS::Lambda::Url", "Properties": { "FunctionName": SERVER } }),
+                SERVER
+            ),
+            "the right name on the wrong type must not match"
+        );
+        assert!(
+            !is_mcp_lambda_function(
+                &json!({ "Type": "AWS::Lambda::Function", "Properties": { "FunctionName": "other" } }),
+                SERVER
+            ),
+            "the right type with the wrong name must not match"
+        );
+        assert!(
+            !is_mcp_lambda_function(
+                &json!({ "Type": "AWS::Lambda::Function", "Properties": {} }),
+                SERVER
+            ),
+            "a missing FunctionName must not match"
+        );
+    }
+
+    /// (12) WIRING GUARD — proves both post-synth merges are actually reached
+    /// in production, not merely unit-tested in isolation.
+    ///
+    /// `deploy_to_pmcp_run` cannot be asserted from a unit test (it needs OAuth
+    /// credentials, presigned S3 URLs and a live GraphQL endpoint), which is
+    /// why the merge chain was extracted into `apply_post_synth_merges`.
+    /// Deleting either call there fails THIS test. Without it, a correct
+    /// `merge_sizing_into_template` that nothing ever calls would still show a
+    /// fully green suite — which is the exact shape of the original bug:
+    /// `memory_mb` parsed fine and was read by zero production code paths.
+    #[test]
+    fn post_synth_merges_apply_environment_and_sizing() {
+        use super::apply_post_synth_merges;
+
+        let mut config = crate::deployment::config::DeployConfig::default_for_server(
+            SERVER.to_string(),
+            "us-east-1".to_string(),
+            std::path::PathBuf::from("/tmp/pmcp-run-post-synth-merges"),
+        );
+        config.server.memory_mb = Some(1024);
+        config.server.timeout_seconds = Some(120);
+        config
+            .environment
+            .insert("FEATURE_FLAG".to_string(), "on".to_string());
+
+        let out = apply_post_synth_merges(scaffold_template(), &config)
+            .expect("post-synth merges succeed on a well-formed template");
+        let parsed: Value = serde_json::from_str(&out).expect("merged template is valid JSON");
+        let p = props(&parsed, "McpFunction");
+
+        assert_eq!(
+            p["Environment"]["Variables"]["FEATURE_FLAG"],
+            json!("on"),
+            "the [environment] merge must still be wired into the deploy path"
+        );
+        assert_eq!(
+            p["MemorySize"],
+            json!(1024),
+            "the [server] sizing merge must be wired into the deploy path"
+        );
+        assert_eq!(p["Timeout"], json!(120));
+    }
+
+    /// (12) Invalid template JSON surfaces a parse error rather than silently
+    /// dropping the merge.
+    #[test]
+    fn invalid_template_json_errors() {
+        let err = merge_sizing_into_template("{ not valid json", SERVER, Some(1024), None)
+            .expect_err("invalid JSON must error");
         assert!(
             err.to_string().contains("parse synthesized CloudFormation"),
             "error must name the parse failure"

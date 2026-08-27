@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-workbook-compiler"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/paiml/rust-mcp-sdk"
@@ -38,7 +38,7 @@ default = []
 # re-exports the runtime's shared model/IR/hash/changelog/finding/rounding types
 # (NEVER re-declares them) so the served loader and the compiler read ONE
 # definition of Manifest/ChangeClass/etc.
-pmcp-workbook-runtime = { version = "0.1.0", path = "../pmcp-workbook-runtime" }
+pmcp-workbook-runtime = { version = "0.2.0", path = "../pmcp-workbook-runtime" }
 # The dialect contract (WHITELIST/DialectRules/CandidateRole) the linter runs
 # against — re-exported here, never re-declared (the dialect crate's spec-binding
 # test would be defeated by a second WHITELIST copy).

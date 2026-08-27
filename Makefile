@@ -348,6 +348,68 @@ test-cargo-pmcp:
 # change parks the last non-ignored test in that file, this gate goes red BY
 # DESIGN; unpark or replace the test, do not relax the guard.
 #
+# `verb_help` (appended by Phase 123 plan 06, 2026-08-26) is the one append here
+# that was NOT a new file. `cargo-pmcp/tests/verb_help.rs` has existed since
+# Phase 110 and, measured on the date of that commit, was executed by NOTHING:
+# `grep -c 'verb_help' Makefile` returned 0, and the four candidate gates all
+# miss it — `make test-cargo-pmcp` is `--lib` (which excludes `tests/`
+# entirely), this target's `--test` selector list omitted it, its
+# `REQUIRED_TEST_BINARIES` omitted it, and `test-all` chains only those two
+# cargo-pmcp legs. It was registered in BOTH lists in the SAME commit that made
+# its `EXPECTED_VERBS` pin an exact-set assertion, because an exact-set pin in a
+# file no gate runs reads green forever — including after the drift it exists to
+# catch. The general lesson for the next person adding a `cargo-pmcp/tests/`
+# file: the default is NOT reached. Register it here or it does not run.
+#
+# PHASE 123 (PKGX-02) — FOUR NAMES, FOUR COMMITS, ON PURPOSE. Consolidated by
+# plan 07 (2026-08-26) so the record sits at the edit point rather than only in
+# four separate SUMMARYs. Each binary was registered in BOTH lists below by the
+# plan that CREATED it, in that plan's own commit:
+#
+#   - `package_save_load`            plan 123-01, wave 1  (5ba3a8b4)
+#   - `package_portability_contract` plan 123-02, wave 2  (bfea2a95), extended
+#                                    by plan 123-05 with the `pull` pipeline
+#   - `package_artifact_framing`     plan 123-04, wave 3  (e34c5354)
+#   - `verb_help`                    plan 123-06, wave 5  (2147fb96) — the
+#                                    pre-existing-but-ungated one, above
+#
+# The four arrived across FOUR commits rather than one deferred batch, and that
+# is the correct reading of the APPEND-ONLY rule, not an exception to it. The
+# hazard the rule guards against is a name landing BEFORE its binary — which
+# turns this gate red for every commit in between. A name landing WITH its
+# binary cannot produce that state, and it is exactly what plan 122-04 did (see
+# the paragraph above). Batching all four here instead would have left waves 1
+# through 5 running `make quality-gate` green WITHOUT the gate ever executing
+# that wave's own new tests — a false green of precisely the class this whole
+# comment block exists to prevent.
+#
+# STANDING INSTRUCTION, restated because this is where someone will be standing
+# when they are tempted: removing a name to quiet a red gate DELETES THE PROOF
+# instead of fixing the failure. Fix the binary, or explain in a commit message
+# why the proof is no longer owed.
+#
+# `package_portability_contract` carries the same ignored-test hazard as
+# `package_attestation_contract`: offline tests plus one `#[ignore]`d live leg
+# parked on a pmcp.run backend that does not exist yet. The OFFLINE tests are
+# what keep its passed count nonzero. If a future change parks the last
+# non-ignored test in that file, this gate goes red BY DESIGN — unpark or
+# replace it, do not relax the guard.
+#
+# MEASURED END STATE (plan 123-07, 2026-08-26), over the complete eight-binary
+# set with every binary present — the configuration in which the gate's real end
+# state is observable, and which no single creator plan could reach on its own:
+#   package_capture_contract 3, package_attestation_contract 3,
+#   package_inspect 12, pmcp_package_pin 1, package_save_load 36,
+#   package_portability_contract 22, package_artifact_framing 14, verb_help 4
+#   — 95 tests, exit 0.
+# Both negative controls were re-run over that complete set: dropping
+# `verb_help` from the `--test` selector list while leaving it in
+# `REQUIRED_TEST_BINARIES` produced the -1 "never RAN" verdict and exit 2 with
+# the summed total still a comfortable 91 (which is why the sum cannot catch
+# it); renaming `cargo-pmcp/tests/package_artifact_framing.rs` produced
+# `error: no test target named 'package_artifact_framing'` and exit 2 from cargo
+# itself, before any output reached the extractor.
+#
 # WHICH GUARD CATCHES WHICH FAILURE — measured, because the two are not
 # interchangeable and the distinction is easy to get backwards:
 #
@@ -393,7 +455,7 @@ test-cargo-pmcp:
 .PHONY: test-cargo-pmcp-integration
 test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
-	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin -- --test-threads=1 2>&1); \
+	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin --test package_save_load --test package_portability_contract --test package_artifact_framing --test verb_help -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
@@ -402,7 +464,7 @@ test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin"; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin package_save_load package_portability_contract package_artifact_framing verb_help"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
@@ -699,8 +761,50 @@ test-fuzz:
 # is no longer the whole truth — `tests/docs04_examples_run.rs` and
 # `tests/docs06_v2_examples_run.rs` do run several of them, under
 # `test-integration`, against the binaries this target produces.
+# The GATE's reach into `cargo-pmcp/examples/`, added by Phase 123 plan 07
+# alongside the example it gates — the same "register it in the commit that
+# creates it" discipline recorded at the APPEND-ONLY block near
+# `test-cargo-pmcp-integration`.
+#
+# MEASURED on the date this landed (2026-08-26), before the leg existed:
+# `cargo-pmcp/examples/` was compiled by NOTHING in `make quality-gate`.
+# Three ways, all read from this file and one script:
+#   - `scripts/run-example-builds.sh` covers exactly three trees (the root
+#     `pmcp` package, `pmcp-agent`, `pmcp-team-servers`) and its own header
+#     names `cargo-pmcp` under "ALSO NOT COVERED" — 87 examples built, none of
+#     them cargo-pmcp's.
+#   - `make build` is `cargo build --all-features` with no `-p` and no
+#     `--examples`, so it resolves to the root `pmcp` package's lib+bins.
+#   - `make lint` is `cargo clippy --features full --lib --tests`, also
+#     root-scoped, and `--lib --tests` excludes examples by construction.
+# So a new `cargo-pmcp` example — including the CLAUDE.md ALWAYS
+# `cargo run --example` deliverable for `package save`/`load` — could rot
+# without any gate noticing. That is the same shape as the `verb_help` hole
+# this phase closed one directory over: the default is NOT reached.
+#
+# RUSTFLAGS is pinned EMPTY here for the same three reasons spelled out at
+# `test-cargo-pmcp-integration`: make re-exports an environment-sourced
+# RUSTFLAGS using the MAKEFILE's value, so this recipe is warning-free locally
+# and `-D warnings` in CI. `cargo-pmcp/examples/deploy_stack_metadata.rs`
+# carries one PRE-EXISTING `unused_imports` warning (measured; not introduced
+# by this leg), which under an inherited `-D warnings` would turn this into a
+# red gate over rot it was never meant to lint. This leg's job is to prove the
+# examples are REACHED and COMPILE. Linting belongs in `make lint`; widening
+# that is a separate, deliberate decision.
+#
+# Scope is deliberately `-p cargo-pmcp` and not `--workspace --examples`.
+# `scripts/run-example-builds.sh`'s header records that the wider form "is
+# cheap to attempt but was not measured, so it is not claimed here"; this
+# narrower form WAS measured (exit 0) and is claimed. Widening further is a
+# separate change that must measure the other members first.
+.PHONY: build-cargo-pmcp-examples
+build-cargo-pmcp-examples:
+	@echo "$(BLUE)Building cargo-pmcp's examples...$(NC)"
+	@RUSTFLAGS= $(CARGO) build -p cargo-pmcp --examples
+	@echo "$(GREEN)✓ cargo-pmcp examples built$(NC)"
+
 .PHONY: test-examples
-test-examples:
+test-examples: build-cargo-pmcp-examples
 	./scripts/run-example-builds.sh
 
 # MCP Tester Integration
@@ -782,11 +886,175 @@ lint-plans:
 	./scripts/lint-plan-verify-commands.sh
 	@echo "$(GREEN)✓ No verification command masks the status of what it verifies$(NC)"
 
+# Phase 124 (D-05) — the three-way release version-drift sweep: in-tree version
+# vs the crates.io-published version vs the source delta since the tag that
+# published that version.
+#
+# What it catches: a PHANTOM DELTA — a crate whose in-tree version EQUALS its
+# published version while its source has moved since. `release.yml` skips an
+# already-published version gracefully and silently, so such a crate does not
+# FAIL the release, it just never ships. Seven were carrying one when this
+# target was written.
+#
+# UNLIKE `lint-plans` above, `release-sweep` is deliberately NOT chained into
+# `quality-gate`. Two reasons, and both are about false red rather than cost:
+#   1. It needs NETWORK access to the crates.io API, which is the only valid
+#      published-version oracle (Cargo reports the in-tree path override), so
+#      in `quality-gate` it would fail offline for a reason unrelated to the
+#      change under test.
+#   2. A version delta is LEGITIMATE right up until a release. Every ordinary
+#      branch carries one by construction, so gating on it would make the gate
+#      red on essentially every branch — and a gate that is red for unrelated
+#      reasons is a gate people learn to ignore.
+# Run it from the release Pre-Flight Checklist, not from the dev loop.
+#
+# It still exits NON-ZERO on a failed probe, an unparseable registry body, an
+# unresolvable diff baseline or a never-published crate: that status reports
+# "did this sweep measure everything it claims to have measured", never "is
+# there a delta". See the script header, section 5.
+.PHONY: release-sweep
+release-sweep:
+	@echo "$(BLUE)Sweeping release version drift against crates.io (D-05)...$(NC)"
+	./scripts/release-version-sweep.sh
+	@echo "$(GREEN)✓ Every publishable crate measured against the registry$(NC)"
+
+# Fixture-driven self-test for the release-ledger coverage gate, mirroring
+# no-crypto-allowlist-guard-selftest and test-openapi-server-guard-selftest. It
+# is a declared PREREQUISITE of check-release-coverage below, so the gate's RED
+# direction is proven before the gate's green reading is trusted — the gate and
+# the proof of the gate cannot drift.
+#
+# Adaptation from both precedents: their logic lives in an extracted `awk` file
+# that can be fed inline fixtures. This gate's logic is not extracted, so each
+# fixture is instead a DOCTORED COPY of the real release.yml built in a
+# `mktemp -d` scratch directory, and the assertion is on EXIT STATUS plus (for
+# the red fixtures) the offending crate's name appearing in captured output —
+# never on full message text, so rewording the gate does not break its proof.
+#
+# Each fixture pins a distinct way the gate can pass vacuously:
+#
+#   intact                       -> 0   the gate still passes on good input; the
+#                                       extension introduced no false red.
+#   excluded_step_removed        -> !=0 THE HEADLINE BLIND SPOT. Before this
+#                                       phase the SAME input printed "all 24
+#                                       publishable workspace members have a
+#                                       publish step." and exited 0 (measured).
+#                                       This is the fixture that matters most.
+#   root_step_removed            -> !=0 the ORIGINAL half still works after the
+#                                       extension — the new loop did not break
+#                                       the member loop it shares state with.
+#   excluded_step_commented      -> !=0 COMMENT BLINDNESS. The comment-strip
+#                                       discipline must extend to the new
+#                                       --manifest-path matcher, so a
+#                                       commented-out step never counts as
+#                                       coverage.
+#   order_inverted               -> !=0 the D-10 order assertion is LIVE, not
+#                                       decorative: the step is present, so the
+#                                       coverage half passes and only the order
+#                                       half can catch it.
+#   workflow_absent              -> !=0 the pre-existing `[ -f "$$WORKFLOW" ]`
+#                                       guard survives the extension.
+#   synthetic_excluded_uncovered -> !=0 THE ONLY FIXTURE THAT PROVES DISCOVERY.
+#                                       Every other fixture doctors release.yml,
+#                                       so they prove only that the MATCHER
+#                                       works against today's repository layout.
+#                                       This one plants a previously-unknown
+#                                       workspace-excluded crate in a synthetic
+#                                       tree and runs against the INTACT
+#                                       workflow: the gate must find it by scan.
+#   prefix_shadow                -> !=0 the matcher's WORD BOUNDARY. Renaming
+#                                       `-p pmcp-agent` to `-p pmcp-agent-extra`
+#                                       must be reported as pmcp-agent missing.
+#                                       A boundary-less matcher resolves
+#                                       pmcp-agent to the -extra line and passes,
+#                                       silently reading the wrong step — the
+#                                       failure mode check-release-coverage.sh
+#                                       documents for the root loop.
+#
+# Every doctored fixture is checked to have ACTUALLY been doctored: the line
+# delta must equal the expected one AND the copy must differ from the source.
+# Without that, a future rename of a publish command would silently make a
+# "removed" fixture byte-identical to `intact`, and this target would go green
+# having proven nothing — the false-green class this repo has hit before.
+.PHONY: check-release-coverage-guard-selftest
+check-release-coverage-guard-selftest:
+	@echo "$(BLUE)Self-testing the release-ledger coverage gate (red direction)...$(NC)"
+	@fail=0; ran=0; \
+	SRC=.github/workflows/release.yml; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	doctored_ok() { \
+		fixture="$$1"; expected="$$2"; doctored="$$3"; \
+		before_lines=$$(wc -l < "$$SRC"); \
+		after_lines=$$(wc -l < "$$doctored"); \
+		d=$$((before_lines - after_lines)); \
+		if [ "$$d" -ne "$$expected" ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': doctoring changed the line count by $$d, expected $$expected — the fixture does not doctor what it claims$(NC)"; \
+			fail=1; \
+		fi; \
+		if cmp -s "$$SRC" "$$doctored"; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': the doctored copy is BYTE-IDENTICAL to the source — this fixture proves nothing$(NC)"; \
+			fail=1; \
+		fi; \
+	}; \
+	check() { \
+		fixture="$$1"; expected="$$2"; doctored="$$3"; needle="$$4"; cdir="$$5"; \
+		ran=$$((ran + 1)); \
+		actual=0; \
+		CRATES_DIR="$$cdir" ./scripts/check-release-coverage.sh "$$doctored" >"$$tmp/out" 2>&1 || actual=$$?; \
+		if [ "$$expected" = "0" ] && [ "$$actual" -ne 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected exit 0, got $$actual$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ "$$expected" != "0" ] && [ "$$actual" -eq 0 ]; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': expected NON-ZERO exit, got 0 — the gate passed input it must reject$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		if [ -n "$$needle" ] && ! grep -q "$$needle" "$$tmp/out"; then \
+			echo "$(RED)✗ coverage gate self-test fixture '$$fixture': failed for the wrong reason — output never names '$$needle'$(NC)"; \
+			cat "$$tmp/out"; fail=1; return 0; \
+		fi; \
+		return 0; \
+	}; \
+	PKG_STEP='cargo publish --manifest-path crates/pmcp-package/Cargo.toml'; \
+	cp "$$SRC" "$$tmp/intact.yml"; \
+	grep -v "$$PKG_STEP" "$$SRC" > "$$tmp/excluded_removed.yml"; \
+	doctored_ok excluded_step_removed 1 "$$tmp/excluded_removed.yml"; \
+	grep -v 'cargo publish -p pmcp-widget-utils' "$$SRC" > "$$tmp/root_removed.yml"; \
+	doctored_ok root_step_removed 1 "$$tmp/root_removed.yml"; \
+	sed 's|^\(.*'"$$PKG_STEP"'.*\)$$|#\1|' "$$SRC" > "$$tmp/excluded_commented.yml"; \
+	doctored_ok excluded_step_commented 0 "$$tmp/excluded_commented.yml"; \
+	grep -v "$$PKG_STEP" "$$SRC" > "$$tmp/order_inverted.yml"; \
+	grep "$$PKG_STEP" "$$SRC" >> "$$tmp/order_inverted.yml"; \
+	doctored_ok order_inverted 0 "$$tmp/order_inverted.yml"; \
+	sed 's|cargo publish -p pmcp-agent |cargo publish -p pmcp-agent-extra |' "$$SRC" > "$$tmp/prefix_shadow.yml"; \
+	doctored_ok prefix_shadow 0 "$$tmp/prefix_shadow.yml"; \
+	mkdir -p "$$tmp/crates/zz-synthetic/src"; \
+	: > "$$tmp/crates/zz-synthetic/src/lib.rs"; \
+	printf '%s\n' '[workspace]' '' '[package]' 'name = "zz-synthetic-uncovered"' 'version = "0.0.0"' 'edition = "2021"' > "$$tmp/crates/zz-synthetic/Cargo.toml"; \
+	check intact 0 "$$tmp/intact.yml" '' ''; \
+	check excluded_step_removed nonzero "$$tmp/excluded_removed.yml" 'pmcp-package' ''; \
+	check root_step_removed nonzero "$$tmp/root_removed.yml" 'pmcp-widget-utils' ''; \
+	check excluded_step_commented nonzero "$$tmp/excluded_commented.yml" 'pmcp-package' ''; \
+	check order_inverted nonzero "$$tmp/order_inverted.yml" 'pmcp-package' ''; \
+	check workflow_absent nonzero "$$tmp/does-not-exist.yml" '' ''; \
+	check synthetic_excluded_uncovered nonzero "$$tmp/intact.yml" 'zz-synthetic-uncovered' "$$tmp/crates"; \
+	check prefix_shadow nonzero "$$tmp/prefix_shadow.yml" 'pmcp-agent' ''; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	if [ "$$ran" -ne 8 ]; then \
+		echo "$(RED)✗ coverage gate self-test executed $$ran fixtures, expected 8 — a fixture was lost$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ release-coverage gate self-test passed ($$ran fixtures)$(NC)"
+
 # Release-ledger coverage: every publishable workspace member must have a
 # publish step in release.yml. Sub-second, chained into `quality-gate` below
 # and invoked by the CI quality-gate job so local and CI stay aligned.
+#
+# The self-test above is a PREREQUISITE, not a sibling: a gate whose red
+# direction is unproven is indistinguishable from a gate that always passes.
 .PHONY: check-release-coverage
-check-release-coverage:
+check-release-coverage: check-release-coverage-guard-selftest
 	@echo "$(BLUE)Checking release-ledger coverage...$(NC)"
 	./scripts/check-release-coverage.sh
 	@echo "$(GREEN)✓ Every publishable workspace member has a publish step$(NC)"

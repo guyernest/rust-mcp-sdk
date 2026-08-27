@@ -66,6 +66,49 @@ unconditionally into its Cognito OAuth stack (there is no
 Cognito-without-DCR or DCR-without-Cognito scaffold option) — see
 `create_oauth_stack_ts` in `cargo-pmcp/src/commands/deploy/init.rs`.
 
+### Derived (tertiary corpus — NOT produced by the generation script)
+
+| File | Derived from | Exercises | Status |
+|---|---|---|---|
+| `plain-lambda-timeout-60.golden.json` | `plain-lambda.golden.json` | A **non-default `timeout_seconds`** (60, not 30). Pins that `Properties.Timeout` comes from the descriptor and not from a constant. | **Active** |
+
+**Why this one is derived rather than regenerated, and why that is not a
+loophole.** The whole corpus above declares the DEFAULT `timeout_seconds = 30`.
+The renderer threads `timeout_seconds: d.server.timeout_seconds`, while the
+TypeScript scaffold hardcodes `cdk.Duration.seconds(30)` — so at the default
+the two agree *by coincidence*, and the entire suite was blind to whether the
+renderer honored the descriptor at all. That blindness is one of the three
+AND-gated causes in debug session `deploy-server-memory-timeout` (the reporter
+predicted it: "the hardcoded 30 happens to be what everyone asks for").
+
+A `generate-cfn-goldens.sh`-produced 60s fixture cannot fix it. `cdk synth`
+reads the stack.ts literal, never `.pmcp/deploy.toml`, so scaffolding a project
+with `timeout_seconds = 60` and synthesizing it yields `"Timeout": 30` — a
+golden that is **permanently red by construction** against a renderer that
+correctly emits 60. It would encode the divergence rather than guard against
+its return. (Splicing `Duration.seconds(60)` into stack.ts by hand first, the
+way `scaffold_iam_statements` splices IAM, would work — but that is a hand-edit
+of the input either way, and it needs Node + a full `npm install aws-cdk-lib`
+to produce a file that differs from `plain-lambda.golden.json` in exactly one
+integer.)
+
+So this fixture is derived by exactly two edits, both recorded in its own
+`_derivation` key: `descriptor_toml`'s `timeout_seconds = 30` -> `60`, and its
+single `AWS::Lambda::Function`'s `Properties.Timeout` `30` -> `60`. The
+derivation is sound because CDK's `lambda.Function` maps `timeout` onto
+`Properties.Timeout` 1:1, with no other property derived from it.
+
+Measured tripwire value: reverting the renderer to `timeout_seconds: 30` leaves
+all 5 generated/wild goldens GREEN and fails only this one. Note its
+`MemorySize` deliberately stays **256** while its descriptor declares
+`memory_mb = 512` — that gap is real, tracked, and fixed downstream by
+cargo-pmcp's post-synth sizing merge rather than in this renderer; do NOT
+"correct" it here without regenerating the corpus.
+
+Everything in this section is exempt from the "regenerate, never hand-edit"
+rule ONLY because it is listed here with its derivation. A golden that is
+neither script-generated nor documented here is a bug.
+
 ### Wild (secondary corpus — real fixture from the sibling `pmcp-run` repo)
 
 The sibling `pmcp-run` repo (read-only for this crate; never written to) is
