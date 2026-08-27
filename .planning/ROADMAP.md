@@ -2446,7 +2446,7 @@ Plans:
   4. The platform half is contract-first and offline-blocking: **`getPackageArtifact`** is validated against the vendored `contracts/pmcp-run/portability-v1.graphql` by a test in the default `cargo test` gate, and invoking `pull` with no reachable backend fails with a message naming the missing platform capability rather than a raw transport error, with the underlying cause preserved in the `anyhow` chain (PKGX-02)
   5. The artifact's **tar framing rule** — entry inventory, no wrapper directory, no absolute or `..` paths, no symlinks, no duplicates, uncompressed, reproducible headers — is documented normatively in `crates/pmcp-package` (the crate both sides read) and pinned by checked-in golden fixtures that the writer under test never regenerates; and a `save`/`load`/`pull` whose artifact fails verification leaves the destination **byte-for-byte unchanged** (PKGX-02)
 
-**Plans**: 5/7 plans executed
+**Plans**: 6/7 plans executed
 
 Plans:
 **Wave 1**
@@ -2468,7 +2468,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 123-06-PLAN.md — The verb-list pin plus its gate registration, the `--help` three-direction preamble, and the written note to the platform
+- [x] 123-06-PLAN.md — The verb-list pin plus its gate registration, the `--help` three-direction preamble, and the written note to the platform
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -2512,7 +2512,7 @@ duplicated. Authoritative table: `.planning/REQUIREMENTS.md`.
 | 120. Config-Server Packaging | PKG-01, PKG-02, PKG-03 | 5/5 | Complete    | 2026-08-23 |
 | 121. Local Round-Trip E2E | PKG-04 | 5/5 | Complete    | 2026-08-25 |
 | 122. Attestation Carriage *(parked)* | PKGX-01 | 8/8 | Complete    | 2026-08-25 |
-| 123. Export/Import Verbs *(parked)* | PKGX-02 | 5/7 | In Progress|  |
+| 123. Export/Import Verbs *(parked)* | PKGX-02 | 6/7 | In Progress|  |
 | 124. Release & Publish Order | PKGR-01 | 0/TBD | Not started | - |
 
 > **⚠ Phases 122 and 123 cannot fully close inside this repo.** Both depend on pmcp.run backend
