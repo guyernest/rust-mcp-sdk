@@ -1869,7 +1869,7 @@ impl OAuthHelper {
             // Derive the issuer from the MCP server URL. Correct only when the
             // MCP server is also its own authorization server.
             //
-            // TODO(DEF-116-01): this tier is a stopgap for a MISSING mechanism,
+            // DEF-116-01 (owner-deferred): this tier is a stopgap for a MISSING mechanism,
             // not a design. RFC 9728 protected-resource metadata is how a client
             // should LEARN the authorization server instead of guessing it from
             // the resource's own origin; until that lands, a third-party-IdP
