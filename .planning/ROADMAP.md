@@ -212,6 +212,84 @@ Plans:
      gate-like guidance** must produce a warning at projection time — the one thing the projection
      can see that the executing surface cannot.
 
+### Phase 128: Secure-by-default input validation for config-driven servers
+
+**Goal**: A config-driven server enforces the input contract it already publishes. The toolkit writes
+`max_length` / `minimum` / `maximum` / `enum` into `inputSchema` and emits `"additionalProperties":
+false` (`crates/pmcp-server-toolkit/src/tools.rs:206`), but NO layer checks any of it at `tools/call`
+time — `src/server/mod.rs:2590` and `:2820` pass `req.arguments` straight to `handler.handle`, and
+`src/server/core.rs` adds no check. Every server team therefore rebuilds validation by hand and misses
+cases. This phase makes the declared schema binding, adds the parameter-shape vocabulary it needs,
+closes the path-injection class on BOTH HTTP surfaces, and leaves documented hooks for the domain
+rules a schema cannot express.
+
+**P0 sub-goal — three false security claims.** `crates/pmcp-server-toolkit/src/tools.rs` asserts this
+enforcement ALREADY exists, against named threat IDs: lines 15-17 (unknown argument keys "are rejected
+by pmcp's request-validation path at `tools/call` time", T-83-05-02), 556-557 ("enforced upstream",
+T-90-03-01) and 615 ("schema-validated ... BEFORE the script runs", T-90-05-03). The test carrying
+T-90-05-03 (`crates/pmcp-server-toolkit/tests/script_tool.rs:185`) asserts argument BINDING, not
+validation. Under the Toyota Way gate a documented mitigation that does not exist is a defect, not a
+feature gap — these three comments are corrected in this phase, and the Phase 83 / Phase 90 threat
+sign-offs are re-checked for the same class.
+
+**Depends on**: Nothing in v2.7 — independent of Phases 125–127 (the `phase.add` CLI's
+auto-generated `Depends on: Phase 127` was a dangling reference; Phase 127 has no ROADMAP entry).
+Touches `pmcp-server-toolkit` (0.1.3), `pmcp-code-mode` (0.5.4) and core `pmcp` (2.20.4).
+
+**Source of truth**: the reviewed change request *PMCP SDK change request: secure-by-default input
+validation*, snapshotted verbatim as `128-CHANGE-REQUEST.md` in this phase directory (Claude doc
+`9mvbYNAzFwviiwbaF2BkBb` at rev 12). Every claim in it was verified against the tree at `3b2d7baf`
+before the snapshot was taken; the review corrections are recorded in `128-REVIEW-NOTES.md`. It
+carries the four defaults D1–D4, the three escape hatches E1–E3, the acceptance-test matrix and six
+open questions.
+
+**Requirements**: No formal REQ-IDs — v2.7 has no REQUIREMENTS.md. The tracked requirement set for
+planning and verification is D1–D4 / E1–E3 from the change request, carried in each plan's
+`requirements:` frontmatter, plus the Success Criteria below.
+
+**Success Criteria**:
+
+- [ ] SC-1 — A config-declared tool refuses arguments that violate its published `inputSchema`
+  (including the `additionalProperties: false` it already emits) before any backend call, with zero
+  upstream requests on refusal. Gated on the toolkit's existing `input-validation` feature
+  (`crates/pmcp-server-toolkit/Cargo.toml:102`, currently zero references in `src/`), NOT on
+  `openapi-code-mode` — that umbrella would pull the SWC/JS engine into curated single-call builds.
+- [ ] SC-2 — `ParamDecl` accepts `pattern`, `min_length`, `format` and `items`/`max_items`; a
+  `pattern` that does not compile under the runtime engine fails config validation rather than
+  failing at call time.
+- [ ] SC-3 — An uncapped string parameter is surfaced by `ServerConfig::validate` and by
+  `cargo pmcp validate deploy`. Whether the default cap is ON (and at what value) is an open
+  question for `/gsd-discuss-phase` — a default-on 256 would refuse calls that work today.
+- [ ] SC-4 — A placeholder value carrying `?`, `#`, `/`, `..` or a percent-encoded form is refused on
+  BOTH HTTP surfaces: `HttpCodeExecutor` (`code_mode.rs`) and the curated single-call
+  `HttpClient::substitute_path` (`http/client.rs:150-163`). All five CR-01 probes pass, including the
+  two that need no JS engine.
+- [ ] SC-5 — `RequestPolicy` (E1) and per-tool `ArgumentValidator` (E2) are registerable on the
+  server builder, and `garde` runs on `TypedTool<T>` where `T: garde::Validate` (E3), retiring
+  `garde`'s zero-reference status in `src/`.
+- [ ] SC-6 — The three false enforcement claims in `tools.rs` are corrected, and no remaining comment
+  in the toolkit claims a mitigation the code does not implement.
+- [ ] SC-7 — Refusal messages name the violated rule and the DECLARED parameters, never the rejected
+  value and never an attacker-supplied key.
+- [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
+  coverage per the CLAUDE.md ALWAYS requirements.
+
+**Plans:** 11 plans
+
+Plans:
+
+- [ ] 128-01-PLAN.md — TRACER: core `schema_validation::validate_input` seam wired end to end (D1/SC-1), plus the Wave-0 Makefile gate repairs (wave 1)
+- [ ] 128-02-PLAN.md — Core validator completeness: full value-free renderer, `validate_path_placeholder`, D-04 feature-split hygiene (wave 2)
+- [ ] 128-03-PLAN.md — D2 `ParamDecl` vocabulary, D3 position-scoped cap, `[server.validation]`, `ServerConfig::lint()`, Q7 default-on rollout (wave 3)
+- [ ] 128-04-PLAN.md — E3 `garde` on `TypedTool`, D-03 deprecate + harvest, ARCHITECTURE.md corrections, the `s57` example (wave 2)
+- [ ] 128-05-PLAN.md — D-09 `HttpExecutor` contract change, Pitfall 7 path-echo fix, Code Mode CR-01 probes (wave 3)
+- [ ] 128-06-PLAN.md — Curated single-call D4 in `substitute_path`, the two JS-engine-free CR-01 probes (wave 4)
+- [ ] 128-07-PLAN.md — SC-3: `cargo pmcp validate config` + `validate deploy` lint integration (wave 4)
+- [ ] 128-08-PLAN.md — D4(b) spec narrowing on the Code Mode surface, placeholder property arms (wave 5)
+- [ ] 128-09-PLAN.md — E1 `RequestPolicy` + E2 `ArgumentValidator` + startup enforcement log + `e05` example (wave 6)
+- [ ] 128-10-PLAN.md — SC-6 threat-comment correction and sweep, SC-7 fuzz targets, root property arm (wave 7)
+- [ ] 128-11-PLAN.md — Release: twelve crate versions and every pin in one commit, CHANGELOG/D-15 rollout note, docs page (wave 8)
+
 ## Progress — v2.7 Milestone
 
 *Milestone **v2.7 SEP-2640 Skills Conformance & Positioning** — opened 2026-09-01 with Phase 125.*
@@ -220,6 +298,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 0/11 | Planned |  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:
