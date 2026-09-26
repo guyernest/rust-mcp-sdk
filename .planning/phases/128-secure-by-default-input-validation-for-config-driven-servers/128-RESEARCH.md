@@ -2277,12 +2277,12 @@ async fn input_validation_refuses_uncapped_filter_without_contacting_upstream() 
 **Missing dependencies with fallback:** `cargo machete` — absent and disabled; do not plan any task
 that depends on it detecting an unused dependency or feature.
 
-# Validation Architecture
+## Validation Architecture
 
 > Required: `.planning/config.json` has `"nyquist_validation": true`
 > `[VERIFIED: .planning/config.json workflow.nyquist_validation]`.
 
-## Test Framework
+### Test Framework
 
 | Property | Value |
 |----------|-------|
@@ -2294,7 +2294,7 @@ that depends on it detecting an unused dependency or feature.
 | Full suite command | `make quality-gate` |
 | ⚠ `--test-threads=1` | Mandatory per CLAUDE.md ("Tests run with `--test-threads=1` — race condition prevention") and already baked into `make test-server-toolkit`. |
 
-## Phase Requirements → Test Map
+### Phase Requirements → Test Map
 
 | Req | Behavior | Test type | Automated command | File exists? |
 |---|---|---|---|---|
@@ -2321,7 +2321,7 @@ that depends on it detecting an unused dependency or feature.
 | SC-8 | Gate green; fuzz/property/unit/example present | gate | `make quality-gate` | ✅ |
 | D-13/D-14 | Publish ledger stays coherent | gate | `./scripts/check-release-coverage.sh` (runs inside `make quality-gate`) | ✅ |
 
-## Sampling Rate
+### Sampling Rate
 
 - **Per task commit:** the narrowest relevant command from the table above, plus `make fmt-check`
   and `make lint`. The pre-commit hook enforces the Toyota Way gate, so a commit that cannot pass
@@ -2332,7 +2332,7 @@ that depends on it detecting an unused dependency or feature.
   `cargo run --example s57_typed_tool_garde_validation` (the CLAUDE.md ALWAYS requirement that
   `make test-examples` only *builds*).
 
-## Wave 0 Gaps
+### Wave 0 Gaps
 
 - [ ] `crates/pmcp-server-toolkit/tests/input_validation_acceptance.rs` — gated
       `#![cfg(all(feature = "http", feature = "input-validation"))]`; covers D1's six rows
