@@ -5,17 +5,17 @@ milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
 current_phase: 128
 current_phase_name: Secure-by-default input validation for config-driven servers
 status: executing
-stopped_at: Completed 128-01-PLAN.md
-last_updated: "2026-09-27T03:49:56.223Z"
+stopped_at: Completed 128-02-PLAN.md
+last_updated: "2026-09-27T04:56:40.553Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 128 execution started
-state_head: 31cccaa610661883711595bf8b2dc9c415b82b41
+state_head: f9edcac0c18b3954d5d101b448b773ffb648269d
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 13
-  percent: 57
+  completed_plans: 14
+  percent: 61
 ---
 
 # Project State
@@ -34,7 +34,7 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 ## Current Position
 
 Phase: 128 (Secure-by-default input validation for config-driven servers) — EXECUTING
-Plan: 2 of 11
+Plan: 3 of 11
 Status: Ready to execute
 Last activity: 2026-09-26 — Phase 128 execution started
 
@@ -575,6 +575,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 128]: Q6 confirmed — a separate input validator cache keyed on schema text alone, key accepted from the caller as Option<&str> so no jsonschema type reaches the public API
 - [Phase 128]: The 18 feature="validation" -> feature="schema-validation" cfg renames landed in plan 01, not 02, breaking the circular wave-1/wave-2 dependency all three review lanes found
 - [Phase 128]: render_refusal echoes a JSON pointer only when its first segment is in the declared allow-list, generalizing SC-7 value-freedom to name-freedom for every keyword
+- [Phase 128]: safe_pointer projects InputViolation::pointer over the DECLARED schema and redacts every non-declared segment with the fixed token <redacted>, because instance_path() names a CALLER-chosen key under patternProperties or an additionalProperties subschema (T-128-08a).
+- [Phase 128]: The D4 floor DECODES ONCE and then denies, never enumerating encoded spellings: %25 is refused outright in any hex case, which is what bounds the decode to a single pass and makes .%2E / %2E. refusable at all.
+- [Phase 128]: A floor refusal never names the offending character: naming it would put a byte of the rejected value in the message and turn every refusal into a one-byte oracle (SC-7 read strictly).
+- [Phase 128]: validate_resolved_path refuses any non-leading empty segment, so a trailing slash is refused: that is the rule closing /search/{v} with an empty v composing to /search/. Plan 06 must confirm no operation path template ends in a slash.
 
 ### Pending Todos
 
@@ -671,8 +675,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-09-27T03:49:46.675Z
-Stopped at: Completed 128-01-PLAN.md
+Last session: 2026-09-27T04:56:19.801Z
+Stopped at: Completed 128-02-PLAN.md
 Resume file: None
 Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complete.** Decide the milestone's next move: `/gsd-phase add` to scope spike 010 (digest-pinned agent skill consumption) or spike 011 (tri-surface docs), or `/gsd-complete-milestone` to close v2.7 as-is. Two phase-126 hooks are configured but unrun: `workflow.nyquist_validation` is true and `126-VALIDATION.md` is still `status: draft` / `nyquist_compliant: false` (`/gsd-validate-phase 126`), and `workflow.security_enforcement` is true with no `126-SECURITY.md` (`/gsd-secure-phase 126`). Six code-review warnings (WR-01, WR-03, WR-04, WR-05, WR-07, WR-08) were deliberately deferred by the human with provenance in phase 126's `deferred-items.md` — they are logged debt, not gaps. Also from phase 126: **`Cargo.toml` reads `2.19.3` against a `## [2.20.0] - Unreleased` CHANGELOG section** — a releaser must bump it before tagging or `release.yml`'s note extraction exits 1. *(The pointer below is RETAINED VERBATIM for its three standing obligations; its own phase target is stale.)* **Phase 118.2 planning — `/gsd:plan-phase 118.2`.** `118.2-CONTEXT.md` is committed (`21215f12`) with 17 locked decisions; Phase 118.1 is 14/14 COMPLETE and its plan-04 pointer that stood here is retired. Two residuals to plan: the client live-SSE read (BOTH collect sites — `src/shared/streamable_http.rs:1002` GET and `:1543` POST-response; the POST case deadlocks in-tool elicitation and was added to scope during discussion) and the `notifications/message` emitter on `RequestHandlerExtra` (no `PeerHandle` method — D-06 declines the roadmap's implied trait addition). Mint `CONF-09`/`CONF-10` **with REQUIREMENTS.md table rows**, not body-only IDs. **Carry forward: `make quality-gate` does NOT run `make doc-check`** (standalone target at `Makefile:546-551`), **`make test-fuzz` cannot fail** (`Makefile:242-249` swallows a crashing target behind `|| echo`), and **there is no pre-commit hook installed** (`.git/hooks/` holds only `.sample` files) — run `cargo fmt --all`, the repo's clippy invocation and `doc-check` explicitly, and read a fuzz campaign's real exit code rather than the target's. **Also carry forward from the 118.1 `/code-review` (2026-08-11): the cross-session `client_capabilities` misattribution is UNOWNED** — `ServerState.server` is one `Arc<Mutex<Server>>` shared by every StreamableHTTP session, so a handler serving client A can read client B's capabilities; it was offered as a 118.2 fold-in and declined, and it needs a phase. *(The block below is retained verbatim for its three standing obligations; Phase 116 itself is complete and its own `Next` pointer is stale.)* **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`); Phase 118.1 plan 14 carried it to v2.6 with the measurement as the reason.
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -842,6 +846,7 @@ Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complet
 | Phase 126 P06 | 25 min | 3 tasks | 7 files |
 | Phase 126 P07 | 1h 32m | 3 tasks | 10 files |
 | Phase 128 P01 | 95min | 3 tasks | 9 files |
+| Phase 128 P02 | 75 min | 3 tasks | 3 files |
 
 ## Operator Next Steps
 

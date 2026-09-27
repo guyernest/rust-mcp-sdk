@@ -26,12 +26,15 @@ affects: [128-03, 128-04, 128-05, 128-06, 128-07, 128-08, 128-09, 128-10, 128-11
 actuals:
   tokens: 17630
   tasks: 3
-  commits: 6
+  commits: 7
   plan_head_before: 1162141f4dc9e559f224cd6cd6fae743c45c5213
   # MEASURED: `git rev-list --count 1162141f..HEAD` == 5 at SUMMARY-write time
-  # (0d0f3dc4, d074d556, 2a4c82e0, 01c4a545, c874c213); 6 including this docs
-  # commit, which is plan 01's convention in this phase. Both numbers are given
-  # so neither is a narration.
+  # (0d0f3dc4, d074d556, 2a4c82e0, 01c4a545, c874c213) and == 7 at close-out,
+  # the two extra being f9edcac0 (this SUMMARY) and ff4cc4b0 (STATE.md +
+  # ROADMAP.md, which the SDK's `query commit` writes as its own commit rather
+  # than folding into the SUMMARY commit). 7 is the close-out figure, which is
+  # what a later `/gsd-verify-work` re-measure will see; the 5 is given so the
+  # composition is not a narration.
   # tokens: `git diff 1162141f..HEAD -- src/ tests/ Makefile | wc -c` == 70518, /4.
 
 # Tech tracking
