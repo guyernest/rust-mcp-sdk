@@ -6,10 +6,10 @@ current_phase: 128
 current_phase_name: Secure-by-default input validation for config-driven servers
 status: executing
 stopped_at: Completed 128-05-PLAN.md
-last_updated: "2026-09-27T15:39:52.167Z"
+last_updated: "2026-09-27T17:28:25.304Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 128 execution started
-state_head: 4d7856ea25450feeaa5a3160665d1886a3ce1524
+state_head: 84eccdd1eb9e79f567d6e02dfcc004afa97afed2
 progress:
   total_phases: 3
   completed_phases: 2
@@ -590,6 +590,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 128]: 128-05: ResolvedPath::from_checked is the ONLY constructor (no new, no new_unchecked) — the unchecked route was deleted rather than documented, so the composed invariant is established not asserted
 - [Phase 128]: 128-05: HttpCodeExecutor::resolve_path DELETED (no caller after step (1) removal); scalar_str RETAINED, still reached from the GET-query step (4)
 - [Phase 128]: 128-05 BREAKING: a literal query string in a Code Mode api.get path is now refused by validate_resolved_path; 13 in-tree sites migrated to a body param. Narrowing the composed check was considered and REJECTED — reversible in one commit (4d7856ea)
+- [Phase 128]: 128-05 OVERTURN (operator: 'Narrow the \'?\' rule only'): the query-separator refusal now applies to the PATH PORTION only — ResolvedPath::from_checked splits at the first ? and checks both sides. Core left strict; the 13-site consumer migration reverted. Plan 06 inherits the split, NOT a relaxed core.
 
 ### Pending Todos
 

@@ -21,22 +21,25 @@ affects: [128-06, 128-08, 128-11]
 
 # Actuals (#2632) — chars/4 over the realized diff, NOT a harness token count.
 actuals:
-  tokens: 21529
+  tokens: 22311
   tasks: 3
-  commits: 6
+  commits: 8
   plan_head_before: e7aa6136b7d8edfcdecba6d7d5ce512c51cfa8a4
-  # MEASURED, not narrated. `git rev-list --count e7aa6136..HEAD` == 6 at
-  # close-out, composed as: 4 code commits (a939a674, 1cd4d69d, 81c39e0b,
-  # 4d7856ea) + b0a17ad4 (this SUMMARY, deferred-items.md, STATE.md, ROADMAP.md
-  # and WINDOWS.md in ONE commit — unlike plan 02, the SDK folded the state files
-  # into the SUMMARY commit rather than writing a separate one) + the HEAD commit,
-  # which is the one that corrected this very number after re-measuring. HEAD is
-  # deliberately named by role and not by hash: this figure lives inside it, so
-  # writing its hash here would change that hash. 6 is what a later
-  # `/gsd-verify-work` re-measure will see.
-  # tokens: `git diff e7aa6136..HEAD -- crates/ | wc -c` == 86114, /4 == 21528.5.
-  # The plan estimated 70000; the actual is ~31% of it. Not rounded toward the
-  # estimate — the gap is real and is recorded so later projections calibrate.
+  # MEASURED, not narrated. `git rev-list --count e7aa6136..HEAD` == 8 at
+  # close-out, composed as: 5 code commits (a939a674, 1cd4d69d, 81c39e0b,
+  # 4d7856ea, 84eccdd1) + b0a17ad4 (the SUMMARY, deferred-items.md, STATE.md,
+  # ROADMAP.md and WINDOWS.md in ONE commit — unlike plan 02, the SDK folded the
+  # state files into the SUMMARY commit rather than writing a separate one) +
+  # de569ff2 (the commit-count re-measure) + the HEAD commit, which carries the
+  # operator-overturn rewrite of this SUMMARY. HEAD is deliberately named by role
+  # and not by hash: this figure lives inside it, so writing its hash here would
+  # change that hash. 8 is what a later `/gsd-verify-work` re-measure will see.
+  # tokens: `git diff e7aa6136..HEAD -- crates/ | wc -c` == 89242, /4 == 22310.5.
+  # The plan estimated 70000; the actual is ~32% of it, INCLUDING the
+  # operator-directed narrowing follow-up. Not rounded toward the estimate — the
+  # gap is real and is recorded so later projections calibrate.
+  # Net files touched fell 11 -> 8: the `git revert` of 4d7856ea returned three of
+  # the four `pmcp-openapi-server` files to byte-identical pre-plan content.
 
 # Tech tracking
 tech-stack:
@@ -59,10 +62,14 @@ key-files:
     - crates/pmcp-server-toolkit/src/code_mode.rs
     - crates/pmcp-server-toolkit/tests/http_executor.rs
     - crates/pmcp-server-toolkit/tests/http_connector_props.rs
+    # Net change is only the two `query_param` matchers + their comment + the
+    # import: the 13-site migration was reverted by the operator's narrowing.
     - crates/pmcp-openapi-server/tests/contoso_m365_code_mode.rs
-    - crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml
-    - crates/pmcp-openapi-server/examples/contoso_m365_min.rs
-    - crates/pmcp-openapi-server/examples/contoso-m365.toml
+  # Touched then REVERTED to byte-identical pre-plan content by `84eccdd1`, listed
+  # so a reader of the history knows they were in scope and are now not:
+  #   crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml
+  #   crates/pmcp-openapi-server/examples/contoso_m365_min.rs
+  #   crates/pmcp-openapi-server/examples/contoso-m365.toml
 
 key-decisions:
   - "`ResolvedPath::from_checked` is the ONLY constructor — no `new`, no `new_unchecked`. The plan offered a rename or a private-ctor-plus-checked pair; the stronger third option was taken: delete the unchecked route entirely. A third party cannot forge an unvalidated `ResolvedPath`, so Codex's finding (an unchecked public constructor whose rustdoc claims an invariant) is answered by removing the route rather than by documenting it away."
@@ -70,12 +77,16 @@ key-decisions:
   - "`validate_resolved_path` has exactly ONE textual call site and is reached from BOTH `ApiCall` arms through `ResolvedPath::from_checked`. That is stronger than the two duplicated call sites the plan's `grep -c >= 2` gate was a proxy for: a single checked constructor cannot be bypassed, whereas two copies can drift."
   - "The layer-1 floor uses `PlaceholderRules::default()` and deliberately NOT `placeholder_rules`. A layer-1 part can appear anywhere in the template, including mid-segment, so there is no OpenAPI `Parameter` to narrow from — asking `placeholder_rules` there would be asking a question with no well-defined answer."
   - "A `PathPart::Expression` refusal names a fixed positional descriptor (`path expression #N`) and never the expression body or the evaluated value. A `PathPart::Variable` refusal names its identifier, which is operator-shipped script text."
-  - "The 13-site consumer migration off literal path query strings was taken rather than narrowing the composed check. The narrowing argument is sound and is recorded verbatim below so it can be overturned cheaply, but taking it unilaterally would remove a defence-in-depth layer in the phase whose identity is closing documented-but-absent gaps."
+  - "OPERATOR DECISION (`Narrow the '?' rule only`): the query-separator refusal applies to the PATH PORTION only. `ResolvedPath::from_checked` splits at the FIRST `?` and applies the full rule set to each side, so exactly one author-written separator is exempted. Safe because both per-value floors already refuse `?` in a substituted value (literal AND percent-encoded, decode-once), so a surviving `?` can only have come from a `PathPart::Literal` — author-written, not injected. Refusing `..` from a literal catches a traversal bug; refusing `?` from a literal rejects legitimate authoring. Same rule, different work."
+  - "The `?` split lives in the CALLER, never in core. `src/server/schema_validation.rs` stays strict and untouched (measured: the diff across the whole plan is EMPTY, and plan 02's 52 strict-refusal tests are green), because it is a general-purpose composed-path checker with other callers. Plan 06 inherits the split, not a relaxed core."
+  - "I first shipped the opposite choice (migrate 13 consumer scripts) and FLAGGED it as overturnable rather than stopping or absorbing it silently. The operator overturned it. Flagging beat both alternatives: stopping would have cost a round-trip with a red gate in the tree, absorbing would have shipped an unwanted breaking change."
 
 patterns-established:
   - "Pattern: name a test MODULE for the verify filter that must resolve. `executor::layer_one` / `::composition` / `::error_does_not_echo_path` all resolve because the tests are siblings of `tests`, not children of it — three zero-selections avoided without editing a single filter."
-  - "Pattern: prove a security call is load-bearing by removing it and naming the rows that go red. Five rows, enumerated below. A claim that a check 'is the mechanism' is otherwise unfalsifiable."
-  - "Pattern: when a migration moves a value from one place to another, assert it ARRIVED. Two `query_param(\"$select\", \"values\")` matchers, because `path()` ignores the query string and the migration could otherwise have silently dropped the projection while the test went green."
+  - "Pattern: prove a security call is load-bearing by removing it and naming the rows that go red. Twelve rows, enumerated below. A claim that a check 'is the mechanism' is otherwise unfalsifiable."
+  - "Pattern: when a migration moves a value from one place to another, assert it ARRIVED. Two `query_param(\"$select\", \"values\")` matchers, because `path()` ignores the query string and the migration could otherwise have silently dropped the projection while the test went green. They were KEPT after the migration was reverted, because they still have teeth — the projection now travels in the path literal and they now additionally pin the `?` narrowing from the consumer side."
+  - "Pattern: a narrowing needs more STILL-REFUSED rows than ACCEPT rows. `mod query_separator` is 3 accept / 9 refuse, and 7 of the 9 are mutation-sensitive. A narrowing pinned only by accept-rows is indistinguishable from a deleted check."
+  - "Pattern: re-run the mutation test after narrowing a check, and report the delta rather than re-stating the old number. Red rows went 5 -> 12 here; had they fallen, the narrowing would have been a hole and the honest move would have been to say so."
 
 requirements-completed: [D4, SC-4, SC-7]
 
@@ -112,12 +123,28 @@ at publish time).
 `publish-as-specified` decision belongs to plan 01's D-01/D-04 checkpoint and was correctly
 refused as authority here by the prior agent.
 
+## The SECOND operator decision, verbatim — Deviation 1 overturned
+
+Plan 05 first shipped Deviation 1 by migrating 13 in-tree Code Mode scripts off literal path query
+strings, and flagged the alternative it had rejected as "the one judgment here you may reasonably
+want to overturn". The operator was shown both sides and overturned it. Their response, verbatim:
+
+```
+Narrow the '?' rule only
+```
+
+So the rejected alternative is the shipped one: `ResolvedPath::from_checked` splits the composed
+path at the FIRST `?` and applies the full rule set to each side, the 13 migrations are reverted,
+and literal query strings remain a supported authoring pattern. Implemented in `84eccdd1`.
+Deviation 1 below records the RESOLUTION; the rejected argument is kept only as the history that
+explains why the decision was escalated.
+
 ## Performance
 
-- **Duration:** ~110 min
-- **Tasks:** 3 of 3 (Task 1 was the resolved checkpoint)
-- **Files modified:** 11 (0 created), 1298 insertions / 107 deletions
-- **Commits:** 4 code + 2 metadata
+- **Duration:** ~110 min plus ~35 min for the overturn follow-up
+- **Tasks:** 3 of 3 (Task 1 was the resolved checkpoint) + 1 operator-directed follow-up
+- **Files modified:** 11 (0 created)
+- **Commits:** 5 code + 3 metadata
 
 ## T-128-07a is now LIVE — named by file and line, with the row that fails if it goes
 
@@ -125,19 +152,21 @@ The carried obligation for this plan was that `validate_resolved_path` existed a
 callers outside its defining module**, so the top review finding of the phase was a mechanism in
 the tree and not a mitigation in effect.
 
-**The call site:**
+**The call sites** — three, after the operator-directed narrowing (`84eccdd1`), all inside
+`ResolvedPath::from_checked`, the type's **only** constructor:
 
 | File | Line | Code |
 |---|---|---|
-| `crates/pmcp-code-mode/src/executor.rs` | **2476** | `crate::validate_resolved_path(path)?;` |
+| `crates/pmcp-code-mode/src/executor.rs` | **2516** | `None => crate::validate_resolved_path(path)?,` — no author-written `?` |
+| `crates/pmcp-code-mode/src/executor.rs` | **2520** | `crate::validate_resolved_path(path_part)?;` — the portion before the first `?` |
+| `crates/pmcp-code-mode/src/executor.rs` | **2521** | `crate::validate_resolved_path(query_part)?;` — the portion after it |
 
-It sits inside `ResolvedPath::from_checked`, the type's **only** constructor, reached from both
-`ApiCall` arms:
+Reached from both `ApiCall` arms:
 
 | File | Line | Reaching call |
 |---|---|---|
-| `crates/pmcp-code-mode/src/executor.rs` | **3114** | `PlanStep::ApiCall` arm — `ResolvedPath::from_checked(&resolved_path)` |
-| `crates/pmcp-code-mode/src/executor.rs` | **3305** | `PlanStep::ParallelApiCalls` arm — same |
+| `crates/pmcp-code-mode/src/executor.rs` | **3161** | `PlanStep::ApiCall` arm — `ResolvedPath::from_checked(&resolved_path)` |
+| `crates/pmcp-code-mode/src/executor.rs` | **3352** | `PlanStep::ParallelApiCalls` arm — same |
 
 It runs on the COMPOSED path, after layer-1 `${var}` interpolation AND layer-2 `{key}`
 resolution, and before `execute_request` is called.
@@ -149,27 +178,54 @@ command never runs):
 | | `schema_validation.rs` | `pmcp-code-mode/src/executor.rs` | `pmcp-code-mode/src/lib.rs` |
 |---|---|---|---|
 | before plan 05 | 17 | **0** | 0 |
-| after plan 05 | 17 | **5** (1 call + 4 rustdoc) | 2 (re-export + doc) |
+| after plan 05 | 17 (**untouched** — see below) | **5** (3 calls + 2 rustdoc) | 2 (re-export + doc) |
 
 Positive control for that scan: `grep -c "validate_input" src/server/schema_validation.rs` -> 18.
 A zero from the scan would have meant a broken scan, not an empty tree.
 
+**Core was left strict.** The `?` narrowing lives entirely in the caller. Measured:
+`git diff e7aa6136..HEAD -- src/server/schema_validation.rs` is **EMPTY** across the whole plan, and
+plan 02's 52 `schema_validation` tests — which assert the strict `?`-anywhere refusal — are
+untouched and green. `validate_resolved_path` remains a general-purpose composed-path checker for
+every other caller, including plan 06's curated surface if it wants the strict form.
+
 ### The rows that fail if the call is removed — MEASURED, not asserted
 
-`crate::validate_resolved_path(path)?;` was temporarily deleted from `from_checked` and the
-suites re-run. **Exactly five rows go red:**
+The equivalent mutation (delete the whole `match`, so `from_checked` accepts everything) was applied
+and the suites re-run, then the file restored byte-exact. **After the narrowing, 12 rows go red —
+up from 5 before it.** All five originals are preserved:
 
-| Row | Binary |
-|---|---|
-| `http_executor_refuses_length_composed_from_two_placeholders` | `pmcp-server-toolkit` / `tests/http_executor.rs` |
-| `executor::composition::composition_refuses_two_adjacent_values_over_the_cap_that_each_pass_alone` | `pmcp-code-mode` lib |
-| `executor::composition::composition_refuses_traversal_assembled_from_unchecked_literal_parts` | `pmcp-code-mode` lib |
-| `executor::composition::composition_refuses_a_mixed_layer_one_and_layer_two_over_cap_segment` | `pmcp-code-mode` lib |
-| `executor::layer_two::layer_two_refuses_an_unsubstituted_placeholder_before_dispatch` | `pmcp-code-mode` lib |
+| Row | Binary | Pre-narrowing? |
+|---|---|---|
+| `http_executor_refuses_length_composed_from_two_placeholders` | toolkit / `tests/http_executor.rs` | ✅ original |
+| `executor::composition::composition_refuses_two_adjacent_values_over_the_cap_that_each_pass_alone` | `pmcp-code-mode` lib | ✅ original |
+| `executor::composition::composition_refuses_traversal_assembled_from_unchecked_literal_parts` | `pmcp-code-mode` lib | ✅ original — **the isolating row** |
+| `executor::composition::composition_refuses_a_mixed_layer_one_and_layer_two_over_cap_segment` | `pmcp-code-mode` lib | ✅ original |
+| `executor::layer_two::layer_two_refuses_an_unsubstituted_placeholder_before_dispatch` | `pmcp-code-mode` lib | ✅ original |
+| `executor::query_separator::query_separator_still_refuses_traversal_in_the_path_portion` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_traversal_in_the_query_portion` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_a_control_byte_in_the_query_portion` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_an_over_cap_query_portion` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_a_second_question_mark` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_an_empty_query_portion` | `pmcp-code-mode` lib | new |
+| `…_still_refuses_a_fragment_marker` | `pmcp-code-mode` lib | new |
 
-(`256 passed` -> `252 passed; 4 failed`; `11 passed` -> `10 passed; 1 failed`.) The file was then
-restored from a byte-exact copy — `git status` showed `executor.rs` unmodified afterwards, and
-both suites returned to 256/256 and 11/11.
+(`268 passed` -> `257 passed; 11 failed`; `11 passed` -> `10 passed; 1 failed`.) Restored from a
+byte-exact copy — `grep -c "MUTATION TEST"` -> 0, the three calls back at `:2516`/`:2520`/`:2521`,
+and both suites returned to 268/268 and 11/11.
+
+**The narrowing strengthened the mutation signal rather than weakening it: 5 -> 12.** That is the
+answer to the risk the operator named — the isolating row survives, and the boundary rows are
+themselves mutation-sensitive, so the narrowing cannot rot into a hole without a test going red.
+
+**Two rows notably do NOT fail**, and that is the honest reading the plan predicted:
+`http_executor_refuses_traversal_composed_from_two_placeholders` and
+`composition_refuses_two_adjacent_single_dot_placeholders` both still pass, because plan 02's
+per-value single-dot rule already refuses `"."` on its own. They are refused **twice over**. That
+is precisely why `composition_refuses_traversal_assembled_from_unchecked_literal_parts` exists:
+it assembles `/a/../b` from three `PathPart::Literal` parts, which are deliberately NOT floored,
+so **no per-value check runs at all** and only the composed check can be doing the refusing. That
+is the isolating row.
 
 **Two rows notably do NOT fail**, and that is the honest reading the plan predicted:
 `http_executor_refuses_traversal_composed_from_two_placeholders` and
@@ -254,25 +310,27 @@ named `_path` and is never formatted. Asserted by
 
 | Selection | Before | After |
 |---|---|---|
-| `cargo test -p pmcp-code-mode --features js-runtime --lib` | 236 | **256** |
-| `… --lib executor::` (with `--features js-runtime`) | 81 | **101** |
+| `cargo test -p pmcp-code-mode --features js-runtime --lib` | 236 | **268** |
+| `… --lib executor::` (with `--features js-runtime`) | 81 | **113** |
 | `… --lib executor::layer_one` | — | **5** |
 | `… --lib executor::layer_two` | — | **7** |
 | `… --lib executor::composition` | — | **4** |
 | `… --lib executor::error_does_not_echo_path` | — | **3** |
-| `make test-code-mode` (total) | 285 | **305** |
+| `… --lib executor::query_separator` (the narrowing boundary) | — | **12** |
+| `make test-code-mode` (total) | 285 | **317** |
 | `cargo test -p pmcp-server-toolkit --features openapi-code-mode --test http_executor` | 5 | **11** |
 | `… --features openapi-code-mode --test http_connector_props` | 5 | **5** |
 | `… --features http --test http_connector_props` | 4 | **4** |
 | `make test-server-toolkit-code-mode` (total) | 359 | **365** |
 | `make test-server-toolkit` (total) | 340 | **340** (unchanged, as required) |
 | `cargo test -p pmcp-openapi-server --no-fail-fast` | 42 | **42** (40+2-failing mid-plan; see Deviation 1) |
+| `cargo test -p pmcp --features full --lib schema_validation` | 52 | **52** (untouched — core left strict) |
 | `cargo nextest run --features "full" --no-fail-fast` (root) | 3358 | **3358**, 0 failed, 5 skipped |
 
-`256 - 236 = 20` new lib tests = 19 in `executor.rs` (5 layer-1 + 7 layer-2 + 4 composition + 3
-error-echo) + 1 in `code_executor.rs`. `11 - 5 = 6` new integration probes, which satisfies the
-plan's "at least four higher" requirement. The root suite is unchanged because these tests live
-in workspace member crates, not the root `pmcp` package.
+`268 - 236 = 32` new lib tests = 31 in `executor.rs` (5 layer-1 + 7 layer-2 + 4 composition + 3
+error-echo + 12 query-separator) + 1 in `code_executor.rs`. `11 - 5 = 6` new integration probes,
+which satisfies the plan's "at least four higher" requirement. The root suite is unchanged because
+these tests live in workspace member crates, not the root `pmcp` package.
 
 ## Hand-off items for plan 11 (the release commit)
 
@@ -318,26 +376,53 @@ All three pins are semver-INCOMPATIBLE with 0.6 on a pre-1.0 line, so per CLAUDE
 Bump Rules* the whole set moves together or not at all. The caret exception does not apply — it
 covers PATCH bumps only.
 
-### H3 — a REQUIRED rollout note that the plan did not anticipate (see Deviation 1)
+### H3 — the rollout note, CORRECTED after the operator narrowed the rule (see Deviation 1)
 
-**Breaking behaviour change for Code Mode script authors:** a script writing a literal query
-string into its `api.get` path — `api.get("/x?$select=values")` — is now REFUSED. The correct
-shape is `api.get("/x", { "$select": "values" })`. Plan 11's CHANGELOG and rollout note must carry
-this alongside plan 02's trailing-slash note.
+An earlier revision of this section said "a script writing a literal query string into its
+`api.get` path is now REFUSED". **That is no longer what ships** — the operator narrowed the rule
+(`84eccdd1`), so the rollout note must describe the narrower behaviour. What plan 11's CHANGELOG
+and rollout note must actually say:
+
+**Code Mode script paths are now checked after substitution, and the check is composition-aware.**
+A path is refused before dispatch — with no upstream request — if, on either side of an
+author-written `?`, it contains:
+
+- a parent-directory sequence (`..`), in literal or percent-encoded form;
+- a backslash, an ASCII control byte, a NUL, or a `#` fragment marker;
+- a segment over 256 code points;
+- a doubled or trailing `/`, or an empty interior segment;
+- an unsubstituted `{placeholder}` — previously these reached the wire as literal braces;
+- a `%25` (which is what bounds percent-decoding to a single pass).
+
+**What continues to work, and is explicitly supported:** ONE author-written query string in the path
+(`api.get("/Line/Mode/tube/Status?detail=true")`, `api.get("…/range(address='A2:D7')?$select=values")`),
+including alongside `{placeholder}` substitution. A second `?`, or a dangling `?` with an empty
+query, is refused.
+
+**What a script author must change:** nothing for a well-formed script. The changes that bite are
+(a) a path template ending in `/`, and (b) a placeholder whose value carries `?`, `#`, `/`, `\`, a
+control byte, traversal, or more than 256 code points — which was the injection route this phase
+exists to close.
+
+Carry this alongside plan 02's trailing-slash note. **Do NOT describe the body-param migration as
+required** — it was reverted, and telling authors to rewrite working scripts would be a
+documentation defect.
 
 ## Deviations from Plan
 
-### 1. [Rule 3 - Blocking, SCOPE EXPANDED] `validate_resolved_path` refuses literal path query strings, breaking 13 in-tree Code Mode scripts
+### 1. [Rule 3 - Blocking, ESCALATED then RESOLVED BY THE OPERATOR] The composed `?` rule refused author-written path query strings
+
+**RESOLUTION: the query-separator rule is NARROWED to the path portion. Literal query strings remain
+a supported Code Mode authoring pattern.** Operator decision, verbatim: `Narrow the '?' rule only`.
+Shipped in `84eccdd1`.
 
 - **Found during:** the plan-level `make quality-gate`, and by NO gate in this plan's own verify
   list — whose scope was `pmcp-code-mode` plus `pmcp-server-toolkit`, while the third consumer of
   the contract is `pmcp-openapi-server`.
 - **Issue:** plan 02's `validate_resolved_path` refuses a query separator ANYWHERE in a composed
-  path (plan 02 Deviation 7, justified by T-128-07b). It cannot tell an author-written `?` from an
-  injected one — that indistinguishability is the whole point of a composed check. Once this plan
-  wired it before dispatch, every Code Mode script writing `?$select=values` into its `api.get`
-  path started being refused with `param 'path segment' must not contain a parent-directory
-  sequence, a query or fragment marker, …`.
+  path (plan 02 Deviation 7, justified by T-128-07b). Once this plan wired it before dispatch, every
+  Code Mode script writing `?$select=values` into its `api.get` path started being refused with
+  `param 'path segment' must not contain a parent-directory sequence, a query or fragment marker, …`.
 - **Measured blast radius:** `cargo test -p pmcp-openapi-server --no-fail-fast` went **40 passed /
   2 failed** — `contoso_m365_code_mode_headline_query_returns_deterministic_set` and
   `contoso_m365_parity_through_real_binary_path`. **The default fail-fast run reported only ONE of
@@ -350,34 +435,47 @@ this alongside plan 02's trailing-slash note.
   `crates/pmcp-server-toolkit`; the second scan missed the backtick spelling. Both were caught only
   because the scan was re-run with a **positive control** (109 `api.get(` lines total, of which 16
   contain `?`, of which 3 are this plan's own new probe payloads).
-- **Fix:** the query moves from the path to a BODY param —
-  `api.get("…/range(address='A2:D7')", { "$select": "values" })`. For a GET the executor already
-  serializes remaining body fields as query params, so the request still reaches Graph with the
-  projection (percent-encoded on the wire as `%24select`, which Graph documents). Two
-  `query_param("$select", "values")` wiremock matchers were ADDED, because `path()` ignores the
-  query string — without them the migration could have silently DROPPED the projection and the
-  test would still have gone green. The prose lines describing the upstream
-  `GET …/range(address='A2:D2')?$select=values` HTTP request are correct as written and untouched;
-  only `api.get` call sites changed.
-- **Verification:** `cargo test -p pmcp-openapi-server --no-fail-fast` -> **42 passed, 0 failed**;
-  `make test-openapi-server` exit 0; `make quality-gate` exit 0 with the banner.
-- **Committed in:** `4d7856ea`
-- **REJECTED ALTERNATIVE, recorded so it can be overturned cheaply.** Narrow the composed check to
-  the portion before the first `?`. The argument FOR it is genuinely sound: after both per-value
-  floors (each of which refuses `?` in literal AND percent-encoded form, decode-once), a `?`
-  surviving into the composed string can ONLY have come from a `PathPart::Literal` — script-authored
-  text, not caller data — so the composed `?` rule guards a route that is already closed. It was
-  NOT taken, for three reasons: (a) it removes a defence-in-depth layer in the phase whose whole
-  identity is closing documented-but-absent gaps, and the argument depends on the per-value floor
-  staying complete for all time; (b) it contradicts this plan's own `must_haves` truth that the
-  composed path is checked by `validate_resolved_path`; (c) a query string in the `path` argument
-  of `api.get` is a script smell when the API already has a first-class way to express query
-  params. **This is the one judgment in this plan an operator may reasonably want to overturn**, and
-  reverting it is one commit (`4d7856ea`) plus a split in `from_checked`'s caller.
+- **First fix, now REVERTED (`4d7856ea`, reverted by `84eccdd1`):** migrate the 13 sites to a body
+  param. It worked (42/42) but imposed a breaking change on every downstream script author, so it
+  was shipped with the alternative flagged as overturnable.
+- **THE SHIPPED FIX — the narrowing.** `ResolvedPath::from_checked` splits the composed path at the
+  FIRST `?` and applies the full, unmodified rule set to each side. Exactly one author-written
+  separator is exempted; nothing else is relaxed.
+  - **The reasoning the operator accepted:** both per-value floors already refuse `?` in a
+    substituted value, in literal AND percent-encoded form, with a decode-once pass. So a `?`
+    surviving into the composed string can only have come from a `PathPart::Literal` — script text
+    the operator authored and shipped, not caller data. **Refusing `..` from a literal catches a
+    traversal bug; refusing `?` from a literal rejects legitimate authoring. Same rule, different
+    work.** That asymmetry is encoded in `from_checked`'s rustdoc so the next reader inherits the
+    argument and not just the code.
+  - **CORE LEFT STRICT, as directed.** The split is in the caller only.
+    `git diff e7aa6136..HEAD -- src/server/schema_validation.rs` is **EMPTY**, and plan 02's 52
+    strict-refusal tests are untouched and green.
+  - **What is NOT relaxed,** each pinned by a test: traversal in the path portion (`/a/../b?x=1` —
+    appending a query does not launder a traversal), traversal in the query portion, a
+    percent-encoded control byte, an over-cap query portion, a SECOND `?`, an empty query portion, a
+    fragment marker, and an injected `?` arriving from a VALUE on both the layer-2 and layer-1
+    routes.
+  - **The 13 migrations were reverted** via `git revert`, since literal query strings are the
+    authoring pattern being protected.
+  - **The two `query_param("$select", "values")` matchers were KEPT** — judgement call, as asked.
+    They are not vacuous after the revert: the projection now travels in the path literal, `path()`
+    ignores the query string entirely, so the matchers still fail if the projection is dropped, and
+    they now ADDITIONALLY pin the narrowing from the consumer side — a regression that refused or
+    stripped an author-written query separator fails there, in a real-binary parity test. Their
+    comment was rewritten to state that rather than the pre-revert rationale.
+- **Verification:** lib 256 -> **268** (12 boundary rows); `make test-code-mode` 305 -> **317**;
+  `cargo test -p pmcp-openapi-server --no-fail-fast` -> **42 passed, 0 failed**; mutation red rows
+  **5 -> 12** with all five originals preserved; `make quality-gate` exit 0 with the banner.
+- **Committed in:** `4d7856ea` (the first fix) then `84eccdd1` (the revert + the narrowing).
 - **Scope note, stated plainly:** `crates/pmcp-openapi-server` is NOT in this plan's
-  `files_modified`. The failures are DIRECTLY caused by this plan's change, so they are in scope
-  for fixing under Rule 3 rather than deferrable under the SCOPE BOUNDARY rule — those files are
-  consumers of the exact contract this plan changed, not unrelated files.
+  `files_modified`. The failures were DIRECTLY caused by this plan's change, so they were in scope
+  under Rule 3 rather than deferrable under the SCOPE BOUNDARY rule. After the narrowing those four
+  files are back to their pre-plan content apart from the two added matchers.
+- **Process note worth keeping.** I judged this Rules 1–3 rather than Rule 4 and proceeded, while
+  flagging the alternative as overturnable. The operator overturned it. Flagging beat both
+  alternatives: stopping would have cost a round-trip with a red gate in the tree, and absorbing it
+  silently would have shipped a breaking change the operator did not want.
 
 ### 2. [Rule 1 - Bug in a plan gate] The plan's `:364` verify command reaches 3 of 101 tests while passing its own `<fails_when>`
 
@@ -391,7 +489,8 @@ this alongside plan 02's trailing-slash note.
   at `:367` states the feature is required for the sibling command, so `:364` is an internal
   inconsistency rather than a considered choice.
 - **Fix:** the command was run BOTH ways and both results are recorded. The corrected form —
-  `--features js-runtime` — selects **101**. Later plans should use the corrected form.
+  `--features js-runtime` — selected **101** when measured at Task 2, and **113** after the
+  operator-directed narrowing added `mod query_separator`. Later plans should use the corrected form.
 - **The count was never lowered to match reality.** The real path was found.
 
 ### 3. [Plan-additive, gate-hazard avoided] Three of the plan's verify filters were at risk of selecting ZERO, and were made to resolve by NAMING THE TEST MODULES for them
@@ -443,16 +542,24 @@ this alongside plan 02's trailing-slash note.
 - **Fix:** `join_url(&self.base_url, resolved_path)`.
 - **Committed in:** `81c39e0b`
 
-### 7. [Plan-additive] Two tests beyond the plan's behaviour list
+### 7. [Plan-additive] Fourteen tests beyond the plan's behaviour list
 
 - `composition_refuses_traversal_assembled_from_unchecked_literal_parts` — the ISOLATING
   composition row. The plan's `.`+`.` row is refused twice over after plan 02's single-dot floor,
   so it cannot prove the composed check is the mechanism. This row assembles `/a/../b` from three
   `PathPart::Literal` parts, which are deliberately not floored, so no per-value check runs at all.
-  It is one of the five rows the mutation test showed going red.
+  It is one of the twelve rows the mutation test showed going red.
 - `layer_one_accepts_a_literal_only_template_including_slashes` — the ACCEPT control for the
   layer-1 floor. Without it, "literals are not floored" is unfalsifiable and the floor could be
   "fixed" into refusing every legitimate multi-segment template.
+- **`mod query_separator`, 12 rows** — required by the operator's narrowing decision and pinning it
+  in both directions. 3 ACCEPT (an author query string; one alongside a floored `{v}`; the exact
+  Graph `?$select=values` shape the in-tree scripts write) and 9 STILL-REFUSED (traversal in the
+  path portion, traversal in the query portion, a percent-encoded control byte, an over-cap query, a
+  second `?`, an empty query portion, a fragment marker, and an injected `?` from a VALUE on both the
+  layer-2 and layer-1 routes). **A narrowing with only accept-rows is indistinguishable from a
+  deleted check**, which is why 9 of the 12 assert what did NOT change; 7 of those 9 are
+  mutation-sensitive.
 
 ### 8. [Deviation from task ORDER, not from content] The five test call-site updates landed in Task 2, not Task 3
 
@@ -462,14 +569,16 @@ is unchanged; only which commit carries it moved.
 
 ---
 
-**Total deviations:** 8 — 1 blocking regression with expanded scope and a rejected alternative,
-2 plan-gate bugs (one a semi-false-green, one a zero-selection hazard avoided by construction),
-3 test retargetings that preserve or strengthen their assertions, 1 blocking clippy fix, 1
-task-ordering shift, plus 2 additive tests.
-**Impact on plan:** no scope creep in the plan's own crates. Deviation 1 is the only one that
-expands the file set, and it is a direct consequence of the plan's own mandated change; it is
-recorded with its measurement, its rejected alternative and a plan-11 rollout obligation rather
-than absorbed.
+**Total deviations:** 8 — 1 blocking regression that was escalated and resolved by an explicit
+operator decision, 2 plan-gate bugs (one a semi-false-green, one a zero-selection hazard avoided by
+construction), 3 test retargetings that preserve or strengthen their assertions, 1 blocking clippy
+fix, 1 task-ordering shift, plus 14 additive tests.
+**Impact on plan:** no scope creep in the plan's own crates. Deviation 1 was the only one that
+expanded the file set, and after the operator's narrowing those four `pmcp-openapi-server` files are
+back to their pre-plan content apart from two added `query_param` matchers. One `must_haves` truth is
+now narrower than written — "The COMPOSED path is checked by `validate_resolved_path`" holds, but on
+each side of an author-written `?` rather than across it. That change is the operator's, recorded
+verbatim, and it does not weaken any mutation-tested row.
 
 ## The grep gates — what they measure, honestly
 
@@ -479,8 +588,8 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
 
 | Gate | Plan's requirement | Measured | Structural reality |
 |---|---|---|---|
-| `grep -c validate_resolved_path` in `executor.rs` | `>= 2` | **5** | **1** call site (`:2476`), reached from **2** arms via `from_checked` (`:3114`, `:3305`). Stronger than two copies: a single checked constructor cannot be bypassed. |
-| `grep -c validate_path_placeholder` in `executor.rs` | `>= 4` | **9** | **2** production call sites — `floor_layer_one_contribution` (`:2892`), reached from both layer-1 arms; `resolve_layer_two_placeholders` (`:2963`), reached from both `ApiCall` arms. Plus 4 in tests. 4 logical places, 2 textual sites, by the plan's own helper-extraction instruction. |
+| `grep -c validate_resolved_path` in `executor.rs` | `>= 2` | **8** | **3** call sites (`:2516`, `:2520`, `:2521`) — after the narrowing the gate passes on REAL call sites, not on rustdoc. All three are inside `from_checked`, reached from **2** arms (`:3161`, `:3352`). Stronger than two duplicated calls: a single checked constructor cannot be bypassed. |
+| `grep -c validate_path_placeholder` in `executor.rs` | `>= 4` | **9** | **2** production call sites — `floor_layer_one_contribution` (`:2939`), reached from both layer-1 arms; `resolve_layer_two_placeholders` (`:3010`), reached from both `ApiCall` arms. Plus 4 in tests. 4 logical places, 2 textual sites, by the plan's own helper-extraction instruction. |
 | path-echo wrap in `executor.rs` (comments stripped) | `== 0` | **0** | Both wraps now read `format!("{method} api call '{result_var}' failed: {e}")` / `'{temp_var}'`. |
 | `NoopHttpExecutor` path format (comments stripped) | `== 0` | **0** | Parameter renamed `_path`; never formatted. |
 | SATD in the four touched `pmcp-code-mode`/toolkit source files | `== 0` | **0** | — |
@@ -491,10 +600,12 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
 |---|---|
 | `RUSTFLAGS="" cargo build -p pmcp-code-mode --features js-runtime` | exit 0, no `error[` |
 | `RUSTFLAGS="" cargo build --workspace` | exit 0 |
-| `… --lib` (pmcp-code-mode, js-runtime) | **256 passed**, 0 failed |
-| `… --lib executor::` (js-runtime) | **101 passed** (3 without the feature — Deviation 2) |
-| `… --lib executor::layer_one` / `layer_two` / `composition` / `error_does_not_echo_path` | **5 / 7 / 4 / 3**, all nonzero |
-| `RUSTFLAGS="" make test-code-mode` | exit 0, **305 tests**, `executor::`-scoped leg 101 |
+| `… --lib` (pmcp-code-mode, js-runtime) | **268 passed**, 0 failed |
+| `… --lib executor::` (js-runtime) | **113 passed** (3 without the feature — Deviation 2) |
+| `… --lib executor::layer_one` / `layer_two` / `composition` / `error_does_not_echo_path` / `query_separator` | **5 / 7 / 4 / 3 / 12**, all nonzero |
+| `RUSTFLAGS="" make test-code-mode` | exit 0, **317 tests**, `executor::`-scoped leg 113 |
+| `cargo test -p pmcp --features full --lib schema_validation` | **52 passed** — plan 02's strict-refusal tests, untouched (core left strict) |
+| `git diff e7aa6136..HEAD -- src/server/schema_validation.rs` | **EMPTY** — the `?` narrowing is caller-only |
 | `… --features openapi-code-mode --test http_executor` | **11 passed** (was 5; ≥ 4 higher ✓) |
 | `… --features openapi-code-mode --test http_connector_props` | **5 passed** |
 | `… --features http --test http_connector_props` | **4 passed** (nonzero ✓) |
@@ -507,18 +618,20 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
 | `cargo clippy -p pmcp-code-mode --features js-runtime --all-targets -- -D warnings` | exit 0 |
 | `cargo clippy -p pmcp-server-toolkit --features openapi-code-mode --all-targets` | 0 findings in any file this plan touched |
 | `RUSTFLAGS="" cargo nextest run --features "full" --no-fail-fast` | **3358 run, 3358 passed**, 5 skipped, exit 0 |
-| `RUSTFLAGS="" make quality-gate` | **exit 0 — `ALL TOYOTA WAY QUALITY CHECKS PASSED` banner present** (15066 captured lines) |
-| Mutation test: `validate_resolved_path` removed | **5 rows red**, enumerated above; file restored byte-exact |
+| `RUSTFLAGS="" make quality-gate` | **exit 0 — `ALL TOYOTA WAY QUALITY CHECKS PASSED` banner present** (15060 captured lines, re-run after the narrowing) |
+| Mutation test: the composed check removed | **12 rows red** (was 5 pre-narrowing; all five originals preserved), enumerated above; file restored byte-exact |
 | Tracked working tree after `.pmat/` cleanup | **clean** |
 
 ## Files Created/Modified
 
-- `crates/pmcp-code-mode/src/executor.rs` — 5040 -> **5929 lines**. New public: `ResolvedPath`
+- `crates/pmcp-code-mode/src/executor.rs` — 5040 -> **6163 lines**. New public: `ResolvedPath`
   (+`from_checked`, `as_str`, `Display`), `HttpExecutor::placeholder_rules`. Changed public:
   `HttpExecutor::execute_request`'s path parameter. New private: `refusal_to_execution_error`,
   `floor_layer_one_contribution`, `render_path_scalar`, `resolve_layer_two_placeholders`.
   `resolve_path` gained the layer-1 floor and a rustdoc stating why literals are exempt.
-  `ApiCallLog::path` gained the T-128-23 disclosure note. Four new `#[cfg(test)]` sibling modules
+  `ApiCallLog::path` gained the T-128-23 disclosure note. `from_checked` carries the `?`-narrowing
+  split and the rustdoc that encodes the operator's reasoning. FIVE new `#[cfg(test)]` sibling
+  modules (`layer_one`, `layer_two`, `composition`, `error_does_not_echo_path`, `query_separator`)
   plus `d09_support`.
 - `crates/pmcp-code-mode/src/lib.rs` — the five-symbol re-export with the Q2 doc, plus
   `ResolvedPath` added to the `executor::` re-export list.
@@ -532,8 +645,11 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
 - `crates/pmcp-server-toolkit/tests/http_connector_props.rs` — prop test retargeted to the
   GET-query leg.
 - `crates/pmcp-openapi-server/{tests/contoso_m365_code_mode.rs, tests/fixtures/contoso-m365.toml,
-  examples/contoso_m365_min.rs, examples/contoso-m365.toml}` — Deviation 1's 13-site migration
-  plus two `query_param` matchers.
+  examples/contoso_m365_min.rs, examples/contoso-m365.toml}` — Deviation 1's 13-site migration,
+  then REVERTED by the operator's narrowing. Net change across the whole plan: **only** the two
+  `query_param("$select", "values")` matchers, their rationale comment and the `query_param` import
+  in `tests/contoso_m365_code_mode.rs`. The other three files end byte-identical to their pre-plan
+  content.
 
 ## Task Commits
 
@@ -545,13 +661,20 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
    assertions about the planned behaviour, with `layer_one_accepts_a_literal_only_template…`
    passing as the accept control.
 2. **Task 2 (tdd) — GREEN** — `1cd4d69d` (`feat`): the real `from_checked`, the layer-1 floor, the
-   layer-2 move, the composed check in both arms, all three message fixes. **GREEN: 256/256.**
+   layer-2 move, the composed check in both arms, all three message fixes. **GREEN: 256/256 AT
+   THIS COMMIT** — the lib total later reached 268 when `84eccdd1` added the 12 boundary rows. The
+   per-commit figures in this section are point-in-time by design; the current totals are in
+   "Before/after test counts".
 3. **Task 3** — `81c39e0b` (`feat`): step (1) removed, `resolve_path` deleted, six probes added.
-4. **Deviation 1** — `4d7856ea` (`fix`): the 13-site consumer migration.
+4. **Deviation 1, first fix** — `4d7856ea` (`fix`): the 13-site consumer migration. Superseded.
+5. **Deviation 1, operator resolution** — `84eccdd1` (`fix`): the `?` narrowing in
+   `from_checked`, the `git revert` of `4d7856ea`, the two `query_param` matchers re-added with a
+   rewritten rationale, and `mod query_separator`'s 12 boundary rows.
 
 **Plan metadata:** `b0a17ad4` (`docs(128-05)`), which carries this SUMMARY, `deferred-items.md`,
 STATE.md, ROADMAP.md and WINDOWS.md in ONE commit — the SDK folded them together here rather
-than writing a separate state commit as it did in plan 02.
+than writing a separate state commit as it did in plan 02 — plus the commit-count re-measure and
+this overturn update.
 
 No separate REFACTOR commit: both behaviour-preserving cleanups (the clippy needless-borrow and
 the helper extraction that kept both arms under cog 25) were made BEFORE their commits, so there
@@ -565,7 +688,7 @@ here (same as plans 01 and 02). The cycle was still run for Task 2 and its evide
 | Gate | Commit | Evidence |
 |---|---|---|
 | RED (Task 2) | `a939a674` (`test(128-05)`) | 256 discovered, 19 failed, exit 101. Named failures included all 4 `composition::*` rows, all 4 `layer_one` refusal rows, all 7 `layer_two` rows, all 3 `error_does_not_echo_path` rows, and `code_executor::tests::noop_http_executor_error_names_the_method_and_not_the_path`. |
-| GREEN (Task 2) | `1cd4d69d` (`feat(128-05)`) | 256/256; clippy `-D warnings` exit 0; pmat 0 violations; `make test-code-mode` 305. |
+| GREEN (Task 2) | `1cd4d69d` (`feat(128-05)`) | 256/256 and `make test-code-mode` 305 AT THAT COMMIT (268 and 317 after the `84eccdd1` narrowing); clippy `-D warnings` exit 0; pmat 0 violations. |
 | REFACTOR | — (not needed) | See the note above. |
 
 **Task 3 has no meaningful RED, stated rather than fabricated.** Its six probes are integration
@@ -590,21 +713,28 @@ files, and no test is `#[ignore]`d.
 
 ## Behaviour Changes
 
-Two, both user-visible, both needing a plan-11 rollout note:
+This section was rewritten after the operator narrowed the `?` rule. The list below is what
+**actually ships**; H3 carries the same content in rollout-note form.
 
-1. **A literal query string in a Code Mode script's `api.get` path is now REFUSED.**
-   `api.get("/x?$select=values")` -> `param 'path segment' must not contain … a query or fragment
-   marker …`. The supported shape is `api.get("/x", { "$select": "values" })`; for a GET the
-   executor serializes remaining body fields as query params, so the request still carries the
-   projection. 13 in-tree sites migrated (Deviation 1). **This is the larger of the two and the
-   plan did not anticipate it.**
+1. **A Code Mode script's path is now checked after substitution, and the check is
+   composition-aware.** Refused before dispatch, on either side of an author-written `?`: traversal
+   (literal or percent-encoded), backslash, ASCII control bytes, `#`, a segment over 256 code points,
+   a doubled or trailing `/`, an unsubstituted `{placeholder}` (previously sent as literal braces),
+   and `%25`. **An author-written query string in the path is NOT refused** — that is the operator's
+   narrowing, and `api.get("/x?$select=values")` keeps working. A SECOND `?`, or a dangling `?` with
+   an empty query, is refused.
 2. **`HttpExecutor::execute_request`'s signature changed** (the accepted D-09 break). Breaking for
    every downstream implementor and every downstream `MockHttpExecutor` expectation constructed
-   against a `{key}` template. A stale implementor gets a compile error, by design.
+   against a `{key}` template. A stale implementor gets a compile error, by design. **This is now the
+   larger of the two** — before the narrowing, (1) was.
 
 Plus plan 02's already-recorded trailing-slash change, which is now LIVE on the Code Mode surface
 because `validate_resolved_path` has a caller: a composed path ending in `/` is refused. No
 in-tree Code Mode path template ends in `/` — verified while scanning for Deviation 1.
+
+**A superseded claim, flagged so it is not quoted from history.** An earlier revision of this
+section said a literal query string is refused and that authors must migrate to a body param. That
+was true of `4d7856ea` and is FALSE of what ships. Do not carry it into docs or a CHANGELOG.
 
 ## Threat Flags
 
@@ -620,10 +750,27 @@ in-tree Code Mode path template ends in `/` — verified while scanning for Devi
 **Unblocked and ready:**
 
 - **Plan 06** (curated `substitute_path`) — the pattern to copy is here: per-value
-  `validate_path_placeholder`, then `validate_resolved_path` on the composed result, then dispatch.
-  `PlaceholderRefusal` implements `std::error::Error`, so it wraps into `HttpConnectorError` with
-  `#[from]`. **Read Deviation 1 first:** a curated `[[tools]]` HTTP tool whose `path` carries a
-  literal `?` will be refused the same way, and the same migration applies.
+  `validate_path_placeholder`, then a composed check, then dispatch. `PlaceholderRefusal` implements
+  `std::error::Error`, so it wraps into `HttpConnectorError` with `#[from]`.
+
+  **⚠ PLAN 06 INHERITS THE NARROWED RULE. This is the explicit handoff.** Do NOT call
+  `validate_resolved_path` directly on a curated composed path. An `[[tools]]` HTTP tool's `path` is
+  operator-authored config, exactly as a Code Mode script's literal is operator-authored script text,
+  so the same asymmetry applies: refusing `..` from it catches a traversal bug, refusing `?` from it
+  rejects legitimate configuration. A curated tool declaring
+  `path = "/content/{version}/CUI?string=x"` must work.
+
+  Concretely, plan 06 should do what `ResolvedPath::from_checked`
+  (`crates/pmcp-code-mode/src/executor.rs:2512-2525`) does — split at the FIRST `?` and call
+  `validate_resolved_path` on each side — and should reuse the reasoning already written in that
+  function's rustdoc rather than re-deriving it. **Do not put the split in core:**
+  `src/server/schema_validation.rs` is deliberately strict and plan 02's 52 tests assert that. Two
+  callers each splitting is the intended shape; a third copy of the *rule* would violate the
+  one-implementation prohibition, but a second call to the same rule does not.
+
+  Plan 06 must also add the mirror of `mod query_separator`'s 9 still-refused rows on its own
+  surface. A narrowing with only accept-rows is indistinguishable from a deleted check, and the
+  Code Mode rows do not cover the curated path.
 - **Plan 08** — the seam exists and is called from both arms:
   `HttpExecutor::placeholder_rules(&self, method: &str, path_template: &str, param: &str) ->
   PlaceholderRules<'_>`, defaulting to `PlaceholderRules::default()`. `method` is present, so
@@ -632,14 +779,14 @@ in-tree Code Mode path template ends in `/` — verified while scanning for Devi
   before `{key}` substitution — which for a string-literal path is byte-identical to the OpenAPI
   template. Build rules through the `with_*` builders (`#[non_exhaustive]` forbids a literal).
 - **Plan 11** — three hand-off items above: H1 (the `schema-validation` feature requirement move,
-  `Cargo.toml:42`), H2 (0.5.4 -> 0.6.0 plus three pins, ONE commit per D-14), H3 (the breaking
-  rollout note for script authors).
+  `Cargo.toml:42`), H2 (0.5.4 -> 0.6.0 plus three pins, ONE commit per D-14), H3 (the rollout note —
+  **rewritten after the narrowing**; use H3's current text, not the pre-overturn wording).
 
 **Concerns to carry forward:**
 
-- **Deviation 1's rejected alternative is the one judgment here an operator may want to overturn.**
-  It is reversible in one commit. The reasoning is recorded in full so the decision can be re-made
-  on the argument rather than re-derived.
+- **Deviation 1 is RESOLVED by operator decision** (`Narrow the '?' rule only`, shipped in
+  `84eccdd1`). No longer an open judgment. The rejected argument is retained only as the history that
+  explains why it was escalated.
 - **`make quality-gate` is the only gate that found Deviation 1.** This plan's own verify list was
   scoped to two crates and the third consumer lives in a fourth. A later plan touching a shared
   contract should enumerate consumers by a POSITIVE-CONTROLLED tree-wide scan, not by the plan's
@@ -652,11 +799,15 @@ in-tree Code Mode path template ends in `/` — verified while scanning for Devi
 ## Self-Check: PASSED
 
 - All 11 modified files exist on disk; this SUMMARY and `deferred-items.md` exist.
-- All four task commits are present in `git log`: `a939a674`, `1cd4d69d`, `81c39e0b`, `4d7856ea`
-  (`git rev-list --count e7aa6136..HEAD` == 4 at SUMMARY-write time and 6 at close-out).
-- Every `<acceptance_criteria>` row in Tasks 2 and 3 was re-run and passes; every plan-level
-  `<verification>` command was re-run and its result is tabulated above.
-- Task 1's acceptance criteria are met: the operator's confirmation is recorded verbatim above.
+- All five code commits are present in `git log`: `a939a674`, `1cd4d69d`, `81c39e0b`, `4d7856ea`,
+  `84eccdd1`.
+- Every `<acceptance_criteria>` row in Tasks 2 and 3 was re-run AFTER the narrowing and passes; every
+  plan-level `<verification>` command was re-run and its result is tabulated above.
+- BOTH operator decisions are recorded verbatim: `breaking-newtype` (Task 1) and
+  `Narrow the '?' rule only` (the Deviation 1 overturn).
+- The mutation test was re-run after the narrowing: **12 red rows**, all five pre-narrowing rows
+  preserved, file restored byte-exact.
+- Core left strict: `git diff e7aa6136..HEAD -- src/server/schema_validation.rs` is EMPTY.
 - Tracked working tree clean (`.pmat/` runtime churn restored with `git checkout -- .pmat/`, never
   committed).
 
