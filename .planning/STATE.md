@@ -5,16 +5,16 @@ milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
 current_phase: 128
 current_phase_name: Secure-by-default input validation for config-driven servers
 status: executing
-stopped_at: Completed 128-08-PLAN.md
-last_updated: "2026-09-27T21:22:30.633Z"
+stopped_at: Completed 128-09-PLAN.md
+last_updated: "2026-09-27T23:16:12.196Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 128 execution started
-state_head: e7989ac2ab7ce936b2cc62f27df3689fbc7a5cce
+state_head: 082b1f07e174dd7db2292c6cbbf137a62ba2800d
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 20
+  completed_plans: 21
   percent: 67
 ---
 
@@ -34,7 +34,7 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 ## Current Position
 
 Phase: 128 (Secure-by-default input validation for config-driven servers) — EXECUTING
-Plan: 9 of 11
+Plan: 10 of 11
 Status: Ready to execute
 Last activity: 2026-09-26 — Phase 128 execution started
 
@@ -602,6 +602,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 128]: Report a configured (method, path) the spec does not declare via an ADDITIVE ServerConfig::lint_against_spec(&OpenApiSchema) rather than a new parameter on lint(), and emit its findings at startup from build_server — the only production point where the config and the parsed spec are both in scope.
 - [Phase 128]: REJECT OpenAPI path-template canonicalization: normalizing {alias} to {id} either re-derives the exact match or guesses, and a wrong guess narrows from the WRONG parameter declared rules, which can refuse a legitimate value under a rule the endpoint does not carry.
 - [Phase 128]: Prove a property non-vacuous by INVERTING the implementation under test (core validate_path_placeholder to pattern-supersedes-floor), capturing the shrunk counterexample, restoring byte-exact by sha256, and committing the shrunk seed with a PROVENANCE header.
+- [Phase 128]: T-128-39a resolved by option (i): the OpenAPI binary's shared reqwest client is built with redirect(Policy::none()), so a redirect surfaces as a 3xx the caller handles rather than as a hop inside the client the E1 hook never saw (128-09)
+- [Phase 128]: The Code Mode step-(4) split WAS structurally possible: the non-auth remaining-body-to-query conversion moved above the E1 hook as step (2a); only auth-supplied query additions stay behind it. OutboundRequest.query is populated on BOTH surfaces; the documented-asymmetry fallback was not needed (128-09)
+- [Phase 128]: E1/E2 registration is PARAMETER-passing via ToolkitHooks, never builder-field accumulation: ServerBuilderExt is implemented for core's ServerBuilder whose fields are private, and a Rust extension trait cannot add a field to a foreign type (128-09)
+- [Phase 128]: E2 ships REFUSE-ONLY (&Value): the change request's normalization use is out of scope for this signature and recorded in the trait rustdoc rather than settled by the shape of a first signature (128-09)
 
 ### Pending Todos
 
@@ -698,8 +702,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-09-27T21:22:09.627Z
-Stopped at: Completed 128-08-PLAN.md
+Last session: 2026-09-27T23:15:55.733Z
+Stopped at: Completed 128-09-PLAN.md
 Resume file: None
 Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complete.** Decide the milestone's next move: `/gsd-phase add` to scope spike 010 (digest-pinned agent skill consumption) or spike 011 (tri-surface docs), or `/gsd-complete-milestone` to close v2.7 as-is. Two phase-126 hooks are configured but unrun: `workflow.nyquist_validation` is true and `126-VALIDATION.md` is still `status: draft` / `nyquist_compliant: false` (`/gsd-validate-phase 126`), and `workflow.security_enforcement` is true with no `126-SECURITY.md` (`/gsd-secure-phase 126`). Six code-review warnings (WR-01, WR-03, WR-04, WR-05, WR-07, WR-08) were deliberately deferred by the human with provenance in phase 126's `deferred-items.md` — they are logged debt, not gaps. Also from phase 126: **`Cargo.toml` reads `2.19.3` against a `## [2.20.0] - Unreleased` CHANGELOG section** — a releaser must bump it before tagging or `release.yml`'s note extraction exits 1. *(The pointer below is RETAINED VERBATIM for its three standing obligations; its own phase target is stale.)* **Phase 118.2 planning — `/gsd:plan-phase 118.2`.** `118.2-CONTEXT.md` is committed (`21215f12`) with 17 locked decisions; Phase 118.1 is 14/14 COMPLETE and its plan-04 pointer that stood here is retired. Two residuals to plan: the client live-SSE read (BOTH collect sites — `src/shared/streamable_http.rs:1002` GET and `:1543` POST-response; the POST case deadlocks in-tool elicitation and was added to scope during discussion) and the `notifications/message` emitter on `RequestHandlerExtra` (no `PeerHandle` method — D-06 declines the roadmap's implied trait addition). Mint `CONF-09`/`CONF-10` **with REQUIREMENTS.md table rows**, not body-only IDs. **Carry forward: `make quality-gate` does NOT run `make doc-check`** (standalone target at `Makefile:546-551`), **`make test-fuzz` cannot fail** (`Makefile:242-249` swallows a crashing target behind `|| echo`), and **there is no pre-commit hook installed** (`.git/hooks/` holds only `.sample` files) — run `cargo fmt --all`, the repo's clippy invocation and `doc-check` explicitly, and read a fuzz campaign's real exit code rather than the target's. **Also carry forward from the 118.1 `/code-review` (2026-08-11): the cross-session `client_capabilities` misattribution is UNOWNED** — `ServerState.server` is one `Arc<Mutex<Server>>` shared by every StreamableHTTP session, so a handler serving client A can read client B's capabilities; it was offered as a 118.2 fold-in and declined, and it needs a phase. *(The block below is retained verbatim for its three standing obligations; Phase 116 itself is complete and its own `Next` pointer is stale.)* **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`); Phase 118.1 plan 14 carried it to v2.6 with the measurement as the reason.
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -876,6 +880,7 @@ Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complet
 | Phase 128 P06 | ~95 min | 3 tasks | 6 files |
 | Phase 128 P07 | 118min | 3 tasks | 4 files |
 | Phase 128 P08 | 113 min | 3 tasks | 7 files |
+| Phase 128 P09 | ~3h | 3 tasks | 17 files |
 
 ## Operator Next Steps
 

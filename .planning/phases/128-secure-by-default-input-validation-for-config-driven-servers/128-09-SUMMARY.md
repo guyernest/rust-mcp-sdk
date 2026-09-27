@@ -492,3 +492,10 @@ from declarations and a test asserts it echoes no credential token), T-128-43 (m
 per-tool enforced-rules list ships), T-128-44 (accepted; documented on the trait), T-128-39a
 (mitigated by `Policy::none()`; mutation 4), T-128-39b (mitigated; mutation 9), T-128-42a
 (mitigated; one formatter, two call sites), T-128-39c (mitigated by the step-(4) split; mutation 3).
+
+## Self-Check: PASSED
+
+All three created artifacts exist on disk (`src/policy.rs`, `tests/request_policy.rs`,
+`examples/e05_input_validation.rs`) and all seven commits resolve in `git log --all`:
+`4d12d66f` (RED E1), `1117c4b6` (GREEN E1), `c42c669e` (RED E2), `90302036` (GREEN E2),
+`dc22ec48` (integration + example), `8a62fd7e` (tripwire rename), `082b1f07` (this SUMMARY).
