@@ -3,18 +3,19 @@ gsd_state_version: "1.0"
 milestone: v2.7
 milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
 current_phase: 128
+current_phase_name: secure-by-default-input-validation-for-config-driven-servers
 status: not_started
 stopped_at: Phase 128 context gathered
-last_updated: "2026-09-26T22:05:32.549Z"
+last_updated: "2026-09-27T00:02:37.277Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 128 added — secure-by-default input validation
-state_head: c36aa1fc8d09cb186d0d0d5339a688a4dcc9f799
+state_head: 95125419158b77751f1d43ede919cec0be109a48
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 12
+  total_plans: 23
   completed_plans: 12
-  percent: 67
+  percent: 52
 ---
 
 # Project State
@@ -32,7 +33,7 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 
 ## Current Position
 
-Phase: 126
+Phase: 128 (secure-by-default-input-validation-for-config-driven-servers) — READY TO EXECUTE
 Plan: Not started
 Status: All phases complete
 Last activity: 2026-09-06 - Completed quick task 260906-lx3: widen the workbook dialect (ROUNDDOWN/MAX/MIN/XLOOKUP, exact-match enforcement)

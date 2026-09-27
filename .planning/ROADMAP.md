@@ -277,17 +277,39 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 **Plans:** 11 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 128-01-PLAN.md — TRACER: core `schema_validation::validate_input` seam wired end to end (D1/SC-1), plus the Wave-0 Makefile gate repairs (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 128-02-PLAN.md — Core validator completeness: full value-free renderer, `validate_path_placeholder`, D-04 feature-split hygiene (wave 2)
-- [ ] 128-03-PLAN.md — D2 `ParamDecl` vocabulary, D3 position-scoped cap, `[server.validation]`, `ServerConfig::lint()`, Q7 default-on rollout (wave 3)
 - [ ] 128-04-PLAN.md — E3 `garde` on `TypedTool`, D-03 deprecate + harvest, ARCHITECTURE.md corrections, the `s57` example (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 128-03-PLAN.md — D2 `ParamDecl` vocabulary, D3 position-scoped cap, `[server.validation]`, `ServerConfig::lint()`, Q7 default-on rollout (wave 3)
 - [ ] 128-05-PLAN.md — D-09 `HttpExecutor` contract change, Pitfall 7 path-echo fix, Code Mode CR-01 probes (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 128-06-PLAN.md — Curated single-call D4 in `substitute_path`, the two JS-engine-free CR-01 probes (wave 4)
 - [ ] 128-07-PLAN.md — SC-3: `cargo pmcp validate config` + `validate deploy` lint integration (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 128-08-PLAN.md — D4(b) spec narrowing on the Code Mode surface, placeholder property arms (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 128-09-PLAN.md — E1 `RequestPolicy` + E2 `ArgumentValidator` + startup enforcement log + `e05` example (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 128-10-PLAN.md — SC-6 threat-comment correction and sweep, SC-7 fuzz targets, root property arm (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 128-11-PLAN.md — Release: twelve crate versions and every pin in one commit, CHANGELOG/D-15 rollout note, docs page (wave 8)
 
 ## Progress — v2.7 Milestone
