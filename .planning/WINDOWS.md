@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 62
+open_count: 68
 waived_count: 0
 fixed_count: 9
-total_count: 71
-last_updated: 2026-09-27T19:36:33.483Z
+total_count: 77
+last_updated: 2026-09-27T23:11:52.001Z
 ---
 
 # Broken Windows Ledger
@@ -86,6 +86,12 @@ last_updated: 2026-09-27T19:36:33.483Z
 | 69 | 128 | deviation | crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml |  | BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry. | open |  | 2026-09-27T15:35:02.834Z |  |
 | 70 | 128 | lint-warning | crates/pmcp-code-mode/src/code_executor.rs | 114 | Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them. | open |  | 2026-09-27T15:35:02.918Z |  |
 | 71 | 128 | deviation | cargo-pmcp/src/commands/validate.rs |  | Plan 128-07: three --lib verify filters selected ZERO tests and exited 0 (commands/ is bin-target-only); corrected to --bins and tests renamed validate_deploy_* | open |  | 2026-09-27T19:36:33.483Z |  |
+| 72 | 128 | deviation | crates/pmcp-server-toolkit/src/policy.rs | 507 | ToolkitHooks::validator_for renamed to argument_validator_for: the short name collided with tests/v2_schema_tripwires.rs's jsonschema 'validator_for(' construction-site needle and failed the tripwire with 2 UNKNOWN sites (128-09 Deviation 1) | open |  | 2026-09-27T23:11:41.220Z |  |
+| 73 | 128 | deviation | crates/pmcp-server-toolkit/src/http/mod.rs | 160 | HttpConnector gained three DEFAULT methods (execute_for_tool, has_request_policy, governed) not in 128-09's artifact list, so OutboundRequest.tool can be populated and a registered-but-unreached policy cannot look registered (128-09 Deviation 3) | open |  | 2026-09-27T23:11:41.299Z |  |
+| 74 | 128 | deviation | crates/pmcp-server-toolkit/src/policy.rs | 690 | emit_validation_report takes (&ServerConfig, &ToolkitHooks) rather than the plan's (&ServerConfig), so the startup log can state E1/E2 registration state and warn on a validator bound to an undeclared tool name (128-09 Deviation 2) | open |  | 2026-09-27T23:11:41.378Z |  |
+| 75 | 128 | deviation | crates/pmcp-server-toolkit/src/http/mod.rs | 128 | HttpConnectorError::PolicyRefused added as its own variant rather than reusing Backend, so a refusal by a security control is distinguishable from a broken backend in a deploy log (128-09 Deviation 5) | open |  | 2026-09-27T23:11:51.841Z |  |
+| 76 | 128 | deviation | crates/pmcp-server-toolkit/src/lib.rs | 190 | pmcp-server-toolkit now re-exports async_trait at its crate root, so an out-of-crate RequestPolicy implementor cannot land on a different async-trait version than the trait was declared with (128-09 Deviation 6) | open |  | 2026-09-27T23:11:51.920Z |  |
+| 77 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-09-PLAN.md |  | gsd_run check tdd-red-evidence could NOT verify either RED phase: it is a node-TAP parser and returns INVALID_RED/zero_tests_discovered on cargo-test output. The REDs are proven by captured cargo output instead (target test failing on a planned-behaviour assertion, controls passing). workflow.tdd_mode is absent from .planning/config.json so the gate is not enforced (128-09 Deviation 12) | open |  | 2026-09-27T23:11:52.001Z |  |
 
 ````json
 [
@@ -939,6 +945,78 @@ last_updated: 2026-09-27T19:36:33.483Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-27T19:36:33.483Z",
+    "resolved_at": null
+  },
+  {
+    "id": 72,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/policy.rs",
+    "line": 507,
+    "description": "ToolkitHooks::validator_for renamed to argument_validator_for: the short name collided with tests/v2_schema_tripwires.rs's jsonschema 'validator_for(' construction-site needle and failed the tripwire with 2 UNKNOWN sites (128-09 Deviation 1)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.220Z",
+    "resolved_at": null
+  },
+  {
+    "id": 73,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/http/mod.rs",
+    "line": 160,
+    "description": "HttpConnector gained three DEFAULT methods (execute_for_tool, has_request_policy, governed) not in 128-09's artifact list, so OutboundRequest.tool can be populated and a registered-but-unreached policy cannot look registered (128-09 Deviation 3)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.299Z",
+    "resolved_at": null
+  },
+  {
+    "id": 74,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/policy.rs",
+    "line": 690,
+    "description": "emit_validation_report takes (&ServerConfig, &ToolkitHooks) rather than the plan's (&ServerConfig), so the startup log can state E1/E2 registration state and warn on a validator bound to an undeclared tool name (128-09 Deviation 2)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.378Z",
+    "resolved_at": null
+  },
+  {
+    "id": 75,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/http/mod.rs",
+    "line": 128,
+    "description": "HttpConnectorError::PolicyRefused added as its own variant rather than reusing Backend, so a refusal by a security control is distinguishable from a broken backend in a deploy log (128-09 Deviation 5)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:51.841Z",
+    "resolved_at": null
+  },
+  {
+    "id": 76,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/lib.rs",
+    "line": 190,
+    "description": "pmcp-server-toolkit now re-exports async_trait at its crate root, so an out-of-crate RequestPolicy implementor cannot land on a different async-trait version than the trait was declared with (128-09 Deviation 6)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:51.920Z",
+    "resolved_at": null
+  },
+  {
+    "id": 77,
+    "kind": "unrun-verify",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-09-PLAN.md",
+    "line": null,
+    "description": "gsd_run check tdd-red-evidence could NOT verify either RED phase: it is a node-TAP parser and returns INVALID_RED/zero_tests_discovered on cargo-test output. The REDs are proven by captured cargo output instead (target test failing on a planned-behaviour assertion, controls passing). workflow.tdd_mode is absent from .planning/config.json so the gate is not enforced (128-09 Deviation 12)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:52.001Z",
     "resolved_at": null
   }
 ]
