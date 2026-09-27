@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 59
+open_count: 61
 waived_count: 0
 fixed_count: 9
-total_count: 68
-last_updated: 2026-09-27T05:48:55.279Z
+total_count: 70
+last_updated: 2026-09-27T15:35:02.918Z
 ---
 
 # Broken Windows Ledger
@@ -83,6 +83,8 @@ last_updated: 2026-09-27T05:48:55.279Z
 | 66 | 126 | deviation | src/server/builder.rs | 1501 | Phase 125 WR-03 still open: finalize_skills_resources panics inside a Result-returning build(); phase 126 neither fixes nor worsens it | open |  | 2026-09-04T20:49:19.150Z |  |
 | 67 | 128 | todo | crates/pmcp-server-toolkit/src/tools.rs |  | T-90-03-01 comment on HttpToolHandler::handle still claims the object envelope is 'enforced upstream'; as of 128-01 it is enforced by ValidatingToolHandler/validate_input in that same module. SC-6 sweep owns the rewrite. | open |  | 2026-09-27T03:50:11.872Z |  |
 | 68 | 128 | deviation | src/server/typed_tool.rs |  | E3 garde path projection: a caller-chosen map key that is itself a bare identifier is emitted verbatim in a refusal (the projection cannot enumerate T's declared field names at runtime). Documented on render_garde_refusal; escape hatch is validating inside the handler body. | open |  | 2026-09-27T05:48:55.279Z |  |
+| 69 | 128 | deviation | crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml |  | BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry. | open |  | 2026-09-27T15:35:02.834Z |  |
+| 70 | 128 | lint-warning | crates/pmcp-code-mode/src/code_executor.rs | 114 | Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them. | open |  | 2026-09-27T15:35:02.918Z |  |
 
 ````json
 [
@@ -900,6 +902,30 @@ last_updated: 2026-09-27T05:48:55.279Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-27T05:48:55.279Z",
+    "resolved_at": null
+  },
+  {
+    "id": 69,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml",
+    "line": null,
+    "description": "BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T15:35:02.834Z",
+    "resolved_at": null
+  },
+  {
+    "id": 70,
+    "kind": "lint-warning",
+    "phase": "128",
+    "file": "crates/pmcp-code-mode/src/code_executor.rs",
+    "line": 114,
+    "description": "Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T15:35:02.918Z",
     "resolved_at": null
   }
 ]
