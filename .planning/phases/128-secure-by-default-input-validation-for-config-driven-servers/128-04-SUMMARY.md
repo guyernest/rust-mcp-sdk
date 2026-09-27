@@ -23,11 +23,13 @@ affects: [128-05, 128-06, 128-08, 128-09, 128-11]
 actuals:
   tokens: 15890
   tasks: 3
-  commits: 4
+  commits: 6
   plan_head_before: e6ebe7400c9638c1f4d87cfcbd679a4d1de5bf78
-  # MEASURED: `git rev-list --count e6ebe740..HEAD` == 4 at SUMMARY-write time (the
-  # three task commits — one of which is a TDD pair, so 2 commits — plus this docs
-  # commit). chars/4: `git diff e6ebe740..HEAD | wc -c` == 63559 -> 15890.
+  # MEASURED: `git rev-list --count e6ebe740..HEAD` == 6 at rest — four task commits
+  # (Task 1 is a TDD pair: c1e80bf7 test + 747aa678 feat; then 9e809952, 8775da9c)
+  # plus two docs commits (142d2a15 SUMMARY + WINDOWS, bc4bb1d5 STATE + ROADMAP,
+  # into which this correction is amended so the count stays 6 rather than chasing
+  # itself). chars/4: `git diff e6ebe740..HEAD | wc -c` == 63559 -> 15890.
   # Estimate was 45000 / raw 90000; the realized diff is ~2.8x smaller, the same
   # over-estimate ratio plan 01 recorded (14942 against the same scale).
 
@@ -196,7 +198,7 @@ status: complete
 3. **Task 2** — `9e809952` (`docs(128-04)`): the deprecation + hide, the module-doc harvest record, the 11 doctest allows, the test relocation, and both `ARCHITECTURE.md` bullets.
 4. **Task 3** — `8775da9c` (`feat(128-04)`): `s57` + its `[[example]]` stanza.
 
-**Plan metadata:** this commit (`docs(128-04)`).
+**Plan metadata:** `142d2a15` (SUMMARY + `WINDOWS.md`) and `bc4bb1d5` (STATE + ROADMAP).
 
 No REFACTOR commit: `pmat quality-gate --checks complexity` reported 0 violations on the GREEN body and every new function is under 15 lines, so there was nothing to clean up. Committing an empty refactor would have been theatre.
 
@@ -421,8 +423,8 @@ None - no external service configuration required.
 - `tests/typed_tool_garde.rs` — FOUND
 - `tests/server_validation_deprecated.rs` — FOUND
 - `examples/s57_typed_tool_garde_validation.rs` — FOUND (and `git ls-files --error-unmatch` exit 0)
-- `c1e80bf7`, `747aa678`, `9e809952`, `8775da9c` — all four FOUND in `git log`
-- `git rev-list --count e6ebe740..HEAD` == 4, matching `actuals.commits`
+- `c1e80bf7`, `747aa678`, `9e809952`, `8775da9c` — all four task commits FOUND in `git log`
+- `git rev-list --count e6ebe740..HEAD` == 6, matching `actuals.commits` (four task + two docs)
 - Tracked working tree clean before this commit
 - Every task's `<acceptance_criteria>` re-run and passing; every plan-level `<verification>` leg run and recorded in the table above
 
