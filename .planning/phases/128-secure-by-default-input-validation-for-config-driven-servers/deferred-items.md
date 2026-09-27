@@ -43,3 +43,20 @@ a generous allow-list, so a bare `-D warnings` run on the toolkit is STRICTER th
 exits 101 on `pmcp-workbook-runtime` (a transitive dependency), "this function has too many
 arguments (8/7)", twice. `git diff --name-only e7aa6136 | grep -c workbook` is **0** — plan 05
 never touched that crate. Same non-CI-gated class as D2.
+
+## From plan 06 (2026-09-27)
+
+### D4 — one `unused_imports` warning in `crates/pmcp-server-toolkit/src/workbook/render_resource.rs`
+
+`RUSTFLAGS="" cargo build --workspace` emits
+`warning: unused import: pmcp_workbook_runtime::RenderMode` at
+`crates/pmcp-server-toolkit/src/workbook/render_resource.rs:43`, exit 0.
+
+**Proven pre-existing**, not introduced by plan 06:
+`git diff --name-only 87611080..HEAD | grep -c workbook` is **0** — plan 06 touched
+`src/http/schema.rs`, `src/http/client.rs`, `src/tools.rs`, `src/config.rs`, `src/error.rs`,
+`tests/curated_path_injection.rs` and the `Makefile`, none of which is in `src/workbook/`.
+
+**Why no gate sees it:** the same CLAUDE.md-recorded blind spot as D2/D3 — `make lint` scopes
+to the root `pmcp` package, and a plain `cargo build --workspace` warning is not
+`-D warnings`. `make quality-gate` is green.
