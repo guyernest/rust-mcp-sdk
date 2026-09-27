@@ -25,10 +25,14 @@ actuals:
   tasks: 3
   commits: 6
   plan_head_before: e7aa6136b7d8edfcdecba6d7d5ce512c51cfa8a4
-  # MEASURED: `git rev-list --count e7aa6136..HEAD` == 4 at the four code commits
-  # (a939a674, 1cd4d69d, 81c39e0b, 4d7856ea) and == 6 at close-out, the two extra
-  # being this SUMMARY's `docs(128-05)` commit and the STATE.md/ROADMAP.md commit
-  # the SDK's `query commit` writes separately. 6 is the close-out figure a later
+  # MEASURED, not narrated. `git rev-list --count e7aa6136..HEAD` == 6 at
+  # close-out, composed as: 4 code commits (a939a674, 1cd4d69d, 81c39e0b,
+  # 4d7856ea) + b0a17ad4 (this SUMMARY, deferred-items.md, STATE.md, ROADMAP.md
+  # and WINDOWS.md in ONE commit — unlike plan 02, the SDK folded the state files
+  # into the SUMMARY commit rather than writing a separate one) + the HEAD commit,
+  # which is the one that corrected this very number after re-measuring. HEAD is
+  # deliberately named by role and not by hash: this figure lives inside it, so
+  # writing its hash here would change that hash. 6 is what a later
   # `/gsd-verify-work` re-measure will see.
   # tokens: `git diff e7aa6136..HEAD -- crates/ | wc -c` == 86114, /4 == 21528.5.
   # The plan estimated 70000; the actual is ~31% of it. Not rounded toward the
@@ -545,8 +549,9 @@ that proxy weak. Both readings are given so the claim is not a grep artifact.
 3. **Task 3** — `81c39e0b` (`feat`): step (1) removed, `resolve_path` deleted, six probes added.
 4. **Deviation 1** — `4d7856ea` (`fix`): the 13-site consumer migration.
 
-**Plan metadata:** the `docs(128-05)` commit carrying this SUMMARY, and the STATE.md/ROADMAP.md
-commit the SDK writes separately.
+**Plan metadata:** `b0a17ad4` (`docs(128-05)`), which carries this SUMMARY, `deferred-items.md`,
+STATE.md, ROADMAP.md and WINDOWS.md in ONE commit — the SDK folded them together here rather
+than writing a separate state commit as it did in plan 02.
 
 No separate REFACTOR commit: both behaviour-preserving cleanups (the clippy needless-borrow and
 the helper extraction that kept both arms under cog 25) were made BEFORE their commits, so there
@@ -648,7 +653,7 @@ in-tree Code Mode path template ends in `/` — verified while scanning for Devi
 
 - All 11 modified files exist on disk; this SUMMARY and `deferred-items.md` exist.
 - All four task commits are present in `git log`: `a939a674`, `1cd4d69d`, `81c39e0b`, `4d7856ea`
-  (`git rev-list --count e7aa6136..HEAD` == 4 at write time).
+  (`git rev-list --count e7aa6136..HEAD` == 4 at SUMMARY-write time and 6 at close-out).
 - Every `<acceptance_criteria>` row in Tasks 2 and 3 was re-run and passes; every plan-level
   `<verification>` command was re-run and its result is tabulated above.
 - Task 1's acceptance criteria are met: the operator's confirmation is recorded verbatim above.
