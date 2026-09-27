@@ -274,7 +274,7 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 - [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
   coverage per the CLAUDE.md ALWAYS requirements.
 
-**Plans:** 11 plans
+**Plans:** 1/11 plans executed
 
 *Wave numbering updated 2026-09-27 after cross-AI review (`128-REVIEWS.md`): eight waves became NINE.
 Codex found wave 4 was not execution-safe — plans 06 and 07 would both edit `Makefile` concurrently —
@@ -284,7 +284,7 @@ only the wave numbers moved. Rationale and the before/after table are in `128-01
 Plans:
 **Wave 1**
 
-- [ ] 128-01-PLAN.md — TRACER: core `schema_validation::validate_input` seam wired end to end (D1/SC-1), the D-04 cfg migration in `output_validation.rs`, acceptance-matrix rows 8-11, plus the Wave-0 Makefile gate repairs (wave 1)
+- [x] 128-01-PLAN.md — TRACER: core `schema_validation::validate_input` seam wired end to end (D1/SC-1), the D-04 cfg migration in `output_validation.rs`, acceptance-matrix rows 8-11, plus the Wave-0 Makefile gate repairs (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -328,7 +328,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
-| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 0/11 | Planned |  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 1/11 | In Progress|  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:

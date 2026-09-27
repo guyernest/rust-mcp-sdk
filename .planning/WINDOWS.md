@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 57
+open_count: 58
 waived_count: 0
 fixed_count: 9
-total_count: 66
-last_updated: 2026-09-04T20:49:19.150Z
+total_count: 67
+last_updated: 2026-09-27T03:50:11.872Z
 ---
 
 # Broken Windows Ledger
@@ -81,6 +81,7 @@ last_updated: 2026-09-04T20:49:19.150Z
 | 64 | 125 | unrun-verify | Makefile |  | make book-test remains RED repo-wide (26 chapters, mdbook not linking the pmcp rlib); measured identical to HEAD baseline by 125-04 and deliberately not chained into quality-gate | open |  | 2026-09-02T08:56:20.392Z |  |
 | 65 | 126 | unrun-verify | Makefile |  | Three doctest legs (workflow::sequential, skill_prepend, and the skills selector's blind spot) are reachable by no make leg; 126-07 ran them by hand | open |  | 2026-09-04T20:49:19.059Z |  |
 | 66 | 126 | deviation | src/server/builder.rs | 1501 | Phase 125 WR-03 still open: finalize_skills_resources panics inside a Result-returning build(); phase 126 neither fixes nor worsens it | open |  | 2026-09-04T20:49:19.150Z |  |
+| 67 | 128 | todo | crates/pmcp-server-toolkit/src/tools.rs |  | T-90-03-01 comment on HttpToolHandler::handle still claims the object envelope is 'enforced upstream'; as of 128-01 it is enforced by ValidatingToolHandler/validate_input in that same module. SC-6 sweep owns the rewrite. | open |  | 2026-09-27T03:50:11.872Z |  |
 
 ````json
 [
@@ -874,6 +875,18 @@ last_updated: 2026-09-04T20:49:19.150Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-04T20:49:19.150Z",
+    "resolved_at": null
+  },
+  {
+    "id": 67,
+    "kind": "todo",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/tools.rs",
+    "line": null,
+    "description": "T-90-03-01 comment on HttpToolHandler::handle still claims the object envelope is 'enforced upstream'; as of 128-01 it is enforced by ValidatingToolHandler/validate_input in that same module. SC-6 sweep owns the rewrite.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T03:50:11.872Z",
     "resolved_at": null
   }
 ]
