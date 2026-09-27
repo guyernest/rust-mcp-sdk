@@ -75,8 +75,14 @@ metrics:
 actuals:
   tokens: 42841
   tasks: 3
-  commits: 6
+  commits: 9
 plan_head_before: 8b76c868b937ee1d6551d90282b24754eabfc527
+# `commits: 9` is MEASURED as `git rev-list --count 8b76c868..HEAD` at the tip of this
+# plan: 6 code commits (RED/GREEN x2, integration, the tripwire fix) + 3 docs commits
+# (the SUMMARY, the metadata commit, and this correction, which was AMENDED into place
+# rather than added so the number does not chase itself). Earlier drafts read 6 then 8 —
+# each was the count at its own write moment, which is exactly the trap: the figure has
+# to be measured at the tip and the write that records it folded into that tip.
 ---
 
 # Phase 128 Plan 09: E1 + E2 Escape Hatches Summary
