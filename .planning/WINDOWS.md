@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 61
+open_count: 62
 waived_count: 0
 fixed_count: 9
-total_count: 70
-last_updated: 2026-09-27T15:35:02.918Z
+total_count: 71
+last_updated: 2026-09-27T19:36:33.483Z
 ---
 
 # Broken Windows Ledger
@@ -85,6 +85,7 @@ last_updated: 2026-09-27T15:35:02.918Z
 | 68 | 128 | deviation | src/server/typed_tool.rs |  | E3 garde path projection: a caller-chosen map key that is itself a bare identifier is emitted verbatim in a refusal (the projection cannot enumerate T's declared field names at runtime). Documented on render_garde_refusal; escape hatch is validating inside the handler body. | open |  | 2026-09-27T05:48:55.279Z |  |
 | 69 | 128 | deviation | crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml |  | BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry. | open |  | 2026-09-27T15:35:02.834Z |  |
 | 70 | 128 | lint-warning | crates/pmcp-code-mode/src/code_executor.rs | 114 | Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them. | open |  | 2026-09-27T15:35:02.918Z |  |
+| 71 | 128 | deviation | cargo-pmcp/src/commands/validate.rs |  | Plan 128-07: three --lib verify filters selected ZERO tests and exited 0 (commands/ is bin-target-only); corrected to --bins and tests renamed validate_deploy_* | open |  | 2026-09-27T19:36:33.483Z |  |
 
 ````json
 [
@@ -926,6 +927,18 @@ last_updated: 2026-09-27T15:35:02.918Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-27T15:35:02.918Z",
+    "resolved_at": null
+  },
+  {
+    "id": 71,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "cargo-pmcp/src/commands/validate.rs",
+    "line": null,
+    "description": "Plan 128-07: three --lib verify filters selected ZERO tests and exited 0 (commands/ is bin-target-only); corrected to --bins and tests renamed validate_deploy_*",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T19:36:33.483Z",
     "resolved_at": null
   }
 ]

@@ -274,7 +274,7 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 - [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
   coverage per the CLAUDE.md ALWAYS requirements.
 
-**Plans:** 5/11 plans executed
+**Plans:** 7/11 plans executed
 
 *Wave numbering updated 2026-09-27 after cross-AI review (`128-REVIEWS.md`): eight waves became NINE.
 Codex found wave 4 was not execution-safe — plans 06 and 07 would both edit `Makefile` concurrently —
@@ -298,11 +298,11 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 128-06-PLAN.md — Curated single-call D4 in `substitute_path`, the composed-path check, the two JS-engine-free CR-01 probes (wave 4)
+- [x] 128-06-PLAN.md — Curated single-call D4 in `substitute_path`, the composed-path check, the two JS-engine-free CR-01 probes (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 128-07-PLAN.md — SC-3: `cargo pmcp validate config` + `validate deploy` lint integration, and the two Makefile gate entries (wave 5; serialized after 06 to avoid a concurrent `Makefile` edit)
+- [x] 128-07-PLAN.md — SC-3: `cargo pmcp validate config` + `validate deploy` lint integration, and the two Makefile gate entries (wave 5; serialized after 06 to avoid a concurrent `Makefile` edit)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -328,7 +328,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
-| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 5/11 | In Progress|  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 7/11 | In Progress|  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:
