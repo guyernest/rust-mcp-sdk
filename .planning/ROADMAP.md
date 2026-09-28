@@ -292,7 +292,7 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 - [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
   coverage per the CLAUDE.md ALWAYS requirements.
 
-**Plans:** 10/11 plans executed
+**Plans:** 11/11 plans executed
 
 *Wave numbering updated 2026-09-27 after cross-AI review (`128-REVIEWS.md`): eight waves became NINE.
 Codex found wave 4 was not execution-safe — plans 06 and 07 would both edit `Makefile` concurrently —
@@ -336,7 +336,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 128-11-PLAN.md — Release: FORK 1's exit (b) (path-only root dev-deps + publish reorder + two guards), twelve crate versions, every manifest pin and all nine scaffold literals in one commit, CHANGELOG/D-15 rollout note, docs page (wave 9)
+- [x] 128-11-PLAN.md — Release: FORK 1's exit (b) (path-only root dev-deps + publish reorder + two guards), twelve crate versions, every manifest pin and all **eight** scaffold literals in one commit, CHANGELOG/D-15 rollout note, docs page (wave 9). *Corrected on execution: this line and the plan's prose both said "nine"; the plan's own table listed eight, and an exhaustive scan of the four template files measured eight movable emitters (three constants + five inline literals). Five had no drift test and now do. `128-11-SUMMARY.md` carries the enumeration. A thirteenth crate-version emitter the plan never enumerated, `server.json`, was also found and moved.*
 
 ## Progress — v2.7 Milestone
 
@@ -346,7 +346,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
-| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 10/11 | In Progress|  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 11/11 | In Progress|  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:

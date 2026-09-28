@@ -4,17 +4,17 @@ milestone: v2.7
 milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
 current_phase: 128
 current_phase_name: Secure-by-default input validation for config-driven servers
-status: executing
-stopped_at: Completed 128-10-PLAN.md
-last_updated: "2026-09-28T01:26:14.543Z"
+status: verifying
+stopped_at: Completed 128-11-PLAN.md — phase 128 complete; release assembled, NOT tagged
+last_updated: "2026-09-28T04:11:08.353Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 128 execution started
-state_head: 5783081d9e8cc82a0a73eb0a90b28e9c6b3f7037
+state_head: 11c86afff8de27da2c519021438488a10094c685
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
   percent: 67
 ---
 
@@ -35,7 +35,7 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 
 Phase: 128 (Secure-by-default input validation for config-driven servers) — EXECUTING
 Plan: 11 of 11
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-26 — Phase 128 execution started
 
 **Phase 125 close-out:** UAT 3/3 passed, verification `passed`, `threats_open: 0`. Three human
@@ -609,6 +609,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 128]: 128-10: the SC-6 sweep's candidate-phrase list must include the TEMPORAL class ("does not exist yet", "lands with", "not yet", "will be", "currently") — that class is the documented-but-absent defect INVERTED, and it is what found `enforce_input_schema`'s stale registry paragraph. A list built only from locating and asserting phrases cannot reach it. — Calibrated: the 36-phrase sweep found BOTH orchestrator-named stale claims before they were fixed, by two independent phrase classes, and then found a THIRD (tools.rs:633's "rejects them upstream") that neither of the plan's two named greps could reach.
 - [Phase 128]: 128-10: a fuzz oracle over a refusal renderer must assert PROVENANCE (a per-case sentinel verified absent from the declaration), never string ABSENCE. A declaration legitimately echoes its own declared names, so an absence oracle cries wolf and then gets relaxed until it asserts nothing. — Proven twice: the provenance oracle ran 108317 iterations clean, and my own property-test generator — which DOES use the strict absence form, legitimately, because it controls both sides — reproduced the false-failure mode on its first run (a one-character caller key "6" that is a substring of "maxLength":6).
 - [Phase 128]: 128-10: the CI home for a new gate leg is decided by MEASURING the required-status-check set, not by preference. The org ruleset "Green Main — unified gate enforcement" requires exactly one context, `gate`; `.github/workflows/fuzz.yml` is NOT required, so enrolling a leg there alone delivers recurring execution and no merge gate. — This is why option (a) (provision nightly + cargo-fuzz in the quality-gate job, NON-DEFAULT so no other check changes toolchain) was implemented and option (b) adopted only additively as the deep daily campaign.
+- [Phase 128]: FORK 1 resolved by exit (b) on the operator's verbatim 'exit-b-as-specified': root Cargo.toml's pmcp-code-mode and pmcp-code-mode-derive dev-deps are PATH-ONLY and release.yml publishes pmcp AHEAD of pmcp-code-mode, guarded by a tripwire test and a second bounded region in check-release-coverage.sh
+- [Phase 128]: SC-3's mixed-version gap resolved by the operator's verbatim 'Version banner in lint output': pmcp_server_toolkit::VERSION is new additive API, both lint surfaces print which toolkit performed the lint, and neither hard-errors on a mismatch
+- [Phase 128]: server.json (a THIRTEENTH version emitter, in no plan's ledger) was folded INTO the D-14 release commit rather than followed up, because its own pin test requires the same commit and a follow-up would leave one commit where release.yml's publish-mcp job would 400 on a duplicate version
+- [Phase 128]: input-validation was NOT added to the toolkit's openapi-code-mode feature list (128-08 H-08b): widening a published feature's list is a compatibility decision with no need behind it
+- [Phase 128]: Contract YAML for the eleven new public symbols was NOT authored — ../provable-contracts is present but its documented contracts/<crate>/<name>.yaml tree does not exist (one commit, README only), so authoring them would invent a format
 
 ### Pending Todos
 
@@ -644,6 +649,7 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - 118.2-11 MEASURED FLAKE (new, open): 2025-11-25:tools-call-elicitation failed 1 of 9 fresh suite runs with 'Dispatch oneshot channel closed' — the same client request-lifecycle race as the blocker above. It is a pre-existing BLOCKING_GREEN_SCENARIOS entry and was ALREADY gate-fatal before the leg was hardened, so the hardening added no new exposure. Stated in the script's own output, NOT exempted. WINDOWS.md entry 9.
 - make book-test is red repo-wide (26 chapters, mdbook not linking the pmcp rlib) — MEASURED identical before and after phase 125; pre-existing build-tooling breakage, see 125 deferred-items.md
 - 128-10: `.github/workflows/ci.yml`'s new nightly + cargo-fuzz install has NEVER executed on a clean GitHub runner. The first CI run IS the measurement; a `cargo install cargo-fuzz` or `cargo +nightly fuzz build` failure there is a FINDING, not a flake, and the correct response is to fix the provisioning — never to relax `test-fuzz-strict`'s CI branch, which would return the leg to being a gate that cannot fail.
+- RELEASE BLOCKER (phase 128, carried from 128-10): ci.yml's nightly + cargo-fuzz provisioning for the test-fuzz-strict leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails there, fix the provisioning, do NOT relax the leg's CI branch. WINDOWS.md #84.
 
 ### Quick Tasks Completed
 
@@ -706,8 +712,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-09-28T01:26:14.472Z
-Stopped at: Completed 128-10-PLAN.md
+Last session: 2026-09-28T04:10:33.637Z
+Stopped at: Completed 128-11-PLAN.md — phase 128 complete; release assembled, NOT tagged
 Resume file: None
 Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complete.** Decide the milestone's next move: `/gsd-phase add` to scope spike 010 (digest-pinned agent skill consumption) or spike 011 (tri-surface docs), or `/gsd-complete-milestone` to close v2.7 as-is. Two phase-126 hooks are configured but unrun: `workflow.nyquist_validation` is true and `126-VALIDATION.md` is still `status: draft` / `nyquist_compliant: false` (`/gsd-validate-phase 126`), and `workflow.security_enforcement` is true with no `126-SECURITY.md` (`/gsd-secure-phase 126`). Six code-review warnings (WR-01, WR-03, WR-04, WR-05, WR-07, WR-08) were deliberately deferred by the human with provenance in phase 126's `deferred-items.md` — they are logged debt, not gaps. Also from phase 126: **`Cargo.toml` reads `2.19.3` against a `## [2.20.0] - Unreleased` CHANGELOG section** — a releaser must bump it before tagging or `release.yml`'s note extraction exits 1. *(The pointer below is RETAINED VERBATIM for its three standing obligations; its own phase target is stale.)* **Phase 118.2 planning — `/gsd:plan-phase 118.2`.** `118.2-CONTEXT.md` is committed (`21215f12`) with 17 locked decisions; Phase 118.1 is 14/14 COMPLETE and its plan-04 pointer that stood here is retired. Two residuals to plan: the client live-SSE read (BOTH collect sites — `src/shared/streamable_http.rs:1002` GET and `:1543` POST-response; the POST case deadlocks in-tool elicitation and was added to scope during discussion) and the `notifications/message` emitter on `RequestHandlerExtra` (no `PeerHandle` method — D-06 declines the roadmap's implied trait addition). Mint `CONF-09`/`CONF-10` **with REQUIREMENTS.md table rows**, not body-only IDs. **Carry forward: `make quality-gate` does NOT run `make doc-check`** (standalone target at `Makefile:546-551`), **`make test-fuzz` cannot fail** (`Makefile:242-249` swallows a crashing target behind `|| echo`), and **there is no pre-commit hook installed** (`.git/hooks/` holds only `.sample` files) — run `cargo fmt --all`, the repo's clippy invocation and `doc-check` explicitly, and read a fuzz campaign's real exit code rather than the target's. **Also carry forward from the 118.1 `/code-review` (2026-08-11): the cross-session `client_capabilities` misattribution is UNOWNED** — `ServerState.server` is one `Arc<Mutex<Server>>` shared by every StreamableHTTP session, so a handler serving client A can read client B's capabilities; it was offered as a 118.2 fold-in and declined, and it needs a phase. *(The block below is retained verbatim for its three standing obligations; Phase 116 itself is complete and its own `Next` pointer is stale.)* **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`); Phase 118.1 plan 14 carried it to v2.6 with the measurement as the reason.
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -886,6 +892,7 @@ Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complet
 | Phase 128 P08 | 113 min | 3 tasks | 7 files |
 | Phase 128 P09 | ~3h | 3 tasks | 17 files |
 | Phase 128 P10 | ~3h | 3 tasks | 14 files |
+| Phase 128 P11 | 108 | 4 tasks | 27 files |
 
 ## Operator Next Steps
 
