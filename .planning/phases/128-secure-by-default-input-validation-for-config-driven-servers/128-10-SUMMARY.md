@@ -165,16 +165,23 @@ metrics:
 actuals:
   tokens: 25670
   tasks: 3
-  commits: 3
+  commits: 5
 plan_head_before: 54bfaf0c343dd54ae1ebc61aeb2bb32e851fcd6b
-# `commits: 3` is MEASURED as `git rev-list --count 54bfaf0c..HEAD` at SUMMARY-write
-# time: caafe27e, 8fa8cbba, 9fec4900 — the three task commits. Two docs commits
-# follow (this SUMMARY, then the STATE.md/ROADMAP.md metadata commit the SDK writes
-# separately), so a later `/gsd-verify-work` re-measure will see **5**. Both figures
-# are given because plan 09 recorded exactly this trap: the number has to be
-# measured, and a single figure written mid-sequence is the count at its own write
-# moment rather than at the tip. `tokens`: `git diff 54bfaf0c..HEAD | wc -c` ==
-# 102683, /4 — the estimateTokens scale, NOT a harness token count.
+# `commits: 5` is MEASURED as `git rev-list --count 54bfaf0c..HEAD` AT THE PLAN TIP:
+# 3 code commits (caafe27e, 8fa8cbba, 9fec4900) + this SUMMARY (5783081d) + the
+# STATE.md/ROADMAP.md metadata commit, which the SDK's `query commit` writes as its
+# own commit rather than folding into the SUMMARY's.
+#
+# The figure was first written as **3** — the count at its own write moment — and
+# corrected to 5 by AMENDING it into the metadata commit rather than adding a sixth,
+# so the number does not chase itself. Plan 09 recorded exactly this trap after its
+# own figure read 6 then 8; the lesson is that the count has to be measured at the
+# tip AND the write that records it folded into that tip. `/gsd-verify-work` will
+# re-measure from `plan_head_before` with the same instrument and see 5.
+#
+# `tokens`: `git diff 54bfaf0c..HEAD | wc -c` == 102683 at the three-code-commit
+# point, /4 — the estimateTokens scale over the realized diff, NOT a harness token
+# count.
 ---
 
 # Phase 128 Plan 10: SC-6's sweep, SC-7's durable guard, and a fuzz leg that can fail Summary

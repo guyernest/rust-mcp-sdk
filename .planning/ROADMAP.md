@@ -274,7 +274,7 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 - [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
   coverage per the CLAUDE.md ALWAYS requirements.
 
-**Plans:** 9/11 plans executed
+**Plans:** 10/11 plans executed
 
 *Wave numbering updated 2026-09-27 after cross-AI review (`128-REVIEWS.md`): eight waves became NINE.
 Codex found wave 4 was not execution-safe — plans 06 and 07 would both edit `Makefile` concurrently —
@@ -314,7 +314,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 128-10-PLAN.md — SC-6 threat-comment correction and sweep, SC-7 fuzz targets with a provenance oracle, root property arm, the strict fuzz leg's CI home (wave 8)
+- [x] 128-10-PLAN.md — SC-6 threat-comment correction and sweep, SC-7 fuzz targets with a provenance oracle, root property arm, the strict fuzz leg's CI home (wave 8)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
@@ -328,7 +328,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
-| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 9/11 | In Progress|  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 10/11 | In Progress|  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:
