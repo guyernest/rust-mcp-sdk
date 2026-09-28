@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 68
+open_count: 73
 waived_count: 0
 fixed_count: 9
-total_count: 77
-last_updated: 2026-09-27T23:11:52.001Z
+total_count: 82
+last_updated: 2026-09-28T01:17:23.203Z
 ---
 
 # Broken Windows Ledger
@@ -92,6 +92,11 @@ last_updated: 2026-09-27T23:11:52.001Z
 | 75 | 128 | deviation | crates/pmcp-server-toolkit/src/http/mod.rs | 128 | HttpConnectorError::PolicyRefused added as its own variant rather than reusing Backend, so a refusal by a security control is distinguishable from a broken backend in a deploy log (128-09 Deviation 5) | open |  | 2026-09-27T23:11:51.841Z |  |
 | 76 | 128 | deviation | crates/pmcp-server-toolkit/src/lib.rs | 190 | pmcp-server-toolkit now re-exports async_trait at its crate root, so an out-of-crate RequestPolicy implementor cannot land on a different async-trait version than the trait was declared with (128-09 Deviation 6) | open |  | 2026-09-27T23:11:51.920Z |  |
 | 77 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-09-PLAN.md |  | gsd_run check tdd-red-evidence could NOT verify either RED phase: it is a node-TAP parser and returns INVALID_RED/zero_tests_discovered on cargo-test output. The REDs are proven by captured cargo output instead (target test failing on a planned-behaviour assertion, controls passing). workflow.tdd_mode is absent from .planning/config.json so the gate is not enforced (128-09 Deviation 12) | open |  | 2026-09-27T23:11:52.001Z |  |
+| 78 | 128 | deviation | fuzz/fuzz_targets/fuzz_input_schema_enforcement.rs |  | 128-10: the plan's 'fuzzing'-gated UNCACHED seam in src/server/schema_validation.rs was NOT added - the dispatch required a zero-line diff on that file. The cache hazard is closed instead by a BOUNDED schema projection (5760 distinct texts max, measured rss 544MB over 108k runs), so the target's SCHEMA side is not fully arbitrary. A defect reachable only from a schema shape outside the template table is out of reach. The seam remains the durable fix. | open |  | 2026-09-28T01:17:22.892Z |  |
+| 79 | 128 | deviation | fuzz/fuzz_targets/fuzz_placeholder_pattern_redos.rs |  | 128-10: this target CANNOT be projected onto a bounded schema family (an arbitrary pattern is the input under test), so its process-global validator-cache growth is bounded by the RUN (-runs / -max_total_time / MAX_PATTERN_LEN) rather than by construction. An unbounded campaign could be killed by memory and read as an A2 reproduction. Same fix as the entry above. | open |  | 2026-09-28T01:17:22.970Z |  |
+| 80 | 128 | deviation | CHANGELOG.md |  | 128-10: 128-03-SUMMARY.md:471 assigned the D-15 forward-incompatibility CHANGELOG note to PLAN 10. 128-11-PLAN.md now owns it (must_haves line 48, verbatim, plus a 'grep -c server.validation CHANGELOG.md' gate) and its Task 3 writes the whole release entry. Plan 10 deliberately did not touch CHANGELOG.md to avoid a partial entry plan 11 would overwrite. Obligation reassigned, not dropped - verify it in 128-11. | open |  | 2026-09-28T01:17:23.048Z |  |
+| 81 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-10-PLAN.md |  | 128-10: 'gsd_run check tdd-red-evidence' still cannot read cargo output (node-TAP parser only; returns INVALID_RED/zero_tests_discovered). Fifth consecutive plan in this phase to record it. Both tdd tasks evidenced by captured cargo/libFuzzer output instead. | open |  | 2026-09-28T01:17:23.125Z |  |
+| 82 | 128 | deviation | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-RESEARCH.md |  | 128-10: RESEARCH Finding 9b records 'make test-property currently selects two tests'. MEASURED before any change: 3 (tests/log_emitter.rs 2 + tests/typed_tool_garde.rs 1). The plan's fails_when compares against the documented 2, which would have passed on a no-op. Corrected upward, never downward. | open |  | 2026-09-28T01:17:23.203Z |  |
 
 ````json
 [
@@ -1017,6 +1022,66 @@ last_updated: 2026-09-27T23:11:52.001Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-27T23:11:52.001Z",
+    "resolved_at": null
+  },
+  {
+    "id": 78,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "fuzz/fuzz_targets/fuzz_input_schema_enforcement.rs",
+    "line": null,
+    "description": "128-10: the plan's 'fuzzing'-gated UNCACHED seam in src/server/schema_validation.rs was NOT added - the dispatch required a zero-line diff on that file. The cache hazard is closed instead by a BOUNDED schema projection (5760 distinct texts max, measured rss 544MB over 108k runs), so the target's SCHEMA side is not fully arbitrary. A defect reachable only from a schema shape outside the template table is out of reach. The seam remains the durable fix.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:22.892Z",
+    "resolved_at": null
+  },
+  {
+    "id": 79,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "fuzz/fuzz_targets/fuzz_placeholder_pattern_redos.rs",
+    "line": null,
+    "description": "128-10: this target CANNOT be projected onto a bounded schema family (an arbitrary pattern is the input under test), so its process-global validator-cache growth is bounded by the RUN (-runs / -max_total_time / MAX_PATTERN_LEN) rather than by construction. An unbounded campaign could be killed by memory and read as an A2 reproduction. Same fix as the entry above.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:22.970Z",
+    "resolved_at": null
+  },
+  {
+    "id": 80,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "CHANGELOG.md",
+    "line": null,
+    "description": "128-10: 128-03-SUMMARY.md:471 assigned the D-15 forward-incompatibility CHANGELOG note to PLAN 10. 128-11-PLAN.md now owns it (must_haves line 48, verbatim, plus a 'grep -c server.validation CHANGELOG.md' gate) and its Task 3 writes the whole release entry. Plan 10 deliberately did not touch CHANGELOG.md to avoid a partial entry plan 11 would overwrite. Obligation reassigned, not dropped - verify it in 128-11.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.048Z",
+    "resolved_at": null
+  },
+  {
+    "id": 81,
+    "kind": "unrun-verify",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-10-PLAN.md",
+    "line": null,
+    "description": "128-10: 'gsd_run check tdd-red-evidence' still cannot read cargo output (node-TAP parser only; returns INVALID_RED/zero_tests_discovered). Fifth consecutive plan in this phase to record it. Both tdd tasks evidenced by captured cargo/libFuzzer output instead.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.125Z",
+    "resolved_at": null
+  },
+  {
+    "id": 82,
+    "kind": "deviation",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-RESEARCH.md",
+    "line": null,
+    "description": "128-10: RESEARCH Finding 9b records 'make test-property currently selects two tests'. MEASURED before any change: 3 (tests/log_emitter.rs 2 + tests/typed_tool_garde.rs 1). The plan's fails_when compares against the documented 2, which would have passed on a no-op. Corrected upward, never downward.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.203Z",
     "resolved_at": null
   }
 ]
