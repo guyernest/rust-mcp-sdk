@@ -257,9 +257,27 @@ planning and verification is D1–D4 / E1–E3 from the change request, carried 
 - [ ] SC-2 — `ParamDecl` accepts `pattern`, `min_length`, `format` and `items`/`max_items`; a
   `pattern` that does not compile under the runtime engine fails config validation rather than
   failing at call time.
-- [ ] SC-3 — An uncapped string parameter is surfaced by `ServerConfig::validate` and by
-  `cargo pmcp validate deploy`. Whether the default cap is ON (and at what value) is an open
-  question for `/gsd-discuss-phase` — a default-on 256 would refuse calls that work today.
+- [ ] SC-3 — **AMENDED 2026-09-28 to name the surface that actually shipped.** An uncapped string
+  parameter is surfaced by `ServerConfig::lint()` and by **`cargo pmcp validate config`**, with
+  `cargo pmcp validate deploy` also emitting the same findings as warnings. The lint output states
+  **which `pmcp-server-toolkit` version performed it**, so a clean result reads as version-scoped
+  rather than as a guarantee about the toolkit the deployed server runs; it does NOT hard-error on a
+  mismatch. The default cap is ON at 256 code points and **position-scoped** (hard cap in path or
+  query position, warning only in body position), with `[server.validation] default_max_length = 0`
+  as the opt-out.
+  - *Original wording, retained:* "An uncapped string parameter is surfaced by
+    `ServerConfig::validate` and by `cargo pmcp validate deploy`. Whether the default cap is ON (and
+    at what value) is an open question for `/gsd-discuss-phase` — a default-on 256 would refuse calls
+    that work today."
+  - *Why it moved, in three places:* the warnings channel is `lint()` rather than `validate()`
+    (`validate()` returns `Result` and has no warning channel, so a warning forced through it would
+    become an error); the primary reviewer surface is a dedicated `validate config` subcommand rather
+    than `validate deploy` (Q5); and the cap question was answered by D-05/D-06 (position-scoped 256)
+    rather than left open. The version-scoping clause is the operator's resolution of the
+    mixed-version gap plan 07 flagged and left open. Full reasoning: CHANGELOG 2.21.0 § *Deviations
+    from this phase's own source documents*, items 4, 5 and the `validate config` section. A success
+    criterion silently rewritten to match what was built would be the same documented-but-absent
+    class this phase exists to close, one document up — hence the original stays visible.
 - [ ] SC-4 — A placeholder value carrying `?`, `#`, `/`, `..` or a percent-encoded form is refused on
   BOTH HTTP surfaces: `HttpCodeExecutor` (`code_mode.rs`) and the curated single-call
   `HttpClient::substitute_path` (`http/client.rs:150-163`). All five CR-01 probes pass, including the
