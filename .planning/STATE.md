@@ -4,12 +4,12 @@ milestone: v2.7
 milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
 current_phase: 128
 current_phase_name: Secure-by-default input validation for config-driven servers
-status: verifying
+status: executing
 stopped_at: Completed 128-11-PLAN.md — phase 128 complete; release assembled, NOT tagged
-last_updated: "2026-09-28T04:11:08.353Z"
-last_activity: 2026-09-26
+last_updated: "2026-09-28T13:10:20.171Z"
+last_activity: 2026-09-28
 last_activity_desc: Phase 128 execution started
-state_head: 11c86afff8de27da2c519021438488a10094c685
+state_head: 39a80181b29b49f7d9b929250efdb117d9075512
 progress:
   total_phases: 3
   completed_phases: 2
@@ -34,9 +34,9 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 ## Current Position
 
 Phase: 128 (Secure-by-default input validation for config-driven servers) — EXECUTING
-Plan: 11 of 11
-Status: Phase complete — ready for verification
-Last activity: 2026-09-26 — Phase 128 execution started
+Plan: 1 of 11
+Status: Executing Phase 128
+Last activity: 2026-09-28 — Phase 128 execution started
 
 **Phase 125 close-out:** UAT 3/3 passed, verification `passed`, `threats_open: 0`. Three human
 decisions recorded — CR-01 accepted as a D-01-scoped residual risk (an advertised skills
