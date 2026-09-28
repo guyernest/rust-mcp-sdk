@@ -1,4 +1,13 @@
-No external API integration: this phase hardens input validation *inside* the pmcp SDK — core `pmcp` (`src/server/schema_validation.rs`, `src/server/validation.rs`), `pmcp-server-toolkit` (`config.rs`, `tools.rs`, `http/client.rs`, `code_mode.rs`) and the `pmcp-code-mode` `HttpExecutor` trait — and adopts no new external API, SDK or service.
+No external API integration: this phase hardens input validation *inside* the pmcp SDK — core `pmcp`, `pmcp-server-toolkit` and `pmcp-code-mode` — and adopts no new external API, SDK or service. Surfaces enumerated below.
+
+## Surfaces touched (all in-repo)
+
+Core `pmcp`: `src/server/schema_validation.rs`, `src/server/validation.rs`.
+`pmcp-server-toolkit`: `config.rs`, `tools.rs`, `http/client.rs`, `code_mode.rs`.
+`pmcp-code-mode`: the `HttpExecutor` trait.
+
+None of these is a third-party API, SDK or service being adopted — every one is a module
+of this repository.
 
 ## Why the detector fired
 
