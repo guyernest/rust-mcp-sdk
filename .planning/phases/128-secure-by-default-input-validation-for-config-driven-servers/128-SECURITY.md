@@ -1,9 +1,9 @@
 ---
 phase: "128"
 slug: "secure-by-default-input-validation-for-config-driven-servers"
-status: blocked
+status: verified
 # threats_open = count of OPEN threats at or above workflow.security_block_on severity (the blocking gate)
-threats_open: 1
+threats_open: 0
 asvs_level: 1
 created: "2026-09-28"
 ---
@@ -44,11 +44,35 @@ Per-row `file:line` evidence is recorded in the audit transcript. Summarized by 
 
 | Status | Count | Threat IDs |
 |--------|-------|------------|
-| closed | 80 | T-128-01 … T-128-49, T-128-49b, T-128-50 … T-128-56 (all except the two below) |
-| **open (blocking)** | **1** | **T-128-49a** |
+| closed | 80 | T-128-01 … T-128-49, T-128-49a, T-128-49b, T-128-50 … T-128-56 (everything except T-128-49c) |
+| **open (blocking)** | **0** | — (T-128-49a closed 2026-09-28, see below) |
 | open — below `high` threshold (non-blocking) | 1 | T-128-49c |
 
-### Open — blocking
+### CLOSED 2026-09-28 — was the sole blocking threat
+
+**T-128-49a is now CLOSED, measured on a clean GitHub runner.** The measurement the phase
+said could only be taken by CI has been taken.
+
+| Evidence | Value |
+|---|---|
+| Run | `36483102030` @ `44c5eebd` — **completed/success** |
+| Provisioning (step 8) | **success** — `nightly-x86_64-unknown-linux-gnu … rustc 1.101.0-nightly (d080e7dff 2026-09-27)`; `cargo-fuzz` installed |
+| `Run quality gate` (step 12) | **success** — `✅ ALL TOYOTA WAY QUALITY CHECKS PASSED` |
+| Strict leg executed | `fuzzing fuzz_input_schema_enforcement for 5s (failure PROPAGATES)` and `fuzzing fuzz_placeholder_pattern_redos for 5s (failure PROPAGATES)` |
+| Execs | **36 615** and **11 943** runs; rss 438 MB / 485 MB |
+| Crashes / artifacts | `ERROR: libFuzzer` 0 · `deadly signal` 0 · `SUMMARY: libFuzzer` 0 · `Test unit written to` 0 |
+
+The feared outcome did not occur: `rustup toolchain install nightly` and
+`cargo install cargo-fuzz` both succeed on the runner image, so the leg does not redden
+every PR and there is no pressure to delete it. Broken-window row 84 (the RELEASE BLOCKER
+carried from 128-10) is marked `fixed` in `.planning/WINDOWS.md`.
+
+Verified from the runner log rather than from the green checkmark, deliberately: a passing
+gate that never ran the leg is the exact false-green class this phase exists to close, and
+rows 22 and 58 record that `make test-fuzz` does precisely that on stable.
+
+### Historical — the open finding, retained for its reasoning
+
 
 | Threat ID | Category | Component | Severity | Disposition | Mitigation | Status |
 |-----------|----------|-----------|----------|-------------|------------|--------|
@@ -207,6 +231,7 @@ non-CI-gated crates, each proven pre-existing with git evidence by the executor.
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-09-28 | 81 | 80 | 1 blocking (+1 non-blocking) | gsd-security-auditor (ASVS L1, `block_on: high`) |
+| 2026-09-28 | 81 | 80 | 0 blocking (1 non-blocking: T-128-49c) | CI run 36483102030 @ 44c5eebd closed T-128-49a |
 
 ---
 
@@ -214,7 +239,12 @@ non-CI-gated crates, each proven pre-existing with git evidence by the executor.
 
 - [x] All threats have a disposition (mitigate / accept / transfer)
 - [x] Accepted risks documented in Accepted Risks Log (8 rows, incl. the new T-128-21b)
-- [ ] `threats_open: 0` confirmed — **NO: threats_open: 1 (T-128-49a)**
-- [ ] `status: verified` set in frontmatter — **NO: status: blocked**
+- [x] `threats_open: 0` confirmed — T-128-49a closed by CI run 36483102030 @ 44c5eebd
+- [x] `status: verified` set in frontmatter
 
-**Approval:** pending — blocked on T-128-49a
+**Approval:** verified 2026-09-28
+
+*One non-blocking threat remains open below the `high` threshold: T-128-49c (medium) — the
+declared `fuzzing`-gated uncached seam does not exist; a bounded projection shipped instead,
+declared in `128-10-SUMMARY.md` Deviation 1. It does not gate advancement, but the register
+row still names a mechanism that is not there and should be amended or implemented.*

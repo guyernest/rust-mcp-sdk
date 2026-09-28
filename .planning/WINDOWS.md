@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 76
+open_count: 75
 waived_count: 0
-fixed_count: 9
+fixed_count: 10
 total_count: 85
-last_updated: 2026-09-28T03:59:12.036Z
+last_updated: 2026-09-28T22:07:09.336Z
 ---
 
 # Broken Windows Ledger
@@ -98,7 +98,7 @@ last_updated: 2026-09-28T03:59:12.036Z
 | 81 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-10-PLAN.md |  | 128-10: 'gsd_run check tdd-red-evidence' still cannot read cargo output (node-TAP parser only; returns INVALID_RED/zero_tests_discovered). Fifth consecutive plan in this phase to record it. Both tdd tasks evidenced by captured cargo/libFuzzer output instead. | open |  | 2026-09-28T01:17:23.125Z |  |
 | 82 | 128 | deviation | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-RESEARCH.md |  | 128-10: RESEARCH Finding 9b records 'make test-property currently selects two tests'. MEASURED before any change: 3 (tests/log_emitter.rs 2 + tests/typed_tool_garde.rs 1). The plan's fails_when compares against the documented 2, which would have passed on a no-op. Corrected upward, never downward. | open |  | 2026-09-28T01:17:23.203Z |  |
 | 83 | 128 | deviation | docs/architecture/input-validation.md |  | Contract-first YAML NOT authored for this phase's 11 new public symbols: ../provable-contracts is present but its documented contracts/<crate>/<name>.yaml tree does not exist (1 commit, README.md only), so there is no schema to conform to and authoring them would invent a format | open |  | 2026-09-28T03:59:11.881Z |  |
-| 84 | 128 | deviation | .github/workflows/ci.yml |  | RELEASE BLOCKER carried from 128-10: the nightly + cargo-fuzz provisioning in the test-fuzz-strict CI leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails, fix the provisioning, do NOT relax the leg's CI branch | open |  | 2026-09-28T03:59:11.958Z |  |
+| 84 | 128 | deviation | .github/workflows/ci.yml |  | RELEASE BLOCKER carried from 128-10: the nightly + cargo-fuzz provisioning in the test-fuzz-strict CI leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails, fix the provisioning, do NOT relax the leg's CI branch | fixed |  | 2026-09-28T03:59:11.958Z | 2026-09-28T22:07:09.336Z |
 | 85 | 128 | todo | cargo-pmcp/src/templates/oauth/proxy.rs | 468 | Three scaffold templates OUTSIDE plan 128-11's four named files emit pmcp requirements stale by a major or more and have no drift test: oauth/proxy.rs:468 and oauth/authorizer.rs:216 emit pmcp 0.3, mcp_app.rs:348 emits pmcp 1.10 (with an exact-string assertion at :897). Pre-existing, unrelated to the 2.21.0 release, deliberately NOT swept in | open |  | 2026-09-28T03:59:12.036Z |  |
 
 ````json
@@ -1106,10 +1106,10 @@ last_updated: 2026-09-28T03:59:12.036Z
     "file": ".github/workflows/ci.yml",
     "line": null,
     "description": "RELEASE BLOCKER carried from 128-10: the nightly + cargo-fuzz provisioning in the test-fuzz-strict CI leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails, fix the provisioning, do NOT relax the leg's CI branch",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-09-28T03:59:11.958Z",
-    "resolved_at": null
+    "resolved_at": "2026-09-28T22:07:09.336Z"
   },
   {
     "id": 85,
