@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 57
+open_count: 76
 waived_count: 0
 fixed_count: 9
-total_count: 66
-last_updated: 2026-09-04T20:49:19.150Z
+total_count: 85
+last_updated: 2026-09-28T03:59:12.036Z
 ---
 
 # Broken Windows Ledger
@@ -81,6 +81,25 @@ last_updated: 2026-09-04T20:49:19.150Z
 | 64 | 125 | unrun-verify | Makefile |  | make book-test remains RED repo-wide (26 chapters, mdbook not linking the pmcp rlib); measured identical to HEAD baseline by 125-04 and deliberately not chained into quality-gate | open |  | 2026-09-02T08:56:20.392Z |  |
 | 65 | 126 | unrun-verify | Makefile |  | Three doctest legs (workflow::sequential, skill_prepend, and the skills selector's blind spot) are reachable by no make leg; 126-07 ran them by hand | open |  | 2026-09-04T20:49:19.059Z |  |
 | 66 | 126 | deviation | src/server/builder.rs | 1501 | Phase 125 WR-03 still open: finalize_skills_resources panics inside a Result-returning build(); phase 126 neither fixes nor worsens it | open |  | 2026-09-04T20:49:19.150Z |  |
+| 67 | 128 | todo | crates/pmcp-server-toolkit/src/tools.rs |  | T-90-03-01 comment on HttpToolHandler::handle still claims the object envelope is 'enforced upstream'; as of 128-01 it is enforced by ValidatingToolHandler/validate_input in that same module. SC-6 sweep owns the rewrite. | open |  | 2026-09-27T03:50:11.872Z |  |
+| 68 | 128 | deviation | src/server/typed_tool.rs |  | E3 garde path projection: a caller-chosen map key that is itself a bare identifier is emitted verbatim in a refusal (the projection cannot enumerate T's declared field names at runtime). Documented on render_garde_refusal; escape hatch is validating inside the handler body. | open |  | 2026-09-27T05:48:55.279Z |  |
+| 69 | 128 | deviation | crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml |  | BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry. | open |  | 2026-09-27T15:35:02.834Z |  |
+| 70 | 128 | lint-warning | crates/pmcp-code-mode/src/code_executor.rs | 114 | Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them. | open |  | 2026-09-27T15:35:02.918Z |  |
+| 71 | 128 | deviation | cargo-pmcp/src/commands/validate.rs |  | Plan 128-07: three --lib verify filters selected ZERO tests and exited 0 (commands/ is bin-target-only); corrected to --bins and tests renamed validate_deploy_* | open |  | 2026-09-27T19:36:33.483Z |  |
+| 72 | 128 | deviation | crates/pmcp-server-toolkit/src/policy.rs | 507 | ToolkitHooks::validator_for renamed to argument_validator_for: the short name collided with tests/v2_schema_tripwires.rs's jsonschema 'validator_for(' construction-site needle and failed the tripwire with 2 UNKNOWN sites (128-09 Deviation 1) | open |  | 2026-09-27T23:11:41.220Z |  |
+| 73 | 128 | deviation | crates/pmcp-server-toolkit/src/http/mod.rs | 160 | HttpConnector gained three DEFAULT methods (execute_for_tool, has_request_policy, governed) not in 128-09's artifact list, so OutboundRequest.tool can be populated and a registered-but-unreached policy cannot look registered (128-09 Deviation 3) | open |  | 2026-09-27T23:11:41.299Z |  |
+| 74 | 128 | deviation | crates/pmcp-server-toolkit/src/policy.rs | 690 | emit_validation_report takes (&ServerConfig, &ToolkitHooks) rather than the plan's (&ServerConfig), so the startup log can state E1/E2 registration state and warn on a validator bound to an undeclared tool name (128-09 Deviation 2) | open |  | 2026-09-27T23:11:41.378Z |  |
+| 75 | 128 | deviation | crates/pmcp-server-toolkit/src/http/mod.rs | 128 | HttpConnectorError::PolicyRefused added as its own variant rather than reusing Backend, so a refusal by a security control is distinguishable from a broken backend in a deploy log (128-09 Deviation 5) | open |  | 2026-09-27T23:11:51.841Z |  |
+| 76 | 128 | deviation | crates/pmcp-server-toolkit/src/lib.rs | 190 | pmcp-server-toolkit now re-exports async_trait at its crate root, so an out-of-crate RequestPolicy implementor cannot land on a different async-trait version than the trait was declared with (128-09 Deviation 6) | open |  | 2026-09-27T23:11:51.920Z |  |
+| 77 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-09-PLAN.md |  | gsd_run check tdd-red-evidence could NOT verify either RED phase: it is a node-TAP parser and returns INVALID_RED/zero_tests_discovered on cargo-test output. The REDs are proven by captured cargo output instead (target test failing on a planned-behaviour assertion, controls passing). workflow.tdd_mode is absent from .planning/config.json so the gate is not enforced (128-09 Deviation 12) | open |  | 2026-09-27T23:11:52.001Z |  |
+| 78 | 128 | deviation | fuzz/fuzz_targets/fuzz_input_schema_enforcement.rs |  | 128-10: the plan's 'fuzzing'-gated UNCACHED seam in src/server/schema_validation.rs was NOT added - the dispatch required a zero-line diff on that file. The cache hazard is closed instead by a BOUNDED schema projection (5760 distinct texts max, measured rss 544MB over 108k runs), so the target's SCHEMA side is not fully arbitrary. A defect reachable only from a schema shape outside the template table is out of reach. The seam remains the durable fix. | open |  | 2026-09-28T01:17:22.892Z |  |
+| 79 | 128 | deviation | fuzz/fuzz_targets/fuzz_placeholder_pattern_redos.rs |  | 128-10: this target CANNOT be projected onto a bounded schema family (an arbitrary pattern is the input under test), so its process-global validator-cache growth is bounded by the RUN (-runs / -max_total_time / MAX_PATTERN_LEN) rather than by construction. An unbounded campaign could be killed by memory and read as an A2 reproduction. Same fix as the entry above. | open |  | 2026-09-28T01:17:22.970Z |  |
+| 80 | 128 | deviation | CHANGELOG.md |  | 128-10: 128-03-SUMMARY.md:471 assigned the D-15 forward-incompatibility CHANGELOG note to PLAN 10. 128-11-PLAN.md now owns it (must_haves line 48, verbatim, plus a 'grep -c server.validation CHANGELOG.md' gate) and its Task 3 writes the whole release entry. Plan 10 deliberately did not touch CHANGELOG.md to avoid a partial entry plan 11 would overwrite. Obligation reassigned, not dropped - verify it in 128-11. | open |  | 2026-09-28T01:17:23.048Z |  |
+| 81 | 128 | unrun-verify | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-10-PLAN.md |  | 128-10: 'gsd_run check tdd-red-evidence' still cannot read cargo output (node-TAP parser only; returns INVALID_RED/zero_tests_discovered). Fifth consecutive plan in this phase to record it. Both tdd tasks evidenced by captured cargo/libFuzzer output instead. | open |  | 2026-09-28T01:17:23.125Z |  |
+| 82 | 128 | deviation | .planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-RESEARCH.md |  | 128-10: RESEARCH Finding 9b records 'make test-property currently selects two tests'. MEASURED before any change: 3 (tests/log_emitter.rs 2 + tests/typed_tool_garde.rs 1). The plan's fails_when compares against the documented 2, which would have passed on a no-op. Corrected upward, never downward. | open |  | 2026-09-28T01:17:23.203Z |  |
+| 83 | 128 | deviation | docs/architecture/input-validation.md |  | Contract-first YAML NOT authored for this phase's 11 new public symbols: ../provable-contracts is present but its documented contracts/<crate>/<name>.yaml tree does not exist (1 commit, README.md only), so there is no schema to conform to and authoring them would invent a format | open |  | 2026-09-28T03:59:11.881Z |  |
+| 84 | 128 | deviation | .github/workflows/ci.yml |  | RELEASE BLOCKER carried from 128-10: the nightly + cargo-fuzz provisioning in the test-fuzz-strict CI leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails, fix the provisioning, do NOT relax the leg's CI branch | open |  | 2026-09-28T03:59:11.958Z |  |
+| 85 | 128 | todo | cargo-pmcp/src/templates/oauth/proxy.rs | 468 | Three scaffold templates OUTSIDE plan 128-11's four named files emit pmcp requirements stale by a major or more and have no drift test: oauth/proxy.rs:468 and oauth/authorizer.rs:216 emit pmcp 0.3, mcp_app.rs:348 emits pmcp 1.10 (with an exact-string assertion at :897). Pre-existing, unrelated to the 2.21.0 release, deliberately NOT swept in | open |  | 2026-09-28T03:59:12.036Z |  |
 
 ````json
 [
@@ -874,6 +893,234 @@ last_updated: 2026-09-04T20:49:19.150Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-04T20:49:19.150Z",
+    "resolved_at": null
+  },
+  {
+    "id": 67,
+    "kind": "todo",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/tools.rs",
+    "line": null,
+    "description": "T-90-03-01 comment on HttpToolHandler::handle still claims the object envelope is 'enforced upstream'; as of 128-01 it is enforced by ValidatingToolHandler/validate_input in that same module. SC-6 sweep owns the rewrite.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T03:50:11.872Z",
+    "resolved_at": null
+  },
+  {
+    "id": 68,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "src/server/typed_tool.rs",
+    "line": null,
+    "description": "E3 garde path projection: a caller-chosen map key that is itself a bare identifier is emitted verbatim in a refusal (the projection cannot enumerate T's declared field names at runtime). Documented on render_garde_refusal; escape hatch is validating inside the handler body.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T05:48:55.279Z",
+    "resolved_at": null
+  },
+  {
+    "id": 69,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-openapi-server/tests/fixtures/contoso-m365.toml",
+    "line": null,
+    "description": "BREAKING for Code Mode script authors: validate_resolved_path refuses a query separator anywhere in a composed path, so api.get('X?$select=values') is now refused. 13 in-tree sites migrated to a body param; plan 11 MUST carry a rollout note + CHANGELOG entry.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T15:35:02.834Z",
+    "resolved_at": null
+  },
+  {
+    "id": 70,
+    "kind": "lint-warning",
+    "phase": "128",
+    "file": "crates/pmcp-code-mode/src/code_executor.rs",
+    "line": 114,
+    "description": "Five pre-existing rustdoc broken_intra_doc_links in pmcp-code-mode visible only under --features js-runtime; make doc-check scopes to root pmcp and cannot see them.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T15:35:02.918Z",
+    "resolved_at": null
+  },
+  {
+    "id": 71,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "cargo-pmcp/src/commands/validate.rs",
+    "line": null,
+    "description": "Plan 128-07: three --lib verify filters selected ZERO tests and exited 0 (commands/ is bin-target-only); corrected to --bins and tests renamed validate_deploy_*",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T19:36:33.483Z",
+    "resolved_at": null
+  },
+  {
+    "id": 72,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/policy.rs",
+    "line": 507,
+    "description": "ToolkitHooks::validator_for renamed to argument_validator_for: the short name collided with tests/v2_schema_tripwires.rs's jsonschema 'validator_for(' construction-site needle and failed the tripwire with 2 UNKNOWN sites (128-09 Deviation 1)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.220Z",
+    "resolved_at": null
+  },
+  {
+    "id": 73,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/http/mod.rs",
+    "line": 160,
+    "description": "HttpConnector gained three DEFAULT methods (execute_for_tool, has_request_policy, governed) not in 128-09's artifact list, so OutboundRequest.tool can be populated and a registered-but-unreached policy cannot look registered (128-09 Deviation 3)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.299Z",
+    "resolved_at": null
+  },
+  {
+    "id": 74,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/policy.rs",
+    "line": 690,
+    "description": "emit_validation_report takes (&ServerConfig, &ToolkitHooks) rather than the plan's (&ServerConfig), so the startup log can state E1/E2 registration state and warn on a validator bound to an undeclared tool name (128-09 Deviation 2)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:41.378Z",
+    "resolved_at": null
+  },
+  {
+    "id": 75,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/http/mod.rs",
+    "line": 128,
+    "description": "HttpConnectorError::PolicyRefused added as its own variant rather than reusing Backend, so a refusal by a security control is distinguishable from a broken backend in a deploy log (128-09 Deviation 5)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:51.841Z",
+    "resolved_at": null
+  },
+  {
+    "id": 76,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "crates/pmcp-server-toolkit/src/lib.rs",
+    "line": 190,
+    "description": "pmcp-server-toolkit now re-exports async_trait at its crate root, so an out-of-crate RequestPolicy implementor cannot land on a different async-trait version than the trait was declared with (128-09 Deviation 6)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:51.920Z",
+    "resolved_at": null
+  },
+  {
+    "id": 77,
+    "kind": "unrun-verify",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-09-PLAN.md",
+    "line": null,
+    "description": "gsd_run check tdd-red-evidence could NOT verify either RED phase: it is a node-TAP parser and returns INVALID_RED/zero_tests_discovered on cargo-test output. The REDs are proven by captured cargo output instead (target test failing on a planned-behaviour assertion, controls passing). workflow.tdd_mode is absent from .planning/config.json so the gate is not enforced (128-09 Deviation 12)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-27T23:11:52.001Z",
+    "resolved_at": null
+  },
+  {
+    "id": 78,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "fuzz/fuzz_targets/fuzz_input_schema_enforcement.rs",
+    "line": null,
+    "description": "128-10: the plan's 'fuzzing'-gated UNCACHED seam in src/server/schema_validation.rs was NOT added - the dispatch required a zero-line diff on that file. The cache hazard is closed instead by a BOUNDED schema projection (5760 distinct texts max, measured rss 544MB over 108k runs), so the target's SCHEMA side is not fully arbitrary. A defect reachable only from a schema shape outside the template table is out of reach. The seam remains the durable fix.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:22.892Z",
+    "resolved_at": null
+  },
+  {
+    "id": 79,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "fuzz/fuzz_targets/fuzz_placeholder_pattern_redos.rs",
+    "line": null,
+    "description": "128-10: this target CANNOT be projected onto a bounded schema family (an arbitrary pattern is the input under test), so its process-global validator-cache growth is bounded by the RUN (-runs / -max_total_time / MAX_PATTERN_LEN) rather than by construction. An unbounded campaign could be killed by memory and read as an A2 reproduction. Same fix as the entry above.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:22.970Z",
+    "resolved_at": null
+  },
+  {
+    "id": 80,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "CHANGELOG.md",
+    "line": null,
+    "description": "128-10: 128-03-SUMMARY.md:471 assigned the D-15 forward-incompatibility CHANGELOG note to PLAN 10. 128-11-PLAN.md now owns it (must_haves line 48, verbatim, plus a 'grep -c server.validation CHANGELOG.md' gate) and its Task 3 writes the whole release entry. Plan 10 deliberately did not touch CHANGELOG.md to avoid a partial entry plan 11 would overwrite. Obligation reassigned, not dropped - verify it in 128-11.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.048Z",
+    "resolved_at": null
+  },
+  {
+    "id": 81,
+    "kind": "unrun-verify",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-10-PLAN.md",
+    "line": null,
+    "description": "128-10: 'gsd_run check tdd-red-evidence' still cannot read cargo output (node-TAP parser only; returns INVALID_RED/zero_tests_discovered). Fifth consecutive plan in this phase to record it. Both tdd tasks evidenced by captured cargo/libFuzzer output instead.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.125Z",
+    "resolved_at": null
+  },
+  {
+    "id": 82,
+    "kind": "deviation",
+    "phase": "128",
+    "file": ".planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-RESEARCH.md",
+    "line": null,
+    "description": "128-10: RESEARCH Finding 9b records 'make test-property currently selects two tests'. MEASURED before any change: 3 (tests/log_emitter.rs 2 + tests/typed_tool_garde.rs 1). The plan's fails_when compares against the documented 2, which would have passed on a no-op. Corrected upward, never downward.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T01:17:23.203Z",
+    "resolved_at": null
+  },
+  {
+    "id": 83,
+    "kind": "deviation",
+    "phase": "128",
+    "file": "docs/architecture/input-validation.md",
+    "line": null,
+    "description": "Contract-first YAML NOT authored for this phase's 11 new public symbols: ../provable-contracts is present but its documented contracts/<crate>/<name>.yaml tree does not exist (1 commit, README.md only), so there is no schema to conform to and authoring them would invent a format",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T03:59:11.881Z",
+    "resolved_at": null
+  },
+  {
+    "id": 84,
+    "kind": "deviation",
+    "phase": "128",
+    "file": ".github/workflows/ci.yml",
+    "line": null,
+    "description": "RELEASE BLOCKER carried from 128-10: the nightly + cargo-fuzz provisioning in the test-fuzz-strict CI leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails, fix the provisioning, do NOT relax the leg's CI branch",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T03:59:11.958Z",
+    "resolved_at": null
+  },
+  {
+    "id": 85,
+    "kind": "todo",
+    "phase": "128",
+    "file": "cargo-pmcp/src/templates/oauth/proxy.rs",
+    "line": 468,
+    "description": "Three scaffold templates OUTSIDE plan 128-11's four named files emit pmcp requirements stale by a major or more and have no drift test: oauth/proxy.rs:468 and oauth/authorizer.rs:216 emit pmcp 0.3, mcp_app.rs:348 emits pmcp 1.10 (with an exact-string assertion at :897). Pre-existing, unrelated to the 2.21.0 release, deliberately NOT swept in",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-28T03:59:12.036Z",
     "resolved_at": null
   }
 ]

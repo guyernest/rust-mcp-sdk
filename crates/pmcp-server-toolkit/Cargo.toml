@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-server-toolkit"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/paiml/rust-mcp-sdk"
@@ -20,8 +20,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-pmcp = { version = "2.9.0", path = "../..", default-features = false }
-pmcp-code-mode = { version = "0.5.3", path = "../pmcp-code-mode", default-features = false, optional = true }
+pmcp = { version = "2.21", path = "../..", default-features = false }
+pmcp-code-mode = { version = "0.6", path = "../pmcp-code-mode", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
@@ -51,7 +51,6 @@ aws-sdk-secretsmanager = { version = "1", default-features = false, features = [
 aws-sdk-ssm = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"], optional = true }
 aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso", "behavior-version-latest"], optional = true }
 
-jsonschema = { version = "0.49", default-features = false, optional = true }
 rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 # Why: Phase 90 OpenAPI HTTP backend (OAPI-01 / OAPI-03). These optional deps are
@@ -90,7 +89,23 @@ pmcp-workbook-runtime = { version = "0.2.0", path = "../pmcp-workbook-runtime", 
 include_dir = { version = "0.7.4", optional = true }
 
 [features]
-default = ["code-mode"]
+# Why: `input-validation` is in `default` because that is the MECHANISM by which
+# this phase's "the defaults ship on" story actually happens (Phase 128, Q7).
+# Before this edit `default = ["code-mode"]` did not contain it, so every
+# config-driven server built from this workspace registered tools whose declared
+# `inputSchema` was never checked — a documented-but-absent mitigation.
+#
+# It is cheap to carry: `input-validation` forwards ONLY `pmcp/schema-validation`,
+# so a curated single-call build pays for the schema engine and NOT for `garde`
+# (which lives behind `pmcp/validation`) and NOT for the JS engine.
+#
+# NOTE: two in-tree consumers set `default-features = false` and therefore do NOT
+# inherit this — `pmcp-workbook-server` and `pmcp-workbook-compiler` name
+# `input-validation` explicitly in their own feature lists, as does the
+# `cargo pmcp new --kind workbook-server` scaffold template. Anything that opts out
+# of defaults must opt back in, or it ships unenforced while every sibling is
+# enforced.
+default = ["code-mode", "input-validation"]
 # Why: the toolkit's code-mode wiring needs `ValidationPipeline::validate_sql_query`
 # for the SC-3 anchor (`allow_writes=false` rejects INSERT). That method is gated
 # behind `pmcp-code-mode/sql-code-mode` (see Phase 83 Plan 06 CODE_MODE_API_NOTES.md
@@ -99,7 +114,17 @@ default = ["code-mode"]
 code-mode = ["dep:pmcp-code-mode", "pmcp-code-mode/sql-code-mode"]
 aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm", "dep:tokio"]
 avp = ["code-mode", "pmcp-code-mode/avp"]
-input-validation = ["dep:jsonschema"]
+# Why: the toolkit deliberately holds NO second `jsonschema` path of its own
+# (Phase 128, D-01 — core `pmcp` owns the one validator path, so a tool's input and
+# output can never be checked under different dialects, and the compiled-validator
+# cache, the draft pin and the value-free refusal renderer are not duplicated). The
+# crate's own optional `jsonschema` dependency was REMOVED when this forward landed.
+#
+# The forward must be EXPLICIT: `pmcp` above carries `default-features = false`, so
+# nothing enables `pmcp/schema-validation` implicitly. With this feature OFF,
+# `tools.rs::enforce_input_schema` logs the opt-out once per synthesized tool at
+# startup — an enforcement that is off must never read as on.
+input-validation = ["pmcp/schema-validation"]
 sqlite = ["dep:rusqlite", "dep:tokio"]
 # Why: the `http` feature serves two reconciled concerns (Phase 90 Plan 01,
 # Rule 3 — name reconciliation):
@@ -172,6 +197,15 @@ required-features = ["workbook-embedded", "http"]
 [[example]]
 name = "workbook_table_authoring"
 required-features = ["workbook-embedded"]
+
+# Phase 128 (E1/E2 + SC-5) — the three input-validation layers, each catching what
+# only it can. `required-features` names TOOLKIT features only (see the note above
+# the feature table): `input-validation` for D1 + the two hooks, `http` for the
+# governed connector. Deliberately NOT `openapi-code-mode` — the demonstration runs
+# on the light, JS-engine-free curated build.
+[[example]]
+name = "e05_input_validation"
+required-features = ["input-validation", "http"]
 
 [dev-dependencies]
 proptest = "1.7"

@@ -64,7 +64,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{ConfigValidationError, Result, ToolkitError};
+use crate::error::{ConfigValidationError, ConfigWarning, Result, ToolkitError};
 
 // -----------------------------------------------------------------------------
 // Top-level
@@ -238,12 +238,20 @@ impl ServerConfig {
     ///    parse time, before `validate()` is called.
     /// 7. When a `[backend]` block is present (`http` feature), its `base_url`
     ///    is non-empty (trimmed) — GAP 3 / WR-02. Absent on no-http builds.
+    /// 8. Every `[[tools.parameters]]` declaration is well-formed (Phase 128
+    ///    D2 / SC-2): no empty `pattern`, no `minimum`/`maximum` outside the
+    ///    exactly-representable `f64` integer range, and the tool's synthesized
+    ///    `inputSchema` COMPILES as a Draft 2020-12 schema. The compile check
+    ///    requires the `input-validation` feature; on a build without it the check
+    ///    is skipped and a `tracing::warn!` says so once, because an enforcement
+    ///    that is off must never read as on.
     ///
     /// # Errors
     ///
     /// Returns a [`ConfigValidationError`] variant identifying the
     /// first rule violated. Iteration order matches struct field order.
     pub fn validate(&self) -> std::result::Result<(), ConfigValidationError> {
+        warn_if_pattern_checking_unavailable(&self.tools);
         if self.server.name.trim().is_empty() {
             return Err(ConfigValidationError::EmptyServerName);
         }
@@ -260,6 +268,9 @@ impl ServerConfig {
             if tool.declared_kind_count() > 1 {
                 return Err(ConfigValidationError::AmbiguousToolKind(i));
             }
+            // Phase 128 D2 / SC-2. Deliberately placed AFTER the name and
+            // kind arms so no pre-existing test's expected variant changes.
+            validate_tool_parameters(tool, &self.server.validation)?;
         }
         for (i, table) in self.database.tables.iter().enumerate() {
             if table.name.trim().is_empty() {
@@ -318,7 +329,625 @@ impl ServerConfig {
         }
         Ok(())
     }
+
+    /// Non-fatal configuration findings (Phase 128, D-07).
+    ///
+    /// Returns, in `[[tools]]` then `[[tools.parameters]]` DECLARATION order:
+    ///
+    /// 1. one `uncapped-string` finding per BODY-position string parameter with no
+    ///    `max_length` — the residual D-05 accepts, surfaced rather than refused;
+    /// 2. one `declared-max-length-above-placeholder-cap` finding per path- or
+    ///    query-position parameter whose declared `max_length` EXCEEDS
+    ///    `pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH`, because such a
+    ///    parameter publishes a limit in `inputSchema` that the always-on
+    ///    placeholder floor will not honour — so a refusal would name a rule the
+    ///    client was never told about;
+    ///
+    /// and then one finding per ACTIVE `[server.validation]` opt-out.
+    ///
+    /// Never returns an error and never refuses anything. A config with zero tools
+    /// and no active opt-out returns an empty `Vec`. Consumed by
+    /// `cargo pmcp validate config` and by the once-at-startup log.
+    #[must_use]
+    pub fn lint(&self) -> Vec<ConfigWarning> {
+        let mut out = Vec::new();
+        for tool in &self.tools {
+            lint_tool(tool, &self.server.validation, &mut out);
+        }
+        lint_opt_outs(&self.server.validation, &mut out);
+        out
+    }
+
+    /// The findings that need the operator's OpenAPI document to be computable
+    /// (Phase 128, D4(b) / T-128-36a).
+    ///
+    /// Separate from [`Self::lint`] rather than folded into it, because `lint`
+    /// takes only `&self` and a config is meaningful with no spec at all — a
+    /// spec-less deployment is supported and must produce no findings from its own
+    /// absence.
+    ///
+    /// Returns, in `[[tools]]` declaration order, one
+    /// [`CONFIGURED_TEMPLATE_NOT_IN_SPEC`] finding per single-call tool whose
+    /// `(method, path)` matches no operation the spec declares. Such a tool reaches
+    /// its endpoint and keeps the unconditional character floor and the always-on
+    /// length cap, but the spec's declared `pattern`/`maxLength` narrowing for its
+    /// placeholders is silently not applied — the `/users/{alias}` versus
+    /// `/users/{id}` drift. That is an author error an operator can fix before
+    /// deploy, which is the whole reason this runs at config time.
+    ///
+    /// An author-written query string on the configured `path` is stripped before
+    /// the lookup, because an OpenAPI path template never carries one — so
+    /// `/content/{version}/CUI?string=x` is matched as `/content/{version}/CUI`
+    /// rather than reported as drift.
+    ///
+    /// # The bound on this guard, stated
+    ///
+    /// It covers a template written in the CONFIG. A template a Code Mode script
+    /// COMPOSES at runtime is not visible here and cannot be, which is why the
+    /// runtime miss is additionally reported once per `(method, template)` pair by
+    /// `crate::code_mode`'s `log_spec_lookup_miss`. Neither signal is a refusal:
+    /// this returns findings, and never an error.
+    ///
+    /// Tools with no `path`/`method` pair — SQL tools, script tools — are skipped:
+    /// they address no single spec operation.
+    #[cfg(feature = "http")]
+    #[must_use]
+    pub fn lint_against_spec(&self, spec: &crate::http::OpenApiSchema) -> Vec<ConfigWarning> {
+        let mut out = Vec::new();
+        for tool in &self.tools {
+            let (Some(path), Some(method)) = (tool.path.as_deref(), tool.method.as_deref()) else {
+                continue;
+            };
+            // An OpenAPI path template never carries a query string; the curated
+            // surface permits one (plan 06's `?` narrowing), so strip it first.
+            let template = path.split_once('?').map_or(path, |(p, _)| p);
+            if spec.operation_for(template, method).is_some() {
+                continue;
+            }
+            out.push(ConfigWarning {
+                tool: tool.name.clone(),
+                param: String::new(),
+                rule: CONFIGURED_TEMPLATE_NOT_IN_SPEC,
+                detail: format!(
+                    "declares `method = \"{method}\"` and `path = \"{path}\"`, which matches no \
+                     operation in the supplied OpenAPI document. The tool still works and its \
+                     path placeholders still face the unconditional character floor and the \
+                     always-on length cap, but the spec's declared pattern/maxLength narrowing \
+                     is NOT applied to them — a placeholder named differently from the spec's \
+                     own (`{{alias}}` against a declared `{{id}}`) reaches the same endpoint \
+                     with its declaration silently dropped. Spell the path and method exactly \
+                     as the spec declares them, or remove the spec if this endpoint is \
+                     deliberately undocumented."
+                ),
+            });
+        }
+        out
+    }
+
+    /// A structured account of what THIS config actually enforces, for the
+    /// once-at-startup log (Phase 128 D-07 / `<specifics>`).
+    ///
+    /// The startup log is the regression-tracing mechanism, not optional polish: it
+    /// is how an operator discovers, from a deploy log alone, that a server is
+    /// running with schema enforcement off or with the cap disabled.
+    #[must_use]
+    pub fn validation_report(&self) -> ValidationReport {
+        let validation = &self.server.validation;
+        let mut opt_outs = Vec::new();
+        lint_opt_outs(validation, &mut opt_outs);
+        ValidationReport {
+            enforce_input_schema: validation.enforce_input_schema,
+            default_max_length: validation.default_max_length,
+            additional_properties: validation.additional_properties,
+            strict: validation.strict,
+            tools: self
+                .tools
+                .iter()
+                .map(|t| tool_validation_report(t, validation))
+                .collect(),
+            opt_outs: opt_outs.iter().map(ToString::to_string).collect(),
+        }
+    }
 }
+
+/// What [`ServerConfig::validation_report`] returns: the enforcement actually in
+/// effect, per server and per tool.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationReport {
+    /// Effective [`ValidationSection::enforce_input_schema`].
+    pub enforce_input_schema: bool,
+    /// Effective [`ValidationSection::default_max_length`].
+    pub default_max_length: u64,
+    /// Effective [`ValidationSection::additional_properties`].
+    pub additional_properties: bool,
+    /// Effective [`ValidationSection::strict`].
+    pub strict: bool,
+    /// One entry per `[[tools]]`, in declaration order.
+    pub tools: Vec<ToolValidationReport>,
+    /// Rendered active opt-outs — EMPTY when the server enforces everything it can.
+    pub opt_outs: Vec<String>,
+}
+
+/// One tool's row in a [`ValidationReport`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolValidationReport {
+    /// The `[[tools]]` `name`.
+    pub tool: String,
+    /// Rendered per-parameter rules in declaration order, e.g.
+    /// `"region: path, pattern, maxLength=256 (default)"`. Reads as a log line.
+    pub rules: Vec<String>,
+}
+
+// -----------------------------------------------------------------------------
+// Phase 128 D3 / D-07 — `lint()` internals
+// -----------------------------------------------------------------------------
+
+/// Whether a parameter's EFFECTIVE JSON Schema type is `string`.
+///
+/// `param_type` defaults to `"string"` when omitted, matching
+/// `tools.rs::build_param_property`, so an omitted `type` is a string here too. A
+/// divergence would make the cap apply to a different set of parameters than the
+/// one the schema builder emits it for.
+pub(crate) fn is_string_param(p: &ParamDecl) -> bool {
+    p.param_type.as_deref().unwrap_or("string") == "string"
+}
+
+/// Whether the D3 default cap applies to a parameter at `position`.
+///
+/// All four conditions, in one place so `lint()` and
+/// `tools.rs::apply_position_cap` cannot disagree about which parameters are
+/// covered: the effective type is `string`, no `max_length` is declared, the
+/// configured default is non-zero, and the position is `Path` or `Query`.
+pub(crate) fn default_cap_applies(
+    p: &ParamDecl,
+    position: ParamPosition,
+    validation: &ValidationSection,
+) -> bool {
+    is_string_param(p)
+        && p.max_length.is_none()
+        && validation.default_max_length != 0
+        && matches!(position, ParamPosition::Path | ParamPosition::Query)
+}
+
+/// Per-tool `lint()` findings, appended in `[[tools.parameters]]` declaration
+/// order.
+fn lint_tool(tool: &ToolDecl, validation: &ValidationSection, out: &mut Vec<ConfigWarning>) {
+    for p in &tool.parameters {
+        let position = tool.param_position(&p.name);
+        if is_string_param(p)
+            && p.max_length.is_none()
+            && !default_cap_applies(p, position, validation)
+        {
+            out.push(ConfigWarning {
+                tool: tool.name.clone(),
+                param: p.name.clone(),
+                rule: UNCAPPED_STRING,
+                detail: format!(
+                    "declares no max_length and is in {position:?} position, where the \
+                     [server.validation] default_max_length cap deliberately does not apply \
+                     (free text must keep working) — declare an explicit max_length, or set \
+                     [server.validation] strict = true to make this an error"
+                ),
+            });
+        }
+        if let Some(declared) = p.max_length {
+            lint_declared_cap_above_placeholder_floor(tool, p, position, declared, out);
+        }
+    }
+}
+
+/// SC-7 shape mismatch: a path- or query-position parameter declaring a
+/// `max_length` ABOVE the always-on placeholder floor publishes a limit in
+/// `inputSchema` that `validate_path_placeholder` will not honour, so the call is
+/// refused against a rule the client was never told about.
+///
+/// The floor is read from
+/// `pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH` — the ONE copy of
+/// that number (D-08) — and is therefore only available under `input-validation`.
+/// See the `cfg(not(...))` sibling for why its absence makes this finding vacuous
+/// rather than merely unavailable.
+#[cfg(feature = "input-validation")]
+fn lint_declared_cap_above_placeholder_floor(
+    tool: &ToolDecl,
+    p: &ParamDecl,
+    position: ParamPosition,
+    declared: u64,
+    out: &mut Vec<ConfigWarning>,
+) {
+    if !matches!(position, ParamPosition::Path | ParamPosition::Query) {
+        return;
+    }
+    let floor = pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH as u64;
+    if declared <= floor {
+        return;
+    }
+    out.push(ConfigWarning {
+        tool: tool.name.clone(),
+        param: p.name.clone(),
+        rule: DECLARED_MAX_LENGTH_ABOVE_PLACEHOLDER_CAP,
+        detail: format!(
+            "declares max_length = {declared} in {position:?} position, but the always-on \
+             path-placeholder floor refuses at {floor} code points regardless — so the \
+             effective limit is {floor}, and a refusal would name a limit the published \
+             inputSchema never advertised. Lower the declared max_length to {floor} or below."
+        ),
+    });
+}
+
+/// The `input-validation`-off half of the placeholder-floor lint.
+//
+// Why a no-op rather than a duplicated `256`: the floor this finding warns about
+// is `pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH`, which is a module
+// constant precisely so exactly one copy of the number exists (D-08). On a build
+// without `input-validation` that floor is not compiled and not enforced, so there
+// is no shape MISMATCH to report — the declared `max_length` is the only limit
+// there is, and it is honoured. Hard-coding a second `256` here to keep the
+// finding alive would report a rule that this build does not apply.
+//
+// The genuinely-missing enforcement on such a build is reported once per
+// `validate()` by `warn_if_pattern_checking_unavailable`, not here.
+#[cfg(not(feature = "input-validation"))]
+fn lint_declared_cap_above_placeholder_floor(
+    _tool: &ToolDecl,
+    _p: &ParamDecl,
+    _position: ParamPosition,
+    _declared: u64,
+    _out: &mut Vec<ConfigWarning>,
+) {
+}
+
+/// One finding per ACTIVE `[server.validation]` opt-out, so a switched-off
+/// enforcement can never read as switched on.
+fn lint_opt_outs(validation: &ValidationSection, out: &mut Vec<ConfigWarning>) {
+    if !validation.enforce_input_schema {
+        out.push(server_warning(
+            OPT_OUT_ENFORCE_INPUT_SCHEMA,
+            "[server.validation] enforce_input_schema = false: declared inputSchema values \
+             are NOT checked at tools/call time. Explicitly-registered argument validators \
+             still run — this flag does not disable them."
+                .to_string(),
+        ));
+    }
+    if validation.default_max_length == 0 {
+        out.push(server_warning(
+            OPT_OUT_DEFAULT_MAX_LENGTH_ZERO,
+            "[server.validation] default_max_length = 0: no default maxLength is emitted in \
+             ANY position, so a path or query string parameter that declares no max_length \
+             is unbounded in the published schema. The always-on path-placeholder floor is \
+             unaffected."
+                .to_string(),
+        ));
+    }
+    if validation.additional_properties {
+        out.push(server_warning(
+            OPT_OUT_ADDITIONAL_PROPERTIES,
+            "[server.validation] additional_properties = true: UNDECLARED arguments are \
+             accepted, re-opening the unknown-argument class for every tool on this server."
+                .to_string(),
+        ));
+    }
+}
+
+/// A server-level [`ConfigWarning`] — empty `tool` / `param`, per that struct's
+/// documented convention.
+fn server_warning(rule: &'static str, detail: String) -> ConfigWarning {
+    ConfigWarning {
+        tool: String::new(),
+        param: String::new(),
+        rule,
+        detail,
+    }
+}
+
+/// One tool's [`ToolValidationReport`] row.
+fn tool_validation_report(tool: &ToolDecl, validation: &ValidationSection) -> ToolValidationReport {
+    ToolValidationReport {
+        tool: tool.name.clone(),
+        rules: tool
+            .parameters
+            .iter()
+            .map(|p| render_param_rules(tool, p, validation))
+            .collect(),
+    }
+}
+
+/// Render ONE parameter's effective rules as a log-readable line.
+fn render_param_rules(tool: &ToolDecl, p: &ParamDecl, validation: &ValidationSection) -> String {
+    let position = tool.param_position(&p.name);
+    let mut parts = vec![format!("{position:?}")];
+    if p.required {
+        parts.push("required".to_string());
+    }
+    if p.pattern.is_some() {
+        parts.push("pattern".to_string());
+    }
+    if let Some(format) = &p.format {
+        parts.push(format!("format={format}"));
+    }
+    if let Some(min) = p.min_length {
+        parts.push(format!("minLength={min}"));
+    }
+    if let Some(max) = p.max_length {
+        parts.push(format!("maxLength={max} (declared)"));
+    } else if default_cap_applies(p, position, validation) {
+        parts.push(format!(
+            "maxLength={} (default)",
+            validation.default_max_length
+        ));
+    }
+    format!("{}: {}", p.name, parts.join(", "))
+}
+
+/// Machine-readable [`ConfigWarning::rule`] identifier: an uncapped body string.
+pub const UNCAPPED_STRING: &str = "uncapped-string";
+/// Machine-readable [`ConfigWarning::rule`] identifier: a declared `max_length`
+/// above the always-on path-placeholder floor.
+pub const DECLARED_MAX_LENGTH_ABOVE_PLACEHOLDER_CAP: &str =
+    "declared-max-length-above-placeholder-cap";
+/// Machine-readable [`ConfigWarning::rule`] identifier: a configured single-call
+/// `(method, path)` that matches no operation in the supplied OpenAPI document, so
+/// the spec's declared placeholder narrowing is not applied to that tool
+/// (Phase 128, D4(b) / T-128-36a). Emitted by
+/// [`ServerConfig::lint_against_spec`](crate::config::ServerConfig::lint_against_spec).
+pub const CONFIGURED_TEMPLATE_NOT_IN_SPEC: &str = "configured-template-not-in-spec";
+/// Machine-readable [`ConfigWarning::rule`] identifier: schema enforcement off.
+pub const OPT_OUT_ENFORCE_INPUT_SCHEMA: &str = "opt-out-enforce-input-schema";
+/// Machine-readable [`ConfigWarning::rule`] identifier: default cap disabled.
+pub const OPT_OUT_DEFAULT_MAX_LENGTH_ZERO: &str = "opt-out-default-max-length-zero";
+/// Machine-readable [`ConfigWarning::rule`] identifier: unknown arguments accepted.
+pub const OPT_OUT_ADDITIONAL_PROPERTIES: &str = "opt-out-additional-properties";
+
+// -----------------------------------------------------------------------------
+// Phase 128 D2 / SC-2 — per-parameter declaration checks
+// -----------------------------------------------------------------------------
+
+/// The largest integer magnitude an `f64` represents exactly (2^53).
+///
+/// [`ParamDecl::minimum`] / [`ParamDecl::maximum`] are `f64`, so a declared bound
+/// above this cannot round-trip. See [`ConfigValidationError::NonFiniteParamBound`]
+/// for exactly what a magnitude check on the already-parsed value can and cannot
+/// establish.
+const MAX_EXACT_INTEGER_BOUND: f64 = 9_007_199_254_740_992.0;
+
+/// Run the Phase 128 D2 / SC-2 declaration checks for ONE `[[tools]]` entry.
+///
+/// Split out of [`ServerConfig::validate`] so that function stays well under the
+/// cog-25 gate as rules accumulate.
+///
+/// # Errors
+///
+/// [`ConfigValidationError::EmptyParamPattern`],
+/// [`ConfigValidationError::NonFiniteParamBound`], or
+/// [`ConfigValidationError::UncompilableParamSchema`] — first rule violated, in
+/// `[[tools.parameters]]` declaration order.
+fn validate_tool_parameters(
+    tool: &ToolDecl,
+    validation: &ValidationSection,
+) -> std::result::Result<(), ConfigValidationError> {
+    for p in &tool.parameters {
+        check_param_patterns_non_empty(tool, p)?;
+        check_param_bounds_representable(tool, p)?;
+        if validation.strict {
+            check_param_capped_under_strict(tool, p, validation)?;
+        }
+    }
+    check_path_template_segments(tool)?;
+    check_tool_input_schema_compiles(tool, validation)
+}
+
+/// Refuse a single-call `path` template segment the curated substitution parser
+/// cannot recognize (Phase 128, D4(b)).
+///
+/// # Why this is a hard error rather than a `lint()` finding
+///
+/// A malformed segment has no working interpretation. `/search/{a}{b}` yields the
+/// parameter name `a}{b`, which no `[[tools.parameters]]` entry can match, and
+/// `/prefix-{id}` is not recognized as carrying a placeholder at all — so in both
+/// cases literal braces are what would travel toward the backend. That request is
+/// already refused at call time by the composed-path check in
+/// `crate::http::HttpClient`, so the choice here is only between failing loudly at
+/// startup and failing obscurely on every call. Nothing that worked before loses a
+/// working behaviour; a silently-broken tool gains a message naming the segment.
+///
+/// Contrast [`ConfigValidationError::UncappedStringParam`], which is `strict`-only
+/// precisely because an uncapped free-text field DOES have a working
+/// interpretation (D-05).
+///
+/// # Errors
+///
+/// [`ConfigValidationError::MalformedPathTemplateSegment`], naming the first
+/// offending segment in left-to-right order.
+fn check_path_template_segments(tool: &ToolDecl) -> std::result::Result<(), ConfigValidationError> {
+    let Some(path) = tool.path.as_deref() else {
+        // No `path` — a SQL or script tool carries no template.
+        return Ok(());
+    };
+    for segment in path.split('/') {
+        if is_supported_path_segment(segment) {
+            continue;
+        }
+        return Err(ConfigValidationError::MalformedPathTemplateSegment {
+            tool: tool.name.clone(),
+            segment: segment.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether ONE `/`-delimited path-template segment is a shape
+/// [`path_placeholder_names`] recognizes.
+///
+/// Exactly two shapes are supported: a segment containing no brace at all, and a
+/// segment that is exactly one non-empty `{name}` spanning the whole segment with
+/// no further brace inside the name. This predicate is the inverse of
+/// [`path_placeholder_names`]'s filter, extended to also catch the
+/// carries-a-brace-but-is-not-a-placeholder cases that filter silently drops.
+fn is_supported_path_segment(segment: &str) -> bool {
+    if !segment.contains('{') && !segment.contains('}') {
+        return true;
+    }
+    // `{` and `}` are single-byte, so the inner slice is always a char boundary.
+    segment.starts_with('{')
+        && segment.ends_with('}')
+        && segment.len() > 2
+        && !segment[1..segment.len() - 1].contains('{')
+        && !segment[1..segment.len() - 1].contains('}')
+}
+
+/// D-07 strict mode: promote an `uncapped-string` lint finding into a hard
+/// `validate()` failure.
+///
+/// Gated on `[server.validation] strict` by the caller, because a running server
+/// must NOT refuse to boot over an uncapped free-text body parameter (D-05). This
+/// path exists for a CI config check, where refusing is exactly right.
+///
+/// # Errors
+///
+/// [`ConfigValidationError::UncappedStringParam`].
+fn check_param_capped_under_strict(
+    tool: &ToolDecl,
+    p: &ParamDecl,
+    validation: &ValidationSection,
+) -> std::result::Result<(), ConfigValidationError> {
+    let position = tool.param_position(&p.name);
+    if is_string_param(p) && p.max_length.is_none() && !default_cap_applies(p, position, validation)
+    {
+        return Err(ConfigValidationError::UncappedStringParam {
+            tool: tool.name.clone(),
+            param: p.name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// SC-2 edge (empty): refuse `pattern = ""` on the parameter OR on its
+/// `[tools.parameters.items]` sub-table.
+///
+/// # Errors
+///
+/// [`ConfigValidationError::EmptyParamPattern`].
+fn check_param_patterns_non_empty(
+    tool: &ToolDecl,
+    p: &ParamDecl,
+) -> std::result::Result<(), ConfigValidationError> {
+    let declared = [
+        p.pattern.as_deref(),
+        p.items.as_ref().and_then(|i| i.pattern.as_deref()),
+    ];
+    if declared.into_iter().flatten().any(str::is_empty) {
+        return Err(ConfigValidationError::EmptyParamPattern {
+            tool: tool.name.clone(),
+            param: p.name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// D3 edge (precision): refuse a `minimum`/`maximum` that an `f64` cannot carry
+/// exactly. See [`ConfigValidationError::NonFiniteParamBound`] for what this does
+/// and does not establish.
+///
+/// # Errors
+///
+/// [`ConfigValidationError::NonFiniteParamBound`].
+fn check_param_bounds_representable(
+    tool: &ToolDecl,
+    p: &ParamDecl,
+) -> std::result::Result<(), ConfigValidationError> {
+    let unrepresentable = [p.minimum, p.maximum]
+        .into_iter()
+        .flatten()
+        .any(|b| !b.is_finite() || b.abs() > MAX_EXACT_INTEGER_BOUND);
+    if unrepresentable {
+        return Err(ConfigValidationError::NonFiniteParamBound {
+            tool: tool.name.clone(),
+            param: p.name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// SC-2: compile the tool's synthesized `inputSchema` at CONFIG time, so a
+/// non-compiling `pattern` fails here — naming the parameter — rather than at call
+/// time, where it would take the tool's entire validator down.
+///
+/// Reuses `crate::tools::build_input_schema`, the same constructor the runtime
+/// serves from, so the gate cannot pass a schema the server never actually uses.
+/// `jsonschema::meta::is_valid` is deliberately NOT the check: it returns `true`
+/// for a schema whose nested `pattern` does not compile (measured — RESEARCH
+/// Finding 1e), which is precisely the mistake this gate exists to catch.
+///
+/// # Errors
+///
+/// [`ConfigValidationError::UncompilableParamSchema`] carrying the compile error's
+/// own schema path and detail. Quoting the detail is safe here and only here: this
+/// runs at load time with no request in scope and its audience is the config author.
+#[cfg(feature = "input-validation")]
+fn check_tool_input_schema_compiles(
+    tool: &ToolDecl,
+    validation: &ValidationSection,
+) -> std::result::Result<(), ConfigValidationError> {
+    let schema = crate::tools::build_input_schema(tool, validation);
+    pmcp::server::schema_validation::check_input_schema_compiles(&schema).map_err(|violation| {
+        ConfigValidationError::UncompilableParamSchema {
+            tool: tool.name.clone(),
+            position: violation.pointer,
+            detail: violation.expected,
+        }
+    })
+}
+
+/// The `input-validation`-off half of the SC-2 gate.
+//
+// Why this arm exists at all, rather than an ungated call: `ServerConfig::validate`
+// compiles in EVERY toolkit feature set, while
+// `pmcp::server::schema_validation::check_input_schema_compiles` exists only under
+// `pmcp/schema-validation` (forwarded by the toolkit's `input-validation`). An
+// ungated call breaks `cargo build -p pmcp-server-toolkit --no-default-features
+// --features http`, which is a real supported configuration.
+//
+// Why it is not a SILENT skip: on this build a declared `pattern` is neither
+// verified here nor enforced at call time, so an author who sees `validate()`
+// return `Ok(())` would reasonably believe their rule was checked. That is exactly
+// the "an enforcement that is off must never read as on" prohibition. The warning
+// is emitted once per `validate()` by `warn_if_pattern_checking_unavailable`, not
+// per tool, so a large config does not bury it.
+#[cfg(not(feature = "input-validation"))]
+fn check_tool_input_schema_compiles(
+    _tool: &ToolDecl,
+    _validation: &ValidationSection,
+) -> std::result::Result<(), ConfigValidationError> {
+    Ok(())
+}
+
+/// Emit the once-per-`validate()` warning when this build cannot check declared
+/// `pattern` values. A no-op when the `input-validation` feature is on, and a
+/// no-op when the config declares no `pattern` at all (there is nothing unchecked
+/// to report).
+#[cfg(not(feature = "input-validation"))]
+fn warn_if_pattern_checking_unavailable(tools: &[ToolDecl]) {
+    let declares_a_pattern = tools.iter().any(|t| {
+        t.parameters
+            .iter()
+            .any(|p| p.pattern.is_some() || p.items.as_ref().is_some_and(|i| i.pattern.is_some()))
+    });
+    if declares_a_pattern {
+        tracing::warn!(
+            "this build lacks the `input-validation` feature: declared \
+             [[tools.parameters]] `pattern` values were NOT checked for compilability at \
+             config time, and will NOT be enforced at tools/call time either — enable \
+             `input-validation` to get either"
+        );
+    }
+}
+
+/// See the `cfg(not(...))` sibling. Under `input-validation` the patterns ARE
+/// checked, so there is nothing to warn about.
+#[cfg(feature = "input-validation")]
+#[allow(clippy::missing_const_for_fn)] // Why: mirrors the cfg(not(...)) sibling's signature, which cannot be const.
+fn warn_if_pattern_checking_unavailable(_tools: &[ToolDecl]) {}
 
 // -----------------------------------------------------------------------------
 // [server]
@@ -350,6 +979,115 @@ pub struct ServerSection {
     /// Chinook reference config sets `is_reference = true`.
     #[serde(default)]
     pub is_reference: bool,
+    /// `[server.validation]` — input-enforcement policy (Phase 128, D3 / D-06).
+    ///
+    /// Absent in TOML yields [`ValidationSection::default`], i.e. enforcement ON
+    /// with a 256-code-point default cap in path and query position.
+    #[serde(default)]
+    pub validation: ValidationSection,
+}
+
+/// `[server.validation]` — how strictly a config-declared tool's inputs are
+/// enforced (Phase 128, D3 / D-06 / D-07).
+///
+/// Every field here is an OPT-OUT knob, and every active opt-out is reported by
+/// [`ServerConfig::lint`] and by [`ServerConfig::validation_report`] so it appears
+/// in the startup log. That is deliberate: a validation rule switched off by a
+/// configuration value must never read as switched on.
+///
+/// # Forward incompatibility (D-15)
+///
+/// [`ServerSection`] and [`ServerConfig`] both carry
+/// `#[serde(deny_unknown_fields)]`, so a config carrying a `[server.validation]`
+/// section fails to PARSE on toolkit 0.1.3 rather than having the section ignored.
+/// Named in the CHANGELOG, exactly as the [`ParamDecl`] D2 keys are.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_server_toolkit::config::ValidationSection;
+///
+/// let v = ValidationSection::default();
+/// assert!(v.enforce_input_schema);
+/// assert_eq!(v.default_max_length, 256);
+/// assert!(!v.additional_properties);
+/// assert!(!v.strict);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ValidationSection {
+    /// Whether a declared `inputSchema` is CHECKED at `tools/call` time.
+    ///
+    /// The checker is `pmcp::server::schema_validation::validate_input`, called
+    /// from the `ValidatingToolHandler` decorator in [`crate::tools`] — in THIS
+    /// crate, before the backend call. Not core `pmcp`'s `tools/call` dispatch,
+    /// which does not validate request arguments against a declared `inputSchema`
+    /// (Phase 128 D-01 defers that wiring). Naming the enforcer is this phase's
+    /// SC-6 convention; the sweep that produced it found the unqualified form of
+    /// this sentence three times in `tools.rs` alone.
+    ///
+    /// Default `true`. Setting it `false` skips the schema check only — it does
+    /// NOT disable an explicitly-registered argument validator. Turning off one
+    /// enforcement must never silently turn off another, so the two live on
+    /// separate switches and the decorator is still constructed whenever a
+    /// validator is registered for the tool.
+    #[serde(default = "default_enforce_input_schema")]
+    pub enforce_input_schema: bool,
+    /// Default `maxLength`, in Unicode code points, emitted for a PATH- or
+    /// QUERY-position string parameter that declares no `max_length` of its own
+    /// (D-06).
+    ///
+    /// Default `256`. A declared `max_length` is never overridden and never merged
+    /// with this value. Body-position strings are deliberately NOT capped by it
+    /// (D-05) — they are surfaced by [`ServerConfig::lint`] instead.
+    ///
+    /// `0` DISABLES the cap in every position and is reported as an active opt-out.
+    /// It does not disable `pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH`,
+    /// which is a module constant precisely so the length half of the path-traversal
+    /// fix cannot be configured away (D-08).
+    #[serde(default = "default_default_max_length")]
+    pub default_max_length: u64,
+    /// Whether to permit UNDECLARED arguments, by emitting
+    /// `additionalProperties: true` instead of `false`.
+    ///
+    /// Default `false` (unknown arguments are refused). `true` re-opens the
+    /// unknown-argument class for this server and is reported as an active opt-out.
+    #[serde(default)]
+    pub additional_properties: bool,
+    /// Whether [`ServerConfig::lint`] findings are promoted into hard
+    /// [`ServerConfig::validate`] failures.
+    ///
+    /// Default `false`: a running server never refuses to boot over an uncapped
+    /// free-text body parameter (D-07). `true` turns each such parameter into
+    /// [`ConfigValidationError::UncappedStringParam`], which is what a CI config
+    /// check wants and what a production boot does not.
+    #[serde(default)]
+    pub strict: bool,
+}
+
+/// The shipped default cap, in Unicode code points (D-06).
+const DEFAULT_MAX_LENGTH: u64 = 256;
+
+/// serde default for [`ValidationSection::enforce_input_schema`]. Enforcement is
+/// ON unless an operator explicitly opts out.
+const fn default_enforce_input_schema() -> bool {
+    true
+}
+
+/// serde default for [`ValidationSection::default_max_length`].
+const fn default_default_max_length() -> u64 {
+    DEFAULT_MAX_LENGTH
+}
+
+impl Default for ValidationSection {
+    fn default() -> Self {
+        Self {
+            enforce_input_schema: default_enforce_input_schema(),
+            default_max_length: default_default_max_length(),
+            additional_properties: false,
+            strict: false,
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -909,6 +1647,162 @@ impl ToolDecl {
         let is_script = self.script.is_some();
         usize::from(is_sql) + usize::from(is_single_call) + usize::from(is_script)
     }
+
+    /// Where `param_name` sits for the purposes of the D3 default length cap
+    /// (Phase 128).
+    ///
+    /// # Derivation
+    ///
+    /// - The name appears as a `{name}` segment of [`Self::path`] -> [`ParamPosition::Path`].
+    /// - Else [`Self::method`] carries a request body (`method_carries_request_body`:
+    ///   `POST`, `PUT`, `PATCH`) -> [`ParamPosition::Body`].
+    /// - Else there IS a method -> [`ParamPosition::Query`]. A method with no
+    ///   request body has nowhere but the URL to carry a non-path input, `OPTIONS`
+    ///   included.
+    /// - Else (no method at all) -> [`ParamPosition::Body`]: a SQL named bind or a
+    ///   script-tool argument.
+    ///
+    /// # Coupling with `tools.rs::build_operation` — structural, not documentary
+    ///
+    /// Both of this function's splits agree with `build_operation` because both
+    /// read the same helper, not because a comment says so:
+    ///
+    /// - the PATH arm and `build_operation`'s `path_param_names` both read
+    ///   `path_placeholder_names`;
+    /// - the QUERY/BODY arms and `build_operation`'s `ParameterLocation` assignment
+    ///   both read `method_carries_request_body`, which is also the sole source of
+    ///   `Operation::has_request_body`.
+    ///
+    /// The second agreement is Phase 128 CR-02/CR-03, and it replaced a documented
+    /// "deliberate divergence" that did not survive measurement. `build_operation`
+    /// used to mark every non-path declared parameter `ParameterLocation::Query`
+    /// regardless of method while this function answered `Body` for a mutating tool
+    /// — justified on the grounds that the two questions ("where does the value
+    /// TRAVEL" versus "where is LENGTH dangerous") are different. They are, but the
+    /// answers were both wrong: the value travelled in the query string, so the D3
+    /// cap was withheld from a genuine request-line input on the stated grounds
+    /// that it was a payload field, and `build_body` — which collected only args
+    /// absent from `operation.parameters` — sent no payload at all.
+    ///
+    /// D-05 is still honoured, and now BY the routing rather than despite it: a
+    /// `Body` position means the value really is a JSON payload field, and
+    /// `default_cap_applies` emits no default `maxLength` for it. The escape for
+    /// a long `Query` value remains an explicit per-parameter `max_length`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_server_toolkit::config::{ParamPosition, ToolDecl};
+    ///
+    /// let search = ToolDecl {
+    ///     path: Some("/lines/{line_id}/status".into()),
+    ///     method: Some("GET".into()),
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(search.param_position("line_id"), ParamPosition::Path);
+    /// assert_eq!(search.param_position("detail"), ParamPosition::Query);
+    ///
+    /// let comment = ToolDecl {
+    ///     path: Some("/issues/{id}/comments".into()),
+    ///     method: Some("POST".into()),
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(comment.param_position("id"), ParamPosition::Path);
+    /// // Free text on a mutating method is NOT capped — D-05.
+    /// assert_eq!(comment.param_position("body_text"), ParamPosition::Body);
+    ///
+    /// let sql = ToolDecl { sql: Some("SELECT 1".into()), ..Default::default() };
+    /// assert_eq!(sql.param_position("anything"), ParamPosition::Body);
+    /// ```
+    #[must_use]
+    pub fn param_position(&self, param_name: &str) -> ParamPosition {
+        if let Some(path) = self.path.as_deref() {
+            if path_placeholder_names(path).any(|n| n == param_name) {
+                return ParamPosition::Path;
+            }
+        }
+        match self.method.as_deref() {
+            // A body-bearing method routes its non-path inputs into the JSON
+            // payload, so length there is D-05 free text.
+            Some(m) if method_carries_request_body(m) => ParamPosition::Body,
+            // Every OTHER HTTP method has nowhere but the URL to put them.
+            Some(_) => ParamPosition::Query,
+            // No method at all: a SQL named bind or a script-tool argument.
+            None => ParamPosition::Body,
+        }
+    }
+}
+
+/// HTTP methods whose non-path inputs travel as fields of the JSON request body.
+///
+/// The ONE definition of that rule. `tools.rs::build_operation` reads it through
+/// [`method_carries_request_body`] for BOTH `Operation::has_request_body` and the
+/// `ParameterLocation::Body` assignment, and [`ToolDecl::param_position`] reads the
+/// same predicate to decide where LENGTH is dangerous — so the request's routing
+/// and the D3 cap's scope cannot drift apart. Phase 128 CR-02/CR-03 is the record
+/// of what that drift cost: a `POST` tool's declared parameters were marked
+/// `ParameterLocation::Query` while being classified `ParamPosition::Body`, so they
+/// travelled in the URL uncapped and no payload ever reached the backend.
+const BODY_BEARING_METHODS: [&str; 3] = ["POST", "PUT", "PATCH"];
+
+/// Whether `method` carries a JSON request body — the one predicate behind
+/// [`BODY_BEARING_METHODS`]. Case-insensitive on the method name.
+pub(crate) fn method_carries_request_body(method: &str) -> bool {
+    BODY_BEARING_METHODS.contains(&method.to_uppercase().as_str())
+}
+
+/// The `{name}` placeholder segments of a single-call tool's `path` template.
+///
+/// The ONE definition of that rule. `tools.rs::build_operation` reads it to build
+/// its `Parameter` list and [`ToolDecl::param_position`] reads it to decide PATH
+/// position, so the two cannot drift — which matters because a drift would
+/// silently mis-scope the D3 cap and the D4 placeholder rules.
+///
+/// Matches a whole `/`-delimited segment only, and requires at least one character
+/// between the braces (`{}` is not a placeholder).
+pub(crate) fn path_placeholder_names(path: &str) -> impl Iterator<Item = &str> {
+    path.split('/')
+        .filter(|s| s.starts_with('{') && s.ends_with('}') && s.len() > 2)
+        .map(|s| &s[1..s.len() - 1])
+}
+
+/// Where a declared parameter's value lands, for the purposes of the D3 default
+/// length cap (Phase 128).
+///
+/// For a single-call HTTP tool this is the SAME answer
+/// `tools.rs::build_operation` gives as a `crate::http::ParameterLocation` — both
+/// derive it from `path_placeholder_names` and `method_carries_request_body`.
+/// See [`ToolDecl::param_position`] for the derivation and for what the previous
+/// divergence between the two cost (CR-02/CR-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParamPosition {
+    /// A `{name}` segment of the tool's `path` template. Capped by default: a long
+    /// value here has no legitimate use and is where the path-traversal class lives.
+    Path,
+    /// A non-path parameter of a tool whose method carries NO request body —
+    /// `GET`, `HEAD`, `DELETE`, `OPTIONS` — so the value travels in the query
+    /// string. `tools.rs::build_operation` gives it
+    /// `crate::http::ParameterLocation::Query` and
+    /// `crate::http::HttpClient::build_query` appends it to the URL.
+    ///
+    /// Capped at `[server.validation] default_max_length` code points by default,
+    /// by `default_cap_applies`, because an unbounded query value is an unbounded
+    /// request line: a 414 on some gateways, a truncation on others, and an
+    /// access-log amplification everywhere. If a search tool starts refusing long
+    /// queries after upgrading, this is why — declare an explicit `max_length` on
+    /// that parameter to raise the limit.
+    Query,
+    /// A `POST` / `PUT` / `PATCH` payload field, a SQL named bind, or a script-tool
+    /// argument.
+    ///
+    /// For a single-call HTTP tool this is a genuine JSON payload field:
+    /// `tools.rs::build_operation` gives it
+    /// `crate::http::ParameterLocation::Body` and
+    /// `crate::http::HttpClient::build_body` folds it into the request body. It
+    /// reaches no request line, which is why it is NOT capped by default
+    /// (D-05 — free text must keep working). Surfaced by [`ServerConfig::lint`] and
+    /// promotable to an error by `[server.validation] strict`.
+    Body,
 }
 
 /// Single `[[tools.parameters]]` entry.
@@ -916,6 +1810,17 @@ impl ToolDecl {
 /// The `default` and `enum` fields use [`toml::Value`] because they are
 /// heterogeneous in the reference configs (a `default` may be an integer,
 /// a string, or a boolean depending on the parameter type).
+///
+/// # Forward incompatibility (Phase 128, D-15)
+///
+/// This struct carries `#[serde(deny_unknown_fields)]`, so a config declaring any
+/// of the Phase 128 D2 keys — `pattern`, `min_length`, `format`, `max_items`,
+/// `allow_slash`, or an `[tools.parameters.items]` table — fails to PARSE on
+/// toolkit 0.1.3 rather than degrading to "the key was ignored". That is
+/// deliberate (a silently-ignored validation rule is the class this phase closes)
+/// but it means a config written for this release cannot be loaded by an older
+/// toolkit. The same applies to the `[server.validation]` section. Named in the
+/// CHANGELOG.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ParamDecl {
@@ -938,14 +1843,148 @@ pub struct ParamDecl {
     #[serde(default)]
     pub max_length: Option<u64>,
     /// Inclusive minimum (integer / number parameters only).
+    ///
+    /// Stored as `f64`. See [`Self::maximum`] for the precision limit that applies
+    /// to both bounds.
     #[serde(default)]
     pub minimum: Option<f64>,
     /// Inclusive maximum (integer / number parameters only).
+    ///
+    /// # Not a safe way to bound a 64-bit integer ID
+    ///
+    /// Both bounds are stored as `f64`, so an integer magnitude above 2^53
+    /// (`9007199254740992`) cannot be represented exactly. `9007199254740993`
+    /// written in TOML has ALREADY become `9007199254740992` by the time any code
+    /// in this crate sees it, and no post-parse check can recover the fact that it
+    /// was rounded. [`ServerConfig::validate`] therefore refuses a bound that is
+    /// non-finite or whose magnitude EXCEEDS 2^53
+    /// ([`ConfigValidationError::NonFiniteParamBound`]) — which catches the wildly
+    /// out-of-range case, and deliberately does not claim to catch a value sitting
+    /// one unit past the boundary.
+    ///
+    /// If you need to bound a `u64` identifier, express the rule as a
+    /// [`Self::pattern`] over its string form instead. This limitation is a
+    /// documented one, not an oversight: adding an `i64`-typed bound vocabulary is
+    /// out of scope for D2.
     #[serde(default)]
     pub maximum: Option<f64>,
     /// Closed set of allowed values (any TOML scalar).
     #[serde(default, rename = "enum")]
     pub enum_values: Option<Vec<toml::Value>>,
+    /// Regular expression the value must match, emitted as JSON Schema `pattern`
+    /// (string parameters only).
+    ///
+    /// # It is UNANCHORED
+    ///
+    /// JSON Schema `pattern` is a SUBSTRING search, exactly as ECMA-262
+    /// `RegExp.prototype.test` is. A rule written as a bare character class such as
+    /// `[A-Z]{3}` matches `"../../etc/passwd-ABC"` and therefore buys no
+    /// enforcement whatsoever. Anchor every rule you mean as a whole-value rule:
+    /// `^[A-Z]{3}$`.
+    ///
+    /// # `\s` and `\S` do not mean one thing here
+    ///
+    /// Two regex engines are live inside one `jsonschema` 0.49.2 process, and which
+    /// one evaluates your pattern depends on the pattern's own syntax:
+    ///
+    /// - A plain pattern takes the linear-time engine, whose `\s` is a PARTIAL
+    ///   ECMA-262 set — measured as
+    ///   `{U+0009, U+000A, U+000B, U+000C, U+000D, U+0020, U+00A0, U+2029, U+FEFF}`.
+    ///   It does NOT include U+3000 IDEOGRAPHIC SPACE, U+0085 NEL, U+1680,
+    ///   U+2000, U+2007, U+2028 or U+202F, and it DOES include the byte-order mark.
+    /// - A pattern containing a lookaround or a backreference takes the
+    ///   backtracking engine, where `\s` is exactly `\p{White_Space}` — so it DOES
+    ///   match U+3000, and does NOT match U+FEFF.
+    ///
+    /// Adding a lookahead to a pattern therefore silently changes what `\s` means
+    /// in it. For anything security-relevant, spell out an explicit character class
+    /// (e.g. `[^\p{White_Space}]`) rather than using the shorthand.
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Minimum string length in Unicode code points, emitted as JSON Schema
+    /// `minLength` (string parameters only).
+    ///
+    /// Counted in code points — not bytes and not grapheme clusters — matching
+    /// `maxLength`'s unit so a `min_length == max_length` pair names exactly one
+    /// length.
+    #[serde(default)]
+    pub min_length: Option<u64>,
+    /// JSON Schema `format` assertion, e.g. `"uuid"`, `"email"`, `"date-time"`.
+    ///
+    /// # It IS enforced on inputs in this SDK
+    ///
+    /// `format` is ANNOTATIVE by default in `jsonschema` 0.49 — a bare
+    /// `draft202012` validator accepts `"!!!not-a-uuid!!!"` against
+    /// `format = "uuid"`. Declared inputs do not take that path: core `pmcp`
+    /// compiles a tool's `inputSchema` through a format-ASSERTING builder
+    /// (Phase 128, Q1), so a declared `format` refuses a non-conforming value at
+    /// `tools/call` time.
+    ///
+    /// Measured under this workspace's pinned `jsonschema` configuration
+    /// (`0.49`, `default-features = false`), all NINETEEN standard Draft 2020-12
+    /// format names assert: `date-time`, `date`, `time`, `duration`, `email`,
+    /// `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `uri`,
+    /// `uri-reference`, `iri`, `iri-reference`, `uuid`, `uri-template`,
+    /// `json-pointer`, `relative-json-pointer`, `regex`. A format name OUTSIDE
+    /// that list is accepted-and-ignored, per JSON Schema's own rule that an
+    /// unknown format is an annotation — so a typo such as `"uid"` for `"uuid"`
+    /// silently enforces nothing.
+    ///
+    /// `format` is NOT enforced on OUTPUTS: `structuredContent` validation is
+    /// deliberately annotative there, and only warns.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// `[tools.parameters.items]` — the element schema for an array parameter,
+    /// emitted as JSON Schema `items`.
+    ///
+    /// Emitted in OBJECT form only. Array-form `items` (the draft-07 tuple
+    /// construct) does not compile under the Draft 2020-12 pin and would take the
+    /// whole tool's validator down with it.
+    #[serde(default)]
+    pub items: Option<ItemsDecl>,
+    /// Maximum number of array elements, emitted as JSON Schema `maxItems`
+    /// (array parameters only).
+    #[serde(default)]
+    pub max_items: Option<u64>,
+    /// Permit `/` inside this parameter's value when it is interpolated into a
+    /// single-call tool's path template (Phase 128, D-11).
+    ///
+    /// Path-placeholder values are refused for path separators by default, because
+    /// a `/` in a `{segment}` lets a caller reshape the request target. This
+    /// per-parameter opt-in is the ONLY legitimate source of that permission — it
+    /// exists for the genuine case of a parameter that names a multi-segment
+    /// resource path.
+    ///
+    /// An OpenAPI spec's `allowReserved` must NEVER be wired to this field. That
+    /// keyword describes URL percent-encoding latitude in the spec author's
+    /// serialization rules; it is not a statement that the value may restructure
+    /// the path, and treating it as one would turn a routine spec detail into a
+    /// silent path-traversal opening.
+    #[serde(default)]
+    pub allow_slash: bool,
+}
+
+/// `[tools.parameters.items]` — the element schema of an array parameter
+/// (Phase 128, D2).
+///
+/// Emitted into `inputSchema` as an OBJECT-form JSON Schema `items` value. The
+/// array form of `items` is a draft-07 tuple construct that does not compile under
+/// the Draft 2020-12 pin, so this struct has no way to express it by design.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ItemsDecl {
+    /// Element type (`"string"`, `"integer"`, …). Defaults to `"string"` when
+    /// omitted, matching [`ParamDecl::param_type`]'s convention.
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
+    /// Maximum element length in Unicode code points (string elements only).
+    #[serde(default)]
+    pub max_length: Option<u64>,
+    /// Regular expression each element must match. UNANCHORED — see
+    /// [`ParamDecl::pattern`] for the anchoring and two-engine `\s` caveats, which
+    /// apply identically here.
+    #[serde(default)]
+    pub pattern: Option<String>,
 }
 
 /// `[tools.annotations]` — MCP `toolAnnotations` hints.
@@ -1994,6 +3033,744 @@ mod tests {
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Phase 128 D2 / SC-2 — the six new `ParamDecl` keys and the config-time
+    // pattern-compile gate.
+    // -------------------------------------------------------------------------
+
+    /// D2: all six new keys parse from TOML, including the
+    /// `[tools.parameters.items]` sub-table.
+    #[test]
+    fn param_decl_parses_all_d2_keys() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "batch_lookup"
+
+            [[tools.parameters]]
+            name = "codes"
+            type = "array"
+            required = true
+            max_items = 25
+            min_length = 2
+            format = "uuid"
+            pattern = "^[A-Z]{3}$"
+            allow_slash = true
+
+            [tools.parameters.items]
+            type = "string"
+            max_length = 8
+            pattern = "^[a-z]+$"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        let p = &cfg.tools[0].parameters[0];
+        assert_eq!(p.pattern.as_deref(), Some("^[A-Z]{3}$"));
+        assert_eq!(p.min_length, Some(2));
+        assert_eq!(p.format.as_deref(), Some("uuid"));
+        assert_eq!(p.max_items, Some(25));
+        assert!(p.allow_slash);
+        let items = p.items.as_ref().expect("items sub-table");
+        assert_eq!(items.item_type.as_deref(), Some("string"));
+        assert_eq!(items.max_length, Some(8));
+        assert_eq!(items.pattern.as_deref(), Some("^[a-z]+$"));
+    }
+
+    /// D2: the six new keys survive a `Serialize` -> `Deserialize` round trip, so
+    /// a config re-emitted by the toolkit does not silently drop a declared rule.
+    #[test]
+    fn param_decl_d2_keys_round_trip_through_toml() {
+        let original = ParamDecl {
+            name: "codes".to_string(),
+            param_type: Some("array".to_string()),
+            required: true,
+            pattern: Some("^[A-Z]{3}$".to_string()),
+            min_length: Some(2),
+            format: Some("uuid".to_string()),
+            max_items: Some(25),
+            allow_slash: true,
+            items: Some(ItemsDecl {
+                item_type: Some("string".to_string()),
+                max_length: Some(8),
+                pattern: Some("^[a-z]+$".to_string()),
+            }),
+            ..Default::default()
+        };
+        let cfg = ServerConfig {
+            server: ServerSection {
+                name: "demo".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            tools: vec![ToolDecl {
+                name: "batch_lookup".to_string(),
+                parameters: vec![original.clone()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let text = toml::to_string(&cfg).expect("serialize");
+        let parsed = ServerConfig::from_toml(&text).expect("re-parse");
+        assert_eq!(parsed.tools[0].parameters[0], original);
+    }
+
+    /// SC-2: a `pattern` that does not compile fails at CONFIG time, naming the
+    /// offending parameter — not at call time, where it would take the whole
+    /// tool's validator down.
+    #[test]
+    fn validate_rejects_uncompilable_param_pattern() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "lookup"
+
+            [[tools.parameters]]
+            name = "region"
+            type = "string"
+            pattern = "^[A-Z"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::UncompilableParamSchema {
+                ref tool,
+                ref position,
+                ref detail,
+            }) => {
+                assert_eq!(tool, "lookup");
+                assert!(
+                    position.contains("region"),
+                    "position must name the offending parameter, got {position:?}"
+                );
+                assert!(
+                    !detail.is_empty(),
+                    "the author-facing detail must be present"
+                );
+            },
+            other => panic!("expected UncompilableParamSchema, got {other:?}"),
+        }
+    }
+
+    /// SC-2 edge (adjacency): a pattern that COMPILES but matches nothing passes
+    /// config validation. Config validation checks compilability, not
+    /// satisfiability — `$^` will refuse every value at call time instead.
+    #[test]
+    fn validate_accepts_unsatisfiable_but_compilable_param_pattern() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "lookup"
+
+            [[tools.parameters]]
+            name = "region"
+            type = "string"
+            pattern = "$^"
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        cfg.validate()
+            .expect("an unsatisfiable pattern still compiles and must validate");
+    }
+
+    /// SC-2 edge (empty): an empty `pattern` matches everything, so it buys no
+    /// enforcement while reading like a rule. Refused as a likely author error.
+    #[test]
+    fn validate_rejects_empty_param_pattern() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "lookup"
+
+            [[tools.parameters]]
+            name = "region"
+            type = "string"
+            pattern = ""
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::EmptyParamPattern {
+                ref tool,
+                ref param,
+            }) => {
+                assert_eq!(tool, "lookup");
+                assert_eq!(param, "region");
+            },
+            other => panic!("expected EmptyParamPattern, got {other:?}"),
+        }
+    }
+
+    /// D3 edge (precision): a bound whose magnitude exceeds 2^53 is refused,
+    /// because `ParamDecl` stores bounds as `f64` and such a value cannot be
+    /// represented exactly.
+    #[test]
+    fn validate_rejects_non_finite_param_bound() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "lookup"
+
+            [[tools.parameters]]
+            name = "count"
+            type = "integer"
+            maximum = 1e300
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        match cfg.validate() {
+            Err(ConfigValidationError::NonFiniteParamBound {
+                ref tool,
+                ref param,
+            }) => {
+                assert_eq!(tool, "lookup");
+                assert_eq!(param, "count");
+            },
+            other => panic!("expected NonFiniteParamBound, got {other:?}"),
+        }
+    }
+
+    /// D3 edge (precision), the honest half: a bound AT the 2^53 boundary is
+    /// accepted. The check cannot see that a larger TOML integer was already
+    /// rounded into this value, and the rustdoc says so rather than claiming a
+    /// guarantee it cannot deliver.
+    #[test]
+    fn validate_accepts_param_bound_at_the_representable_boundary() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "lookup"
+
+            [[tools.parameters]]
+            name = "count"
+            type = "integer"
+            maximum = 9007199254740992
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        cfg.validate()
+            .expect("a bound exactly at 2^53 is representable and must validate");
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 128 D3 / D-07 — `[server.validation]`, `param_position`, `lint()`
+    // -------------------------------------------------------------------------
+
+    /// `[server.validation]` parses with all four keys.
+    #[test]
+    fn validation_section_parses_all_four_keys() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [server.validation]
+            enforce_input_schema = false
+            default_max_length = 64
+            additional_properties = true
+            strict = true
+        "#;
+        let cfg = ServerConfig::from_toml(toml).expect("parse");
+        let v = &cfg.server.validation;
+        assert!(!v.enforce_input_schema);
+        assert_eq!(v.default_max_length, 64);
+        assert!(v.additional_properties);
+        assert!(v.strict);
+    }
+
+    /// Each absent key yields its documented default, and an absent SECTION yields
+    /// the same — enforcement is on unless an operator opts out.
+    #[test]
+    fn validation_section_absent_keys_yield_documented_defaults() {
+        let partial = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [server.validation]
+            default_max_length = 10
+        "#;
+        let cfg = ServerConfig::from_toml(partial).expect("parse");
+        let v = &cfg.server.validation;
+        assert!(v.enforce_input_schema, "default is ON");
+        assert_eq!(v.default_max_length, 10);
+        assert!(!v.additional_properties, "default is a closed envelope");
+        assert!(!v.strict, "default must not refuse to boot");
+
+        let cfg = ServerConfig::from_toml(MINIMAL).expect("parse");
+        assert_eq!(cfg.server.validation, ValidationSection::default());
+        assert!(cfg.server.validation.enforce_input_schema);
+        assert_eq!(cfg.server.validation.default_max_length, 256);
+    }
+
+    /// An unknown key under `[server.validation]` is refused at PARSE time — the
+    /// section carries `deny_unknown_fields`, so a typo'd opt-out cannot be
+    /// silently ignored.
+    #[test]
+    fn validation_section_rejects_an_unknown_key() {
+        let toml = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [server.validation]
+            enforce_input_schemas = false
+        "#;
+        let err = ServerConfig::from_toml(toml)
+            .expect_err("a typo'd opt-out key must not be silently ignored");
+        assert!(matches!(err, ToolkitError::Parse(_)), "got {err:?}");
+    }
+
+    /// `ToolDecl::param_position` agrees with `tools.rs::build_operation`'s PATH
+    /// split for every parameter of a single-call tool, and applies the
+    /// method-aware query/body rule for the rest.
+    #[test]
+    fn param_position_agrees_with_build_operation_on_path_parameters() {
+        let get_tool = ToolDecl {
+            name: "line_status".to_string(),
+            path: Some("/lines/{line_id}/status".to_string()),
+            method: Some("GET".to_string()),
+            parameters: vec![
+                ParamDecl {
+                    name: "line_id".to_string(),
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "detail".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        // The PATH set is the shared helper both functions read.
+        let path_names: Vec<&str> =
+            path_placeholder_names(get_tool.path.as_deref().expect("path")).collect();
+        assert_eq!(path_names, vec!["line_id"]);
+        for p in &get_tool.parameters {
+            let expected = if path_names.contains(&p.name.as_str()) {
+                ParamPosition::Path
+            } else {
+                ParamPosition::Query
+            };
+            assert_eq!(
+                get_tool.param_position(&p.name),
+                expected,
+                "position for {} must agree with the path split",
+                p.name
+            );
+        }
+
+        // A mutating method's non-path parameter is BODY here AND
+        // `ParameterLocation::Body` in `build_operation` — the two agree by
+        // construction since CR-02/CR-03 (see
+        // `param_position_agrees_with_the_built_parameter_location_for_every_method`
+        // in `tools.rs::mod build_operation`, which asserts the pairing directly).
+        let post_tool = ToolDecl {
+            name: "add_comment".to_string(),
+            path: Some("/issues/{id}/comments".to_string()),
+            method: Some("POST".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(post_tool.param_position("id"), ParamPosition::Path);
+        assert_eq!(post_tool.param_position("body_text"), ParamPosition::Body);
+
+        // A method that carries NO request body puts its non-path input in the URL,
+        // `OPTIONS` included. Before CR-03 this returned `Body` — so the D3 cap was
+        // withheld from a value `build_operation` sent in the query string.
+        let options_tool = ToolDecl {
+            name: "probe".to_string(),
+            path: Some("/issues/{id}".to_string()),
+            method: Some("OPTIONS".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(options_tool.param_position("id"), ParamPosition::Path);
+        assert_eq!(options_tool.param_position("detail"), ParamPosition::Query);
+
+        // No method at all is still BODY: a SQL named bind or a script-tool
+        // argument, neither of which has a URL to travel in.
+        let sql_tool = ToolDecl {
+            name: "q".to_string(),
+            sql: Some("SELECT :id".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(sql_tool.param_position("id"), ParamPosition::Body);
+    }
+
+    /// `{}` is not a placeholder, and a brace pair inside a larger segment is not
+    /// one either — the helper matches whole `/`-delimited segments only.
+    #[test]
+    fn path_placeholder_names_matches_whole_segments_only() {
+        let names: Vec<&str> = path_placeholder_names("/a/{}/b/{id}/c/pre{mid}post").collect();
+        assert_eq!(names, vec!["id"]);
+    }
+
+    /// SC-3 edge (empty): a config with zero tools and no active opt-out lints
+    /// clean.
+    #[test]
+    fn lint_returns_empty_vec_for_a_config_with_zero_tools() {
+        let cfg = ServerConfig::from_toml(MINIMAL).expect("parse");
+        assert_eq!(cfg.lint(), Vec::new());
+    }
+
+    /// Build a config with one tool whose declarations are supplied by the caller.
+    fn cfg_with_one_tool(tool: ToolDecl, validation: ValidationSection) -> ServerConfig {
+        ServerConfig {
+            server: ServerSection {
+                name: "demo".to_string(),
+                version: "0.1.0".to_string(),
+                validation,
+                ..Default::default()
+            },
+            tools: vec![tool],
+            ..Default::default()
+        }
+    }
+
+    /// A SQL tool's string parameter with no `max_length` is BODY position and is
+    /// surfaced by `lint()` — not refused (D-05 / D-07).
+    #[test]
+    fn lint_reports_one_uncapped_string_finding_per_body_parameter() {
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "search_tracks".to_string(),
+                sql: Some("SELECT 1".to_string()),
+                parameters: vec![ParamDecl {
+                    name: "q".to_string(),
+                    param_type: Some("string".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        let findings = cfg.lint();
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        assert_eq!(findings[0].rule, UNCAPPED_STRING);
+        assert_eq!(findings[0].tool, "search_tracks");
+        assert_eq!(findings[0].param, "q");
+        // The same config must still BOOT — a non-strict finding never refuses.
+        cfg.validate()
+            .expect("a lint finding must not fail validate");
+    }
+
+    /// SC-3 ordering: findings follow `[[tools.parameters]]` declaration order, not
+    /// alphabetical order.
+    #[test]
+    fn lint_returns_findings_in_declaration_order() {
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "note".to_string(),
+                sql: Some("SELECT 1".to_string()),
+                parameters: vec![
+                    ParamDecl {
+                        name: "zebra".to_string(),
+                        param_type: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                    ParamDecl {
+                        name: "alpha".to_string(),
+                        param_type: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        let findings = cfg.lint();
+        assert_eq!(findings.len(), 2, "got {findings:?}");
+        assert_eq!(findings[0].param, "zebra");
+        assert_eq!(findings[1].param, "alpha");
+    }
+
+    /// D3 ordering (mixed): for a tool carrying BOTH an uncapped body string and an
+    /// uncapped path string, only the body one is a finding — the path one is
+    /// covered by the default cap — and the finding order follows declaration order.
+    #[test]
+    fn lint_skips_a_path_parameter_covered_by_the_default_cap() {
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "add_comment".to_string(),
+                path: Some("/issues/{id}/comments".to_string()),
+                method: Some("POST".to_string()),
+                parameters: vec![
+                    ParamDecl {
+                        name: "body_text".to_string(),
+                        param_type: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                    ParamDecl {
+                        name: "id".to_string(),
+                        param_type: Some("string".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        let findings = cfg.lint();
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        assert_eq!(findings[0].param, "body_text");
+        assert_eq!(findings[0].rule, UNCAPPED_STRING);
+    }
+
+    /// SC-7 shape mismatch: a path-position parameter declaring a `max_length`
+    /// ABOVE the always-on placeholder floor is surfaced, because it publishes a
+    /// limit the floor will not honour.
+    #[cfg(feature = "input-validation")]
+    #[test]
+    fn lint_reports_a_declared_max_length_above_the_placeholder_floor() {
+        let floor = pmcp::server::schema_validation::PLACEHOLDER_MAX_LENGTH as u64;
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "line_status".to_string(),
+                path: Some("/lines/{line_id}/status".to_string()),
+                method: Some("GET".to_string()),
+                parameters: vec![ParamDecl {
+                    name: "line_id".to_string(),
+                    param_type: Some("string".to_string()),
+                    max_length: Some(floor + 1),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        let findings = cfg.lint();
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        assert_eq!(findings[0].rule, DECLARED_MAX_LENGTH_ABOVE_PLACEHOLDER_CAP);
+        assert_eq!(findings[0].param, "line_id");
+        assert!(
+            findings[0].detail.contains(&floor.to_string()),
+            "the finding must name the effective limit: {}",
+            findings[0].detail
+        );
+
+        // Exactly AT the floor is fine — the adjacency case.
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "line_status".to_string(),
+                path: Some("/lines/{line_id}/status".to_string()),
+                method: Some("GET".to_string()),
+                parameters: vec![ParamDecl {
+                    name: "line_id".to_string(),
+                    param_type: Some("string".to_string()),
+                    max_length: Some(floor),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        assert_eq!(cfg.lint(), Vec::new());
+    }
+
+    /// Every ACTIVE opt-out is reported, so a switched-off enforcement can never
+    /// read as switched on.
+    #[test]
+    fn lint_reports_every_active_opt_out() {
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "ping".to_string(),
+                sql: Some("SELECT 1".to_string()),
+                ..Default::default()
+            },
+            ValidationSection {
+                enforce_input_schema: false,
+                default_max_length: 0,
+                additional_properties: true,
+                strict: false,
+            },
+        );
+        let rules: Vec<&str> = cfg.lint().iter().map(|w| w.rule).collect();
+        assert_eq!(
+            rules,
+            vec![
+                OPT_OUT_ENFORCE_INPUT_SCHEMA,
+                OPT_OUT_DEFAULT_MAX_LENGTH_ZERO,
+                OPT_OUT_ADDITIONAL_PROPERTIES,
+            ]
+        );
+        // A server-level finding names no tool or parameter.
+        for w in cfg.lint() {
+            assert!(w.tool.is_empty(), "{w:?}");
+            assert!(w.param.is_empty(), "{w:?}");
+            assert!(!w.to_string().is_empty(), "Display must render");
+        }
+    }
+
+    /// D-07 strict mode: the SAME config that returns `Ok(())` with one lint
+    /// finding under the default becomes a hard `validate()` failure under
+    /// `strict = true`.
+    #[test]
+    fn validate_rejects_uncapped_string_param_in_strict_mode() {
+        let toml_body = r#"
+            [server]
+            name = "demo"
+            version = "0.1.0"
+
+            [[tools]]
+            name = "search_tracks"
+            sql = "SELECT 1"
+
+            [[tools.parameters]]
+            name = "q"
+            type = "string"
+        "#;
+        let lenient = ServerConfig::from_toml(toml_body).expect("parse");
+        lenient
+            .validate()
+            .expect("non-strict must never refuse to boot over an uncapped body string");
+        assert_eq!(lenient.lint().len(), 1);
+
+        let strict_toml = format!("{toml_body}\n[server.validation]\nstrict = true\n");
+        let strict = ServerConfig::from_toml(&strict_toml).expect("parse");
+        match strict.validate() {
+            Err(ConfigValidationError::UncappedStringParam {
+                ref tool,
+                ref param,
+            }) => {
+                assert_eq!(tool, "search_tracks");
+                assert_eq!(param, "q");
+            },
+            other => panic!("expected UncappedStringParam, got {other:?}"),
+        }
+    }
+
+    /// `validation_report()` carries the effective policy and a per-tool rule list
+    /// for the once-at-startup log.
+    #[test]
+    fn validation_report_carries_the_effective_policy_and_per_tool_rules() {
+        let cfg = cfg_with_one_tool(
+            ToolDecl {
+                name: "line_status".to_string(),
+                path: Some("/lines/{line_id}/status".to_string()),
+                method: Some("GET".to_string()),
+                parameters: vec![ParamDecl {
+                    name: "line_id".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    pattern: Some("^[0-9a-z-]+$".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        );
+        let report = cfg.validation_report();
+        assert!(report.enforce_input_schema);
+        assert_eq!(report.default_max_length, 256);
+        assert!(report.opt_outs.is_empty(), "nothing is opted out");
+        assert_eq!(report.tools.len(), 1);
+        assert_eq!(report.tools[0].tool, "line_status");
+        let rule = &report.tools[0].rules[0];
+        assert!(rule.contains("line_id"), "{rule}");
+        assert!(rule.contains("Path"), "{rule}");
+        assert!(rule.contains("pattern"), "{rule}");
+        assert!(rule.contains("maxLength=256 (default)"), "{rule}");
+    }
+
+    // -- Phase 128 D4(b) step 3b: the curated template parser's limit, enforced at
+    //    CONFIG time rather than failing obscurely at call time. ---------------
+
+    /// A single-call `GET` tool on `path`, no parameters.
+    fn single_call_on(path: &str) -> ServerConfig {
+        cfg_with_one_tool(
+            ToolDecl {
+                name: "t".to_string(),
+                description: Some("t".to_string()),
+                path: Some(path.to_string()),
+                method: Some("GET".to_string()),
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        )
+    }
+
+    fn assert_malformed_segment(path: &str) {
+        let err = single_call_on(path)
+            .validate()
+            .expect_err("an unsupported path-template segment must be refused at config time");
+        match err {
+            ConfigValidationError::MalformedPathTemplateSegment { tool, segment } => {
+                assert_eq!(tool, "t");
+                assert!(!segment.is_empty(), "the finding must name the segment");
+            },
+            other => panic!("expected MalformedPathTemplateSegment, got {other:?}"),
+        }
+    }
+
+    /// `/search/{a}{b}` parses to the SINGLE name `a}{b`, which no `ParamDecl` can
+    /// match — refused at config time instead of sending literal braces upstream.
+    #[test]
+    fn validate_rejects_a_path_template_segment_with_two_brace_pairs() {
+        assert_malformed_segment("/search/{a}{b}");
+    }
+
+    /// `/prefix-{id}` is not recognized as carrying a placeholder at all.
+    #[test]
+    fn validate_rejects_a_path_template_segment_with_text_adjacent_to_a_brace_pair() {
+        assert_malformed_segment("/prefix-{id}");
+    }
+
+    /// `{}` is a brace pair with no name — not a placeholder.
+    #[test]
+    fn validate_rejects_an_empty_path_template_placeholder() {
+        assert_malformed_segment("/a/{}/b");
+    }
+
+    /// An unbalanced brace is the same author error seen from the other side.
+    #[test]
+    fn validate_rejects_an_unbalanced_path_template_brace() {
+        assert_malformed_segment("/a/{id");
+    }
+
+    /// ACCEPT control: whole-segment placeholders are the supported shape. Without
+    /// this row the four refusals above are satisfiable by refusing every template.
+    #[test]
+    fn validate_accepts_whole_segment_path_template_placeholders() {
+        single_call_on("/content/{version}/CUI/{cui}")
+            .validate()
+            .expect("whole-segment placeholders are the supported shape");
+    }
+
+    /// ACCEPT control, and the CURATED half of the inherited `?` narrowing: an
+    /// author-written query string in a `[[tools]]` `path` is configuration, not
+    /// caller data, and must keep working.
+    #[test]
+    fn validate_accepts_a_path_template_carrying_an_author_written_query_string() {
+        single_call_on("/content/{version}/CUI?string=x")
+            .validate()
+            .expect("an author-written query string in a curated path must be accepted");
+    }
+
+    /// A SQL tool has no `path`, so the template rule cannot reach it.
+    #[test]
+    fn validate_ignores_the_template_rule_for_a_tool_with_no_path() {
+        cfg_with_one_tool(
+            ToolDecl {
+                name: "t".to_string(),
+                sql: Some("SELECT 1".to_string()),
+                ..Default::default()
+            },
+            ValidationSection::default(),
+        )
+        .validate()
+        .expect("a SQL tool carries no path template");
+    }
+
     proptest! {
         /// TEST-02: any valid `ServerConfig` round-trips through TOML.
         ///
@@ -2018,5 +3795,127 @@ mod tests {
             prop_assert_eq!(parsed.server.name, name);
             prop_assert_eq!(parsed.server.version, version);
         }
+    }
+}
+
+/// `ServerConfig::lint_against_spec` — the CONFIG-time half of the
+/// template-spelling-drift guard (Phase 128, D4(b) / T-128-36a).
+///
+/// Four rows, and the shape matters: one row per DRIFT that must be reported, plus
+/// three accept rows for the shapes that must NOT be, because a finding-producing
+/// lint with no accept rows is indistinguishable from one that fires on everything.
+#[cfg(all(test, feature = "http"))]
+mod lint_against_spec_tests {
+    use super::{ServerConfig, ToolDecl, CONFIGURED_TEMPLATE_NOT_IN_SPEC};
+    use crate::http::OpenApiSchema;
+
+    const SPEC: &str = r#"{
+      "openapi": "3.0.0",
+      "info": { "title": "t", "version": "1" },
+      "paths": {
+        "/content/{version}/CUI": {
+          "get": {
+            "operationId": "getCui",
+            "parameters": [
+              { "name": "version", "in": "path", "required": true,
+                "schema": { "type": "string", "pattern": "^[a-z]+$" } }
+            ],
+            "responses": { "200": { "description": "ok" } }
+          }
+        }
+      }
+    }"#;
+
+    fn spec() -> OpenApiSchema {
+        OpenApiSchema::parse(SPEC).expect("the fixture spec parses")
+    }
+
+    fn cfg_with(tools: Vec<ToolDecl>) -> ServerConfig {
+        ServerConfig {
+            server: super::ServerSection {
+                name: "t".to_string(),
+                version: "0.1.0".to_string(),
+                ..Default::default()
+            },
+            tools,
+            ..Default::default()
+        }
+    }
+
+    fn http_tool(name: &str, method: &str, path: &str) -> ToolDecl {
+        ToolDecl {
+            name: name.to_string(),
+            method: Some(method.to_string()),
+            path: Some(path.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The drift the guard exists for: a placeholder spelled differently from the
+    /// spec's own reaches the same endpoint with the declaration dropped.
+    #[test]
+    fn lint_against_spec_reports_a_template_the_spec_does_not_declare() {
+        let cfg = cfg_with(vec![http_tool("get_cui", "GET", "/content/{alias}/CUI")]);
+        let findings = cfg.lint_against_spec(&spec());
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, CONFIGURED_TEMPLATE_NOT_IN_SPEC);
+        assert_eq!(findings[0].tool, "get_cui");
+        assert!(
+            findings[0].detail.contains("floor"),
+            "the finding must say what a miss RETAINS, not only what it loses: {}",
+            findings[0].detail
+        );
+    }
+
+    /// A method the spec does not declare on a path it does is the same class of
+    /// drift, because operations are indexed by `(path, METHOD)`.
+    #[test]
+    fn lint_against_spec_reports_a_method_the_spec_does_not_declare() {
+        let cfg = cfg_with(vec![http_tool(
+            "del_cui",
+            "DELETE",
+            "/content/{version}/CUI",
+        )]);
+        let rules: Vec<&str> = cfg
+            .lint_against_spec(&spec())
+            .iter()
+            .map(|w| w.rule)
+            .collect();
+        assert_eq!(rules, vec![CONFIGURED_TEMPLATE_NOT_IN_SPEC]);
+    }
+
+    /// ACCEPT — an exact match, in either method case, is no finding.
+    #[test]
+    fn lint_against_spec_accepts_an_exactly_declared_template() {
+        let cfg = cfg_with(vec![
+            http_tool("a", "GET", "/content/{version}/CUI"),
+            http_tool("b", "get", "/content/{version}/CUI"),
+        ]);
+        assert_eq!(cfg.lint_against_spec(&spec()), Vec::new());
+    }
+
+    /// ACCEPT — an author-written query string on the configured `path` is legal
+    /// curated authoring (plan 06's `?` narrowing) and an OpenAPI template never
+    /// carries one, so it is stripped before the lookup rather than reported.
+    #[test]
+    fn lint_against_spec_accepts_an_author_written_query_string() {
+        let cfg = cfg_with(vec![http_tool(
+            "a",
+            "GET",
+            "/content/{version}/CUI?string=x",
+        )]);
+        assert_eq!(cfg.lint_against_spec(&spec()), Vec::new());
+    }
+
+    /// ACCEPT — a tool that addresses no single spec operation is skipped, not
+    /// reported. A SQL tool has no `(method, path)` to look up.
+    #[test]
+    fn lint_against_spec_skips_a_tool_with_no_method_path_pair() {
+        let cfg = cfg_with(vec![ToolDecl {
+            name: "q".to_string(),
+            sql: Some("SELECT 1".to_string()),
+            ..Default::default()
+        }]);
+        assert_eq!(cfg.lint_against_spec(&spec()), Vec::new());
     }
 }

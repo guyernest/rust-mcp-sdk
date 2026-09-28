@@ -255,4 +255,187 @@ pub enum ConfigValidationError {
          the config file)"
     )]
     SecretSlotCarriesTestedValue(usize),
+    /// Per Phase 128 SC-2: a `[[tools]]` entry's synthesized `inputSchema` does
+    /// not compile as a Draft 2020-12 schema — in practice always a
+    /// `[[tools.parameters]]` `pattern` that is not a valid regular expression.
+    ///
+    /// Caught at CONFIG time rather than at call time, because a single
+    /// non-compiling `pattern` fails the whole document: the tool's validator
+    /// never builds, so every call to it is refused (or, if the compile error were
+    /// swallowed, every call passes unchecked). Neither outcome should first be
+    /// discovered by a client.
+    ///
+    /// # Why quoting `detail` is safe here
+    ///
+    /// `detail` is the engine's own compile-error text, which quotes the offending
+    /// SCHEMA — author-supplied config, never caller-supplied argument data. This
+    /// error is raised by [`crate::config::ServerConfig::validate`], which runs at
+    /// load time with no request in scope, and its audience is the config author,
+    /// who needs the detail to fix the regex. The SC-7 no-echo rule governs the
+    /// CLIENT-facing `tools/call` refusal path, where a non-compiling schema still
+    /// yields a detail-free message.
+    ///
+    /// `position` is the compile error's JSON schema path — e.g.
+    /// `/properties/region/pattern` — so it names the offending parameter directly.
+    #[error(
+        "[[tools]] '{tool}' has a declared parameter schema that does not compile at \
+         {position}: {detail}"
+    )]
+    UncompilableParamSchema {
+        /// The `[[tools]]` `name` whose parameter schema failed to compile.
+        tool: String,
+        /// JSON schema path of the offending declaration, e.g.
+        /// `/properties/region/pattern`.
+        position: String,
+        /// The engine's compile-error text. Schema-derived, never caller data.
+        detail: String,
+    },
+    /// Per Phase 128 SC-2: a `[[tools.parameters]]` `pattern` was declared as the
+    /// empty string.
+    ///
+    /// An empty `pattern` is a valid regular expression that matches every input,
+    /// so it buys no enforcement at all while reading — in a config review, in a
+    /// diff — exactly like a rule. Refused as a likely author error rather than
+    /// accepted as a no-op.
+    #[error(
+        "[[tools]] '{tool}' parameter '{param}' declares an empty pattern; an empty pattern \
+         matches every value and enforces nothing — remove the key or write the rule"
+    )]
+    EmptyParamPattern {
+        /// The `[[tools]]` `name` carrying the offending parameter.
+        tool: String,
+        /// The `[[tools.parameters]]` `name` whose `pattern` is empty.
+        param: String,
+    },
+    /// Per Phase 128 D3: a `[[tools.parameters]]` `minimum` or `maximum` is
+    /// non-finite (`NaN` / infinity) or has a magnitude EXCEEDING 2^53.
+    ///
+    /// # What this establishes, precisely
+    ///
+    /// [`crate::config::ParamDecl::minimum`] and
+    /// [`crate::config::ParamDecl::maximum`] are `f64`. A TOML integer above 2^53
+    /// has therefore ALREADY been rounded by the time this check runs, so the check
+    /// cannot see that rounding happened and does NOT promise to catch a bound
+    /// sitting one unit past the boundary. It catches the non-finite and the wildly
+    /// out-of-range cases, which is where a silently-mangled bound is most likely
+    /// to be load-bearing.
+    ///
+    /// The honest contract, stated on the field itself as well: `minimum` /
+    /// `maximum` are not a safe way to bound a 64-bit integer ID. Use a `pattern`
+    /// over the string form for that.
+    #[error(
+        "[[tools]] '{tool}' parameter '{param}' declares a minimum/maximum that is \
+         non-finite or exceeds 2^53; bounds are stored as f64, so such a value cannot be \
+         represented exactly — bound a large integer ID with a `pattern` instead"
+    )]
+    NonFiniteParamBound {
+        /// The `[[tools]]` `name` carrying the offending parameter.
+        tool: String,
+        /// The `[[tools.parameters]]` `name` whose bound cannot be represented.
+        param: String,
+    },
+    /// Per Phase 128 D3 / D-07: a body-position string parameter declares no
+    /// `max_length`, and `[server.validation]` `strict = true` promotes that lint
+    /// finding into a hard failure.
+    ///
+    /// Only reachable under `strict`. With `strict = false` (the default) the same
+    /// config validates cleanly and the finding is reported by
+    /// [`crate::config::ServerConfig::lint`] instead — a running server must never
+    /// refuse to boot over an uncapped free-text field, which is the whole reason
+    /// the lint channel exists separately from `validate`.
+    #[error(
+        "[[tools]] '{tool}' parameter '{param}' is an uncapped body-position string and \
+         [server.validation] strict = true; declare a max_length or clear the strict flag"
+    )]
+    UncappedStringParam {
+        /// The `[[tools]]` `name` carrying the uncapped parameter.
+        tool: String,
+        /// The `[[tools.parameters]]` `name` with no `max_length`.
+        param: String,
+    },
+    /// Per Phase 128 D4(b): a single-call `[[tools]]` `path` carries a
+    /// `/`-delimited segment that is not a supported placeholder shape.
+    ///
+    /// # The supported shape, and why anything else is an author error
+    ///
+    /// On the curated single-call surface a placeholder is a WHOLE segment: the
+    /// `path_placeholder_names` helper recognizes `{name}` spanning an
+    /// entire `/`-delimited segment and nothing else. A segment that contains a
+    /// brace but is not exactly `{name}` therefore takes one of two bad routes at
+    /// call time, neither of which is what the author meant:
+    ///
+    /// - `/search/{a}{b}` parses to the single parameter name `a}{b`, which no
+    ///   `[[tools.parameters]]` entry can match, so nothing is substituted;
+    /// - `/prefix-{id}` is not recognized as carrying a placeholder at all, so the
+    ///   literal text `{id}` is what would travel toward the backend.
+    ///
+    /// Both used to pass config validation and fail obscurely later. Refusing here
+    /// turns a silently-wrong request into a startup error naming the segment. The
+    /// segment text is author-written configuration, so echoing it is safe and is
+    /// what makes the error actionable — it carries no caller data.
+    #[error(
+        "[[tools]] '{tool}' path template segment '{segment}' is not a supported \
+         placeholder shape: a segment either contains no braces at all, or is \
+         exactly one non-empty '{{name}}' spanning the whole segment"
+    )]
+    MalformedPathTemplateSegment {
+        /// The `[[tools]]` `name` whose `path` carries the offending segment.
+        tool: String,
+        /// The offending `/`-delimited segment, verbatim (author-written config).
+        segment: String,
+    },
+}
+
+/// One non-fatal finding from [`crate::config::ServerConfig::lint`]
+/// (Phase 128, D-07).
+///
+/// # Why this exists instead of a `validate()` variant
+///
+/// [`ConfigValidationError`] is first-error-wins `Result<(), _>` with no warning
+/// channel, so D-07's "warns" is unexpressible in that signature. A running server
+/// must NOT refuse to boot because a free-text body parameter has no `max_length`
+/// (D-05) — but the author still has to be told, and the startup log is what makes
+/// a later regression traceable. Hence a separate additive `-> Vec<ConfigWarning>`
+/// channel that leaves `validate`'s existing behaviour untouched.
+///
+/// `[server.validation] strict = true` is what promotes a finding into a
+/// [`ConfigValidationError::UncappedStringParam`].
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigWarning {
+    /// The `[[tools]]` `name` the finding concerns.
+    ///
+    /// EMPTY for a server-level finding — an active `[server.validation]` opt-out
+    /// belongs to the server, not to a tool.
+    pub tool: String,
+    /// The `[[tools.parameters]]` `name` the finding concerns.
+    ///
+    /// EMPTY for a server-level finding, for the same reason as [`Self::tool`].
+    pub param: String,
+    /// Stable machine-readable rule identifier, e.g. `"uncapped-string"`.
+    ///
+    /// A `&'static str` rather than an enum so plan 07's CLI and plan 09's startup
+    /// log can group and filter on it without either taking a dependency on a
+    /// closed set that every new rule would widen.
+    pub rule: &'static str,
+    /// Human-readable explanation, including the remedy.
+    ///
+    /// Author-facing, like [`ConfigValidationError`]'s messages and unlike a
+    /// client-facing refusal: it may name config keys and declared limits. It never
+    /// contains caller data — `lint` runs at load time with no request in scope.
+    pub detail: String,
+}
+
+impl std::fmt::Display for ConfigWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.tool.is_empty() {
+            write!(f, "[{}] {}", self.rule, self.detail)
+        } else {
+            write!(
+                f,
+                "[{}] [[tools]] '{}' parameter '{}': {}",
+                self.rule, self.tool, self.param, self.detail
+            )
+        }
+    }
 }

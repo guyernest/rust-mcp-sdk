@@ -58,7 +58,8 @@ use pmcp_server_toolkit::code_mode::{
 use pmcp_server_toolkit::http::{HttpConnector, OpenApiSchema};
 use pmcp_server_toolkit::prompts::PromptConfig;
 use pmcp_server_toolkit::resources::ResourceConfig;
-use pmcp_server_toolkit::synthesize_from_config_with_http_connector_and_scripts;
+use pmcp_server_toolkit::synthesize_from_config_with_http_connector_and_scripts_and_hooks;
+use pmcp_server_toolkit::ToolkitHooks;
 
 use pmcp::server::auth::{AuthContext, AuthProvider};
 use pmcp::Server;
@@ -242,13 +243,82 @@ fn register_prompts(
 /// [`AssembleError::Toolkit`] if a toolkit step fails (e.g. tool synthesis or a
 /// `token_secret` resolution error) or [`AssembleError::Build`] if the final
 /// `pmcp::Server` build fails.
+/// Attach the operator's parsed OpenAPI document to the executor, when there is
+/// one (Phase 128 D4(b)).
+///
+/// A named function rather than two lines inline, for one reason: it is the only
+/// thing outside this crate's own `build_server` that a test can call, and
+/// T-128-36c is the risk of a wiring nothing can observe. `build_server` returns a
+/// `pmcp::Server`, which exposes no route back to the executor it consumed — so
+/// without this seam the only provable statement would be "the server built".
+///
+/// The `Arc` is CLONED, never the document: the same parse is also served verbatim
+/// as the `api_schema` resource and a spec can be large.
+///
+/// `None` leaves the executor exactly as it was. That is the supported spec-less
+/// deployment, and it is still floored and capped — the unconditional character
+/// floor and the always-on length cap live in core and do not depend on a spec.
+fn narrowed_executor(
+    http_exec: HttpCodeExecutor,
+    spec: Option<&Arc<OpenApiSchema>>,
+) -> HttpCodeExecutor {
+    match spec {
+        Some(schema) => http_exec.with_schema(Arc::clone(schema)),
+        None => http_exec,
+    }
+}
+
+/// Attach the registered E1 policy to the connector, or FAIL LOUDLY (Phase 128).
+///
+/// The connector arrives already erased to `Arc<dyn HttpConnector>`, so the policy
+/// reaches it through `HttpConnector::governed`. An implementation that cannot host
+/// one returns `None`, and that is NOT treated as a silent no-op: a policy the
+/// operator registered and the connector never consults is precisely the
+/// present-but-inert defect this phase exists to close (T-128-39b). It is reported
+/// as an `error!` rather than returning `Err` because assembly has no way to know
+/// whether the deployment considers E1 load-bearing; the log names the exact
+/// condition.
+fn governed_connector(
+    connector: Arc<dyn HttpConnector>,
+    hooks: &ToolkitHooks,
+) -> Arc<dyn HttpConnector> {
+    let Some(policy) = hooks.request_policy() else {
+        return connector;
+    };
+    match connector.governed(policy) {
+        Some(governed) => {
+            debug_assert!(governed.has_request_policy());
+            governed
+        },
+        None => {
+            tracing::error!(
+                target: "pmcp_openapi_server",
+                "a RequestPolicy is registered but this HttpConnector implementation cannot \
+                 host one (`governed` returned None), so E1 will NOT run on the single-call \
+                 surface. The Code Mode surface is unaffected. Use the toolkit's HttpClient, \
+                 or implement `HttpConnector::governed`."
+            );
+            connector
+        },
+    }
+}
+
 pub fn build_server(
     cfg: &ServerConfig,
     connector: Arc<dyn HttpConnector>,
     http_exec: HttpCodeExecutor,
     spec: Option<OpenApiSchema>,
+    hooks: &ToolkitHooks,
 ) -> Result<Server, AssembleError> {
     let exec_config = execution_config(cfg);
+
+    // Phase 128 D-07 — the once-at-startup enforcement report, emitted HERE and not
+    // only in `ServerBuilderExt::try_tools_from_config_with`. This function reaches
+    // the free synthesizer directly (below) and never goes through that builder
+    // path, so a report emitted only there would be absent from the deployment that
+    // most needs it (T-128-42a). ONE formatter, two call sites; it is built from
+    // declarations and carries no request data.
+    pmcp_server_toolkit::emit_validation_report(cfg, hooks);
 
     // D-03: define the no-spec + code-mode behavior — warn and proceed (Code Mode
     // runs without the api_schema contract resource).
@@ -261,14 +331,59 @@ pub fn build_server(
         );
     }
 
-    let resources = StaticResourceHandler::from_configs(&merge_spec_resource(cfg, spec.as_ref()))?;
+    // ONE `Arc<OpenApiSchema>`, shared between the `api_schema` resource below and
+    // the executor's D4(b) narrowing. The parsed document is retained verbatim and
+    // can be large; cloning it to give the executor its own copy would double that
+    // allocation for no benefit.
+    let spec = spec.map(Arc::new);
+
+    let resources =
+        StaticResourceHandler::from_configs(&merge_spec_resource(cfg, spec.as_deref()))?;
+
+    // Phase 128 D4(b) — the executor gets the spec HERE, and the position is
+    // load-bearing rather than incidental.
+    //
+    // Both HTTP surfaces run on ONE executor (D-02): the synthesizer at (1) takes a
+    // CLONE and Code Mode at (2) takes the original. `HttpCodeExecutor` is a
+    // cheap-clone value type, so a clone taken before `with_schema` would be
+    // permanently unnarrowed — the narrowing has to be attached before EITHER
+    // fan-out, which is why this statement precedes both. `build_server` is also the
+    // only place the executor and the parsed spec are both in scope: `dispatch.rs`
+    // constructs the executor with no spec available, and the two `#[cfg(test)]`
+    // helpers that look like candidates would leave the production binary
+    // unnarrowed while every test passed (T-128-36c).
+    let http_exec = narrowed_executor(http_exec, spec.as_ref());
+
+    // Phase 128 E1 — the policy is attached to BOTH HTTP surfaces here, and the
+    // position is load-bearing for the same reason `with_schema` above is: the
+    // executor fans out below (a clone to the synthesizer, the original to Code
+    // Mode), so a clone taken before this line would be permanently ungoverned.
+    let http_exec = match hooks.request_policy() {
+        Some(policy) => http_exec.with_request_policy(policy),
+        None => http_exec,
+    };
+    let connector = governed_connector(connector, hooks);
+
+    // The CONFIGURED half of the template-spelling guard (T-128-36a). A `[[tools]]`
+    // `(method, path)` the spec does not declare keeps the unconditional floor and
+    // the always-on cap but loses the spec's narrowing, and that is an author error
+    // the operator can fix before deploy — so it is reported once, at startup, in
+    // the deploy log. Its bound is stated on `lint_against_spec`: a template a Code
+    // Mode script composes at RUNTIME is invisible at config time and is reported
+    // instead by the toolkit's once-per-pair debug log.
+    if let Some(schema) = spec.as_deref() {
+        for finding in cfg.lint_against_spec(schema) {
+            tracing::warn!(target: "pmcp_openapi_server", "{finding}");
+        }
+    }
 
     // 1. Single-call + script tools over the shared connector + http_exec.
-    let synthesized = synthesize_from_config_with_http_connector_and_scripts(
+    let synthesized = synthesize_from_config_with_http_connector_and_scripts_and_hooks(
         cfg,
         connector,
         http_exec.clone(),
         exec_config.clone(),
+        hooks,
     )?;
     let mut builder = Server::builder()
         .name(&cfg.server.name)
@@ -301,7 +416,7 @@ pub fn build_server(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_server, merge_spec_resource, AssembleError, API_SCHEMA_URI};
+    use super::{build_server, merge_spec_resource, AssembleError, ToolkitHooks, API_SCHEMA_URI};
     use pmcp_server_toolkit::config::ServerConfig;
     use pmcp_server_toolkit::http::auth::{create_auth_provider, AuthConfig};
     use pmcp_server_toolkit::http::OpenApiSchema;
@@ -360,7 +475,13 @@ required = true
         // Code Mode tools register, no api_schema resource).
         std::env::set_var("OPENAPI_ASSEMBLE_SECRET", "assemble-secret-min-16-bytes");
         let cfg = curated_only_cfg();
-        let server = build_server(&cfg, connector(), http_exec(), None)?;
+        let server = build_server(
+            &cfg,
+            connector(),
+            http_exec(),
+            None,
+            &ToolkitHooks::default(),
+        )?;
         // The server builds without a spec — D-03 curated/no-spec boot proof.
         drop(server);
         Ok(())
@@ -400,4 +521,129 @@ required = true
     // dead). Its unit coverage now lives in the toolkit
     // (`code_mode::per_request_executor_tests`), and the end-to-end
     // handler-path forwarding proof is `tests/oauth_passthrough_e2e.rs`.
+
+    /// A spec declaring a NARROW pattern on the curated tool's own path, so the
+    /// wiring's effect is observable rather than merely present.
+    const NARROWING_SPEC: &str = r#"{
+      "openapi": "3.0.0",
+      "info": { "title": "tube", "version": "1" },
+      "paths": {
+        "/Line/{id}/Status": {
+          "get": {
+            "operationId": "getLineStatus",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "pattern": "^[a-z]+$" } }
+            ],
+            "responses": { "200": { "description": "ok" } }
+          }
+        }
+      }
+    }"#;
+
+    /// T-128-36c — the wiring must attach a supplied spec to the executor the
+    /// binary actually serves with. Asserted through the toolkit's public
+    /// `has_schema()` because the wiring lives in THIS crate while the field lives
+    /// in the toolkit, so a `#[cfg(test)]` accessor could not reach it.
+    #[test]
+    fn narrowed_executor_attaches_a_supplied_spec() {
+        let spec = std::sync::Arc::new(OpenApiSchema::parse(NARROWING_SPEC).expect("parses"));
+        assert!(
+            !http_exec().has_schema(),
+            "the constructor must leave the schema absent, or this row proves nothing"
+        );
+        assert!(
+            super::narrowed_executor(http_exec(), Some(&spec)).has_schema(),
+            "a supplied spec must reach the executor"
+        );
+    }
+
+    /// T-128-39b: a registered `RequestPolicy` must actually REACH both HTTP
+    /// surfaces through this crate's assembly, not just through the toolkit's
+    /// `ServerBuilderExt` path that this binary never uses.
+    ///
+    /// `build_server` returns a `pmcp::Server`, which exposes no route back to what
+    /// it consumed — so the attachment is proven at the two seams `build_server`
+    /// calls, each of which reports its own state through a public accessor
+    /// precisely so a registered-but-unreached policy cannot look registered.
+    #[test]
+    fn a_registered_policy_reaches_both_http_surfaces() {
+        use pmcp_server_toolkit::{OutboundRequest, PolicyRefusal, RequestPolicy};
+        use std::sync::Arc;
+
+        struct RefuseAll;
+        #[pmcp_server_toolkit::async_trait]
+        impl RequestPolicy for RefuseAll {
+            async fn check(&self, _req: &OutboundRequest<'_>) -> Result<(), PolicyRefusal> {
+                Err(PolicyRefusal::new("refused"))
+            }
+        }
+
+        let hooks = ToolkitHooks::default().with_request_policy(Arc::new(RefuseAll));
+
+        // Surface 1 — the single-call connector, reached via `HttpConnector::governed`.
+        let bare = connector();
+        assert!(!bare.has_request_policy(), "the fixture starts ungoverned");
+        assert!(
+            super::governed_connector(bare, &hooks).has_request_policy(),
+            "E1 must reach the single-call connector"
+        );
+
+        // Surface 2 — the Code Mode executor.
+        let policy = hooks.request_policy().expect("registered");
+        assert!(
+            http_exec().with_request_policy(policy).has_request_policy(),
+            "E1 must reach the Code Mode executor"
+        );
+    }
+
+    /// Empty hooks leave the connector exactly as it was — no wrapper, no clone.
+    #[test]
+    fn empty_hooks_leave_the_connector_untouched() {
+        let c = super::governed_connector(connector(), &ToolkitHooks::default());
+        assert!(!c.has_request_policy());
+    }
+
+    /// The spec-less deployment stays supported: no spec, no schema, and the floor
+    /// plus the cap are what still protect it.
+    #[test]
+    fn narrowed_executor_leaves_a_spec_less_executor_alone() {
+        assert!(!super::narrowed_executor(http_exec(), None).has_schema());
+    }
+
+    /// ONE `Arc` is shared rather than the document being cloned: the executor's
+    /// copy and the caller's are the same allocation.
+    #[test]
+    fn narrowed_executor_shares_one_arc() {
+        let spec = std::sync::Arc::new(OpenApiSchema::parse(NARROWING_SPEC).expect("parses"));
+        let before = std::sync::Arc::strong_count(&spec);
+        let exec = super::narrowed_executor(http_exec(), Some(&spec));
+        assert_eq!(
+            std::sync::Arc::strong_count(&spec),
+            before + 1,
+            "the executor must hold a clone of the Arc, not a clone of the document"
+        );
+        drop(exec);
+        assert_eq!(std::sync::Arc::strong_count(&spec), before);
+    }
+
+    /// `build_server` with a spec still builds and registers both tool families —
+    /// the narrowing is additive, not a new failure mode.
+    #[test]
+    fn build_server_with_a_spec_builds_and_registers_tools() -> Result<(), AssembleError> {
+        std::env::set_var("OPENAPI_ASSEMBLE_SECRET", "s3cr3t-assemble-narrowing");
+        let cfg = curated_only_cfg();
+        let spec = OpenApiSchema::parse(NARROWING_SPEC).expect("parses");
+        let server = build_server(
+            &cfg,
+            connector(),
+            http_exec(),
+            Some(spec),
+            &ToolkitHooks::default(),
+        )?;
+        assert!(server.get_tool("get_line_status").is_some());
+        assert!(server.get_tool("execute_code").is_some());
+        std::env::remove_var("OPENAPI_ASSEMBLE_SECRET");
+        Ok(())
+    }
 }

@@ -212,6 +212,132 @@ Plans:
      gate-like guidance** must produce a warning at projection time — the one thing the projection
      can see that the executing surface cannot.
 
+### Phase 128: Secure-by-default input validation for config-driven servers
+
+**Goal**: A config-driven server enforces the input contract it already publishes. The toolkit writes
+`max_length` / `minimum` / `maximum` / `enum` into `inputSchema` and emits `"additionalProperties":
+false` (`crates/pmcp-server-toolkit/src/tools.rs:206`), but NO layer checks any of it at `tools/call`
+time — `src/server/mod.rs:2590` and `:2820` pass `req.arguments` straight to `handler.handle`, and
+`src/server/core.rs` adds no check. Every server team therefore rebuilds validation by hand and misses
+cases. This phase makes the declared schema binding, adds the parameter-shape vocabulary it needs,
+closes the path-injection class on BOTH HTTP surfaces, and leaves documented hooks for the domain
+rules a schema cannot express.
+
+**P0 sub-goal — three false security claims.** `crates/pmcp-server-toolkit/src/tools.rs` asserts this
+enforcement ALREADY exists, against named threat IDs: lines 15-17 (unknown argument keys "are rejected
+by pmcp's request-validation path at `tools/call` time", T-83-05-02), 556-557 ("enforced upstream",
+T-90-03-01) and 615 ("schema-validated ... BEFORE the script runs", T-90-05-03). The test carrying
+T-90-05-03 (`crates/pmcp-server-toolkit/tests/script_tool.rs:185`) asserts argument BINDING, not
+validation. Under the Toyota Way gate a documented mitigation that does not exist is a defect, not a
+feature gap — these three comments are corrected in this phase, and the Phase 83 / Phase 90 threat
+sign-offs are re-checked for the same class.
+
+**Depends on**: Nothing in v2.7 — independent of Phases 125–127 (the `phase.add` CLI's
+auto-generated `Depends on: Phase 127` was a dangling reference; Phase 127 has no ROADMAP entry).
+Touches `pmcp-server-toolkit` (0.1.3), `pmcp-code-mode` (0.5.4) and core `pmcp` (2.20.4).
+
+**Source of truth**: the reviewed change request *PMCP SDK change request: secure-by-default input
+validation*, snapshotted verbatim as `128-CHANGE-REQUEST.md` in this phase directory (Claude doc
+`9mvbYNAzFwviiwbaF2BkBb` at rev 12). Every claim in it was verified against the tree at `3b2d7baf`
+before the snapshot was taken; the review corrections are recorded in `128-REVIEW-NOTES.md`. It
+carries the four defaults D1–D4, the three escape hatches E1–E3, the acceptance-test matrix and six
+open questions.
+
+**Requirements**: No formal REQ-IDs — v2.7 has no REQUIREMENTS.md. The tracked requirement set for
+planning and verification is D1–D4 / E1–E3 from the change request, carried in each plan's
+`requirements:` frontmatter, plus the Success Criteria below.
+
+**Success Criteria**:
+
+- [ ] SC-1 — A config-declared tool refuses arguments that violate its published `inputSchema`
+  (including the `additionalProperties: false` it already emits) before any backend call, with zero
+  upstream requests on refusal. Gated on the toolkit's existing `input-validation` feature
+  (`crates/pmcp-server-toolkit/Cargo.toml:102`, currently zero references in `src/`), NOT on
+  `openapi-code-mode` — that umbrella would pull the SWC/JS engine into curated single-call builds.
+- [ ] SC-2 — `ParamDecl` accepts `pattern`, `min_length`, `format` and `items`/`max_items`; a
+  `pattern` that does not compile under the runtime engine fails config validation rather than
+  failing at call time.
+- [ ] SC-3 — **AMENDED 2026-09-28 to name the surface that actually shipped.** An uncapped string
+  parameter is surfaced by `ServerConfig::lint()` and by **`cargo pmcp validate config`**, with
+  `cargo pmcp validate deploy` also emitting the same findings as warnings. The lint output states
+  **which `pmcp-server-toolkit` version performed it**, so a clean result reads as version-scoped
+  rather than as a guarantee about the toolkit the deployed server runs; it does NOT hard-error on a
+  mismatch. The default cap is ON at 256 code points and **position-scoped** (hard cap in path or
+  query position, warning only in body position), with `[server.validation] default_max_length = 0`
+  as the opt-out.
+  - *Original wording, retained:* "An uncapped string parameter is surfaced by
+    `ServerConfig::validate` and by `cargo pmcp validate deploy`. Whether the default cap is ON (and
+    at what value) is an open question for `/gsd-discuss-phase` — a default-on 256 would refuse calls
+    that work today."
+  - *Why it moved, in three places:* the warnings channel is `lint()` rather than `validate()`
+    (`validate()` returns `Result` and has no warning channel, so a warning forced through it would
+    become an error); the primary reviewer surface is a dedicated `validate config` subcommand rather
+    than `validate deploy` (Q5); and the cap question was answered by D-05/D-06 (position-scoped 256)
+    rather than left open. The version-scoping clause is the operator's resolution of the
+    mixed-version gap plan 07 flagged and left open. Full reasoning: CHANGELOG 2.21.0 § *Deviations
+    from this phase's own source documents*, items 4, 5 and the `validate config` section. A success
+    criterion silently rewritten to match what was built would be the same documented-but-absent
+    class this phase exists to close, one document up — hence the original stays visible.
+- [ ] SC-4 — A placeholder value carrying `?`, `#`, `/`, `..` or a percent-encoded form is refused on
+  BOTH HTTP surfaces: `HttpCodeExecutor` (`code_mode.rs`) and the curated single-call
+  `HttpClient::substitute_path` (`http/client.rs:150-163`). All five CR-01 probes pass, including the
+  two that need no JS engine.
+- [ ] SC-5 — `RequestPolicy` (E1) and per-tool `ArgumentValidator` (E2) are registerable on the
+  server builder, and `garde` runs on `TypedTool<T>` where `T: garde::Validate` (E3), retiring
+  `garde`'s zero-reference status in `src/`.
+- [ ] SC-6 — The three false enforcement claims in `tools.rs` are corrected, and no remaining comment
+  in the toolkit claims a mitigation the code does not implement.
+- [ ] SC-7 — Refusal messages name the violated rule and the DECLARED parameters, never the rejected
+  value and never an attacker-supplied key.
+- [ ] SC-8 — `make quality-gate` passes, and the phase ships fuzz, property, unit and example
+  coverage per the CLAUDE.md ALWAYS requirements.
+
+**Plans:** 11/11 plans executed
+
+*Wave numbering updated 2026-09-27 after cross-AI review (`128-REVIEWS.md`): eight waves became NINE.
+Codex found wave 4 was not execution-safe — plans 06 and 07 would both edit `Makefile` concurrently —
+so 07 gained `depends_on: 128-06` and the later plans cascaded. The eleven-plan shape is unchanged;
+only the wave numbers moved. Rationale and the before/after table are in `128-01-PLAN.md` § Wave graph.*
+
+Plans:
+**Wave 1**
+
+- [x] 128-01-PLAN.md — TRACER: core `schema_validation::validate_input` seam wired end to end (D1/SC-1), the D-04 cfg migration in `output_validation.rs`, acceptance-matrix rows 8-11, plus the Wave-0 Makefile gate repairs (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 128-02-PLAN.md — Core validator completeness: full value-free renderer with the `safe_pointer` redaction, `validate_path_placeholder` on a decode-once floor, `validate_resolved_path` for the composed path (wave 2)
+- [x] 128-04-PLAN.md — E3 `garde` on `TypedTool`, D-03 deprecate + harvest, ARCHITECTURE.md corrections, the `s57` example (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 128-03-PLAN.md — D2 `ParamDecl` vocabulary, D3 position-scoped cap, `[server.validation]`, `ServerConfig::lint()`, Q7 default-on rollout including the scaffold template (wave 3)
+- [x] 128-05-PLAN.md — D-09 `HttpExecutor` contract change, layer-1 `${var}` flooring (FORK 2), composed-path check, Pitfall 7 path-echo fixes, six Code Mode probes (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 128-06-PLAN.md — Curated single-call D4 in `substitute_path`, the composed-path check, the two JS-engine-free CR-01 probes (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 128-07-PLAN.md — SC-3: `cargo pmcp validate config` + `validate deploy` lint integration, and the two Makefile gate entries (wave 5; serialized after 06 to avoid a concurrent `Makefile` edit)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 128-08-PLAN.md — D4(b) spec narrowing on the Code Mode surface, `with_schema` wired in `build_server`, placeholder property arms (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 128-09-PLAN.md — E1 `RequestPolicy` + E2 `ArgumentValidator` via `ToolkitHooks` + startup enforcement log wired through both assembly paths + `e05` example (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 128-10-PLAN.md — SC-6 threat-comment correction and sweep, SC-7 fuzz targets with a provenance oracle, root property arm, the strict fuzz leg's CI home (wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 128-11-PLAN.md — Release: FORK 1's exit (b) (path-only root dev-deps + publish reorder + two guards), twelve crate versions, every manifest pin and all **eight** scaffold literals in one commit, CHANGELOG/D-15 rollout note, docs page (wave 9). *Corrected on execution: this line and the plan's prose both said "nine"; the plan's own table listed eight, and an exhaustive scan of the four template files measured eight movable emitters (three constants + five inline literals). Five had no drift test and now do. `128-11-SUMMARY.md` carries the enumeration. A thirteenth crate-version emitter the plan never enumerated, `server.json`, was also found and moved.*
+
 ## Progress — v2.7 Milestone
 
 *Milestone **v2.7 SEP-2640 Skills Conformance & Positioning** — opened 2026-09-01 with Phase 125.*
@@ -220,6 +346,7 @@ Plans:
 |-------|--------------|----------------|--------|-----------|
 | 125. SEP-2640 Conformance — skills/list + skills/get | D-01..D-11 (`125-CONTEXT.md`; no formal REQ-IDs) | 5/5 | Complete | 2026-09-02 |
 | 126. Workflow→skill projection (`as_skill()`) | SC-1..SC-6 (ROADMAP) + D-01..D-16, D-04a/D-15a/D-16a (`126-CONTEXT.md`); no formal REQ-IDs | 7/7 | In Progress|  |
+| 128. Secure-by-default input validation | D1–D4 / E1–E3 (`128-CHANGE-REQUEST.md`) + SC-1..SC-8 (ROADMAP); no formal REQ-IDs | 11/11 | In Progress|  |
 
 **Phase 125 close-out record (2026-09-02).** All five ROADMAP Success Criteria above verified
 (`125-VERIFICATION.md`, status `passed`). UAT 3/3 passed (`125-UAT.md`) — three human decisions:

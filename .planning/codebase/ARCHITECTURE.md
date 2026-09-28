@@ -195,9 +195,30 @@ Match on error type → construct JSONRPCError with code/message → send via tr
 - Middleware: `LoggingMiddleware` logs requests/responses with correlation IDs
 
 **Validation:**
-- Framework: Optional `jsonschema` + `garde` (feature-gated "validation")
-- Locations: `src/server/validation.rs` for general validation, typed tools auto-validate via schema
-- Usage: Server can validate tool inputs before calling handler
+- Framework: `jsonschema` behind the `schema-validation` feature; `garde` (with its
+  `derive` feature) behind `validation`, which is defined as
+  `["schema-validation", "dep:garde"]`. A config-driven server gets the schema engine
+  without `garde`; `full` implies `validation` and so implies both.
+- Locations — there are exactly two ENFORCING paths, and each names its enforcer:
+  - `src/server/schema_validation.rs` → `validate_input` + `render_refusal`: runtime
+    enforcement of a tool's declared `inputSchema` at `tools/call` time, pinned to
+    Draft 2020-12 on both protocol eras. Wired for config-driven toolkit tools by
+    `ValidatingToolHandler` in `crates/pmcp-server-toolkit/src/tools.rs`.
+  - `src/server/typed_tool.rs` → `TypedTool::new_validated` /
+    `TypedSyncTool::new_validated` (and the `*_with_schema` siblings): `garde` field
+    rules on hand-written typed tools, run after deserialization. Opt-in per tool —
+    the plain constructors store no validator and do NOT validate, and `T`'s bounds
+    are unchanged.
+  - `src/server/validation.rs` is NEITHER. Eleven public validators with zero callers
+    in `src/`; `#[deprecated(since = "2.21.0")]` + `#[doc(hidden)]`, removal booked
+    against 3.0. Do not cite it as a validation path.
+- Usage: typed tools DESERIALIZE their arguments, and validate only when built through
+  a `new_validated*` constructor. Generic core dispatch does NOT schema-check tool
+  inputs before calling the handler: the four dispatch sites (`src/server/mod.rs:2590`,
+  `:2820`, `src/server/core.rs:1085`, `:1270`) are unguarded, and the one existing
+  guard at `src/server/core.rs:1014-1023` is a whole-object BYTE-SIZE cap, not a schema
+  check. Wiring `schema_validation::validate_input` into core dispatch is explicitly
+  deferred; `core.rs:1014-1023` is the natural neighbour for it.
 
 **Authentication:**
 - Location: `src/server/auth/` (oauth2.rs, jwt.rs, middleware.rs, providers/)

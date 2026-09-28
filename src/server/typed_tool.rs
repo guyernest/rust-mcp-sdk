@@ -21,6 +21,13 @@ use super::{ToolHandler, ToolOutput};
 #[cfg(feature = "schema-generation")]
 use schemars::JsonSchema;
 
+/// A stored, type-erased `garde` entry point for `T`.
+///
+/// Exists as an alias so the field it types stays readable and so the
+/// `clippy::type_complexity` shape is named once.
+#[cfg(feature = "validation")]
+type GardeValidator<T> = Box<dyn Fn(&T) -> std::result::Result<(), garde::Report> + Send + Sync>;
+
 /// A typed tool implementation with automatic schema generation and validation.
 pub struct TypedTool<T, F>
 where
@@ -36,6 +43,13 @@ where
     ui_resource_uri: Option<String>,
     execution: Option<ToolExecution>,
     handler: F,
+    /// The `garde` validator, populated ONLY by [`TypedTool::new_validated`] and
+    /// [`TypedTool::new_validated_with_schema`]. Every other constructor leaves it
+    /// `None`, which is what keeps this addition behaviour-preserving for every
+    /// existing `TypedTool<T>` — including one whose `T` happens to implement
+    /// `garde::Validate`.
+    #[cfg(feature = "validation")]
+    validator: Option<GardeValidator<T>>,
     _phantom: PhantomData<T>,
 }
 
@@ -78,6 +92,8 @@ where
             ui_resource_uri: None,
             execution: None,
             handler,
+            #[cfg(feature = "validation")]
+            validator: None,
             _phantom: PhantomData,
         }
     }
@@ -92,7 +108,134 @@ where
             ui_resource_uri: None,
             execution: None,
             handler,
+            #[cfg(feature = "validation")]
+            validator: None,
             _phantom: PhantomData,
+        }
+    }
+
+    /// Create a new typed tool that runs `T`'s `garde` field rules after
+    /// deserialization (Phase 128, E3).
+    ///
+    /// # Why the bound is on the constructor
+    ///
+    /// `T: garde::Validate<Context = ()>` is declared HERE and nowhere else — not
+    /// on the `struct`, not on the inherent `impl`, and not on the
+    /// [`ToolHandler`] impl. That is deliberate and load-bearing: adding it to the
+    /// type would be a breaking change for every existing `TypedTool<T>` whose `T`
+    /// does not implement `garde::Validate`, and stable Rust has no specialization
+    /// that would make the bound conditional. Confining it to the constructor
+    /// makes field validation opt-in per tool at zero cost to every other tool.
+    ///
+    /// # Scope boundary — a non-unit `Context`
+    ///
+    /// Only `Context = ()` is supported here, because `garde`'s argument-free
+    /// `Validate::validate` requires `Self::Context: Default`. A rule that needs
+    /// request context or server-side state is out of scope for this entry point;
+    /// validate it inside the handler body instead.
+    ///
+    /// # Refusal shape
+    ///
+    /// A violation short-circuits the handler with [`crate::Error::Validation`]
+    /// rendered value-free — see `render_garde_refusal` for the two residual leak
+    /// surfaces (`#[garde(custom(..))]` messages and `#[garde(dive)]` map keys).
+    /// A DESERIALIZATION failure on a tool built through this constructor is also
+    /// redacted, which is the one behavioural difference from the plain
+    /// constructors; see `deserialize_args`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(all(feature = "validation", feature = "schema-generation"))] {
+    /// use pmcp::server::typed_tool::TypedTool;
+    /// use serde::Deserialize;
+    /// use schemars::JsonSchema;
+    /// use garde::Validate;
+    ///
+    /// #[derive(Debug, Deserialize, JsonSchema, Validate)]
+    /// struct CreateArgs {
+    ///     #[garde(length(min = 1, max = 64))]
+    ///     title: String,
+    /// }
+    ///
+    /// let tool = TypedTool::new_validated("create", |args: CreateArgs, _extra| {
+    ///     Box::pin(async move { Ok(serde_json::json!({"title": args.title})) })
+    /// });
+    /// # }
+    /// ```
+    #[cfg(all(feature = "validation", feature = "schema-generation"))]
+    pub fn new_validated(name: impl Into<String>, handler: F) -> Self
+    where
+        T: JsonSchema + garde::Validate<Context = ()>,
+    {
+        Self::new(name, handler).with_garde_validator()
+    }
+
+    /// [`TypedTool::new_validated`] with a manually provided schema.
+    ///
+    /// The `validation`-gated sibling of [`TypedTool::new_with_schema`], for builds
+    /// that do not enable `schema-generation`. The bound story is identical: see
+    /// [`TypedTool::new_validated`].
+    #[cfg(feature = "validation")]
+    pub fn new_validated_with_schema(name: impl Into<String>, schema: Value, handler: F) -> Self
+    where
+        T: garde::Validate<Context = ()>,
+    {
+        Self::new_with_schema(name, schema, handler).with_garde_validator()
+    }
+
+    /// Store the `garde` entry point. Private: the only way to reach it is a
+    /// `new_validated*` constructor, so the bound cannot leak onto the type.
+    #[cfg(feature = "validation")]
+    fn with_garde_validator(mut self) -> Self
+    where
+        T: garde::Validate<Context = ()>,
+    {
+        self.validator = Some(Box::new(garde::Validate::validate));
+        self
+    }
+
+    /// Deserialize `args` into `T`.
+    ///
+    /// # The message shape is asymmetric BY DESIGN (T-128-17a)
+    ///
+    /// `serde_json::Error`'s `Display` quotes the offending input for several
+    /// failure kinds (an invalid string, an unknown enum variant, a type
+    /// mismatch), and this step runs BEFORE `garde`. A tool built through
+    /// [`TypedTool::new_validated`] advertises a value-free refusal, so on that
+    /// path the error is redacted down to the tool name plus the failure's
+    /// CLASSIFICATION. A tool built through any other constructor keeps today's
+    /// message byte-identical, so no existing user's error text changes — the
+    /// narrowing is what keeps E3 additive.
+    ///
+    #[cfg(feature = "validation")]
+    fn deserialize_args(&self, args: Value) -> Result<T> {
+        serde_json::from_value(args).map_err(|e| {
+            if self.validator.is_some() {
+                redacted_deserialize_error(&self.name, &e)
+            } else {
+                legacy_deserialize_error(&self.name, &e)
+            }
+        })
+    }
+
+    /// Deserialize `args` into `T`. Without the `validation` feature no validated
+    /// constructor exists, so today's message is the only one.
+    #[cfg(not(feature = "validation"))]
+    fn deserialize_args(&self, args: Value) -> Result<T> {
+        serde_json::from_value(args).map_err(|e| legacy_deserialize_error(&self.name, &e))
+    }
+
+    /// Run the stored `garde` validator, if this tool has one.
+    ///
+    /// A tool built through a plain constructor stores none, and this is a no-op.
+    #[cfg(feature = "validation")]
+    fn run_garde(&self, typed_args: &T) -> Result<()> {
+        match self.validator.as_deref() {
+            Some(validate) => {
+                validate(typed_args).map_err(|report| render_garde_refusal(&self.name, &report))
+            },
+            None => Ok(()),
         }
     }
 
@@ -251,10 +394,14 @@ where
         + Sync,
 {
     async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> Result<Value> {
-        // Deserialize and validate the arguments
-        let typed_args: T = serde_json::from_value(args).map_err(|e| {
-            crate::Error::Validation(format!("Invalid arguments for tool '{}': {}", self.name, e))
-        })?;
+        // Deserialize the arguments, and validate them ONLY when this tool was built
+        // through `TypedTool::new_validated` / `new_validated_with_schema` — every
+        // other constructor stores no validator and this step is deserialization
+        // alone (T-128-18: the comment this replaced claimed validation that never
+        // happened).
+        let typed_args: T = self.deserialize_args(args)?;
+        #[cfg(feature = "validation")]
+        self.run_garde(&typed_args)?;
 
         // Call the handler with the typed arguments
         (self.handler)(typed_args, extra).await
@@ -275,6 +422,145 @@ where
     }
 }
 
+/// Today's deserialization refusal, preserved byte-for-byte for every tool built
+/// through a NON-validated constructor.
+///
+/// `serde_json::Error`'s `Display` can quote the caller's input. That is a known
+/// leak (T-128-17a) which is fixed only on the validated path, so that no existing
+/// consumer's error text changes.
+fn legacy_deserialize_error(tool: &str, e: &serde_json::Error) -> Error {
+    Error::Validation(format!("Invalid arguments for tool '{}': {}", tool, e))
+}
+
+/// The REDACTED deserialization refusal a VALIDATED tool returns (T-128-17a).
+///
+/// `serde_json::Error`'s `Display` quotes the caller's input for several failure
+/// kinds — an invalid string, an unknown enum variant, a type mismatch — and this
+/// route sits in FRONT of `garde`, so a tool advertising a value-free refusal would
+/// otherwise leak before any field rule ran. This renders the failure's
+/// CLASSIFICATION instead, plus the position when `serde_json` reports one (it does
+/// for `from_str`; `from_value` has no position and reports line 0).
+#[cfg(feature = "validation")]
+fn redacted_deserialize_error(tool: &str, e: &serde_json::Error) -> Error {
+    let classification = match e.classify() {
+        serde_json::error::Category::Data => {
+            "the arguments do not match the declared argument type"
+        },
+        serde_json::error::Category::Syntax => "the arguments are not well-formed JSON",
+        serde_json::error::Category::Eof => "the arguments ended unexpectedly",
+        serde_json::error::Category::Io => "the arguments could not be read",
+    };
+    let position = if e.line() == 0 {
+        String::new()
+    } else {
+        format!(" at line {}, column {}", e.line(), e.column())
+    };
+    Error::Validation(format!(
+        "Invalid arguments for tool '{tool}': {classification}{position}"
+    ))
+}
+
+/// Map a `garde::Report` onto a value-free [`Error::Validation`].
+///
+/// # Why the text is rebuilt rather than `Display`-formatted
+///
+/// `garde::Report`'s own `Display` is value-free by construction — a rule's message
+/// names the DECLARED bound ("length is greater than 10"), never the rejected value
+/// (measured, Phase 128 RESEARCH Finding 4b). The `Path` half is NOT: garde 0.23's
+/// map validator EXTENDS the path with the map's KEYS
+/// (`garde-0.23.0/src/validate.rs:293`), and `T` here is generic and unrestricted,
+/// so a `#[garde(dive)]` field of type `HashMap<String, _>` contributes
+/// caller-chosen segments that may themselves be PHI — the same class as an
+/// `additionalProperties` key on the D1 path (T-128-17b). Every segment is
+/// therefore PROJECTED through [`project_garde_segment`], reusing the D1 path's
+/// redaction token so the two refusals read alike.
+///
+/// # Residual leak surfaces, stated rather than implied
+///
+/// 1. **`#[garde(custom(..))]` supplies its own message**, copied here verbatim. A
+///    custom validator must not put the rejected value in it; `pmcp` cannot inspect
+///    a closure's text.
+/// 2. **A caller-chosen map key that is ITSELF a bare identifier survives.** The
+///    projection cannot enumerate `T`'s declared field names at runtime, so its
+///    test is "does this segment have the SHAPE of a declared identifier". A map key
+///    like `ssn` is indistinguishable from a field named `ssn` and is emitted. Keys
+///    carrying anything else — a space, a dot, a hyphen, a digit first — are
+///    redacted. A tool whose map keys are themselves sensitive should validate
+///    inside the handler body instead.
+#[cfg(feature = "validation")]
+fn render_garde_refusal(tool: &str, report: &garde::Report) -> Error {
+    let detail = report
+        .iter()
+        .map(|(path, error)| {
+            let pointer = project_garde_path(path);
+            if pointer.is_empty() {
+                error.message().to_string()
+            } else {
+                format!("{pointer}: {}", error.message())
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("; ");
+    let detail = if detail.is_empty() {
+        "the arguments do not satisfy the declared field rules".to_string()
+    } else {
+        detail
+    };
+    Error::Validation(format!("Invalid arguments for tool '{tool}': {detail}"))
+}
+
+/// Project a `garde::Path` into a value-free RFC 6901-shaped pointer.
+///
+/// Walks the path's COMPONENTS rather than parsing its `Display`, which is
+/// deliberate: `Display` joins components with `.` and `[`/`]`, so a caller-chosen
+/// key containing one of those characters is indistinguishable from a nesting
+/// separator once rendered, and a lossy split could emit half of a sensitive key
+/// verbatim (`ssn.value` -> `ssn` + `value`, two identifier-shaped halves).
+/// `Path::__iter` is `#[doc(hidden)]` in garde 0.23 and `garde_derive` itself calls
+/// it the same way (`garde_derive-0.23.0/src/lib.rs:126`); a future garde release
+/// that removes it is a COMPILE error here rather than a silent behaviour change.
+#[cfg(feature = "validation")]
+fn project_garde_path(path: &garde::Path) -> String {
+    let mut out = String::new();
+    for (_, component) in path.__iter().rev() {
+        out.push('/');
+        out.push_str(project_garde_segment(component.as_str()));
+    }
+    out
+}
+
+/// One segment of [`project_garde_path`]'s walk.
+///
+/// Emitted VERBATIM only when it cannot carry caller-chosen text — a bare
+/// identifier (the shape of a declared struct field name) or a base-10 index (a
+/// sequence position). Everything else becomes the D1 path's `REDACTED_SEGMENT`.
+#[cfg(feature = "validation")]
+fn project_garde_segment(segment: &str) -> &str {
+    if is_identifier_shaped(segment) || is_base10_index(segment) {
+        segment
+    } else {
+        crate::server::schema_validation::REDACTED_SEGMENT
+    }
+}
+
+/// `true` when `segment` has the shape of a Rust identifier, which is what a
+/// declared struct field name always is.
+#[cfg(feature = "validation")]
+fn is_identifier_shaped(segment: &str) -> bool {
+    let mut bytes = segment.bytes();
+    match bytes.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == b'_' => {},
+        _ => return false,
+    }
+    bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// `true` when `segment` is a base-10 sequence index. Carries no caller text.
+#[cfg(feature = "validation")]
+fn is_base10_index(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// A synchronous typed tool implementation with automatic schema generation.
 pub struct TypedSyncTool<T, F>
 where
@@ -288,6 +574,11 @@ where
     ui_resource_uri: Option<String>,
     execution: Option<ToolExecution>,
     handler: F,
+    /// The `garde` validator, populated ONLY by [`TypedSyncTool::new_validated`]
+    /// and [`TypedSyncTool::new_validated_with_schema`]. See
+    /// [`TypedTool`]'s field of the same name for why it is optional.
+    #[cfg(feature = "validation")]
+    validator: Option<GardeValidator<T>>,
     _phantom: PhantomData<T>,
 }
 
@@ -326,6 +617,8 @@ where
             ui_resource_uri: None,
             execution: None,
             handler,
+            #[cfg(feature = "validation")]
+            validator: None,
             _phantom: PhantomData,
         }
     }
@@ -340,7 +633,80 @@ where
             ui_resource_uri: None,
             execution: None,
             handler,
+            #[cfg(feature = "validation")]
+            validator: None,
             _phantom: PhantomData,
+        }
+    }
+
+    /// Create a new synchronous typed tool that runs `T`'s `garde` field rules
+    /// after deserialization (Phase 128, E3).
+    ///
+    /// The sync twin of [`TypedTool::new_validated`] — see it for why the
+    /// `garde::Validate` bound sits on the constructor rather than on the type,
+    /// for the `Context = ()` scope boundary, and for the refusal shape.
+    #[cfg(all(feature = "validation", feature = "schema-generation"))]
+    pub fn new_validated(name: impl Into<String>, handler: F) -> Self
+    where
+        T: JsonSchema + garde::Validate<Context = ()>,
+    {
+        Self::new(name, handler).with_garde_validator()
+    }
+
+    /// [`TypedSyncTool::new_validated`] with a manually provided schema.
+    ///
+    /// See [`TypedTool::new_validated_with_schema`].
+    #[cfg(feature = "validation")]
+    pub fn new_validated_with_schema(name: impl Into<String>, schema: Value, handler: F) -> Self
+    where
+        T: garde::Validate<Context = ()>,
+    {
+        Self::new_with_schema(name, schema, handler).with_garde_validator()
+    }
+
+    /// Store the `garde` entry point. Private: the only way to reach it is a
+    /// `new_validated*` constructor, so the bound cannot leak onto the type.
+    #[cfg(feature = "validation")]
+    fn with_garde_validator(mut self) -> Self
+    where
+        T: garde::Validate<Context = ()>,
+    {
+        self.validator = Some(Box::new(garde::Validate::validate));
+        self
+    }
+
+    /// Deserialize `args` into `T`. See [`TypedTool`]'s method of the same name for
+    /// why the validated path's message is redacted and the unvalidated path's is
+    /// byte-identical to today (T-128-17a).
+    ///
+    #[cfg(feature = "validation")]
+    fn deserialize_args(&self, args: Value) -> Result<T> {
+        serde_json::from_value(args).map_err(|e| {
+            if self.validator.is_some() {
+                redacted_deserialize_error(&self.name, &e)
+            } else {
+                legacy_deserialize_error(&self.name, &e)
+            }
+        })
+    }
+
+    /// Deserialize `args` into `T`. Without the `validation` feature no validated
+    /// constructor exists, so today's message is the only one.
+    #[cfg(not(feature = "validation"))]
+    fn deserialize_args(&self, args: Value) -> Result<T> {
+        serde_json::from_value(args).map_err(|e| legacy_deserialize_error(&self.name, &e))
+    }
+
+    /// Run the stored `garde` validator, if this tool has one.
+    ///
+    /// A tool built through a plain constructor stores none, and this is a no-op.
+    #[cfg(feature = "validation")]
+    fn run_garde(&self, typed_args: &T) -> Result<()> {
+        match self.validator.as_deref() {
+            Some(validate) => {
+                validate(typed_args).map_err(|report| render_garde_refusal(&self.name, &report))
+            },
+            None => Ok(()),
         }
     }
 
@@ -427,10 +793,13 @@ where
     F: Fn(T, RequestHandlerExtra) -> Result<Value> + Send + Sync,
 {
     async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> Result<Value> {
-        // Deserialize and validate the arguments
-        let typed_args: T = serde_json::from_value(args).map_err(|e| {
-            crate::Error::Validation(format!("Invalid arguments for tool '{}': {}", self.name, e))
-        })?;
+        // Deserialize the arguments, and validate them ONLY when this tool was built
+        // through `TypedSyncTool::new_validated` / `new_validated_with_schema` —
+        // every other constructor stores no validator and this step is
+        // deserialization alone (T-128-18).
+        let typed_args: T = self.deserialize_args(args)?;
+        #[cfg(feature = "validation")]
+        self.run_garde(&typed_args)?;
 
         // Call the handler with the typed arguments
         (self.handler)(typed_args, extra)

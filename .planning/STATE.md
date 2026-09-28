@@ -1,20 +1,21 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v2.7
 milestone_name: SEP-2640 Skills Conformance & Positioning (Phase 125+)
-current_phase: 126
-status: completed
-stopped_at: Phase 126 complete — all phases complete
-last_updated: "2026-09-04T22:32:35.569Z"
-last_activity: 2026-09-04
-last_activity_desc: Phase 126 complete
-state_head: e30131292eaa9dd72b585405343bac424dc20397
+current_phase: 128
+current_phase_name: Secure-by-default input validation for config-driven servers
+status: executing
+stopped_at: Completed 128-11-PLAN.md — phase 128 complete; release assembled, NOT tagged
+last_updated: "2026-09-28T13:10:20.171Z"
+last_activity: 2026-09-28
+last_activity_desc: Phase 128 execution started
+state_head: 39a80181b29b49f7d9b929250efdb117d9075512
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_plans: 23
+  completed_plans: 23
+  percent: 67
 ---
 
 # Project State
@@ -28,14 +29,14 @@ See: `.planning/PROJECT.md` · `.planning/ROADMAP.md` (collapsed at the v2.6 clo
 > v2.7 gets a fresh one — `/gsd-new-milestone` writes it. Do not go looking for the old file.
 
 **Core value:** An AI-Package built from configuration alone moves between pmcp.run environments with its tool surface intact, and the target environment is told exactly what it must supply.
-**Current focus:** None — every phase in the v2.7 roadmap (125, 126) is complete. v2.7's remaining scope (spikes 010 digest-pinned agent skill consumption, 011 tri-surface docs) has no phase yet; `/gsd-phase add` or `/gsd-complete-milestone`.
+**Current focus:** Phase 128 — Secure-by-default input validation for config-driven servers
 
 ## Current Position
 
-Phase: 126
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-04 — Phase 126 complete
+Phase: 128 (Secure-by-default input validation for config-driven servers) — EXECUTING
+Plan: 1 of 11
+Status: Executing Phase 128
+Last activity: 2026-09-28 — Phase 128 execution started
 
 **Phase 125 close-out:** UAT 3/3 passed, verification `passed`, `threats_open: 0`. Three human
 decisions recorded — CR-01 accepted as a D-01-scoped residual risk (an advertised skills
@@ -70,6 +71,7 @@ that phase's `deferred-items.md`.
 
 ### Roadmap Evolution
 
+- Phase 128 added (2026-09-26): Secure-by-default input validation for config-driven servers. Appended to v2.7 after Phases 125/126. Source of truth is the reviewed change request snapshotted at `.planning/phases/128-secure-by-default-input-validation-for-config-driven-servers/128-CHANGE-REQUEST.md` (Claude doc `9mvbYNAzFwviiwbaF2BkBb` rev 12, verified against commit `3b2d7baf`); the review's unfolded design items — reuse `output_validation`'s validator, the default-cap compatibility break, the seven-crate semver set, D4 trait-level-vs-impl-level — are in `128-REVIEW-NOTES.md` and must be resolved by `/gsd-discuss-phase 128`. Carries a P0 sub-goal: three `tools.rs` comments (15-17, 556-557, 615) document input-schema enforcement against threat IDs T-83-05-02 / T-90-03-01 / T-90-05-03 that the code does not implement — `src/server/mod.rs:2590` and `:2820` pass `req.arguments` straight to `handler.handle`. The `phase.add` CLI auto-generated `Depends on: Phase 127`, a dangling reference (Phase 127 has no ROADMAP entry); corrected by hand.
 - Phase 118.1 inserted after Phase 118 (2026-08-10) (URGENT): close the nine conformance gaps G-1..G-9 that Phase 118 found by running the official `@modelcontextprotocol/conformance` suite for the first time. Recorded with source citations in `.planning/phases/118-conformance-against-the-official-suite/118-CONFORMANCE-GAPS.md`. Inserted as a decimal rather than appended, because Phases 120-124 are already claimed by the v2.6 AI-Package Portability milestone. G-1 (`Content::Resource` serializes flat vs spec `EmbeddedResource` nesting under `resource:`) changes the wire format of a public type and needs a semver decision before it can be scheduled. Phase 119 (docs) now sequences after 118.1.
 - v2.5 milestone roadmap created (2026-07-22): 8 phases (112-119) map the 38 v1 requirements along the research-corroborated dependency spine — version-plumbing keystone (112) first and alone, stateless HTTP + MRTR (113), Tasks-as-extension (114), parallel JSON Schema (115) and Auth (116), agents/tester + v1 severability (117), conformance (118), docs (119). 100% coverage, no orphans, no duplicates. v2.4 Phase 111 docs folded into v2.5 DOCS-04 (Phase 119). Continues numbering after v2.4's Phases 106-111 (Phase 111 never executed).
 - v2.4 milestone roadmap created (2026-07-17): 6 phases (106-111) map 1:1 to the approved design doc's §4 phases A-F along the compliance→contracts→agent→teams→CLI→docs spine; all 31 v1 requirements mapped (100% coverage, no orphans).
@@ -568,6 +570,50 @@ Decisions are logged in PROJECT.md Key Decisions table. Decisions framing this m
 - [Phase 126]: The pmcp-package attestation-opacity failure was fixed, not deferred: the cause is Canonical JSON NFC normalization in olpc-cjson (U+F900 has a singleton canonical decomposition to U+8C48), NOT macOS path normalization; the property now asserts the round-trip modulo NFC.
 - [Phase 126]: A plan verify command that pipes to tail must be wrapped in bash -o pipefail -c, or the pipeline exit status is the pager's and a FAILING build reports PASS (7 of 9 D-19 repairs in 126-07).
 - [Phase 126]: Examples assert before printing (c10 habit, not s44's print-only one), so cargo run --example is a verification that can go red rather than a demo.
+- [Phase 128]: Operator confirmed publish-as-specified: validate_input, render_refusal, InputViolation ship as pmcp 2.x public API and schema-validation as a feature name (D-01/D-04, one-way)
+- [Phase 128]: Q1 confirmed — format enforces for inputs via a dedicated should_validate_formats(true) builder, so inputs get their own compile entry point and never share the output validator
+- [Phase 128]: Q6 confirmed — a separate input validator cache keyed on schema text alone, key accepted from the caller as Option<&str> so no jsonschema type reaches the public API
+- [Phase 128]: The 18 feature="validation" -> feature="schema-validation" cfg renames landed in plan 01, not 02, breaking the circular wave-1/wave-2 dependency all three review lanes found
+- [Phase 128]: render_refusal echoes a JSON pointer only when its first segment is in the declared allow-list, generalizing SC-7 value-freedom to name-freedom for every keyword
+- [Phase 128]: safe_pointer projects InputViolation::pointer over the DECLARED schema and redacts every non-declared segment with the fixed token <redacted>, because instance_path() names a CALLER-chosen key under patternProperties or an additionalProperties subschema (T-128-08a).
+- [Phase 128]: The D4 floor DECODES ONCE and then denies, never enumerating encoded spellings: %25 is refused outright in any hex case, which is what bounds the decode to a single pass and makes .%2E / %2E. refusable at all.
+- [Phase 128]: A floor refusal never names the offending character: naming it would put a byte of the rejected value in the message and turn every refusal into a one-byte oracle (SC-7 read strictly).
+- [Phase 128]: validate_resolved_path refuses any non-leading empty segment, so a trailing slash is refused: that is the rule closing /search/{v} with an empty v composing to /search/. Plan 06 must confirm no operation path template ends in a slash.
+- [Phase 128]: E3 garde validation is opt-in via new_validated on the CONSTRUCTOR only; the garde::Validate bound never touches the struct or the ToolHandler impl, so no existing TypedTool<T> changes — Adding it to the type would break every TypedTool<T> whose T does not implement Validate, and stable Rust has no specialization to make the bound conditional
+- [Phase 128]: A garde Report path segment is PROJECTED, not copied: emitted verbatim only when identifier-shaped or a base-10 index, else replaced by schema_validation::REDACTED_SEGMENT, walking Path components rather than parsing its Display — garde 0.23 extends the path with caller-chosen map KEYS, and Display joins with dots and brackets so a dotted key would split into two identifier-shaped halves and leak
+- [Phase 128]: garde now carries features = derive - garde declares NO default features, so the Validate derive did not exist and new_validated was unsatisfiable. Deliberately not features = full — Without it E3 would have shipped as another declared-but-unusable surface, the exact defect class phase 128 exists to close
+- [Phase 128]: A deprecated module makes its own test-generated consts deprecated and libtest references them from the CRATE ROOT, so module- and fn-scoped allow(deprecated) both fail (both measured). The 5 tests moved to tests/server_validation_deprecated.rs with one file-scoped allow — The alternative was a crate-wide cfg_attr(test, allow(deprecated)) masking genuine findings across ~2000 unit tests to fix 5. 128-PATTERNS Corrections cleared examples/s19 correctly but missed this file own tests
+- [Phase 128]: RESEARCH assumption A1 MEASURED and CONFIRMED: with the deprecation applied and the 11 hidden allow lines removed, make test-doc exits 0 with 459 passed and ZERO warning lines - RUSTFLAGS -D warnings does not reach rustdoc doctest compilation on rust 1.98.0. The allow lines were still shipped — A pass WITH the allows would have answered nothing; the prophylactic guarantees the leg, the measurement answers the open question
+- [Phase 128]: Phase 128 D3 2^53 bound check took option (ii): keep the f64 magnitude test and NARROW the documented contract. minimum/maximum are documented as NOT a safe way to bound a 64-bit integer ID; use a pattern over the string form. — Option (i) (inspect the raw TOML integer before it becomes f64) was rejected as not cheap: ServerConfig::validate only has the parsed config in scope, and ParamDecl.minimum/maximum stay f64 in the public API regardless, so the rounding would still happen before any caller could see it.
+- [Phase 128]: ToolDecl::param_position and tools.rs::build_operation now share ONE path_placeholder_names helper, so their PATH agreement is structural rather than documentary; their query/body split for non-path parameters deliberately diverges and is documented on both sides. — The plan required a unit test asserting agreement. A shared helper makes the class of drift impossible rather than detected, and the test is kept as a second line.
+- [Phase 128]: Two plan verify filters selected ZERO tests and still exited 0 (config::lint_ and templates::workbook_server). Corrected to config::tests::lint_ and templates_workbook_server; recorded as deviations rather than silently substituted. — libtest matches the full path including the tests module segment. A zero-count filter that exits 0 is the Pitfall-2 false green this phase exists to close, so the correction is a finding, not a fix-up.
+- [Phase 128]: 128-05: ResolvedPath::from_checked is the ONLY constructor (no new, no new_unchecked) — the unchecked route was deleted rather than documented, so the composed invariant is established not asserted
+- [Phase 128]: 128-05: HttpCodeExecutor::resolve_path DELETED (no caller after step (1) removal); scalar_str RETAINED, still reached from the GET-query step (4)
+- [Phase 128]: 128-05 BREAKING: a literal query string in a Code Mode api.get path is now refused by validate_resolved_path; 13 in-tree sites migrated to a body param. Narrowing the composed check was considered and REJECTED — reversible in one commit (4d7856ea)
+- [Phase 128]: 128-05 OVERTURN (operator: 'Narrow the \'?\' rule only'): the query-separator refusal now applies to the PATH PORTION only — ResolvedPath::from_checked splits at the first ? and checks both sides. Core left strict; the 13-site consumer migration reverted. Plan 06 inherits the split, NOT a relaxed core.
+- [Phase 128]: SC-4 closed on the CURATED surface: `substitute_path` is two-pass — every rendered path value faces `validate_path_placeholder` with nothing substituted yet, then the composed result faces `validate_resolved_path` before dispatch. Four real call sites, one core implementation. — Mutation-tested: removing the per-value call turns 10 rows red (6 lib + 4 integration); removing the composed call turns 10 lib rows red; removing the missing-argument refusal turns exactly 1 red. `src/server/schema_validation.rs` diff across the plan is 0 lines.
+- [Phase 128]: The inherited `?` narrowing is mirrored on the curated surface in the CALLER (`check_composed_path` splits at the first `?`), never in core, and is pinned by 3 accept rows against 9 still-refused rows. — A `[[tools]]` `path` is operator-authored config, so refusing `..` from it catches a traversal bug while refusing `?` from it rejects legitimate configuration. Plan 02's 52 strict core tests stay green.
+- [Phase 128]: An unsupported curated `path` template segment (`/{a}{b}`, `/prefix-{id}`, `{}`, `{id`) is now a HARD `ConfigValidationError::MalformedPathTemplateSegment` at config time, not a `lint()` finding. — Such a segment has no working interpretation — it yields a parameter name no declaration can match or literal braces on the wire, both of which the new composed check refuses at call time anyway. The choice was only between failing loudly at startup and failing obscurely per call.
+- [Phase 128]: Q5 Route B + the literal D-07 surface: `validate config` is the primary command; `validate deploy` also emits the findings as warnings
+- [Phase 128]: `http` on the cargo-pmcp -> pmcp-server-toolkit edge decided from source (cfg-gated `backend` + `deny_unknown_fields`), not from a probe
+- [Phase 128]: cargo-pmcp/src/commands/validate.rs is NOT in the lib target — every `--lib` test filter against it selects zero tests and exits 0
+- [Phase 128]: Wire with_schema in pmcp-openapi-server build_server at assemble.rs:310 — measured to precede the script-tool fan-out (:326) and the Code Mode fan-out (:344), because both HTTP surfaces share one cheap-clone executor (D-02) and a clone taken earlier would be permanently unnarrowed (T-128-36c).
+- [Phase 128]: Make HttpCodeExecutor::has_schema() PUBLIC rather than #[cfg(test)]: the D4(b) wiring lives in pmcp-openapi-server while the schema field lives in pmcp-server-toolkit, so a test-only accessor could not prove the wiring from where the wiring is.
+- [Phase 128]: Report a configured (method, path) the spec does not declare via an ADDITIVE ServerConfig::lint_against_spec(&OpenApiSchema) rather than a new parameter on lint(), and emit its findings at startup from build_server — the only production point where the config and the parsed spec are both in scope.
+- [Phase 128]: REJECT OpenAPI path-template canonicalization: normalizing {alias} to {id} either re-derives the exact match or guesses, and a wrong guess narrows from the WRONG parameter declared rules, which can refuse a legitimate value under a rule the endpoint does not carry.
+- [Phase 128]: Prove a property non-vacuous by INVERTING the implementation under test (core validate_path_placeholder to pattern-supersedes-floor), capturing the shrunk counterexample, restoring byte-exact by sha256, and committing the shrunk seed with a PROVENANCE header.
+- [Phase 128]: T-128-39a resolved by option (i): the OpenAPI binary's shared reqwest client is built with redirect(Policy::none()), so a redirect surfaces as a 3xx the caller handles rather than as a hop inside the client the E1 hook never saw (128-09)
+- [Phase 128]: The Code Mode step-(4) split WAS structurally possible: the non-auth remaining-body-to-query conversion moved above the E1 hook as step (2a); only auth-supplied query additions stay behind it. OutboundRequest.query is populated on BOTH surfaces; the documented-asymmetry fallback was not needed (128-09)
+- [Phase 128]: E1/E2 registration is PARAMETER-passing via ToolkitHooks, never builder-field accumulation: ServerBuilderExt is implemented for core's ServerBuilder whose fields are private, and a Rust extension trait cannot add a field to a foreign type (128-09)
+- [Phase 128]: E2 ships REFUSE-ONLY (&Value): the change request's normalization use is out of scope for this signature and recorded in the trait rustdoc rather than settled by the shape of a first signature (128-09)
+- [Phase 128]: 128-10: the SC-6 sweep's candidate-phrase list must include the TEMPORAL class ("does not exist yet", "lands with", "not yet", "will be", "currently") — that class is the documented-but-absent defect INVERTED, and it is what found `enforce_input_schema`'s stale registry paragraph. A list built only from locating and asserting phrases cannot reach it. — Calibrated: the 36-phrase sweep found BOTH orchestrator-named stale claims before they were fixed, by two independent phrase classes, and then found a THIRD (tools.rs:633's "rejects them upstream") that neither of the plan's two named greps could reach.
+- [Phase 128]: 128-10: a fuzz oracle over a refusal renderer must assert PROVENANCE (a per-case sentinel verified absent from the declaration), never string ABSENCE. A declaration legitimately echoes its own declared names, so an absence oracle cries wolf and then gets relaxed until it asserts nothing. — Proven twice: the provenance oracle ran 108317 iterations clean, and my own property-test generator — which DOES use the strict absence form, legitimately, because it controls both sides — reproduced the false-failure mode on its first run (a one-character caller key "6" that is a substring of "maxLength":6).
+- [Phase 128]: 128-10: the CI home for a new gate leg is decided by MEASURING the required-status-check set, not by preference. The org ruleset "Green Main — unified gate enforcement" requires exactly one context, `gate`; `.github/workflows/fuzz.yml` is NOT required, so enrolling a leg there alone delivers recurring execution and no merge gate. — This is why option (a) (provision nightly + cargo-fuzz in the quality-gate job, NON-DEFAULT so no other check changes toolchain) was implemented and option (b) adopted only additively as the deep daily campaign.
+- [Phase 128]: FORK 1 resolved by exit (b) on the operator's verbatim 'exit-b-as-specified': root Cargo.toml's pmcp-code-mode and pmcp-code-mode-derive dev-deps are PATH-ONLY and release.yml publishes pmcp AHEAD of pmcp-code-mode, guarded by a tripwire test and a second bounded region in check-release-coverage.sh
+- [Phase 128]: SC-3's mixed-version gap resolved by the operator's verbatim 'Version banner in lint output': pmcp_server_toolkit::VERSION is new additive API, both lint surfaces print which toolkit performed the lint, and neither hard-errors on a mismatch
+- [Phase 128]: server.json (a THIRTEENTH version emitter, in no plan's ledger) was folded INTO the D-14 release commit rather than followed up, because its own pin test requires the same commit and a follow-up would leave one commit where release.yml's publish-mcp job would 400 on a duplicate version
+- [Phase 128]: input-validation was NOT added to the toolkit's openapi-code-mode feature list (128-08 H-08b): widening a published feature's list is a compatibility decision with no need behind it
+- [Phase 128]: Contract YAML for the eleven new public symbols was NOT authored — ../provable-contracts is present but its documented contracts/<crate>/<name>.yaml tree does not exist (one commit, README only), so authoring them would invent a format
 
 ### Pending Todos
 
@@ -602,6 +648,14 @@ yet. (Research flags per phase to be surfaced during `/gsd:plan-phase`.)
 - ~~118.2-11 CHECKPOINT: official suite re-measured at held pin 0.2.0-alpha.11 — v1 leg 72/2 -> 71/3, exit 1. tools-call-with-logging 1/1 -> 0/2. Root cause: LogMessageParams emits 'message'; spec requires 'data'. Gate hardening (D-16) and CONF-09 booking BLOCKED on a src/ wire-format decision.~~ **RESOLVED 2026-08-17.** The developer chose the src/ fix; 118.2-13 shipped it (emit_log_record defaults `data` to the message string; semver-checks clean). 118.2-11 re-measured at the SAME held pin over 9 fresh runs: tools-call-with-logging **0/2 -> 2/0** (logCount 3, WireSchemaValid 10 messages / 0 violations), v1 leg **73 passed / 1 failed, exit 0**, GAP_ATTRIBUTABLE_FAILURES **-> 0**, G-3 CLOSED in full. Gate hardened (D-16): 2025-11-25 joined FULLY_SCORED_GREEN_REVISIONS with a per-revision scored floor, BLOCKING_GREEN_SCENARIOS widened 29 -> 30. CONF-09 booked. See 118-CONFORMANCE-GAPS.md '## Dispositions — Phase 118.2 (amendment 2)'.
 - 118.2-11 MEASURED FLAKE (new, open): 2025-11-25:tools-call-elicitation failed 1 of 9 fresh suite runs with 'Dispatch oneshot channel closed' — the same client request-lifecycle race as the blocker above. It is a pre-existing BLOCKING_GREEN_SCENARIOS entry and was ALREADY gate-fatal before the leg was hardened, so the hardening added no new exposure. Stated in the script's own output, NOT exempted. WINDOWS.md entry 9.
 - make book-test is red repo-wide (26 chapters, mdbook not linking the pmcp rlib) — MEASURED identical before and after phase 125; pre-existing build-tooling breakage, see 125 deferred-items.md
+- 128-10: `.github/workflows/ci.yml`'s new nightly + cargo-fuzz install has NEVER executed on a clean GitHub runner. The first CI run IS the measurement; a `cargo install cargo-fuzz` or `cargo +nightly fuzz build` failure there is a FINDING, not a flake, and the correct response is to fix the provisioning — never to relax `test-fuzz-strict`'s CI branch, which would return the leg to being a gate that cannot fail.
+- RELEASE BLOCKER (phase 128, carried from 128-10): ci.yml's nightly + cargo-fuzz provisioning for the test-fuzz-strict leg has NEVER run on a GitHub runner. The first CI run IS the measurement; if cargo install cargo-fuzz or cargo +nightly fuzz build fails there, fix the provisioning, do NOT relax the leg's CI branch. WINDOWS.md #84.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260906-lx3 | Widen the workbook dialect: add ROUNDDOWN/MAX/MIN, add a constrained XLOOKUP, and enforce the exact-match contract VLOOKUP/MATCH already claim | 2026-09-06 | c0d84d14 | [260906-lx3-widen-the-workbook-dialect-add-rounddown](./quick/260906-lx3-widen-the-workbook-dialect-add-rounddown/) |
 
 ## Deferred Items
 
@@ -658,8 +712,8 @@ Items deferred by design for this milestone (design §7 / REQUIREMENTS v2):
 
 ## Session Continuity
 
-Last session: 2026-09-04T20:31:18.995Z
-Stopped at: Phase 126 complete — all phases complete
+Last session: 2026-09-28T04:10:33.637Z
+Stopped at: Completed 128-11-PLAN.md — phase 128 complete; release assembled, NOT tagged
 Resume file: None
 Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complete.** Decide the milestone's next move: `/gsd-phase add` to scope spike 010 (digest-pinned agent skill consumption) or spike 011 (tri-surface docs), or `/gsd-complete-milestone` to close v2.7 as-is. Two phase-126 hooks are configured but unrun: `workflow.nyquist_validation` is true and `126-VALIDATION.md` is still `status: draft` / `nyquist_compliant: false` (`/gsd-validate-phase 126`), and `workflow.security_enforcement` is true with no `126-SECURITY.md` (`/gsd-secure-phase 126`). Six code-review warnings (WR-01, WR-03, WR-04, WR-05, WR-07, WR-08) were deliberately deferred by the human with provenance in phase 126's `deferred-items.md` — they are logged debt, not gaps. Also from phase 126: **`Cargo.toml` reads `2.19.3` against a `## [2.20.0] - Unreleased` CHANGELOG section** — a releaser must bump it before tagging or `release.yml`'s note extraction exits 1. *(The pointer below is RETAINED VERBATIM for its three standing obligations; its own phase target is stale.)* **Phase 118.2 planning — `/gsd:plan-phase 118.2`.** `118.2-CONTEXT.md` is committed (`21215f12`) with 17 locked decisions; Phase 118.1 is 14/14 COMPLETE and its plan-04 pointer that stood here is retired. Two residuals to plan: the client live-SSE read (BOTH collect sites — `src/shared/streamable_http.rs:1002` GET and `:1543` POST-response; the POST case deadlocks in-tool elicitation and was added to scope during discussion) and the `notifications/message` emitter on `RequestHandlerExtra` (no `PeerHandle` method — D-06 declines the roadmap's implied trait addition). Mint `CONF-09`/`CONF-10` **with REQUIREMENTS.md table rows**, not body-only IDs. **Carry forward: `make quality-gate` does NOT run `make doc-check`** (standalone target at `Makefile:546-551`), **`make test-fuzz` cannot fail** (`Makefile:242-249` swallows a crashing target behind `|| echo`), and **there is no pre-commit hook installed** (`.git/hooks/` holds only `.sample` files) — run `cargo fmt --all`, the repo's clippy invocation and `doc-check` explicitly, and read a fuzz campaign's real exit code rather than the target's. **Also carry forward from the 118.1 `/code-review` (2026-08-11): the cross-session `client_capabilities` misattribution is UNOWNED** — `ServerState.server` is one `Arc<Mutex<Server>>` shared by every StreamableHTTP session, so a handler serving client A can read client B's capabilities; it was offered as a 118.2 fold-in and declined, and it needs a phase. *(The block below is retained verbatim for its three standing obligations; Phase 116 itself is complete and its own `Next` pointer is stale.)* **Phase 116 (Auth Hardening SEPs)** — `/gsd:discuss-phase 116`, then `/gsd:plan-phase 116`. It depends only on Phase 112's era gate and is independent of the 113/114 holds. **Three standing obligations carry forward, and Phase 115's sign-off discharged NONE of them:** (1) **watch `modelcontextprotocol/ext-tasks`** — `gh api repos/modelcontextprotocol/ext-tasks/contents/schema --jq '.[].name'`; when it returns anything but `draft` alone, re-run `114-SPEC-RECHECK.md` `## Procedure` end to end, which flips TASK-01..06 as a group and re-enters the contract-first question. Nothing automates this (**D-114-S**). `115-01` vendored the CORE half of that two-repository trigger and closed `D-114-R`; the `ext-tasks` half is untouched, so Phase 114's D-18 hold stays ENGAGED. (2) **D-113-U still needs an owner before this branch merges**, per `deferred-items.md` § *Inherited from Phase 113*. (3) **UNAS-01** (SEP-2243 `x-mcp-header` / `Mcp-Param-{Name}`) is still an unassigned v2.5 requirement with no phase — it is closest to CLNT-01's header work and was explicitly NOT folded into Phase 114 (`D-114-Y`); Phase 118.1 plan 14 carried it to v2.6 with the measurement as the reason.
 **The derived-view disagreement recorded here on 2026-08-01 by `114-18` is now RESOLVED — by capitulation, not by decision, and the record must say so rather than quietly agree.** That note read: the SDK RECOMPUTES `completed_phases` from `ROADMAP.md` and reports **60** while this file correctly STORES **59**; the stored value is authoritative; the SDK helpers twice tried to mark Phase 114 `[x]` and bump the counter during `114-18` and both were reverted. **Measured 2026-08-01 by `115-10`: the stored value moved 59 → 60 in `1d1493b8` (`docs(state): record phase 115 context session`), the very next STATE-touching commit after `114-18`'s close, via an SDK helper's recompute — the exact edit the note forbade, made by the tool rather than by hand.** It was not caught then and is not being silently reverted now, because eight Phase-115 plans have since incremented `completed_plans` off that base. **What the counter therefore MEANS, stated plainly so nobody re-derives it wrongly: `completed_phases: 61` = 60 (which already counts Phase 114, still `[~]` and HELD, as complete) + Phase 115 (genuinely complete).** The counter is a plan-shipped tally, NOT a requirements tally. **Phase 114's `[~]` in `ROADMAP.md` and its `[~]` TASK-01..06 bookings are the authoritative statement of its status — not this number.** Do not "fix" Phase 114's marker to agree with the counter; fix the counter's interpretation, which is what this paragraph is.
@@ -828,6 +882,17 @@ Next: **v2.7 has no unplanned phase left — phases 125 and 126 are both complet
 | Phase 126 P05 | 54 min | 4 tasks | 5 files |
 | Phase 126 P06 | 25 min | 3 tasks | 7 files |
 | Phase 126 P07 | 1h 32m | 3 tasks | 10 files |
+| Phase 128 P01 | 95min | 3 tasks | 9 files |
+| Phase 128 P02 | 75 min | 3 tasks | 3 files |
+| Phase 128 P04 | 44 min | 3 tasks | 9 files |
+| Phase 128 P03 | 50 min | 3 tasks | 7 files |
+| Phase 128 P05 | ~110min | 3 tasks | 11 files |
+| Phase 128 P06 | ~95 min | 3 tasks | 6 files |
+| Phase 128 P07 | 118min | 3 tasks | 4 files |
+| Phase 128 P08 | 113 min | 3 tasks | 7 files |
+| Phase 128 P09 | ~3h | 3 tasks | 17 files |
+| Phase 128 P10 | ~3h | 3 tasks | 14 files |
+| Phase 128 P11 | 108 | 4 tasks | 27 files |
 
 ## Operator Next Steps
 
