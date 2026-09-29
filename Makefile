@@ -528,7 +528,7 @@ test-cargo-pmcp:
 .PHONY: test-cargo-pmcp-integration
 test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 	@echo "$(BLUE)Running cargo-pmcp's contract/inspect integration tests...$(NC)"
-	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin --test package_save_load --test package_portability_contract --test package_artifact_framing --test verb_help -- --test-threads=1 2>&1); \
+	@out=$$(RUSTFLAGS= RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p cargo-pmcp --test package_capture_contract --test package_attestation_contract --test package_inspect --test pmcp_package_pin --test package_save_load --test package_portability_contract --test package_artifact_framing --test verb_help --test validate_server_config -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
@@ -537,7 +537,7 @@ test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 		echo "$(RED)✗ cargo-pmcp integration tests reported 0 tests — the gate is not reaching cargo-pmcp/tests/$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin package_save_load package_portability_contract package_artifact_framing verb_help"; \
+	REQUIRED_TEST_BINARIES="package_capture_contract package_attestation_contract package_inspect pmcp_package_pin package_save_load package_portability_contract package_artifact_framing verb_help validate_server_config"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
@@ -581,10 +581,25 @@ test-cargo-pmcp-integration: test-openapi-server-guard-selftest
 # `test-openapi-server`'s per-binary guard exists for, which is why the two
 # named binaries below are count-asserted individually rather than trusted to
 # the sum.
+#
+# `input-validation` is REQUIRED for the same MEASURED reason `http` already is
+# (Phase 128): `tests/input_validation_acceptance.rs` is
+# `#![cfg(all(feature = "http", feature = "input-validation"))]` and the toolkit's
+# `default` is still `["code-mode"]`, so without naming the feature here the whole
+# file -- acceptance-matrix rows 8-11, the D1 enforcement proof -- compiles to
+# `running 0 tests` and exits 0.
+#
+# `tests/curated_path_injection.rs` (Phase 128 plan 06) is gated on the SAME pair
+# and is required below for the same reason. Note what it deliberately does NOT
+# require: `openapi-code-mode`. Its two CR-01 rows exist to prove the path
+# injection class is closed on the LIGHT, JS-engine-free curated build, so adding
+# the JS-engine feature to its gate would move them onto a build they are not
+# about. The `cargo tree -i pmcp-code-mode` check in that plan's verification is
+# the paired guard from the dependency side.
 .PHONY: test-server-toolkit
 test-server-toolkit:
 	@echo "$(BLUE)Running pmcp-server-toolkit's own tests...$(NC)"
-	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-server-toolkit --features http -- --test-threads=1 2>&1); \
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-server-toolkit --features http,input-validation -- --test-threads=1 2>&1); \
 	status=$$?; \
 	echo "$$out"; \
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
@@ -593,7 +608,7 @@ test-server-toolkit:
 		echo "$(RED)✗ pmcp-server-toolkit reported 0 tests — the gate is not reaching this crate$(NC)"; \
 		exit 1; \
 	fi; \
-	REQUIRED_TEST_BINARIES="env_ref_grammar_parity base_url_expansion"; \
+	REQUIRED_TEST_BINARIES="env_ref_grammar_parity base_url_expansion input_validation_acceptance curated_path_injection path_placeholder_props request_policy"; \
 	for b in $$REQUIRED_TEST_BINARIES; do \
 		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
 		case "$$n" in \
@@ -614,6 +629,161 @@ test-server-toolkit:
 		esac; \
 	done; \
 	echo "$(GREEN)✓ pmcp-server-toolkit tests passed ($$ran tests)$(NC)"
+	@# SECOND invocation, Phase 128 plan 08 — the `#[ignore]`d `property_` arms.
+	@#
+	@# The run above does NOT pass `--ignored`, so every `#[ignore]`d arm in the
+	@# crate is skipped by it. That is not a defect to fix by removing the markers:
+	@# `scripts/named-test-binary-count.awk` reads the PASSED count from the
+	@# `test result:` line, and an all-`#[ignore]`d binary reports `0 passed`, which
+	@# the loop above rejects. So `tests/path_placeholder_props.rs` carries BOTH a
+	@# non-ignored smoke arm (which satisfies that loop) and `#[ignore]`d property
+	@# arms — and this invocation is what actually SELECTS the property arms. Without
+	@# it they would be selectable in principle and dead weight in every gate run.
+	@#
+	@# `make test-property` cannot stand in for this: it runs
+	@# `cargo test --features "full" -- --ignored property_`, a ROOT-package
+	@# selector that never reaches a toolkit test binary (PATTERNS SP-3).
+	@#
+	@# Count-asserted independently, because `--ignored property_` is exactly the
+	@# shape of selector that silently selects ZERO: a renamed arm or a dropped
+	@# `#[ignore]` would make this print `running 0 tests` and exit 0.
+	@echo "$(BLUE)Selecting the toolkit's #[ignore]d property arms (--ignored property_)...$(NC)"
+	@pout=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) PROPTEST_CASES=$${PROPTEST_CASES:-256} $(CARGO) test -p pmcp-server-toolkit --features http,input-validation --test path_placeholder_props -- --test-threads=1 --ignored property_ 2>&1); \
+	pstatus=$$?; \
+	echo "$$pout"; \
+	if [ $$pstatus -ne 0 ]; then exit $$pstatus; fi; \
+	pn=$$(printf '%s\n' "$$pout" | awk -v want="tests/path_placeholder_props.rs" -f scripts/named-test-binary-count.awk); \
+	case "$$pn" in \
+	-1) \
+		echo "$(RED)✗ the property invocation never RAN 'tests/path_placeholder_props.rs'.$(NC)"; \
+		exit 1;; \
+	-2) \
+		echo "$(RED)✗ the property invocation printed a target line but NO 'test result:' line.$(NC)"; \
+		exit 1;; \
+	0) \
+		echo "$(RED)✗ '--ignored property_' selected ZERO property arms — a 'property_' prefix or an #[ignore] marker was dropped, so the D-10 ordering and percent-encoding-closure invariants are no longer asserted anywhere.$(NC)"; \
+		exit 1;; \
+	''|*[!0-9]*) \
+		echo "$(RED)✗ the property invocation's count extractor produced no usable reading ('$$pn').$(NC)"; \
+		exit 1;; \
+	*) \
+		echo "$(GREEN)  ✓ path_placeholder_props property arms passed $$pn tests$(NC)";; \
+	esac
+
+# Phase 128 Wave 0 gate repair, leg 1 of 2 — `pmcp-code-mode` had NO quality-gate
+# leg at all. MEASURED: `test-all` (see its prerequisite list) named `test-tester`,
+# `test-cargo-pmcp`, `test-server-toolkit` and `test-openapi-server` and NOT
+# `pmcp-code-mode`, so the crate whose public `HttpExecutor` contract this phase
+# changes was never compiled or run by `make quality-gate`.
+#
+# `--features js-runtime` is LOAD-BEARING, not stylistic. MEASURED:
+# `crates/pmcp-code-mode/Cargo.toml` sets `default = []`, and
+# `crates/pmcp-code-mode/src/lib.rs` gates `pub mod executor` on
+# `#[cfg(feature = "js-runtime")]`. A bare `cargo test -p pmcp-code-mode` compiles
+# the `cedar`, `sql` and shared-eval surfaces, reports a comfortably nonzero total,
+# and never builds `executor` at all.
+#
+# So a crate-wide nonzero count is NOT sufficient, and neither is an
+# `executor::`-scoped count on its own. MEASURED on this tree:
+#   cargo test -p pmcp-code-mode                     --lib executor::  -> 3 selected
+#   cargo test -p pmcp-code-mode -F js-runtime       --lib executor::  -> 81 selected
+# i.e. 3 unrelated tests whose PATH happens to contain `executor::` keep a
+# nonzero-count assertion green while the module itself is absent. Three guards
+# together close it: the crate-wide count, the `executor::`-scoped count, and a
+# comment-stripped `grep -c js-runtime` over this file (see the verify commands in
+# .planning/phases/128-.../128-01-PLAN.md) that pins the feature so a later edit
+# cannot drop it silently.
+.PHONY: test-code-mode
+test-code-mode:
+	@echo "$(BLUE)Running pmcp-code-mode's own tests (js-runtime)...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-code-mode --features js-runtime -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-code-mode reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="eval_semantic_regression"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests — a #[cfg] gate turned false or an #[ignore] sweep landed.$(NC)"; \
+			exit 1;; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n').$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
+	done; \
+	scoped=$$(RUST_LOG=$(RUST_LOG) $(CARGO) test -p pmcp-code-mode --features js-runtime --lib executor:: -- --test-threads=1 2>&1); \
+	sstatus=$$?; \
+	echo "$$scoped"; \
+	if [ $$sstatus -ne 0 ]; then exit $$sstatus; fi; \
+	sran=$$(echo "$$scoped" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$sran" -eq 0 ]; then \
+		echo "$(RED)✗ the executor::-scoped selection passed ZERO tests — pmcp-code-mode's pub mod executor is not compiled (is --features js-runtime still on this leg?) or the module's tests were renamed away. The crate-wide count above CANNOT catch this.$(NC)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)  ✓ executor::-scoped selection passed $$sran tests$(NC)"; \
+	echo "$(GREEN)✓ pmcp-code-mode tests passed ($$ran tests)$(NC)"
+
+# Phase 128 Wave 0 gate repair, leg 2 of 2 — the toolkit's `openapi-code-mode`
+# surface. MEASURED: `crates/pmcp-server-toolkit/tests/http_executor.rs` is
+# `#![cfg(feature = "openapi-code-mode")]` while `test-server-toolkit` above pins
+# `--features http,input-validation`, so its five existing tests compile to
+# `running 0 tests` and exit 0 in every gate run. `script_tool.rs`,
+# `script_tool_engine_parity.rs` and `code_mode_tools.rs` are in the same position.
+#
+# This is a SEPARATE leg rather than a feature added to `test-server-toolkit`
+# deliberately: SC-1's curated single-call build must stay free of the SWC/JS
+# engine, so the engine-bearing surface gets its own invocation.
+#
+# Same shape as the `test-skills`, `lint-skills` and `test-oauth` legs — the gate
+# is green on what it reaches, and until this leg existed the coverage lived in
+# what it did not.
+.PHONY: test-server-toolkit-code-mode
+test-server-toolkit-code-mode:
+	@echo "$(BLUE)Running pmcp-server-toolkit's Code Mode surface (openapi-code-mode)...$(NC)"
+	@out=$$(RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test -p pmcp-server-toolkit --features openapi-code-mode -- --test-threads=1 2>&1); \
+	status=$$?; \
+	echo "$$out"; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
+	ran=$$(echo "$$out" | awk '/^test result:/ { total += $$4 } END { print total+0 }'); \
+	if [ "$$ran" -eq 0 ]; then \
+		echo "$(RED)✗ pmcp-server-toolkit (openapi-code-mode) reported 0 tests — the gate is not reaching this crate$(NC)"; \
+		exit 1; \
+	fi; \
+	REQUIRED_TEST_BINARIES="http_executor"; \
+	for b in $$REQUIRED_TEST_BINARIES; do \
+		n=$$(printf '%s\n' "$$out" | awk -v want="tests/$$b.rs" -f scripts/named-test-binary-count.awk); \
+		case "$$n" in \
+		-1) \
+			echo "$(RED)✗ required test binary '$$b' never RAN — cargo printed no 'Running tests/$$b.rs' target line.$(NC)"; \
+			exit 1;; \
+		-2) \
+			echo "$(RED)✗ required test binary '$$b' printed a target line but NO 'test result:' line followed it.$(NC)"; \
+			exit 1;; \
+		0) \
+			echo "$(RED)✗ required test binary '$$b' RAN but passed ZERO tests — a #[cfg] gate turned false (check that this target still passes openapi-code-mode) or an #[ignore] sweep landed.$(NC)"; \
+			exit 1;; \
+		''|*[!0-9]*) \
+			echo "$(RED)✗ required test binary '$$b' — the count extractor produced no usable reading ('$$n').$(NC)"; \
+			exit 1;; \
+		*) \
+			echo "$(GREEN)  ✓ $$b passed $$n tests$(NC)";; \
+		esac; \
+	done; \
+	echo "$(GREEN)✓ pmcp-server-toolkit Code Mode tests passed ($$ran tests)$(NC)"
 
 # Proof that `test-openapi-server`'s per-binary count guard is SENSITIVE, not
 # merely present.
@@ -799,6 +969,24 @@ test-property:
 	PROPTEST_CASES=1000 RUST_LOG=$(RUST_LOG) $(CARGO) test --features "full" -- --ignored property_
 	@echo "$(GREEN)✓ Property tests passed$(NC)"
 
+# Phase 128-10 BREADCRUMB — read this before citing `make test-fuzz` as evidence.
+#
+# The recipe below pipes EVERY non-zero exit into `|| echo "… completed"`, so a
+# crash, a timeout, a missing nightly toolchain and a clean run are all reported
+# identically: green. It also invokes the PLAIN `cargo fuzz`, and `cargo fuzz`
+# passes `-Zsanitizer=address`, which stable rustc refuses — so on a machine whose
+# default toolchain is stable (this repo pins `channel = "stable"` in
+# `rust-toolchain.toml`) this target reports success having fuzzed NOTHING.
+#
+# It is left EXACTLY as it is, deliberately. The blanket swallow spans 27
+# pre-existing targets, and narrowing it could turn the gate red on a pre-existing
+# crash in an unrelated target. That would be a genuine discovery, but it is not
+# this phase's scope and it would block this phase's merge on someone else's
+# defect. All three review lanes agreed on that scope call.
+#
+# `test-fuzz-strict` below is the leg that DOES propagate a failure. It runs only
+# Phase 128's two targets, with `+nightly`, and a crash there fails the gate. The
+# residual is therefore documented rather than silently inherited.
 .PHONY: test-fuzz
 test-fuzz:
 	@echo "$(BLUE)Running fuzz tests (ALWAYS required for new features)...$(NC)"
@@ -811,6 +999,108 @@ test-fuzz:
 		echo "$(YELLOW)⚠ No fuzz directory found. Run 'cargo fuzz init' to create fuzz tests$(NC)"; \
 	fi
 	@echo "$(GREEN)✓ Fuzz testing completed$(NC)"
+
+# Phase 128-10 (SC-7 / T-128-47, T-128-48, T-128-49): a fuzz leg that can actually
+# FAIL.
+#
+# Runs ONLY this phase's two targets and PROPAGATES their exit codes. See the
+# breadcrumb above `test-fuzz` for why that target's blanket `|| echo` is left in
+# place and why this is a separate leg rather than a fix to it.
+#
+# Both targets were PROVEN able to fail before being chained (128-10-SUMMARY.md):
+# the schema target's oracle was fed a sentinel through `render_refusal`'s allowed-
+# name list and exited 1 with a written crash artifact; the ReDoS target's D-10
+# ordering assertion was pointed at a floor-ACCEPTED value and exited 1. A fuzz leg
+# that has never been seen to fail is not a gate.
+#
+# ---- Why the LOCAL bound is 5 seconds per target, not 30 ----
+#
+# `make quality-gate` is mandatory before every commit (CLAUDE.md), and two
+# 30-second runs would add a minute to the inner loop. Phase 75 D-07 already decided
+# this exact tradeoff the same way when it kept PMAT out of the local gate and ran it
+# only in CI. So: ~10 s total locally (FUZZ_STRICT_TIME=5 x 2 targets), and the long
+# campaign lives in CI — `.github/workflows/fuzz.yml`'s matrix runs both at
+# `-max_total_time=300` daily and on any PR touching `src/**` or `fuzz/**`. Override
+# for a deeper local run with `make test-fuzz-strict FUZZ_STRICT_TIME=300`.
+#
+# ---- Why a conditional skip is accepted HERE, of all places ----
+#
+# A conditional skip is normally the exact class this phase is repairing: an
+# enforcement that is off must never read as on. It is accepted here for one
+# reason — `cargo fuzz` requires a NIGHTLY toolchain (`-Zsanitizer=address` is
+# rejected by stable rustc), and a Makefile target cannot install a toolchain on a
+# developer's machine on their behalf. CI can, and does.
+#
+# The skip is therefore made as loud as a skip can be: a RED line naming BOTH
+# targets and exactly what was not run, and a non-zero exit when `CI` is set. It
+# never silently passes.
+#
+# ---- Why the CI branch can legitimately be strict (MEASURED, 2026-09-27) ----
+#
+# This leg is chained into `quality-gate`, and `.github/workflows/ci.yml`'s
+# `quality-gate` job is in the `gate` aggregate's `needs:` array. The org ruleset
+# "Green Main — unified gate enforcement" requires exactly ONE status context:
+# `gate`. So a non-zero exit here under `CI` is genuinely merge-blocking — and would
+# have failed EVERY PR immediately, because before this phase that job installed
+# `cargo-llvm-cov` and `cargo-nextest` and NO nightly toolchain and NO `cargo-fuzz`
+# (T-128-49a: the realistic outcome of a gate that is red on every run is not a
+# fixed toolchain, it is a deleted gate).
+#
+# That is provisioned in the same change: `ci.yml` now installs nightly as a
+# NON-DEFAULT toolchain plus `cargo-fuzz` in that job. Non-default matters — making
+# nightly the default would silently move the job's `fmt-check` / `lint` / `test-all`
+# onto nightly clippy, whose lint set differs from stable's, and CLAUDE.md names
+# toolchain mismatch as the #1 cause of CI failures. `cargo +nightly` overrides
+# `rust-toolchain.toml` explicitly, so the stable pin does not need removing the way
+# `fuzz.yml` removes it.
+#
+# `fuzz.yml` alone would NOT have delivered a gate: it is not a required check. That
+# was measured, not assumed, and it is why option (b) of the plan's three was
+# rejected on its own and adopted only as the deep-campaign half.
+FUZZ_STRICT_TARGETS := fuzz_input_schema_enforcement fuzz_placeholder_pattern_redos
+FUZZ_STRICT_TIME ?= 5
+FUZZ_STRICT_TIMEOUT ?= 5
+
+.PHONY: test-fuzz-strict
+test-fuzz-strict:
+	@echo "$(BLUE)Running STRICT fuzz leg (Phase 128 targets; failures PROPAGATE)...$(NC)"
+	@# ONE shell for the whole recipe, backslash-joined. This is load-bearing, not
+	@# style: make runs each recipe LINE in its own shell, so a guard that ends with
+	@# `exit 0` on its own line merely ends that line successfully and make proceeds
+	@# to the next one — the "skip" would print its RED banner and then run the fuzz
+	@# command anyway. MEASURED while building this target: with nightly and
+	@# cargo-fuzz both off PATH, the two-line form printed BOTH skip banners and then
+	@# failed at `cargo: command not found` (make exit 2). A leg that turns red for
+	@# the wrong reason is how a gate gets deleted (T-128-49a), so the guard and the
+	@# run share one shell and one exit status.
+	@set -e; \
+	miss=""; \
+	rustup toolchain list 2>/dev/null | grep -q '^nightly' || miss="a nightly toolchain"; \
+	command -v cargo-fuzz >/dev/null 2>&1 || miss="$${miss:+$$miss and }cargo-fuzz"; \
+	if [ -n "$$miss" ]; then \
+		echo "$(RED)═══════════════════════════════════════════════════════════$(NC)"; \
+		echo "$(RED)  SKIPPED — $$miss MISSING. NOTHING WAS FUZZED.$(NC)"; \
+		echo "$(RED)  NOT RUN: fuzz_input_schema_enforcement (SC-7 no-echo)$(NC)"; \
+		echo "$(RED)  NOT RUN: fuzz_placeholder_pattern_redos (A2 ReDoS look)$(NC)"; \
+		echo "$(RED)  Why: cargo fuzz passes -Zsanitizer=address, which stable$(NC)"; \
+		echo "$(RED)  rustc refuses, and a Makefile cannot install a toolchain$(NC)"; \
+		echo "$(RED)  on your behalf. Fix:$(NC)"; \
+		echo "$(RED)    rustup toolchain install nightly && cargo install cargo-fuzz$(NC)"; \
+		echo "$(RED)═══════════════════════════════════════════════════════════$(NC)"; \
+		if [ -n "$$CI" ]; then \
+			echo "$(RED)CI is set — this is a HARD FAILURE, not a skip.$(NC)"; \
+			exit 1; \
+		fi; \
+		exit 0; \
+	fi; \
+	cd fuzz && for t in $(FUZZ_STRICT_TARGETS); do \
+		echo "$(BLUE)  fuzzing $$t for $(FUZZ_STRICT_TIME)s (failure PROPAGATES)...$(NC)"; \
+		cargo +nightly fuzz run $$t -- \
+			-max_total_time=$(FUZZ_STRICT_TIME) \
+			-timeout=$(FUZZ_STRICT_TIMEOUT) \
+			-detect_leaks=0; \
+	done; \
+	echo "$(GREEN)✓ Strict fuzz leg passed (no crash, no timeout, no artifact)$(NC)"
 
 # Phase 119 (D-13/D-14) — BUILD every example, and FAIL when one does not
 # compile.
@@ -1478,7 +1768,7 @@ test-playwright-ui:
 	@cd tests/playwright && npm run test:ui
 
 .PHONY: test-all
-test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-cargo-pmcp-integration test-server-toolkit test-openapi-server
+test-all: test-unit test-doc test-property test-examples test-integration test-tester test-cargo-pmcp test-cargo-pmcp-integration test-server-toolkit test-code-mode test-server-toolkit-code-mode test-openapi-server
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
 
 # ALWAYS Requirements Validation (for new features)
@@ -1542,8 +1832,14 @@ doc-open: doc
 .PHONY: doc-check
 doc-check:
 	@echo "$(BLUE)Checking rustdoc warnings (zero-tolerance)...$(NC)"
+	# `schema-validation` (phase 128 D-04) is listed EXPLICITLY even though
+	# `validation` is now its superset and would pull it in transitively. Naming it
+	# here compiles the feature ALONGSIDE its superset and no more than that -- it
+	# does NOT establish that the feature stands alone. The isolated proof is
+	# `cargo build -p pmcp --no-default-features --features schema-validation`,
+	# which plan 128-01 Task 2 added and plan 128-02 Task 3 re-runs.
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps \
-		--features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,skills,sse,streamable-http,validation,websocket,v1-compat
+		--features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,schema-validation,simd,skills,sse,streamable-http,validation,websocket,v1-compat
 	@echo "$(GREEN)✓ Zero rustdoc warnings$(NC)"
 
 # Book documentation
@@ -1966,6 +2262,16 @@ quality-gate:
 	@$(MAKE) check-todos
 	@$(MAKE) check-unwraps
 	@$(MAKE) validate-always
+	# test-fuzz-strict runs HERE because `validate-always` cannot: its FUZZ leg is
+	# `make test-fuzz`, which pipes every non-zero exit into `|| echo` and therefore
+	# CANNOT fail the gate on a crash — a target that found a counterexample and one
+	# that never ran report identically. Same framing as the doc-check / test-skills /
+	# test-oauth legs above: the gate is green on what it reaches, and until this leg
+	# existed a crash in Phase 128's SC-7 no-echo invariant lived in what it did not.
+	# Bounded to ~10s locally (Phase 75 D-07's tradeoff); the deep campaign is
+	# `fuzz.yml`. See the target's own header for the nightly guard and the measured
+	# reason its CI branch can be strict.
+	@$(MAKE) test-fuzz-strict
 	@$(MAKE) purity-check
 	@$(MAKE) no-crypto-check
 	@$(MAKE) comply

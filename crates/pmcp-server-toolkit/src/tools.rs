@@ -10,11 +10,41 @@
 //!
 //! # Invariants enforced
 //!
-//! - **JSON Schema object envelope.** Every synthesized [`ToolInfo`] carries an
-//!   `input_schema` with `"type": "object"`, an explicit `properties` map, a
-//!   `required` array, and `"additionalProperties": false`. Unknown argument
-//!   keys are rejected by pmcp's request-validation path at `tools/call` time —
-//!   defence-in-depth against arg-injection (threat T-83-05-02).
+//! - **JSON Schema object envelope, CHECKED HERE.** Every synthesized
+//!   [`ToolInfo`] carries an `input_schema` with `"type": "object"`, an explicit
+//!   `properties` map, a `required` array, and `"additionalProperties": false`
+//!   (`true` only when `[server.validation] additional_properties` opts out).
+//!   Unknown argument keys are refused by
+//!   `pmcp::server::schema_validation::validate_input`, called from the
+//!   `ValidatingToolHandler` decorator that `enforce_input_schema` wraps
+//!   around every handler this module pushes — **in the toolkit, before the
+//!   backend call**. Threat T-83-05-02.
+//!
+//!   Both halves matter, and stating only the first is what made this comment a
+//!   defect for two phases. Core `pmcp`'s `tools/call` dispatch does **not**
+//!   validate request arguments against a tool's declared `inputSchema`; that
+//!   wiring is deliberately deferred (Phase 128 D-01), so a comment locating the
+//!   enforcement "upstream" described a mitigation that did not exist. It exists
+//!   now, and it exists *here*.
+//!
+//!   Condition: the `input-validation` feature must be on. It is on via this
+//!   crate's `default` feature set and by that route ALONE — measured: `http =
+//!   ["dep:reqwest", "dep:url", "dep:openapiv3", "dep:serde_yaml", "dep:base64",
+//!   "dep:regex", "dep:tokio", "pmcp/streamable-http"]` and `openapi-code-mode =
+//!   ["http", "code-mode", "pmcp-code-mode/js-runtime"]`, neither of which names
+//!   it. Those two umbrellas do NOT forward it, so a
+//!   `--no-default-features --features http` build — exactly the shape a
+//!   consumer reaches for — turns it off, and then
+//!   `enforce_input_schema` is the identity function and says so in a
+//!   `tracing::warn!`. Second condition: `[server.validation]
+//!   enforce_input_schema` must not be `false`.
+//!
+//!   Backed by `tests/input_validation_acceptance.rs`'s
+//!   `input_validation_refuses_undeclared_argument_without_contacting_upstream`
+//!   (row 10) and `input_validation_refuses_absent_arguments_when_required_declared`
+//!   (row 9), each of which fails if the `validate_input` call is removed, plus
+//!   `input_validation_accepts_compliant_call_with_one_upstream_request` (row 11)
+//!   as the passing control that catches an over-refusing decorator.
 //! - **`handler.metadata()` returns `Some(ToolInfo)`.** Phase 82's `tool_arc`
 //!   consumes `handler.metadata()` at registration; returning `None` would
 //!   silently degrade the schema enforcement to "anything goes" (RESEARCH
@@ -35,8 +65,16 @@ use pmcp::types::{ToolAnnotations, ToolInfo};
 use pmcp::RequestHandlerExtra;
 use serde_json::{json, Map, Value};
 
-use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ToolDecl};
+use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ToolDecl, ValidationSection};
 use crate::error::Result;
+use crate::policy::ToolkitHooks;
+// Every use of the trait object itself lives inside a `#[cfg(feature =
+// "input-validation")]` item (`ValidatingToolHandler`'s field and `wrap`'s
+// parameter), so an ungated import is an `unused_imports` warning — and a hard
+// error — in the `--no-default-features --features http` build this module's own
+// header names as the shape a consumer reaches for.
+#[cfg(feature = "input-validation")]
+use crate::policy::ArgumentValidator;
 use crate::sql::SqlConnector;
 
 #[cfg(feature = "http")]
@@ -83,7 +121,25 @@ pub type SynthesizedTool = (String, ToolInfo, Arc<dyn ToolHandler>);
 /// assert_eq!(synthesized.len(), 0);
 /// ```
 pub fn synthesize_from_config(config: &ServerConfig) -> Result<Vec<SynthesizedTool>> {
-    synthesize_inner(config, None)
+    synthesize_inner(config, None, &ToolkitHooks::default())
+}
+
+/// [`synthesize_from_config`] with registered E2 hooks (Phase 128).
+///
+/// PUBLIC, not `pub(crate)`: `crates/pmcp-openapi-server` is a DIFFERENT crate and
+/// calls the free synthesizers directly rather than going through
+/// [`crate::ServerBuilderExt`], so a crate-private variant would leave the shipped
+/// OpenAPI binary unable to pass hooks at all — a registration surface that exists
+/// and cannot be reached from the deployment that most needs it.
+///
+/// # Errors
+///
+/// As [`synthesize_from_config`].
+pub fn synthesize_from_config_and_hooks(
+    config: &ServerConfig,
+    hooks: &ToolkitHooks,
+) -> Result<Vec<SynthesizedTool>> {
+    synthesize_inner(config, None, hooks)
 }
 
 /// Synthesize tools that execute against a wired [`SqlConnector`] (Phase 84
@@ -123,7 +179,22 @@ pub fn synthesize_from_config_with_connector(
     config: &ServerConfig,
     connector: Arc<dyn SqlConnector>,
 ) -> Result<Vec<SynthesizedTool>> {
-    synthesize_inner(config, Some(connector))
+    synthesize_inner(config, Some(connector), &ToolkitHooks::default())
+}
+
+/// [`synthesize_from_config_with_connector`] with registered E2 hooks (Phase 128).
+///
+/// PUBLIC for the reason given on [`synthesize_from_config_and_hooks`].
+///
+/// # Errors
+///
+/// As [`synthesize_from_config_with_connector`].
+pub fn synthesize_from_config_with_connector_and_hooks(
+    config: &ServerConfig,
+    connector: Arc<dyn SqlConnector>,
+    hooks: &ToolkitHooks,
+) -> Result<Vec<SynthesizedTool>> {
+    synthesize_inner(config, Some(connector), hooks)
 }
 
 /// Shared synthesizer body for both [`synthesize_from_config`] (no connector)
@@ -136,18 +207,274 @@ pub fn synthesize_from_config_with_connector(
 fn synthesize_inner(
     config: &ServerConfig,
     connector: Option<Arc<dyn SqlConnector>>,
+    hooks: &ToolkitHooks,
 ) -> Result<Vec<SynthesizedTool>> {
+    let validation = &config.server.validation;
     let mut out = Vec::with_capacity(config.tools.len());
     for decl in &config.tools {
-        let info = build_tool_info(decl);
+        let info = build_tool_info(decl, validation);
         let handler: Arc<dyn ToolHandler> = Arc::new(SynthesizedToolHandler {
             info: info.clone(),
             decl: decl.clone(),
             connector: connector.clone(),
         });
+        // Push site 1 of 3 (SQL handler) — D1 enforcement + E2 validator.
+        let handler = enforce_input_schema(handler, &info, decl, validation, hooks);
         out.push((decl.name.clone(), info, handler));
     }
     Ok(out)
+}
+
+/// Enforce a synthesized tool's declared `inputSchema` before its inner handler
+/// runs (Phase 128, D1 / T-128-01).
+///
+/// # Enforcing function
+///
+/// `pmcp::server::schema_validation::validate_input`, called from BOTH
+/// [`ValidatingToolHandler::handle`] and [`ValidatingToolHandler::handle_output`].
+/// Backed by `tests/input_validation_acceptance.rs` acceptance rows 8–11, which
+/// fail if either call is removed.
+///
+/// Wrapping happens at every handler push site in this module, so all four public
+/// entry points inherit the enforcement with none forgotten.
+///
+/// With the `input-validation` feature OFF this is the identity function, and the
+/// opt-out is logged once per synthesized tool at synthesis time: a validation rule
+/// that is off must never read as on.
+///
+/// # `[server.validation] enforce_input_schema = false`
+///
+/// That flag is an operator opt-out from the SCHEMA CHECK, not from the decorator.
+/// `ValidatingToolHandler` carries an `enforce_schema: bool` and skips only the
+/// `validate_input` call, so a future explicitly-registered argument validator
+/// living in the same decorator keeps running. Turning off one enforcement must
+/// never silently turn off another — and losing an explicit custom validator
+/// because schema enforcement was disabled is the worst form of that class, since
+/// the operator turned off A and lost B without being told.
+///
+/// The decorator is constructed when schema enforcement is ON **or** a validator is
+/// registered for this tool. The registry is [`ToolkitHooks`], consulted below via
+/// [`ToolkitHooks::argument_validator_for`], so the decorator is skipped entirely
+/// only when `enforce_input_schema = false` AND no validator is registered for this
+/// tool name — which preserves the "no added allocation for a server that uses
+/// neither" property.
+///
+/// Until Phase 128 plan 09 this paragraph read "No validator registry exists yet
+/// (it lands with E2), so `has_registered_validator` is `false` today". That
+/// sentence outlived the registry by one plan and is kept named here rather than
+/// silently deleted: it is the documented-but-absent defect this phase exists to
+/// close, INVERTED — a comment in the very function that closes the gap still
+/// describing the machinery as absent. The binding it named no longer exists.
+///
+/// Backed by `tools::argument_validator_seam::a_registered_validator_still_runs_with_enforce_input_schema_false`,
+/// which fails if the `registered_validator.is_none()` conjunct is dropped from the
+/// early return, and by
+/// `tools::argument_validator_seam::a_registered_validator_refuses_a_combination_the_schema_permits`,
+/// which fails if the lookup is removed.
+#[cfg(feature = "input-validation")]
+fn enforce_input_schema(
+    handler: Arc<dyn ToolHandler>,
+    info: &ToolInfo,
+    decl: &ToolDecl,
+    validation: &ValidationSection,
+    hooks: &ToolkitHooks,
+) -> Arc<dyn ToolHandler> {
+    // Phase 128 E2 — the registry lookup that replaced plan 03's
+    // `let has_registered_validator = false;` placeholder.
+    let registered_validator = hooks.argument_validator_for(&decl.name);
+    if !validation.enforce_input_schema && registered_validator.is_none() {
+        tracing::warn!(
+            tool = %decl.name,
+            "[server.validation] enforce_input_schema = false: this tool's arguments are \
+             NOT checked against its declared inputSchema before the backend call"
+        );
+        return handler;
+    }
+    ValidatingToolHandler::wrap(
+        handler,
+        info,
+        decl,
+        validation.enforce_input_schema,
+        registered_validator,
+    )
+}
+
+/// The `input-validation`-off half of [`enforce_input_schema`]: the identity
+/// function, with the absence logged once per synthesized tool.
+///
+/// A `#[cfg]` SIBLING rather than one function with two inner blocks, because the
+/// off arm reads none of the schema inputs and the single-function form needed an
+/// `#[allow(unused_variables)]` — which this module's own header rules out ("No
+/// `#[allow]` annotations"). This is the same sibling-pair idiom
+/// `check_tool_input_schema_compiles`, `warn_if_pattern_checking_unavailable`,
+/// `spec_placeholder_rules` and `lint_declared_cap_above_placeholder_floor`
+/// already use in this crate for exactly this situation.
+#[cfg(not(feature = "input-validation"))]
+fn enforce_input_schema(
+    handler: Arc<dyn ToolHandler>,
+    _info: &ToolInfo,
+    decl: &ToolDecl,
+    _validation: &ValidationSection,
+    hooks: &ToolkitHooks,
+) -> Arc<dyn ToolHandler> {
+    tracing::warn!(
+        tool = %decl.name,
+        "the `input-validation` feature is OFF: this tool's arguments are NOT checked \
+         against its declared inputSchema before the backend call"
+    );
+    // `ToolkitHooks::argument_validator_for` is NOT feature-gated, so
+    // `with_argument_validator` compiles and appears to succeed in this build —
+    // while `ValidatingToolHandler`, the only thing that can RUN a registered
+    // validator, is gated away. Naming the drop is the difference between an
+    // enforcement that is off and one that silently reads as on; the schema warning
+    // above does not cover it, because a registered validator is a SEPARATE switch
+    // (see `ValidatingToolHandler::enforce_schema`).
+    if hooks.argument_validator_for(&decl.name).is_some() {
+        tracing::warn!(
+            tool = %decl.name,
+            "an E2 ArgumentValidator IS registered for this tool and is DISCARDED: \
+             running it requires the `input-validation` feature"
+        );
+    }
+    handler
+}
+
+/// Decorator that refuses a `tools/call` whose arguments violate the tool's
+/// declared `inputSchema`, WITHOUT invoking the inner handler.
+///
+/// Crate-private by design: the validator and the value-free refusal renderer both
+/// live in core `pmcp` (D-01), so this type holds no schema logic of its own.
+#[cfg(feature = "input-validation")]
+struct ValidatingToolHandler {
+    inner: Arc<dyn ToolHandler>,
+    /// The synthesized `ToolInfo`'s `input_schema`, verbatim.
+    input_schema: Value,
+    /// `input_schema.to_string()`, computed ONCE at synthesis so the hot
+    /// `tools/call` path never re-serializes the whole schema to hit the core
+    /// validator cache.
+    schema_key: String,
+    /// Declared parameter names in declaration order — the ONLY names a refusal
+    /// message may echo (SC-7).
+    declared: Vec<String>,
+    /// Whether the SCHEMA CHECK runs, from `[server.validation]
+    /// enforce_input_schema`.
+    ///
+    /// A SEPARATE switch from the decorator's existence on purpose: when the E2
+    /// argument-validator registry lands in the same decorator, an operator who
+    /// turns schema enforcement off must not silently lose an
+    /// explicitly-registered validator too.
+    enforce_schema: bool,
+    /// The E2 [`ArgumentValidator`] registered for this tool, if any (Phase 128).
+    ///
+    /// Looked up by tool NAME once at synthesis, so the `tools/call` path does no
+    /// map lookup. `None` is the overwhelmingly common case and costs one
+    /// `Option` discriminant test per call.
+    validator: Option<Arc<dyn ArgumentValidator>>,
+}
+
+#[cfg(feature = "input-validation")]
+impl ValidatingToolHandler {
+    /// Wrap `handler`, taking the schema from the already-built `info` and the
+    /// declared parameter names from `decl`.
+    fn wrap(
+        inner: Arc<dyn ToolHandler>,
+        info: &ToolInfo,
+        decl: &ToolDecl,
+        enforce_schema: bool,
+        validator: Option<Arc<dyn ArgumentValidator>>,
+    ) -> Arc<dyn ToolHandler> {
+        let input_schema = info.input_schema.clone();
+        let schema_key = input_schema.to_string();
+        Arc::new(Self {
+            inner,
+            input_schema,
+            schema_key,
+            declared: decl.parameters.iter().map(|p| p.name.clone()).collect(),
+            enforce_schema,
+            validator,
+        })
+    }
+
+    /// Validate `args`, mapping any violation to a value-free
+    /// `pmcp::Error::Validation`. Kept a separate helper so both trait entry
+    /// points stay one-liners and well under the cog-25 gate.
+    ///
+    /// Returns `Ok(())` without consulting the schema when `enforce_schema` is
+    /// `false` — skipping the CHECK, not the decorator, so anything else this
+    /// decorator does still happens.
+    fn check(&self, args: &Value) -> pmcp::Result<()> {
+        self.check_schema(args)?;
+        self.check_registered_validator(args)
+    }
+
+    /// The D1 declared-schema check.
+    ///
+    /// Returns `Ok(())` without consulting the schema when `enforce_schema` is
+    /// `false` — skipping the CHECK, not the decorator, so the E2 validator below
+    /// still runs.
+    fn check_schema(&self, args: &Value) -> pmcp::Result<()> {
+        use pmcp::server::schema_validation::{render_refusal, validate_input};
+
+        if !self.enforce_schema {
+            return Ok(());
+        }
+        validate_input(&self.input_schema, Some(args), Some(&self.schema_key)).map_err(
+            |violations| {
+                let declared: Vec<&str> = self.declared.iter().map(String::as_str).collect();
+                pmcp::Error::Validation(render_refusal(&violations, &declared))
+            },
+        )
+    }
+
+    /// The E2 registered-validator check (Phase 128).
+    ///
+    /// Called by [`Self::check`] STRICTLY AFTER [`Self::check_schema`] returns
+    /// `Ok`, which is the E2 ordering contract: a custom rule never sees arguments
+    /// the declared schema already refused (T-128-41). Inverting the two calls is
+    /// what `a_registered_validator_is_not_invoked_when_the_schema_refuses` fails
+    /// on.
+    ///
+    /// The refusal message is the VALIDATOR's own, authored outside this crate, so
+    /// unlike `render_refusal` above the toolkit cannot guarantee it is value-free.
+    /// That residual is documented on [`crate::policy::ArgumentRefusal`].
+    fn check_registered_validator(&self, args: &Value) -> pmcp::Result<()> {
+        let Some(validator) = self.validator.as_ref() else {
+            return Ok(());
+        };
+        validator
+            .validate(args)
+            .map_err(|refusal| pmcp::Error::Validation(refusal.message().to_string()))
+    }
+}
+
+#[cfg(feature = "input-validation")]
+#[async_trait]
+impl ToolHandler for ValidatingToolHandler {
+    async fn handle(&self, args: Value, extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        self.check(&args)?;
+        self.inner.handle(args, extra).await
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        self.inner.metadata()
+    }
+
+    /// Validates, then DELEGATES to the inner handler's own `handle_output`.
+    ///
+    /// Implementing only `handle` would silently replace an inner handler's
+    /// `handle_output` override with the trait default
+    /// (`handle(..).map(ToolOutput::Payload)`), stripping that handler's ability to
+    /// own its `CallToolResult` envelope. A decorator must not narrow the contract
+    /// of what it wraps — and both entry points must validate, or an inner handler
+    /// that overrides `handle_output` becomes an unvalidated path.
+    async fn handle_output(
+        &self,
+        args: Value,
+        extra: RequestHandlerExtra,
+    ) -> pmcp::Result<pmcp::server::ToolOutput> {
+        self.check(&args)?;
+        self.inner.handle_output(args, extra).await
+    }
 }
 
 /// Flip widget metadata onto `info` when the declaration carries a
@@ -173,8 +500,8 @@ fn apply_widget_meta(info: ToolInfo, decl: &ToolDecl) -> ToolInfo {
 /// kind (single-call HTTP, SQL, and script), so it lives here once — keeping the
 /// `#[non_exhaustive]` [`ToolInfo`] constructor discipline (the `with_annotations`
 /// vs `new` arms) in a single place rather than copy-pasted per synthesizer.
-fn build_tool_info(decl: &ToolDecl) -> ToolInfo {
-    let schema = build_input_schema(&decl.parameters);
+fn build_tool_info(decl: &ToolDecl, validation: &ValidationSection) -> ToolInfo {
+    let schema = build_input_schema(decl, validation);
     let annotations = build_annotations(decl.annotations.as_ref());
     let base = match annotations {
         Some(ann) => {
@@ -190,11 +517,26 @@ fn build_tool_info(decl: &ToolDecl) -> ToolInfo {
 ///
 /// Decomposed from [`synthesize_from_config`] to keep cognitive complexity ≤25
 /// (Phase 75 D-03 + PATTERNS §Pattern G).
-fn build_input_schema(params: &[ParamDecl]) -> Value {
+///
+/// `pub(crate)` since Phase 128 SC-2: [`crate::config::ServerConfig::validate`]
+/// builds each tool's schema through THIS function and compiles it at config time,
+/// so the schema the compile gate checks is byte-identical to the one the runtime
+/// validator enforces. A second construction path there would let the gate pass a
+/// schema the server never serves.
+///
+/// Takes the whole [`ToolDecl`] rather than just its parameters because the D3
+/// default cap is POSITION-scoped, and position is a property of the tool's `path`
+/// and `method` — see [`crate::config::ToolDecl::param_position`].
+///
+/// `properties` and `required` are emitted in `[[tools.parameters]]` declaration
+/// order, so two synthesis runs over one config produce byte-identical output.
+pub(crate) fn build_input_schema(decl: &ToolDecl, validation: &ValidationSection) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
-    for p in params {
-        props.insert(p.name.clone(), build_param_property(p));
+    for p in &decl.parameters {
+        let mut prop = build_param_property(p);
+        apply_position_cap(&mut prop, p, decl.param_position(&p.name), validation);
+        props.insert(p.name.clone(), prop);
         if p.required {
             required.push(Value::String(p.name.clone()));
         }
@@ -203,16 +545,52 @@ fn build_input_schema(params: &[ParamDecl]) -> Value {
         "type": "object",
         "properties": props,
         "required": required,
-        "additionalProperties": false,
+        "additionalProperties": validation.additional_properties,
     })
+}
+
+/// Apply the D3 position-scoped default length cap to ONE already-built property
+/// object (Phase 128).
+///
+/// Emits `maxLength = validation.default_max_length` only when ALL of:
+/// the parameter's effective type is `string`; it declares no `max_length` of its
+/// own; `default_max_length` is non-zero; and `position` is `Path` or `Query`.
+/// BODY position emits nothing — capping a `POST` payload's free-text field is
+/// exactly the breakage D-05 exists to avoid, and `ServerConfig::lint` surfaces
+/// those instead.
+///
+/// A DECLARED `max_length` is never overridden and never merged with the default in
+/// either direction: the author's number wins outright, and the always-on
+/// `PLACEHOLDER_MAX_LENGTH` floor is what bounds a URL segment regardless.
+///
+/// The four conditions live in `crate::config::default_cap_applies` rather than
+/// here, so `lint()` and this function cannot disagree about which parameters are
+/// covered — a disagreement would make `lint()` report a parameter as uncapped
+/// while the schema caps it, or the reverse.
+///
+/// Its own free function (not inlined into [`build_input_schema`]) to keep that
+/// function's cognitive complexity well under the 25 gate.
+fn apply_position_cap(
+    prop: &mut Value,
+    p: &ParamDecl,
+    position: crate::config::ParamPosition,
+    validation: &ValidationSection,
+) {
+    if crate::config::default_cap_applies(p, position, validation) {
+        prop["maxLength"] = json!(validation.default_max_length);
+    }
 }
 
 /// Build a single JSON Schema property object from a [`ParamDecl`].
 ///
-/// Per-parameter constraints (`minimum`, `maximum`, `maxLength`, `default`,
-/// `enum`) are folded in only when present; the param's `param_type` defaults
-/// to `"string"` when omitted in TOML to match JSON Schema's permissive
-/// default.
+/// Per-parameter constraints (`minimum`, `maximum`, `maxLength`, `minLength`,
+/// `pattern`, `format`, `maxItems`, `items`, `default`, `enum`) are folded in only
+/// when present — an undeclared keyword is ABSENT from the emitted schema, never
+/// present-and-empty, because an empty `pattern` matches everything and an empty
+/// `items` object constrains nothing while both read like rules.
+///
+/// The param's `param_type` defaults to `"string"` when omitted in TOML to match
+/// JSON Schema's permissive default.
 fn build_param_property(p: &ParamDecl) -> Value {
     let ty = p.param_type.as_deref().unwrap_or("string");
     let mut prop = json!({ "type": ty });
@@ -228,6 +606,21 @@ fn build_param_property(p: &ParamDecl) -> Value {
     if let Some(max_len) = p.max_length {
         prop["maxLength"] = json!(max_len);
     }
+    if let Some(min_len) = p.min_length {
+        prop["minLength"] = json!(min_len);
+    }
+    if let Some(pattern) = &p.pattern {
+        prop["pattern"] = Value::String(pattern.clone());
+    }
+    if let Some(format) = &p.format {
+        prop["format"] = Value::String(format.clone());
+    }
+    if let Some(max_items) = p.max_items {
+        prop["maxItems"] = json!(max_items);
+    }
+    if let Some(items) = &p.items {
+        prop["items"] = build_items_property(items);
+    }
     if let Some(default) = &p.default {
         // toml::Value serializes losslessly into serde_json::Value via serde.
         if let Ok(v) = serde_json::to_value(default) {
@@ -238,6 +631,31 @@ fn build_param_property(p: &ParamDecl) -> Value {
         if let Ok(v) = serde_json::to_value(enum_vals) {
             prop["enum"] = v;
         }
+    }
+    prop
+}
+
+/// Build the OBJECT-form JSON Schema `items` value from an [`ItemsDecl`]
+/// (Phase 128, D2).
+///
+/// A separate free function for two reasons. First, cognitive complexity:
+/// [`build_param_property`] gained five arms in this phase and RESEARCH assumption
+/// A4 (that they stay under cog 25) was explicitly unmeasured, so the construction
+/// lives outside it. Second, and more importantly, there is exactly ONE place that
+/// can decide the SHAPE of `items`, and it returns a [`Value::Object`]
+/// unconditionally. The array form of `items` is a draft-07 tuple construct that
+/// does NOT compile under the Draft 2020-12 pin, and a schema that does not compile
+/// takes the whole tool's validator down — so "never an array here" is a safety
+/// property, not a style preference, and it is enforced by this function having no
+/// code path that builds a JSON array.
+fn build_items_property(items: &crate::config::ItemsDecl) -> Value {
+    let ty = items.item_type.as_deref().unwrap_or("string");
+    let mut prop = json!({ "type": ty });
+    if let Some(max_len) = items.max_length {
+        prop["maxLength"] = json!(max_len);
+    }
+    if let Some(pattern) = &items.pattern {
+        prop["pattern"] = Value::String(pattern.clone());
     }
     prop
 }
@@ -287,9 +705,37 @@ struct SynthesizedToolHandler {
 }
 
 /// Extract the named `(name, value)` parameter pairs the connector binds from,
-/// filtering the caller's validated `args` against the declared parameter list
-/// (T-84-03-01: only declared parameter names reach `execute()`; extra keys are
-/// silently dropped — JSON-schema validation rejects them upstream).
+/// filtering the caller's `args` against the declared parameter list
+/// (T-84-03-01: only declared parameter names reach `execute()`; an extra key is
+/// dropped HERE, and separately refused one layer out).
+///
+/// The refusal is not "upstream". It is
+/// `pmcp::server::schema_validation::validate_input` inside the
+/// `ValidatingToolHandler` decorator that [`enforce_input_schema`] wraps around
+/// this handler at its push site, so an undeclared key normally never reaches this
+/// function at all. Conditional on the `input-validation` feature AND on
+/// `[server.validation]` leaving both `enforce_input_schema` (`true`) and
+/// `additional_properties` (`false`) at their defaults — with `additional_properties
+/// = true` an undeclared key is ADMITTED by the schema and this filter is the only
+/// thing that keeps it out of `execute()`. That is why the drop stays here rather
+/// than being replaced by an assertion: the two layers close the case under
+/// different configurations. Backed by
+/// `tests/input_validation_acceptance.rs::input_validation_refuses_undeclared_argument_without_contacting_upstream`
+/// for the schema layer; the filter layer is covered by this module's
+/// `extract_params` unit tests.
+///
+/// Found by this phase's SC-6 candidate-phrase sweep, not by the plan's named
+/// list: the phrasing "rejects them upstream" is the same defect class as
+/// the retired `HttpToolHandler::handle` claim one function-group away, which
+/// located the same envelope check "upstream" in the same way.
+///
+/// The retired phrasings are deliberately NOT quoted verbatim anywhere in `src/`.
+/// This phase's SC-6 gates grep for each retired phrase and require a count of
+/// zero, and a gate that a historical citation can satisfy is a gate that has
+/// stopped distinguishing a surviving claim from a note about one — the first
+/// draft of THIS comment quoted one of them and turned the gate red on itself,
+/// which is the cheapest possible demonstration that the gate is sensitive. The
+/// full before/after text lives in `128-10-SUMMARY.md`.
 ///
 /// When the caller omits an optional parameter that declares a `default`, the
 /// default is applied so the bound SQL sees a concrete value. Without this an
@@ -394,13 +840,45 @@ pub fn synthesize_from_config_with_http_connector(
     // [`synthesize_from_config_with_http_connector_and_scripts`], which supplies
     // a [`ScriptToolHandler`] builder so a `script` tool synthesizes a real
     // handler over the shared engine (OAPI-02b / D-01 / D-02).
-    synthesize_http_inner(config, connector, |decl| {
-        Err(ToolkitError::Synth(format!(
-            "tool '{}' is a script tool — script tools require the `openapi-code-mode` \
-             feature (use synthesize_from_config_with_http_connector_and_scripts)",
-            decl.name
-        )))
-    })
+    synthesize_from_config_with_http_connector_and_hooks(
+        config,
+        connector,
+        &ToolkitHooks::default(),
+    )
+}
+
+/// [`synthesize_from_config_with_http_connector`] with registered E2 hooks
+/// (Phase 128).
+///
+/// PUBLIC for the reason given on [`synthesize_from_config_and_hooks`].
+///
+/// # Errors
+///
+/// As [`synthesize_from_config_with_http_connector`].
+#[cfg(feature = "http")]
+pub fn synthesize_from_config_with_http_connector_and_hooks(
+    config: &ServerConfig,
+    connector: Arc<dyn HttpConnector>,
+    hooks: &ToolkitHooks,
+) -> Result<Vec<SynthesizedTool>> {
+    // No script-tool builder is supplied on this (single-call-only) entry point,
+    // so the `is_script_tool()` arm of [`synthesize_http_inner`] returns the
+    // typed Plan 05 seam error. The OpenAPI Code Mode build calls
+    // [`synthesize_from_config_with_http_connector_and_scripts`], which supplies
+    // a [`ScriptToolHandler`] builder so a `script` tool synthesizes a real
+    // handler over the shared engine (OAPI-02b / D-01 / D-02).
+    synthesize_http_inner(
+        config,
+        connector,
+        |decl| {
+            Err(ToolkitError::Synth(format!(
+                "tool '{}' is a script tool — script tools require the `openapi-code-mode` \
+                 feature (use synthesize_from_config_with_http_connector_and_scripts)",
+                decl.name
+            )))
+        },
+        hooks,
+    )
 }
 
 /// Synthesize single-call AND script `[[tools]]` against a wired
@@ -434,12 +912,48 @@ pub fn synthesize_from_config_with_http_connector_and_scripts(
     http_exec: HttpCodeExecutor,
     exec_config: ExecutionConfig,
 ) -> Result<Vec<SynthesizedTool>> {
-    synthesize_http_inner(config, connector, |decl| {
-        let handler = ScriptToolHandler::new(decl, http_exec.clone(), exec_config.clone())?;
-        let info = handler.tool_info.clone();
-        let arc: Arc<dyn ToolHandler> = Arc::new(handler);
-        Ok((info, arc))
-    })
+    synthesize_from_config_with_http_connector_and_scripts_and_hooks(
+        config,
+        connector,
+        http_exec,
+        exec_config,
+        &ToolkitHooks::default(),
+    )
+}
+
+/// [`synthesize_from_config_with_http_connector_and_scripts`] with registered E2
+/// hooks (Phase 128).
+///
+/// This is THE variant `crates/pmcp-openapi-server`'s `build_server` calls, which
+/// is why it is PUBLIC rather than `pub(crate)`: that crate reaches the
+/// synthesizer directly and never through [`crate::ServerBuilderExt`], so a
+/// crate-private variant would ship E2 as present-but-inert on this phase's
+/// principal HTTP surface (T-128-39b).
+///
+/// # Errors
+///
+/// As [`synthesize_from_config_with_http_connector_and_scripts`].
+#[cfg(feature = "openapi-code-mode")]
+pub fn synthesize_from_config_with_http_connector_and_scripts_and_hooks(
+    config: &ServerConfig,
+    connector: Arc<dyn HttpConnector>,
+    http_exec: HttpCodeExecutor,
+    exec_config: ExecutionConfig,
+    hooks: &ToolkitHooks,
+) -> Result<Vec<SynthesizedTool>> {
+    let validation = &config.server.validation;
+    synthesize_http_inner(
+        config,
+        connector,
+        |decl| {
+            let handler =
+                ScriptToolHandler::new(decl, http_exec.clone(), exec_config.clone(), validation)?;
+            let info = handler.tool_info.clone();
+            let arc: Arc<dyn ToolHandler> = Arc::new(handler);
+            Ok((info, arc))
+        },
+        hooks,
+    )
 }
 
 /// Shared synthesizer body for the single-call HTTP entry points.
@@ -454,11 +968,17 @@ fn synthesize_http_inner(
     config: &ServerConfig,
     connector: Arc<dyn HttpConnector>,
     mut build_script_tool: impl FnMut(&ToolDecl) -> Result<(ToolInfo, Arc<dyn ToolHandler>)>,
+    hooks: &ToolkitHooks,
 ) -> Result<Vec<SynthesizedTool>> {
+    let validation = &config.server.validation;
     let mut out = Vec::with_capacity(config.tools.len());
     for decl in &config.tools {
         if decl.is_script_tool() {
             let (info, handler) = build_script_tool(decl)?;
+            // Push site 2 of 3 (SCRIPT tool) — D1 enforcement. This site is
+            // SEPARATE from the HTTP push below because of the `continue`; wrapping
+            // only the HTTP push would leave every script tool unvalidated.
+            let handler = enforce_input_schema(handler, &info, decl, validation, hooks);
             out.push((decl.name.clone(), info, handler));
             continue;
         }
@@ -476,12 +996,14 @@ fn synthesize_http_inner(
         };
 
         let operation = build_operation(path, method, decl);
-        let info = build_tool_info(decl);
+        let info = build_tool_info(decl, validation);
         let handler: Arc<dyn ToolHandler> = Arc::new(HttpToolHandler {
             info: info.clone(),
             operation,
             connector: connector.clone(),
         });
+        // Push site 3 of 3 (single-call HTTP handler) — D1 enforcement + E2 validator.
+        let handler = enforce_input_schema(handler, &info, decl, validation, hooks);
         out.push((decl.name.clone(), info, handler));
     }
     Ok(out)
@@ -490,42 +1012,87 @@ fn synthesize_http_inner(
 /// Build the [`Operation`] for a single-call tool from its `path` template,
 /// `method`, declared parameters, and per-tool `base_url`.
 ///
-/// Path parameters are the `{...}` segments of the path template; every other
-/// declared `[[tools.parameters]]` becomes a query parameter (the reference
-/// `create_tool_from_config` mapping). `POST`/`PUT`/`PATCH` carry a request body
-/// so non-path/query args are sent as JSON. The per-tool `base_url` is reflected
-/// onto the [`Operation`] (Codex MEDIUM — never dropped).
+/// Path parameters are the `{...}` segments of the path template. Every other
+/// declared `[[tools.parameters]]` becomes a QUERY parameter, or — when the method
+/// carries a request body (`POST`/`PUT`/`PATCH`) — a
+/// [`ParameterLocation::Body`] parameter that
+/// [`crate::http::HttpClient`]'s `build_body` folds into the JSON payload. The
+/// per-tool `base_url` is reflected onto the [`Operation`] (Codex MEDIUM — never
+/// dropped).
+///
+/// # Agreement with `ToolDecl::param_position` — structural, not documentary
+///
+/// Both splits this function performs read a shared helper, so neither can drift
+/// from [`crate::config::ToolDecl::param_position`]:
+///
+/// - the PATH split and `param_position`'s `Path` arm both read
+///   [`crate::config::path_placeholder_names`];
+/// - the QUERY/BODY split and `param_position`'s `Query`/`Body` arms both read
+///   `crate::config::method_carries_request_body`, which is also the sole source of
+///   [`Operation::has_request_body`].
+///
+/// That second agreement is Phase 128 CR-02/CR-03. Before it, this function marked
+/// every non-path declared parameter `ParameterLocation::Query` regardless of
+/// method while `param_position` classified a mutating tool's as `Body`, and the
+/// divergence was documented here as deliberate. It was not survivable: a `POST`
+/// tool's declared parameters travelled in the URL — so the D3 cap was withheld
+/// from values that genuinely land in a request line — and `build_body`, which
+/// collects only args ABSENT from `operation.parameters`, found nothing, so no
+/// payload reached the backend at all once `additionalProperties: false` began to
+/// be enforced.
+///
+/// D-05 is still honoured, and now by the routing rather than despite it: a
+/// `Body`-located parameter really is a payload field, and
+/// `crate::config::default_cap_applies` emits no default `maxLength` for it.
 #[cfg(feature = "http")]
 fn build_operation(path: &str, method: &str, decl: &ToolDecl) -> Operation {
     let method_upper = method.to_uppercase();
-    let path_param_names: Vec<&str> = path
-        .split('/')
-        .filter(|s| s.starts_with('{') && s.ends_with('}') && s.len() > 2)
-        .map(|s| &s[1..s.len() - 1])
-        .collect();
+    let path_param_names: Vec<&str> = crate::config::path_placeholder_names(path).collect();
 
     let mut parameters = Vec::with_capacity(decl.parameters.len());
     // Path params (template `{...}` segments) — always required.
+    //
+    // Phase 128 D4(b): this loop iterates the TEMPLATE, not `decl.parameters`, so
+    // the declared narrowing is looked up BY NAME and falls back to "no declared
+    // rules" when the template names a segment the config never declared. Such a
+    // parameter still gets the unconditional character floor and the always-on cap
+    // at substitution time — it simply gets no narrowing on top (D-10).
     for name in &path_param_names {
-        parameters.push(Parameter::new(
-            (*name).to_string(),
-            ParameterLocation::Path,
-            true,
-        ));
+        let declared = decl.parameters.iter().find(|p| p.name == **name);
+        parameters.push(
+            Parameter::new((*name).to_string(), ParameterLocation::Path, true).with_rules(
+                declared.and_then(|p| p.pattern.clone()),
+                declared.and_then(|p| p.max_length),
+                // D-11: the config is the ONE legitimate source of this permission.
+                declared.is_some_and(|p| p.allow_slash),
+            ),
+        );
     }
-    // Remaining declared params → query params.
+    // Remaining declared params → the QUERY STRING, or the JSON BODY when the
+    // method carries one (Phase 128 CR-02).
+    //
+    // `has_request_body` and this location are derived from the SAME
+    // `method_carries_request_body` predicate `ToolDecl::param_position` reads, so
+    // a `Body`-located parameter on a body-less request is not constructible and
+    // the D3 cap's scope cannot drift from the request's actual routing.
+    let has_request_body = crate::config::method_carries_request_body(&method_upper);
+    let non_path_location = if has_request_body {
+        ParameterLocation::Body
+    } else {
+        ParameterLocation::Query
+    };
     for p in &decl.parameters {
         if path_param_names.iter().any(|n| *n == p.name) {
             continue;
         }
-        parameters.push(Parameter::new(
-            p.name.clone(),
-            ParameterLocation::Query,
-            p.required,
-        ));
+        parameters.push(
+            Parameter::new(p.name.clone(), non_path_location, p.required).with_rules(
+                p.pattern.clone(),
+                p.max_length,
+                p.allow_slash,
+            ),
+        );
     }
-
-    let has_request_body = matches!(method_upper.as_str(), "POST" | "PUT" | "PATCH");
 
     Operation {
         method: method_upper,
@@ -553,13 +1120,48 @@ struct HttpToolHandler {
 #[async_trait]
 impl ToolHandler for HttpToolHandler {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        // T-90-03-01: arg injection is bounded by the object-envelope schema
-        // (additionalProperties:false) enforced upstream; path substitution in the
-        // connector touches only declared `{params}`.
+        // T-90-03-01: arg injection is bounded by TWO checks, both of which run
+        // before this handler's connector call and both of which live in this
+        // repository rather than "upstream":
+        //
+        // (1) the object-envelope schema (additionalProperties:false) is checked by
+        //     `pmcp::server::schema_validation::validate_input`, called from the
+        //     `ValidatingToolHandler` decorator that `enforce_input_schema` wraps
+        //     around this handler at its push site — so a call carrying an
+        //     undeclared key never reaches `handle` at all. Conditional on the
+        //     `input-validation` feature and on `[server.validation]
+        //     enforce_input_schema` not being `false`. Backed by
+        //     `tests/input_validation_acceptance.rs::input_validation_refuses_undeclared_argument_without_contacting_upstream`,
+        //     which fails if the decorator or its `validate_input` call is removed.
+        //
+        // (2) path substitution touches only declared `{params}`, and EVERY
+        //     substituted value additionally faces
+        //     `pmcp::server::schema_validation::validate_path_placeholder` inside
+        //     `HttpClient::substitute_path`, with the composed result facing
+        //     `validate_resolved_path` through `check_composed_path` before
+        //     dispatch. Backed by
+        //     `tests/curated_path_injection.rs::curated_path_injection_refuses_traversal_via_a_placeholder_value`
+        //     and `..._refuses_a_query_via_a_placeholder_value`, with
+        //     `..._accepts_a_compliant_call_with_one_upstream_request` as the
+        //     passing control.
+        //
+        // Until Phase 128 this comment located the envelope check somewhere
+        // "upstream" of here (the retired phrasing is quoted in full in
+        // `128-10-SUMMARY.md` and deliberately nowhere in `src/`, so the SC-6 grep
+        // gate keeps distinguishing a surviving claim from a note about one).
+        // Core `pmcp`'s `tools/call` dispatch does not validate request arguments
+        // against a declared `inputSchema` — that wiring is deliberately deferred
+        // (D-01) — so the claim named a mitigation that did not exist. Restated
+        // rather than deleted, because as of this phase it is true and local.
         // The connector's Display is redaction-safe (T-90-01-01); no URL/credential
         // reaches the client error.
+        //
+        // Phase 128 E1: `execute_for_tool`, not `execute`, so a registered
+        // `RequestPolicy` is told WHICH tool the call came from. An `Operation`
+        // describes an endpoint and cannot carry a tool name; the default trait
+        // body delegates to `execute`, so an out-of-repo connector is unaffected.
         self.connector
-            .execute(&self.operation, &args)
+            .execute_for_tool(&self.info.name, &self.operation, &args)
             .await
             .map_err(|e| pmcp::Error::Internal(format!("connector error: {e}")))
     }
@@ -611,8 +1213,27 @@ struct ScriptToolHandler {
     /// The execution bounds (Pitfall 7 — the only limit on an admin script).
     exec_config: ExecutionConfig,
     /// The synthesized `ToolInfo` (object-envelope schema from
-    /// `[[tools.parameters]]`, `additionalProperties:false`) — `args` are
-    /// schema-validated against this BEFORE the script runs (T-90-05-03).
+    /// `[[tools.parameters]]`, `additionalProperties:false`).
+    ///
+    /// `args` are checked against THIS schema before the script runs (T-90-05-03),
+    /// by `pmcp::server::schema_validation::validate_input` inside the
+    /// `ValidatingToolHandler` decorator that [`enforce_input_schema`] wraps
+    /// around this handler at its push site — so a refusal happens before
+    /// [`ToolHandler::handle`] is entered and therefore before
+    /// `PlanExecutor::execute` makes any backend call.
+    ///
+    /// Conditional on the `input-validation` feature and on `[server.validation]
+    /// enforce_input_schema` not being `false`; with either off,
+    /// [`enforce_input_schema`] logs the opt-out and returns the handler undecorated.
+    ///
+    /// Backed by
+    /// `tests/script_tool.rs::script_tool_refuses_a_schema_violating_arg_before_the_script_runs`,
+    /// which asserts the refusal AND that the mock backend observed zero requests —
+    /// it fails if the decorator or its `validate_input` call is removed. The
+    /// sibling `script_tool_args_max_lines_binding_is_honored` asserts argument
+    /// BINDING, which is a different (also true) property; before this phase it was
+    /// the only row carrying this threat ID, and a binding assertion is not a
+    /// validation assertion.
     tool_info: ToolInfo,
 }
 
@@ -623,8 +1244,22 @@ impl ScriptToolHandler {
     ///
     /// The `tool_info` is built from `[[tools.parameters]]` via the SAME
     /// [`build_input_schema`] / [`build_annotations`] / [`apply_widget_meta`]
-    /// helpers the single-call path uses, so a script tool's `args` are
-    /// schema-validated identically (object envelope, `additionalProperties:false`).
+    /// helpers the single-call path uses, so a script tool's `args` are checked
+    /// against an identically-shaped schema (object envelope,
+    /// `additionalProperties:false` unless `[server.validation]
+    /// additional_properties` opts out) by the same enforcer — one
+    /// [`enforce_input_schema`] call per push site, one
+    /// `pmcp::server::schema_validation::validate_input` inside
+    /// `ValidatingToolHandler`. There is no second validator for script tools;
+    /// see [`ScriptToolHandler::tool_info`] for the condition and the acceptance
+    /// row.
+    ///
+    /// `validation` is threaded in so a script tool's schema is built under the SAME
+    /// `[server.validation]` policy as every other tool kind — a script tool whose
+    /// parameters escaped the D3 cap would be a hole in exactly the surface this
+    /// phase closes. A script tool's parameters are BODY position (it declares no
+    /// `path`/`method`), so in practice the cap does not apply to them; the point is
+    /// that the decision is made by one rule rather than by which synthesizer ran.
     ///
     /// # Errors
     ///
@@ -636,6 +1271,7 @@ impl ScriptToolHandler {
         decl: &ToolDecl,
         http_exec: HttpCodeExecutor,
         exec_config: ExecutionConfig,
+        validation: &ValidationSection,
     ) -> Result<Self> {
         let script = decl.script.clone().ok_or_else(|| {
             ToolkitError::Synth(format!(
@@ -655,10 +1291,14 @@ impl ScriptToolHandler {
                     decl.name
                 ))
             })?;
-        let tool_info = build_tool_info(decl);
+        let tool_info = build_tool_info(decl, validation);
         Ok(Self {
             plan,
-            http_exec,
+            // Phase 128 E1: this handler owns a per-tool CLONE of the shared
+            // executor, which is the one place a script tool's name can be
+            // attached — `HttpExecutor::execute_request` is a `pmcp-code-mode`
+            // trait method and carries no tool name.
+            http_exec: http_exec.with_tool_label(&decl.name),
             exec_config,
             tool_info,
         })
@@ -681,8 +1321,15 @@ impl ToolHandler for ScriptToolHandler {
             crate::code_mode::request_executor_from_extra(&self.http_exec, &extra),
             self.exec_config.clone(),
         );
-        // (2) Bind the schema-validated client args to `args` (T-90-05-03) —
-        //     byte-identical to compile_and_execute's set_variable("args", …).
+        // (2) Bind the client args to `args` (T-90-05-03) — byte-identical to
+        //     compile_and_execute's set_variable("args", …). These args have
+        //     ALREADY been checked against `self.tool_info.input_schema` by
+        //     `pmcp::server::schema_validation::validate_input`, in the
+        //     `ValidatingToolHandler` decorator wrapped around this handler — a
+        //     violating call never reaches this line. That is a fact about the
+        //     DECORATOR, not about this function: `handle` performs no validation
+        //     of its own and must not be read as if it did. Condition and
+        //     acceptance row: see `ScriptToolHandler::tool_info`.
         executor.set_variable("args", args);
 
         let result = executor
@@ -704,7 +1351,10 @@ impl ToolHandler for ScriptToolHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AnnotationsDecl, ParamDecl, ServerConfig, ServerSection, ToolDecl};
+    use crate::config::{
+        AnnotationsDecl, ItemsDecl, ParamDecl, ServerConfig, ServerSection, ToolDecl,
+        ValidationSection,
+    };
     use serde_json::Value;
 
     /// Construct a minimal `ServerConfig` that satisfies `validate()` (non-empty
@@ -946,6 +1596,776 @@ mod tests {
         let decl = decl_with_limit_default();
         let params = extract_named_params(&decl, &serde_json::json!({ "limit": 5 }));
         assert_eq!(params, vec![("limit".to_string(), serde_json::json!(5))]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 128 D2 — the six new `ParamDecl` keywords reach `inputSchema`
+    // -------------------------------------------------------------------------
+
+    /// Fetch the synthesized property object for `param` of the single tool in
+    /// `tools`.
+    fn prop_of(tools: Vec<ToolDecl>, param: &str) -> Value {
+        let cfg = cfg_with_tools(tools);
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        let (_name, info, _handler) = &out[0];
+        info.input_schema["properties"][param].clone()
+    }
+
+    /// D2 / SC-2: `pattern`, `minLength`, `format` and `maxItems` all reach the
+    /// emitted `inputSchema`.
+    #[test]
+    fn input_schema_emits_d2_scalar_keywords() {
+        let prop = prop_of(
+            vec![ToolDecl {
+                name: "lookup".to_string(),
+                parameters: vec![ParamDecl {
+                    name: "region".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    pattern: Some("^[A-Z]{3}$".to_string()),
+                    min_length: Some(3),
+                    format: Some("uuid".to_string()),
+                    max_items: Some(5),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            "region",
+        );
+        assert_eq!(prop["pattern"], serde_json::json!("^[A-Z]{3}$"));
+        assert_eq!(prop["minLength"], serde_json::json!(3));
+        assert_eq!(prop["format"], serde_json::json!("uuid"));
+        assert_eq!(prop["maxItems"], serde_json::json!(5));
+    }
+
+    /// D2 / RESEARCH Finding 1h: `items` is emitted in OBJECT form. The array
+    /// (draft-07 tuple) form does not compile under the Draft 2020-12 pin and
+    /// would take the whole tool's validator down.
+    #[test]
+    fn input_schema_emits_items_as_object_never_array() {
+        let prop = prop_of(
+            vec![ToolDecl {
+                name: "batch".to_string(),
+                parameters: vec![ParamDecl {
+                    name: "codes".to_string(),
+                    param_type: Some("array".to_string()),
+                    required: true,
+                    items: Some(ItemsDecl {
+                        item_type: Some("string".to_string()),
+                        max_length: Some(8),
+                        pattern: Some("^[a-z]+$".to_string()),
+                    }),
+                    max_items: Some(10),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            "codes",
+        );
+        assert!(
+            prop["items"].is_object(),
+            "items must be an OBJECT, got: {}",
+            prop["items"]
+        );
+        assert!(
+            !prop["items"].is_array(),
+            "array-form items does not compile under the 2020-12 pin"
+        );
+        assert_eq!(
+            prop["items"],
+            serde_json::json!({
+                "type": "string",
+                "maxLength": 8,
+                "pattern": "^[a-z]+$",
+            })
+        );
+    }
+
+    /// D2 edge (empty): a `ParamDecl` carrying NONE of the six new keywords emits
+    /// exactly the five it emits today — no empty `pattern` string and no empty
+    /// `items` object appears.
+    #[test]
+    fn input_schema_omits_d2_keywords_when_undeclared() {
+        let prop = prop_of(
+            vec![ToolDecl {
+                name: "legacy".to_string(),
+                parameters: vec![ParamDecl {
+                    name: "count".to_string(),
+                    param_type: Some("integer".to_string()),
+                    description: Some("how many".to_string()),
+                    required: false,
+                    minimum: Some(1.0),
+                    maximum: Some(10.0),
+                    max_length: Some(4),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            "count",
+        );
+        let obj = prop.as_object().expect("property object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["description", "maxLength", "maximum", "minimum", "type"],
+            "exactly the five pre-D2 keywords, and no more"
+        );
+        for absent in ["pattern", "minLength", "format", "items", "maxItems"] {
+            assert!(
+                obj.get(absent).is_none(),
+                "undeclared keyword {absent} must not be emitted"
+            );
+        }
+    }
+
+    /// D2 edge (ordering): two synthesis runs over ONE config produce
+    /// byte-identical `input_schema` values, so `properties` and `required` follow
+    /// `[[tools.parameters]]` declaration order deterministically.
+    #[test]
+    fn input_schema_is_byte_identical_across_two_synthesis_runs() {
+        let tools = vec![ToolDecl {
+            name: "search".to_string(),
+            parameters: vec![
+                ParamDecl {
+                    name: "zebra".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    pattern: Some("^z".to_string()),
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "alpha".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    min_length: Some(1),
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "middle".to_string(),
+                    param_type: Some("integer".to_string()),
+                    required: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let cfg = cfg_with_tools(tools);
+        let first = synthesize_from_config(&cfg).expect("synthesize")[0]
+            .1
+            .input_schema
+            .to_string();
+        let second = synthesize_from_config(&cfg).expect("synthesize")[0]
+            .1
+            .input_schema
+            .to_string();
+        assert_eq!(first, second, "synthesis must be byte-deterministic");
+        // Declaration order, not sorted order.
+        assert!(
+            first.find("\"zebra\"").unwrap() < first.find("\"alpha\"").unwrap(),
+            "properties must follow declaration order: {first}"
+        );
+    }
+
+    /// D2 edge (adjacency): `min_length == max_length` accepts exactly that length
+    /// and refuses one code point either side, through the SAME core validator the
+    /// D1 decorator uses.
+    #[cfg(feature = "input-validation")]
+    #[test]
+    fn min_length_equal_to_max_length_accepts_exactly_that_length() {
+        use pmcp::server::schema_validation::validate_input;
+
+        let cfg = cfg_with_tools(vec![ToolDecl {
+            name: "exact".to_string(),
+            parameters: vec![ParamDecl {
+                name: "code".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                min_length: Some(3),
+                max_length: Some(3),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]);
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        let schema = &out[0].1.input_schema;
+
+        validate_input(schema, Some(&serde_json::json!({ "code": "abc" })), None)
+            .expect("exactly three code points must be accepted");
+        validate_input(schema, Some(&serde_json::json!({ "code": "ab" })), None)
+            .expect_err("two code points must be refused");
+        validate_input(schema, Some(&serde_json::json!({ "code": "abcd" })), None)
+            .expect_err("four code points must be refused");
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 128 D3 — position-scoped default cap and `[server.validation]`
+    // -------------------------------------------------------------------------
+
+    /// Synthesize `tools` under `validation` and return the property object for
+    /// `param` of the FIRST tool.
+    fn prop_under(tools: Vec<ToolDecl>, validation: ValidationSection, param: &str) -> Value {
+        let mut cfg = cfg_with_tools(tools);
+        cfg.server.validation = validation;
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        out[0].1.input_schema["properties"][param].clone()
+    }
+
+    /// A single-call `GET` tool declaring one path parameter and one query
+    /// parameter, both uncapped strings.
+    fn get_tool_with_path_and_query() -> Vec<ToolDecl> {
+        vec![ToolDecl {
+            name: "line_status".to_string(),
+            path: Some("/lines/{line_id}/status".to_string()),
+            method: Some("GET".to_string()),
+            parameters: vec![
+                ParamDecl {
+                    name: "line_id".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "detail".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }]
+    }
+
+    /// D3: a PATH-position string with no `max_length` is capped at the configured
+    /// default.
+    #[test]
+    fn default_cap_applies_to_path_position_string() {
+        let prop = prop_under(
+            get_tool_with_path_and_query(),
+            ValidationSection::default(),
+            "line_id",
+        );
+        assert_eq!(prop["maxLength"], serde_json::json!(256));
+    }
+
+    /// D3: a QUERY-position string (non-path parameter of a `GET` tool) with no
+    /// `max_length` is capped at the configured default.
+    #[test]
+    fn default_cap_applies_to_query_position_string() {
+        let prop = prop_under(
+            get_tool_with_path_and_query(),
+            ValidationSection::default(),
+            "detail",
+        );
+        assert_eq!(prop["maxLength"], serde_json::json!(256));
+    }
+
+    /// D3 / D-05 / T-128-13d: a BODY-position string on a mutating single-call tool
+    /// receives NO cap. Capping a `POST` payload's free-text field is exactly the
+    /// breakage review note C objected to.
+    #[test]
+    fn default_cap_never_applies_to_body_position_string() {
+        let tools = vec![ToolDecl {
+            name: "add_comment".to_string(),
+            path: Some("/issues/{id}/comments".to_string()),
+            method: Some("POST".to_string()),
+            parameters: vec![
+                ParamDecl {
+                    name: "id".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    ..Default::default()
+                },
+                ParamDecl {
+                    name: "body_text".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let path_prop = prop_under(tools.clone(), ValidationSection::default(), "id");
+        assert_eq!(
+            path_prop["maxLength"],
+            serde_json::json!(256),
+            "the path parameter of a POST tool IS still capped"
+        );
+        let body_prop = prop_under(tools, ValidationSection::default(), "body_text");
+        assert!(
+            body_prop.get("maxLength").is_none(),
+            "a POST payload field must receive no default cap, got: {body_prop}"
+        );
+    }
+
+    /// D3 edge (adjacency): a DECLARED `max_length` is never overridden and never
+    /// merged with the default, in either direction.
+    #[test]
+    fn declared_max_length_wins_over_the_default_cap() {
+        let mut tools = get_tool_with_path_and_query();
+        tools[0].parameters[0].max_length = Some(12);
+        let prop = prop_under(tools, ValidationSection::default(), "line_id");
+        assert_eq!(prop["maxLength"], serde_json::json!(12));
+    }
+
+    /// D3 edge (empty): `default_max_length = 0` emits no `maxLength` in ANY
+    /// position and disables the cap entirely.
+    #[test]
+    fn default_max_length_zero_disables_the_cap_in_every_position() {
+        let validation = ValidationSection {
+            default_max_length: 0,
+            ..Default::default()
+        };
+        for param in ["line_id", "detail"] {
+            let prop = prop_under(get_tool_with_path_and_query(), validation.clone(), param);
+            assert!(
+                prop.get("maxLength").is_none(),
+                "{param} must carry no maxLength when the default is 0, got: {prop}"
+            );
+        }
+    }
+
+    /// D3 edge (boundary + encoding): the cap is counted in Unicode CODE POINTS,
+    /// not bytes — so exactly `default_max_length` multi-byte characters are
+    /// accepted and one more is refused, through the SAME core validator.
+    #[cfg(feature = "input-validation")]
+    #[test]
+    fn default_cap_boundary_is_counted_in_code_points_not_bytes() {
+        use pmcp::server::schema_validation::validate_input;
+
+        let validation = ValidationSection {
+            default_max_length: 8,
+            ..Default::default()
+        };
+        let mut cfg = cfg_with_tools(get_tool_with_path_and_query());
+        cfg.server.validation = validation;
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        let schema = &out[0].1.input_schema;
+
+        // Each `é` is TWO bytes and ONE code point. Eight of them are 16 bytes.
+        let at_limit: String = "é".repeat(8);
+        let over_limit: String = "é".repeat(9);
+        assert_eq!(
+            at_limit.len(),
+            16,
+            "the fixture must actually be multi-byte"
+        );
+        validate_input(
+            schema,
+            Some(&serde_json::json!({ "line_id": at_limit })),
+            None,
+        )
+        .expect("exactly 8 code points must be accepted even though they are 16 bytes");
+        validate_input(
+            schema,
+            Some(&serde_json::json!({ "line_id": over_limit })),
+            None,
+        )
+        .expect_err("9 code points must be refused");
+    }
+
+    /// `additional_properties = true` flips the emitted envelope, re-opening the
+    /// unknown-argument class for this server.
+    #[test]
+    fn additional_properties_opt_out_flips_the_envelope() {
+        let mut cfg = cfg_with_tools(get_tool_with_path_and_query());
+        cfg.server.validation = ValidationSection {
+            additional_properties: true,
+            ..Default::default()
+        };
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        assert_eq!(
+            out[0].1.input_schema["additionalProperties"],
+            Value::Bool(true)
+        );
+
+        let mut cfg = cfg_with_tools(get_tool_with_path_and_query());
+        cfg.server.validation = ValidationSection::default();
+        let out = synthesize_from_config(&cfg).expect("synthesize");
+        assert_eq!(
+            out[0].1.input_schema["additionalProperties"],
+            Value::Bool(false),
+            "the default must remain a closed envelope"
+        );
+    }
+
+    /// T-128-13c: `enforce_input_schema = false` skips the SCHEMA CHECK, not the
+    /// decorator. This test pins the separation the E2 argument-validator registry
+    /// will depend on: with the flag off an undeclared argument is ACCEPTED (schema
+    /// off), while the inner handler's own rule still REFUSES (the non-schema
+    /// enforcement is untouched). Without this test the two collapse back together
+    /// on the next refactor.
+    #[cfg(feature = "input-validation")]
+    #[tokio::test]
+    async fn enforce_input_schema_false_skips_the_check_not_the_decorator() {
+        /// Stands in for an explicitly-registered argument validator: a rule that
+        /// lives INSIDE the decorated stack and is not the JSON Schema check.
+        struct RefusingInner;
+
+        #[async_trait]
+        impl ToolHandler for RefusingInner {
+            async fn handle(
+                &self,
+                _args: Value,
+                _extra: RequestHandlerExtra,
+            ) -> pmcp::Result<Value> {
+                Err(pmcp::Error::Validation(
+                    "the registered validator refused".to_string(),
+                ))
+            }
+        }
+
+        let decl = ToolDecl {
+            name: "guarded".to_string(),
+            parameters: vec![ParamDecl {
+                name: "declared".to_string(),
+                param_type: Some("string".to_string()),
+                required: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let info = build_tool_info(&decl, &ValidationSection::default());
+        let undeclared = serde_json::json!({ "not_declared_at_all": "x" });
+
+        // (a) enforcement ON: the SCHEMA refuses before the inner handler runs, so
+        //     the message is the schema refusal, not the inner one.
+        let on = ValidatingToolHandler::wrap(Arc::new(RefusingInner), &info, &decl, true, None);
+        let err = on
+            .handle(undeclared.clone(), RequestHandlerExtra::default())
+            .await
+            .expect_err("an undeclared argument must be refused when enforcement is on");
+        assert!(
+            !err.to_string().contains("registered validator"),
+            "the schema check must run FIRST when enforcement is on: {err}"
+        );
+
+        // (b) enforcement OFF: the schema check is skipped (the undeclared argument
+        //     is accepted by it), and the inner rule STILL refuses. That is the
+        //     separation — A off must not silently turn B off.
+        let off = ValidatingToolHandler::wrap(Arc::new(RefusingInner), &info, &decl, false, None);
+        let err = off
+            .handle(undeclared, RequestHandlerExtra::default())
+            .await
+            .expect_err("the inner (non-schema) rule must still refuse");
+        assert!(
+            err.to_string().contains("registered validator"),
+            "with the schema check off, the refusal must come from the inner rule: {err}"
+        );
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tests — Phase 128 D4(b): `build_operation` carries the declared placeholder
+// rules onto every `Parameter`.
+// -----------------------------------------------------------------------------
+
+/// Named `build_operation` deliberately: libtest matches the FULL test path, so a
+/// test placed in the crate's existing `mod tests` would be
+/// `tools::tests::build_operation_…` and this plan's `--lib tools::build_operation`
+/// verify filter would select ZERO tests while exiting 0. As a SIBLING of `tests`
+/// at the `tools` module level the filter resolves as written. Do not fold these
+/// into `mod tests`.
+#[cfg(all(test, feature = "http"))]
+mod build_operation {
+    use super::*;
+
+    /// A single-call `GET` tool on `path` carrying `parameters`.
+    fn decl(path: &str, parameters: Vec<ParamDecl>) -> ToolDecl {
+        ToolDecl {
+            name: "t".to_string(),
+            description: Some("t".to_string()),
+            path: Some(path.to_string()),
+            method: Some("GET".to_string()),
+            parameters,
+            ..Default::default()
+        }
+    }
+
+    fn param_named<'a>(op: &'a Operation, name: &str) -> &'a Parameter {
+        op.parameters
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("parameter {name} present"))
+    }
+
+    /// A path parameter declaring a `pattern` produces a `Parameter` carrying it.
+    #[test]
+    fn build_operation_carries_a_declared_path_pattern() {
+        let d = decl(
+            "/content/{version}",
+            vec![ParamDecl {
+                name: "version".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                pattern: Some("^C[0-9]+$".to_string()),
+                ..Default::default()
+            }],
+        );
+        let op = super::build_operation("/content/{version}", "GET", &d);
+        let p = param_named(&op, "version");
+        assert_eq!(p.location, ParameterLocation::Path);
+        assert_eq!(p.pattern.as_deref(), Some("^C[0-9]+$"));
+    }
+
+    /// A query parameter declaring `max_length = 64` produces a `Parameter`
+    /// carrying `max_length: Some(64)`.
+    #[test]
+    fn build_operation_carries_a_declared_query_max_length() {
+        let d = decl(
+            "/search",
+            vec![ParamDecl {
+                name: "q".to_string(),
+                param_type: Some("string".to_string()),
+                max_length: Some(64),
+                ..Default::default()
+            }],
+        );
+        let op = super::build_operation("/search", "GET", &d);
+        let p = param_named(&op, "q");
+        assert_eq!(p.location, ParameterLocation::Query);
+        assert_eq!(p.max_length, Some(64));
+    }
+
+    /// A template segment the config never declared carries NO declared rules and
+    /// `allow_slash: false` — the path loop iterates the TEMPLATE, so it must look
+    /// the `ParamDecl` up by name and fall back cleanly when there is none.
+    #[test]
+    fn build_operation_leaves_rules_absent_for_an_undeclared_template_segment() {
+        let d = decl("/content/{version}", vec![]);
+        let op = super::build_operation("/content/{version}", "GET", &d);
+        let p = param_named(&op, "version");
+        assert_eq!(p.pattern, None);
+        assert_eq!(p.max_length, None);
+        assert!(!p.allow_slash);
+        assert!(p.required, "a template path parameter stays required");
+    }
+
+    /// D-11: `allow_slash` reaches the `Parameter` from the server's OWN config —
+    /// the one legitimate source.
+    #[test]
+    fn build_operation_carries_allow_slash_from_the_config() {
+        let d = decl(
+            "/files/{subpath}",
+            vec![ParamDecl {
+                name: "subpath".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                allow_slash: true,
+                ..Default::default()
+            }],
+        );
+        let op = super::build_operation("/files/{subpath}", "GET", &d);
+        assert!(param_named(&op, "subpath").allow_slash);
+    }
+
+    /// The three rule fields round-trip into the core rules type the substitution
+    /// point reads.
+    #[cfg(feature = "input-validation")]
+    #[test]
+    fn build_operation_rules_reach_placeholder_rules() {
+        let d = decl(
+            "/files/{subpath}",
+            vec![ParamDecl {
+                name: "subpath".to_string(),
+                param_type: Some("string".to_string()),
+                required: true,
+                pattern: Some("^[a-z/]+$".to_string()),
+                max_length: Some(128),
+                allow_slash: true,
+                ..Default::default()
+            }],
+        );
+        let op = super::build_operation("/files/{subpath}", "GET", &d);
+        let rules = param_named(&op, "subpath").placeholder_rules();
+        assert_eq!(rules.declared_pattern, Some("^[a-z/]+$"));
+        assert_eq!(rules.declared_max_length, Some(128));
+        assert!(rules.allow_slash);
+    }
+
+    /// Phase 128 CR-02 — a body-bearing method routes its non-path declared
+    /// parameters to [`ParameterLocation::Body`], not to the query string.
+    ///
+    /// Before the fix every one of these was `Query`, so the payload
+    /// `build_body` assembles was empty and the values travelled in the URL.
+    #[test]
+    fn build_operation_routes_a_post_non_path_param_to_the_body() {
+        for method in ["POST", "PUT", "PATCH", "post"] {
+            let mut d = decl(
+                "/issues/{id}/comments",
+                vec![
+                    ParamDecl {
+                        name: "id".to_string(),
+                        param_type: Some("string".to_string()),
+                        required: true,
+                        ..Default::default()
+                    },
+                    ParamDecl {
+                        name: "body_text".to_string(),
+                        param_type: Some("string".to_string()),
+                        required: true,
+                        ..Default::default()
+                    },
+                ],
+            );
+            d.method = Some(method.to_string());
+            let op = super::build_operation("/issues/{id}/comments", method, &d);
+            assert!(
+                op.has_request_body,
+                "{method} carries a request body by definition"
+            );
+            assert_eq!(param_named(&op, "id").location, ParameterLocation::Path);
+            assert_eq!(
+                param_named(&op, "body_text").location,
+                ParameterLocation::Body,
+                "{method}: a non-path declared parameter must be routed to the payload"
+            );
+            assert_eq!(
+                op.body_parameters().len(),
+                1,
+                "{method}: exactly the one non-path parameter is a body parameter"
+            );
+            assert!(
+                op.query_parameters().is_empty(),
+                "{method}: nothing may travel in the query string as well"
+            );
+        }
+    }
+
+    /// The other half of the same rule: a method that carries NO request body has
+    /// nowhere but the URL to put a non-path parameter, so it stays `Query`. Without
+    /// this row the fix above is satisfiable by routing everything to the body,
+    /// which would drop a `GET` tool's parameters entirely.
+    #[test]
+    fn build_operation_keeps_a_body_less_method_non_path_param_in_the_query() {
+        for method in ["GET", "HEAD", "DELETE", "OPTIONS"] {
+            let mut d = decl(
+                "/search",
+                vec![ParamDecl {
+                    name: "q".to_string(),
+                    param_type: Some("string".to_string()),
+                    required: true,
+                    ..Default::default()
+                }],
+            );
+            d.method = Some(method.to_string());
+            let op = super::build_operation("/search", method, &d);
+            assert!(!op.has_request_body, "{method} carries no request body");
+            assert_eq!(
+                param_named(&op, "q").location,
+                ParameterLocation::Query,
+                "{method}: a non-path parameter must stay in the query string"
+            );
+            assert!(
+                op.body_parameters().is_empty(),
+                "{method}: a body-less request can have no body parameter"
+            );
+        }
+    }
+
+    /// Phase 128 CR-03 — the D3 cap's POSITION and the request's ROUTING agree for
+    /// EVERY method this connector can send, so the cap can no longer be withheld
+    /// from a value that travels in the query string.
+    ///
+    /// This is the row that would have caught the original defect: it does not
+    /// assert a particular location, it asserts the PAIRING. Before the fix
+    /// `param_position` said `Body` for `POST` while `build_operation` said `Query`,
+    /// and `apply_position_cap` emitted nothing for `Body` — so a `POST` parameter
+    /// reached the request line with no `maxLength`.
+    ///
+    /// Fails on removal: point either side at its own method list again and the
+    /// `POST`/`PUT`/`PATCH` rows (or the `OPTIONS` row) go red.
+    #[test]
+    fn param_position_agrees_with_the_built_parameter_location_for_every_method() {
+        use crate::config::ParamPosition;
+
+        // Every method `HttpClient::convert_method` accepts.
+        for method in [
+            "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "patch",
+        ] {
+            let mut d = decl(
+                "/things/{id}",
+                vec![
+                    ParamDecl {
+                        name: "id".to_string(),
+                        param_type: Some("string".to_string()),
+                        required: true,
+                        ..Default::default()
+                    },
+                    ParamDecl {
+                        name: "note".to_string(),
+                        param_type: Some("string".to_string()),
+                        required: false,
+                        ..Default::default()
+                    },
+                ],
+            );
+            d.method = Some(method.to_string());
+            let op = super::build_operation("/things/{id}", method, &d);
+
+            for p in &op.parameters {
+                let expected_location = match d.param_position(&p.name) {
+                    ParamPosition::Path => ParameterLocation::Path,
+                    ParamPosition::Query => ParameterLocation::Query,
+                    ParamPosition::Body => ParameterLocation::Body,
+                };
+                assert_eq!(
+                    p.location,
+                    expected_location,
+                    "{method}: `{}` is {:?} for the D3 cap but {:?} on the wire — the cap's \
+                     scope and the request's routing must not disagree",
+                    p.name,
+                    d.param_position(&p.name),
+                    p.location
+                );
+            }
+
+            // And the routing is self-consistent: a Body location exists exactly
+            // when the request carries a body.
+            assert_eq!(
+                op.has_request_body,
+                !op.body_parameters().is_empty(),
+                "{method}: a Body-located parameter on a body-less request would be \
+                 silently dropped"
+            );
+        }
+    }
+
+    /// The consequence CR-03 is really about: the D3 default `maxLength` is emitted
+    /// for a parameter that travels in the query string and withheld from one that
+    /// travels in the JSON payload — checked against the BUILT location rather than
+    /// against a method list, so the two cannot drift.
+    #[test]
+    fn the_default_cap_is_emitted_exactly_where_the_value_travels_in_the_url() {
+        use crate::config::{default_cap_applies, ValidationSection};
+
+        let validation = ValidationSection::default();
+        assert_ne!(
+            validation.default_max_length, 0,
+            "the default cap must be on for this row to mean anything"
+        );
+
+        for method in ["GET", "HEAD", "DELETE", "OPTIONS", "POST", "PUT", "PATCH"] {
+            let param = ParamDecl {
+                name: "note".to_string(),
+                param_type: Some("string".to_string()),
+                required: false,
+                ..Default::default()
+            };
+            let mut d = decl("/things", vec![param.clone()]);
+            d.method = Some(method.to_string());
+            let op = super::build_operation("/things", method, &d);
+            let location = param_named(&op, "note").location;
+            let capped = default_cap_applies(&param, d.param_position("note"), &validation);
+
+            assert_eq!(
+                capped,
+                location == ParameterLocation::Query,
+                "{method}: an uncapped string in a {location:?} position is the CR-03 defect \
+                 when that position is the query string, and the D-05 requirement when it is \
+                 the payload"
+            );
+        }
     }
 }
 
@@ -1223,6 +2643,350 @@ mod synth_http_tests {
                 );
             },
             other => panic!("expected Synth error, got {other:?}"),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Phase 128 E2 — the per-tool ArgumentValidator seam.
+//
+// A SIBLING of `mod tests`, selected by the `--lib tools::` filter. It drives the
+// PUBLIC `*_and_hooks` synthesizer so the assertions hold through the surface an
+// out-of-crate caller (`pmcp-openapi-server`) actually uses.
+// -----------------------------------------------------------------------------
+
+/// E2 ordering, the schema opt-out, and the empty case.
+#[cfg(all(test, feature = "input-validation"))]
+mod argument_validator_seam {
+    use super::synthesize_from_config_and_hooks;
+    use crate::config::ServerConfig;
+    use crate::policy::{ArgumentRefusal, ArgumentValidator, ToolkitHooks};
+    use pmcp::RequestHandlerExtra;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Counts its invocations, then refuses when `end < start`. The refusal is a
+    /// FIXED string: it names the rule, never a value.
+    struct EndAfterStart {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ArgumentValidator for EndAfterStart {
+        fn validate(&self, args: &Value) -> Result<(), ArgumentRefusal> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let start = args.get("start").and_then(Value::as_i64);
+            let end = args.get("end").and_then(Value::as_i64);
+            match (start, end) {
+                (Some(s), Some(e)) if e < s => {
+                    Err(ArgumentRefusal::new("`end` must not precede `start`"))
+                },
+                _ => Ok(()),
+            }
+        }
+    }
+
+    /// A `[[tools]]` whose declared schema permits any two integers, so the
+    /// cross-field rule is one only E2 can express.
+    fn cfg(enforce: bool) -> ServerConfig {
+        let toml = format!(
+            r#"
+[server]
+name = "range"
+version = "0.1.0"
+
+[server.validation]
+enforce_input_schema = {enforce}
+
+[[tools]]
+name = "range_query"
+description = "Query a range"
+sql = "SELECT 1"
+
+[[tools.parameters]]
+name = "start"
+type = "integer"
+required = true
+
+[[tools.parameters]]
+name = "end"
+type = "integer"
+required = true
+"#
+        );
+        ServerConfig::from_toml_strict_validated(&toml).expect("parse")
+    }
+
+    fn extra() -> RequestHandlerExtra {
+        RequestHandlerExtra::default()
+    }
+
+    fn hooks(calls: &Arc<AtomicUsize>) -> ToolkitHooks {
+        ToolkitHooks::default().with_argument_validator(
+            "range_query",
+            Arc::new(EndAfterStart {
+                calls: Arc::clone(calls),
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_registered_validator_refuses_a_combination_the_schema_permits() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = synthesize_from_config_and_hooks(&cfg(true), &hooks(&calls)).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+        let err = handler
+            .handle(json!({ "start": 10, "end": 2 }), extra())
+            .await
+            .expect_err("the validator refuses");
+        assert!(
+            err.to_string().contains("`end` must not precede `start`"),
+            "the refusal must carry the validator's own message, got: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_registered_validator_allows_a_valid_combination() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = synthesize_from_config_and_hooks(&cfg(true), &hooks(&calls)).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+        // No SQL connector is wired, so the INNER handler errors — which is itself
+        // the proof that the validator allowed the call through to it.
+        let err = handler
+            .handle(json!({ "start": 2, "end": 10 }), extra())
+            .await
+            .expect_err("no connector is wired");
+        assert!(
+            !err.to_string().contains("must not precede"),
+            "the validator must NOT have refused, got: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// T-128-41: the ordering is the contract. A validator must never see
+    /// arguments that failed the declared schema.
+    #[tokio::test]
+    async fn a_registered_validator_is_not_invoked_when_the_schema_refuses() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = synthesize_from_config_and_hooks(&cfg(true), &hooks(&calls)).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+        // `start` is a declared integer; a string violates the schema.
+        let err = handler
+            .handle(json!({ "start": "ten", "end": 2 }), extra())
+            .await
+            .expect_err("D1 refuses");
+        assert!(
+            !err.to_string().contains("must not precede"),
+            "D1 must be the refuser, not E2, got: {err}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "the validator was invoked on arguments the schema already refused"
+        );
+    }
+
+    /// The joint test also present in plan 03: turning off one enforcement must
+    /// never silently turn off another.
+    #[tokio::test]
+    async fn a_registered_validator_still_runs_with_enforce_input_schema_false() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = synthesize_from_config_and_hooks(&cfg(false), &hooks(&calls)).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+
+        // Half one: the SCHEMA check is off, so an undeclared key is accepted.
+        let err = handler
+            .handle(json!({ "start": 2, "end": 10, "undeclared": 1 }), extra())
+            .await
+            .expect_err("no connector is wired");
+        assert!(
+            !err.to_string().contains("undeclared"),
+            "with enforce_input_schema=false an undeclared key must be accepted, got: {err}"
+        );
+
+        // Half two: the VALIDATOR still refuses.
+        let err = handler
+            .handle(json!({ "start": 10, "end": 2 }), extra())
+            .await
+            .expect_err("the validator refuses");
+        assert!(
+            err.to_string().contains("`end` must not precede `start`"),
+            "a registered validator must survive the schema opt-out, got: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_tool_with_no_registered_validator_runs_d1_only() {
+        let tools =
+            synthesize_from_config_and_hooks(&cfg(true), &ToolkitHooks::default()).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+        // D1 still refuses a schema violation.
+        handler
+            .handle(json!({ "start": "ten", "end": 2 }), extra())
+            .await
+            .expect_err("D1 refuses");
+        // And a schema-valid call reaches the inner handler (which has no connector).
+        let err = handler
+            .handle(json!({ "start": 10, "end": 2 }), extra())
+            .await
+            .expect_err("no connector is wired");
+        assert!(!err.to_string().contains("must not precede"));
+    }
+
+    /// `handle_output` must validate too, or an inner handler that overrides it
+    /// becomes a path with schema enforcement and no custom rule.
+    #[tokio::test]
+    async fn handle_output_runs_the_validator_as_well() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools = synthesize_from_config_and_hooks(&cfg(true), &hooks(&calls)).expect("synth");
+        let (_name, _info, handler) = &tools[0];
+        let err = handler
+            .handle_output(json!({ "start": 10, "end": 2 }), extra())
+            .await
+            .expect_err("the validator refuses");
+        assert!(
+            err.to_string().contains("`end` must not precede `start`"),
+            "handle_output must run the validator too, got: {err}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// The once-at-startup enforcement report's line formats (Phase 128 D-07).
+#[cfg(all(test, feature = "input-validation"))]
+mod enforcement_report {
+    use crate::config::ServerConfig;
+    use crate::policy::{
+        render_validation_report, ArgumentRefusal, ArgumentValidator, ReportLevel, ToolkitHooks,
+    };
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    struct Never;
+    impl ArgumentValidator for Never {
+        fn validate(&self, _args: &Value) -> Result<(), ArgumentRefusal> {
+            Err(ArgumentRefusal::new("disabled"))
+        }
+    }
+
+    fn cfg(extra_validation: &str) -> ServerConfig {
+        let toml = format!(
+            r#"
+[server]
+name = "report"
+version = "0.1.0"
+
+[server.validation]
+{extra_validation}
+
+[[tools]]
+name = "get_thing"
+description = "Get a thing"
+path = "/things/{{id}}"
+method = "GET"
+
+[[tools.parameters]]
+name = "id"
+type = "string"
+required = true
+pattern = "^[0-9]+$"
+"#
+        );
+        ServerConfig::from_toml_strict_validated(&toml).expect("parse")
+    }
+
+    fn texts(lines: &[crate::policy::ReportLine]) -> String {
+        lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_fully_enforcing_config_states_that_no_opt_out_is_active() {
+        let lines = render_validation_report(&cfg(""), &ToolkitHooks::default());
+        let joined = texts(&lines);
+        assert!(
+            joined.contains("input validation: schema_check=ON"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("tool 'get_thing' enforces"),
+            "one line per tool: {joined}"
+        );
+        assert!(
+            joined.contains("no [server.validation] opt-out is active"),
+            "the report must state the ABSENCE of an opt-out, not stay silent: {joined}"
+        );
+        assert!(
+            joined.contains("E1 RequestPolicy registered=false"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("no E2 ArgumentValidator is registered"),
+            "{joined}"
+        );
+        assert!(
+            lines.iter().all(|l| l.level == ReportLevel::Info),
+            "a fully enforcing config emits no warning"
+        );
+    }
+
+    #[test]
+    fn every_active_opt_out_is_reported_at_warn_level() {
+        let lines = render_validation_report(
+            &cfg("enforce_input_schema = false\ndefault_max_length = 0\nadditional_properties = true"),
+            &ToolkitHooks::default(),
+        );
+        let joined = texts(&lines);
+        assert!(joined.contains("schema_check=OFF"), "{joined}");
+        let warns: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.level == ReportLevel::Warn)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert!(
+            warns.len() >= 4,
+            "an enforcement that is OFF must never read as on; got {warns:#?}"
+        );
+        assert!(
+            warns.iter().any(|w| w.contains("opt-out ACTIVE")),
+            "{warns:#?}"
+        );
+    }
+
+    #[test]
+    fn a_validator_for_an_undeclared_tool_name_is_warned_not_refused() {
+        let hooks = ToolkitHooks::default()
+            .with_argument_validator("get_thing", Arc::new(Never))
+            .with_argument_validator("typoed_name", Arc::new(Never));
+        let lines = render_validation_report(&cfg(""), &hooks);
+        let joined = texts(&lines);
+        assert!(
+            joined.contains("E2 ArgumentValidator registered for get_thing, typoed_name"),
+            "{joined}"
+        );
+        let warns: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.level == ReportLevel::Warn)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert_eq!(warns.len(), 1, "exactly the typo warns: {warns:#?}");
+        assert!(warns[0].contains("'typoed_name'"), "{:?}", warns[0]);
+        assert!(warns[0].contains("will never run"), "{:?}", warns[0]);
+    }
+
+    /// SC-7: the report is built from declarations, so it cannot carry request
+    /// data. Asserted rather than trusted, because the log is a channel.
+    #[test]
+    fn the_report_never_echoes_an_argument_value() {
+        let lines = render_validation_report(&cfg(""), &ToolkitHooks::default());
+        let joined = texts(&lines);
+        for forbidden in ["Bearer", "app_key", "super-secret"] {
+            assert!(!joined.contains(forbidden), "{joined}");
         }
     }
 }

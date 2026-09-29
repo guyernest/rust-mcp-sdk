@@ -332,7 +332,14 @@ pub fn code_mode_http_tools_from_executor(
     };
     let execute_handler = tool_handlers::ExecuteCodeHandler {
         pipeline,
-        source: tool_handlers::ExecSource::PerRequestHttp { base, exec_config },
+        source: tool_handlers::ExecSource::PerRequestHttp {
+            // Phase 128 E1: label the executor with the tool it serves, so a
+            // registered `RequestPolicy` can attribute an outbound request. One
+            // `execute_code` call may issue many requests; they all carry this
+            // label.
+            base: base.with_tool_label("execute_code"),
+            exec_config,
+        },
         flavor,
     };
 
@@ -852,6 +859,31 @@ pub struct HttpCodeExecutor {
     /// `None` for the static-auth path; set per request via
     /// [`HttpCodeExecutor::with_inbound_token`].
     inbound_token: Option<String>,
+    /// The operator's parsed OpenAPI document, when one was supplied
+    /// (Phase 128 D4(b)).
+    ///
+    /// `None` on every executor built by [`HttpCodeExecutor::new`], which is what
+    /// keeps that constructor's signature unchanged. An `Arc` rather than an owned
+    /// document because the same parse is also served verbatim as the `api_schema`
+    /// resource, and the spec can be large — one allocation is shared, never
+    /// cloned. Read ONLY by
+    /// [`placeholder_rules`](pmcp_code_mode::HttpExecutor::placeholder_rules).
+    schema: Option<Arc<crate::http::OpenApiSchema>>,
+    /// The E1 outbound-request policy, when one was registered (Phase 128).
+    ///
+    /// `None` on every executor built by [`HttpCodeExecutor::new`], which keeps
+    /// that constructor's signature unchanged and keeps the no-policy request
+    /// path allocation-free.
+    policy: Option<Arc<dyn crate::policy::RequestPolicy>>,
+    /// The MCP tool this executor serves, for [`crate::policy::OutboundRequest`]'s
+    /// `tool` field (Phase 128 E1).
+    ///
+    /// `HttpExecutor::execute_request` is a `pmcp-code-mode` trait method and
+    /// carries no tool name, so the label is attached where a PER-TOOL executor is
+    /// minted: a script tool's own `[[tools]]` `name` at synthesis, and
+    /// `execute_code` for the generic Code Mode tool. `Arc<str>` because the
+    /// executor is cloned per request.
+    tool_label: Option<Arc<str>>,
 }
 
 #[cfg(feature = "openapi-code-mode")]
@@ -871,7 +903,105 @@ impl HttpCodeExecutor {
             base_url,
             auth,
             inbound_token: None,
+            schema: None,
+            policy: None,
+            tool_label: None,
         }
+    }
+
+    /// Label this executor with the MCP tool it serves, so an E1 policy is told
+    /// which `tools/call` an outbound request came from (Phase 128).
+    ///
+    /// Attach it where a PER-TOOL executor is minted — `ScriptToolHandler::new`
+    /// for a script tool, `code_mode_http_tools_from_executor` for `execute_code`.
+    /// On the Code Mode surface one `tools/call` may issue many outbound requests
+    /// and they all carry this same label.
+    #[must_use]
+    pub fn with_tool_label(mut self, tool: impl AsRef<str>) -> Self {
+        self.tool_label = Some(Arc::from(tool.as_ref()));
+        self
+    }
+
+    /// The MCP tool this executor serves, or `""` when it carries no label (a
+    /// caller driving the executor directly, with no tool to name).
+    #[must_use]
+    pub fn tool_label(&self) -> &str {
+        self.tool_label.as_deref().unwrap_or("")
+    }
+
+    /// Consult the registered E1 policy, if any, for one already-assembled
+    /// outbound request (Phase 128).
+    ///
+    /// The mirror of `http::HttpClient`'s helper of the same name. Its own
+    /// function so `execute_request` keeps ONE added statement and stays under
+    /// the cognitive-complexity 25 gate, and returns immediately when no policy
+    /// is registered.
+    async fn run_request_policy(
+        &self,
+        method: &str,
+        path: &str,
+        query: &[(String, String)],
+        body: Option<&serde_json::Value>,
+    ) -> std::result::Result<(), ExecutionError> {
+        let Some(policy) = self.policy.as_ref() else {
+            return Ok(());
+        };
+        let req = crate::policy::OutboundRequest::new(self.tool_label(), method, path, query, body);
+        policy
+            .check(&req)
+            .await
+            .map_err(|refusal| ExecutionError::RuntimeError {
+                message: format!("outbound request refused by policy: {refusal}"),
+            })
+    }
+
+    /// Attach the E1 [`crate::policy::RequestPolicy`] consulted before every
+    /// outbound request this executor makes (Phase 128).
+    ///
+    /// Cheap clone-with-builder, the same shape as
+    /// [`with_inbound_token`](Self::with_inbound_token).
+    ///
+    /// # Call it BEFORE the executor fans out
+    ///
+    /// Both HTTP surfaces run on ONE executor (D-02) — script tools take a clone
+    /// and Code Mode takes the original — so a clone taken before this builder
+    /// runs is permanently ungoverned. The same constraint
+    /// [`with_schema`](Self::with_schema) documents, for the same reason.
+    #[must_use]
+    pub fn with_request_policy(mut self, policy: Arc<dyn crate::policy::RequestPolicy>) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Whether this executor consults an E1 policy before sending.
+    ///
+    /// Public for the same reason [`has_schema`](Self::has_schema) is: the wiring
+    /// lives in a different crate, so a registered-but-unreached policy must be
+    /// observable from outside rather than only from a `#[cfg(test)]` accessor.
+    #[must_use]
+    pub fn has_request_policy(&self) -> bool {
+        self.policy.is_some()
+    }
+
+    /// Attach the operator's parsed OpenAPI document, so a path placeholder can be
+    /// narrowed by what the spec DECLARES for it (Phase 128 D4(b)).
+    ///
+    /// Cheap clone-with-builder, the same shape as
+    /// [`with_inbound_token`](Self::with_inbound_token): the `Arc` is shared with
+    /// the `api_schema` resource rather than the document being duplicated.
+    ///
+    /// # Call it BEFORE the executor fans out
+    ///
+    /// Both HTTP surfaces run on ONE executor (D-02) — script tools take a clone
+    /// and Code Mode takes the original. A clone taken before this builder runs is
+    /// permanently unnarrowed, so the call has to precede both fan-out sites. The
+    /// production wiring is `pmcp-openapi-server`'s `build_server`, the only place
+    /// the executor and the parsed spec are both in scope.
+    #[must_use]
+    pub fn with_schema(mut self, schema: Arc<crate::http::OpenApiSchema>) -> Self {
+        warn_if_narrowing_unavailable();
+        self.schema = Some(schema);
+        self
     }
 
     /// Cheap clone-with-token builder (H1): the binary calls this PER REQUEST to
@@ -887,6 +1017,26 @@ impl HttpCodeExecutor {
         self
     }
 
+    /// Whether this executor carries an OpenAPI document, and therefore whether a
+    /// path placeholder can be narrowed by a spec DECLARATION (Phase 128 D4(b)).
+    ///
+    /// `false` never means "unchecked": a spec-less executor still applies the
+    /// unconditional character floor and the always-on length cap to every
+    /// placeholder value. It means only that no ADDITIONAL declared narrowing is
+    /// available.
+    ///
+    /// Public, and deliberately so. T-128-36c is the risk that `with_schema` gets
+    /// wired to a `#[cfg(test)]` helper — or applied after the executor has already
+    /// fanned out — leaving the production binary unnarrowed while every test
+    /// passes. The wiring lives in a DIFFERENT crate (`pmcp-openapi-server`'s
+    /// `build_server`), so a `#[cfg(test)]` accessor could not prove it from there.
+    /// This is a read-only boolean over a private field; it exposes nothing about
+    /// the document.
+    #[must_use]
+    pub fn has_schema(&self) -> bool {
+        self.schema.is_some()
+    }
+
     /// Test-only accessor for the per-request captured token, so unit tests can
     /// assert [`request_executor_from_extra`] threads the inbound token (the
     /// field is otherwise private — Plan 90-10).
@@ -895,45 +1045,7 @@ impl HttpCodeExecutor {
         self.inbound_token.as_deref()
     }
 
-    /// Substitute `{key}` path-template segments from `body` keys, returning the
-    /// resolved path and the remaining (non-path) body fields.
-    ///
-    /// Lifted from the pmcp-run reference `execute_request` (kept a free helper
-    /// so the trait method stays under the cog ≤25 budget).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionError::RuntimeError`] naming the offending key when a
-    /// `{key}` path value is a non-scalar (`Object`/`Array`) — see
-    /// [`HttpCodeExecutor::scalar_str`] for the decided rule (WR-03 / GAP 4).
-    fn resolve_path(
-        path: &str,
-        body: &Option<serde_json::Value>,
-    ) -> std::result::Result<(String, Option<serde_json::Value>), ExecutionError> {
-        let mut resolved_path = path.to_string();
-        let remaining = if let Some(serde_json::Value::Object(obj)) = body {
-            let mut remaining = serde_json::Map::new();
-            for (key, value) in obj {
-                let placeholder = format!("{{{key}}}");
-                if resolved_path.contains(&placeholder) {
-                    resolved_path =
-                        resolved_path.replace(&placeholder, &Self::scalar_str(key, value)?);
-                } else {
-                    remaining.insert(key.clone(), value.clone());
-                }
-            }
-            if remaining.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Object(remaining))
-            }
-        } else {
-            body.clone()
-        };
-        Ok((resolved_path, remaining))
-    }
-
-    /// Render a JSON scalar for path / query substitution (strings unquoted),
+    /// Render a JSON scalar for GET-query substitution (strings unquoted),
     /// REJECTING non-scalar values (WR-03 / GAP 4).
     ///
     /// This is the `code_mode` counterpart of [`crate::http::client`]'s
@@ -941,8 +1053,18 @@ impl HttpCodeExecutor {
     /// the `Parameter` model carries no OpenAPI `style`/`explode`/`type` hint,
     /// the rule is uniform: a scalar (`String`, `Number`, `Bool`, `Null`)
     /// renders to a bare string (`Null` → `"null"`, preserving prior behavior);
-    /// an `Object` or `Array` in a `{path}` substitution or a GET-query field is
-    /// rejected rather than silently JSON-stringified into the URL.
+    /// an `Object` or `Array` in a GET-query field is rejected rather than
+    /// silently JSON-stringified into the URL.
+    ///
+    /// # Scope after Phase 128 D-09
+    ///
+    /// This is now reached ONLY from step (4) — the remaining-body-as-query-params
+    /// step. The `{path}` substitution half moved up to
+    /// `pmcp_code_mode::PlanExecutor`, which applies the identical rule
+    /// (`render_path_scalar`) and then additionally floors the rendered value
+    /// through `validate_path_placeholder`. The sibling `resolve_path` helper that
+    /// used to live here was deleted with step (1) rather than left as a
+    /// caller-less function.
     ///
     /// # Errors
     ///
@@ -966,21 +1088,221 @@ impl HttpCodeExecutor {
     }
 }
 
+/// The spec-declared narrowing for ONE layer-2 `{param}` value (Phase 128 D4(b)).
+///
+/// A free helper, not an inline block, for two reasons: it keeps the trait method
+/// trivially under the cog-25 gate (SP-4), and it lets the `input-validation`-off
+/// build be a SIBLING FUNCTION with its own doc rather than a `cfg` arm buried in
+/// the impl.
+///
+/// The lookup is an O(1) index hit. [`OpenApiSchema`](crate::http::OpenApiSchema)
+/// indexes operations by `(path, METHOD)`, which is why `method` is part of the
+/// trait signature: `GET /things/{id}` and `DELETE /things/{id}` are two
+/// operations that may declare different constraints for the same `id`, and a
+/// `(path_template, param)` signature could only scan linearly or narrow from the
+/// wrong operation.
+///
+/// Only PATH-position parameters are consulted. A query-position namesake
+/// describes a different part of the request and must not narrow a path
+/// placeholder.
+///
+/// # What a MISS costs
+///
+/// No schema, no matching operation, or no matching PATH parameter returns
+/// [`PlaceholderRules::default()`](pmcp_code_mode::PlaceholderRules) — which
+/// RETAINS the unconditional character floor and the always-on
+/// 256-code-point cap, and LOSES the spec's additional narrowing. That is a real
+/// reduction, not a no-op: a Code Mode script writing `/users/{alias}` against a
+/// spec that declares `/users/{id}` reaches the SAME endpoint while the declared
+/// `pattern` silently disappears, because the lookup is by exact template text.
+///
+/// Three things bound that, and they are all the bound there is:
+///
+/// 1. the sentence above, so the cost is stated rather than described as harmless;
+/// 2. [`log_spec_lookup_miss`], a `tracing::debug!` fired once per
+///    `(method, template)` pair, naming the method and the template and never a
+///    value — so a drifted template produces a signal instead of silence;
+/// 3. `ServerConfig::lint_against_spec`, which refuses the CONFIGURED case before
+///    deploy. Its bound, stated: it covers a template written in the config. A
+///    template a Code Mode script COMPOSES at runtime is not visible at config
+///    time, which is why (2) exists as well.
+///
+/// Template canonicalization is deliberately NOT attempted. Normalizing `{alias}`
+/// to `{id}` requires knowing the two denote the same parameter, which only the
+/// spec's own path can establish — so a canonicalizer either re-derives the exact
+/// match it was meant to replace, or guesses, and a wrong guess narrows from
+/// ANOTHER parameter's declared rules. That can refuse a legitimate value under a
+/// rule the caller's endpoint does not carry, which is strictly worse than not
+/// narrowing.
+///
+/// This function builds [`PlaceholderRules`](pmcp_code_mode::PlaceholderRules) and
+/// nothing else. It evaluates no pattern of its own: there is exactly one regex
+/// path in this phase and it lives in core, which is what makes a placeholder
+/// `pattern` and an `inputSchema` `pattern` resolve the whitespace shorthand
+/// identically.
+#[cfg(all(feature = "openapi-code-mode", feature = "input-validation"))]
+fn spec_placeholder_rules<'a>(
+    schema: Option<&'a crate::http::OpenApiSchema>,
+    method: &str,
+    path_template: &str,
+    param: &str,
+) -> pmcp_code_mode::PlaceholderRules<'a> {
+    let default = pmcp_code_mode::PlaceholderRules::default();
+    let Some(schema) = schema else {
+        return default;
+    };
+    let Some(operation) = schema.operation_for(path_template, method) else {
+        log_spec_lookup_miss(method, path_template);
+        return default;
+    };
+    operation
+        .path_parameters()
+        .into_iter()
+        .find(|p| p.name == param)
+        .map_or(default, |p| p.placeholder_rules())
+}
+
+/// Report a `(method, path_template)` pair the spec does not carry, ONCE.
+///
+/// At `debug!` rather than `warn!` because a Code Mode script may legitimately
+/// address a long-tail endpoint the operator's spec omits, so this is diagnostic
+/// signal and not an error. It names only author-written text — the method and the
+/// template — and never a placeholder value.
+#[cfg(all(feature = "openapi-code-mode", feature = "input-validation"))]
+fn log_spec_lookup_miss(method: &str, path_template: &str) {
+    /// Bound on the distinct pairs remembered.
+    ///
+    /// A Code Mode script composes its template at RUNTIME, so an unbounded memo
+    /// is an unbounded allocation driven by caller-influenced input. Past the
+    /// bound the LOG goes quiet rather than the process growing: a server that has
+    /// already produced this many distinct misses has a configuration problem the
+    /// first entries already named. Enforcement is unaffected either way — the
+    /// floor and the cap never depend on this memo.
+    const MAX_REMEMBERED: usize = 64;
+
+    static SEEN: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+    > = std::sync::OnceLock::new();
+
+    let Ok(mut seen) = SEEN
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+        .lock()
+    else {
+        return;
+    };
+    if seen.len() >= MAX_REMEMBERED || !seen.insert((method.to_string(), path_template.to_string()))
+    {
+        return;
+    }
+    drop(seen);
+    tracing::debug!(
+        target: "pmcp_server_toolkit::code_mode",
+        method = method,
+        path_template = path_template,
+        "no OpenAPI operation matches this (method, path template) pair: every placeholder \
+         value still faces the unconditional character floor and the always-on length cap, \
+         and the spec's ADDITIONAL narrowing is NOT applied. A template written in the \
+         config is reported before deploy by ServerConfig::lint_against_spec; a template a \
+         Code Mode script composes at runtime can only be reported here."
+    );
+}
+
+/// The `input-validation`-off half of the spec narrowing.
+///
+/// `Parameter::placeholder_rules` — the accessor that names the core
+/// `PlaceholderRules` type — is gated on the toolkit's `input-validation` feature,
+/// so on a build without it there is no declared-rules accessor to read and the
+/// spec contributes no narrowing.
+///
+/// **This is not the floor being switched off.** The floor and the cap run inside
+/// `pmcp_code_mode::PlanExecutor`, which depends on `pmcp/schema-validation`
+/// unconditionally; they are not behind this feature and this feature cannot turn
+/// them off. What IS off is the spec's additional narrowing — and
+/// [`warn_if_narrowing_unavailable`] says so once, at the moment an operator
+/// supplies a spec and would otherwise believe it was being enforced.
+#[cfg(all(feature = "openapi-code-mode", not(feature = "input-validation")))]
+fn spec_placeholder_rules<'a>(
+    schema: Option<&'a crate::http::OpenApiSchema>,
+    method: &str,
+    path_template: &str,
+    param: &str,
+) -> pmcp_code_mode::PlaceholderRules<'a> {
+    let _ = (schema, method, path_template, param);
+    pmcp_code_mode::PlaceholderRules::default()
+}
+
+/// No-op on a build that HAS `input-validation`: the narrowing is available, so
+/// there is no opt-out to report. The sibling below is the half that speaks.
+#[cfg(all(feature = "openapi-code-mode", feature = "input-validation"))]
+fn warn_if_narrowing_unavailable() {}
+
+/// Report, ONCE, that a supplied spec cannot narrow on this build.
+///
+/// An enforcement that is off must never read as on. An operator who passes
+/// `--spec` has asked for the spec's declarations to be applied; on a build
+/// without `input-validation` they are not, and this is the only moment at which
+/// that intent is observable.
+#[cfg(all(feature = "openapi-code-mode", not(feature = "input-validation")))]
+fn warn_if_narrowing_unavailable() {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if WARNED.set(()).is_ok() {
+        tracing::warn!(
+            target: "pmcp_server_toolkit::code_mode",
+            "an OpenAPI spec was supplied but this build has the toolkit's \
+             `input-validation` feature OFF, so a path placeholder gets the unconditional \
+             character floor and the always-on length cap and NOT the spec's declared \
+             pattern/maxLength narrowing. Rebuild with `input-validation` (it is in the \
+             toolkit's default feature set) to apply the declarations."
+        );
+    }
+}
+
 #[cfg(feature = "openapi-code-mode")]
 #[pmcp_code_mode::async_trait]
 impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
+    /// Narrow a layer-2 `{param}` value by what the carried OpenAPI document
+    /// DECLARES for it (Phase 128 D4(b)).
+    ///
+    /// Delegates to the private `spec_placeholder_rules` helper in this module,
+    /// whose rustdoc states exactly what a schema/operation/parameter MISS costs —
+    /// the floor and the cap are retained, the spec's narrowing is lost — and what
+    /// bounds that loss. Named in plain backticks rather than as an intra-doc link
+    /// because this method is public and the helper is private, which rustdoc
+    /// (correctly) warns about.
+    fn placeholder_rules(
+        &self,
+        method: &str,
+        path_template: &str,
+        param: &str,
+    ) -> pmcp_code_mode::PlaceholderRules<'_> {
+        spec_placeholder_rules(self.schema.as_deref(), method, path_template, param)
+    }
+
     async fn execute_request(
         &self,
         method: &str,
-        path: &str,
+        path: pmcp_code_mode::ResolvedPath<'_>,
         body: Option<serde_json::Value>,
     ) -> std::result::Result<serde_json::Value, ExecutionError> {
+        let path = path.as_str();
         let upper = method.to_uppercase();
         let is_get_like = matches!(upper.as_str(), "GET" | "HEAD" | "OPTIONS");
 
-        // (1) Path-param substitution from the body object. A non-scalar `{key}`
-        //     value is rejected (WR-03) rather than JSON-stringified into the URL.
-        let (resolved_path, remaining_body) = Self::resolve_path(path, &body)?;
+        // (1) REMOVED in Phase 128 (D-09). Placeholder resolution used to happen
+        //     here, and that is exactly what made this executor — and every other
+        //     `HttpExecutor` implementor, in this repo and out of it — blind BY
+        //     CONSTRUCTION to what it was about to send: a decorator wrapping the
+        //     public trait saw only the template the script wrote, never the
+        //     substituted values, so a placeholder carrying a query separator
+        //     became a different endpoint with nothing in a position to notice.
+        //
+        //     `pmcp_code_mode::PlanExecutor` now resolves BOTH layers and checks
+        //     the composed result before dispatch, so `path` arrives as a
+        //     `ResolvedPath` with every placeholder already substituted and
+        //     checked, and `body` already has the path-consumed keys removed.
+        //     Resolving again here would be a double-resolution bug.
+        let resolved_path = path;
+        let remaining_body = body;
 
         // (2) Shared join_url helper (Pitfall 2 — preserves an API-Gateway
         //     stage prefix; it does NOT use the RFC-3986 path-replacing join).
@@ -988,7 +1310,40 @@ impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
         //     append query pairs because reqwest 0.13 gates
         //     RequestBuilder::query behind a `query` feature the toolkit
         //     deliberately does not enable (Plan 01 Rule 1).
-        let url = crate::http::join_url(&self.base_url, &resolved_path);
+        let url = crate::http::join_url(&self.base_url, resolved_path);
+
+        // (2a) Phase 128 — the NON-AUTH half of step (4) moved ABOVE the E1 hook.
+        //      Step (4) used to run entirely after `auth.apply` at (3), which put
+        //      the remaining-body-to-query conversion after any hook placed before
+        //      auth. A policy documented to inspect the query pairs would then have
+        //      inspected an EMPTY slice while the pairs about to be sent still sat
+        //      in `body` — a security hook that is present, documented and blind,
+        //      which is worse than an absent one. D-12 is preserved exactly: only
+        //      the AUTH-supplied query additions stay behind the hook, so the
+        //      credential's contribution is still invisible to the policy.
+        //
+        //      Nothing is renumbered; the auth-supplied pairs are appended at (3a).
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        let request_body = if is_get_like {
+            if let Some(serde_json::Value::Object(obj)) = &remaining_body {
+                for (key, value) in obj {
+                    // A non-scalar GET-query value is rejected (WR-03) rather than
+                    // silently JSON-stringified into the URL.
+                    query_params.push((key.clone(), Self::scalar_str(key, value)?));
+                }
+            }
+            None
+        } else {
+            remaining_body
+        };
+
+        // (2b) Phase 128 E1 / D-12 — the outbound-policy hook. AFTER `join_url` so
+        //      the policy sees the URL as it will be sent, and BEFORE `auth.apply`
+        //      so no credential exists yet in `headers` / `query`. A refusal returns
+        //      before auth and before the send. The mirror of the curated surface's
+        //      hook in `http/client.rs::execute_inner`.
+        self.run_request_policy(&upper, &url, &query_params, request_body.as_ref())
+            .await?;
 
         // (3) Apply auth, threading the per-request inbound token (H1). Auth
         //     failures map to a RuntimeError WITHOUT echoing URL/token
@@ -1003,22 +1358,10 @@ impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
                 message: "authentication failed for outgoing request".to_string(),
             })?;
 
-        let mut query_params: Vec<(String, String)> = auth_query.into_iter().collect();
-
-        // (4) For GET-like requests, serialize remaining body fields as query
-        //     params; otherwise keep them as the JSON body.
-        let request_body = if is_get_like {
-            if let Some(serde_json::Value::Object(obj)) = &remaining_body {
-                for (key, value) in obj {
-                    // A non-scalar GET-query value is rejected (WR-03) rather than
-                    // silently JSON-stringified into the URL.
-                    query_params.push((key.clone(), Self::scalar_str(key, value)?));
-                }
-            }
-            None
-        } else {
-            remaining_body
-        };
+        // (3a) The auth-supplied query additions — an API-key-in-query credential —
+        //      join the pairs AFTER the hook, which is what keeps them invisible to
+        //      the policy.
+        query_params.extend(auth_query);
 
         // Append query params via url::Url (reqwest 0.13's RequestBuilder::query
         // is behind the off-by-default `query` feature; Plan 01 Rule 1).
@@ -2360,5 +2703,528 @@ mod sql_static_source_tests {
         assert!(server.get_tool("validate_code").is_some());
         assert!(server.get_tool("execute_code").is_some());
         std::env::remove_var("PMCP_TOOLKIT_90_10_SQL_SECRET");
+    }
+}
+
+// =============================================================================
+// Phase 128 D4(b) — the `placeholder_rules` override on `HttpCodeExecutor`
+// =============================================================================
+
+/// The spec-narrowing half of D4(b) on the Code Mode surface.
+///
+/// Plan 05 moved placeholder resolution ahead of dispatch and left
+/// `HttpExecutor::placeholder_rules` default-implemented, because `PlanExecutor`
+/// has no access to an OpenAPI document. These rows prove the executor that DOES
+/// own the document supplies the narrowing, and — the load-bearing half — that an
+/// executor without one is still floored and capped.
+///
+/// Nine of the rows assert what a MISS does, because a miss is the shape a reader
+/// most easily mistakes for "no checks".
+#[cfg(all(test, feature = "openapi-code-mode", feature = "input-validation"))]
+mod placeholder_rules_override {
+    use super::HttpCodeExecutor;
+    use crate::http::auth::{create_auth_provider, AuthConfig};
+    use crate::http::OpenApiSchema;
+    use pmcp_code_mode::HttpExecutor;
+    use std::sync::Arc;
+
+    /// A spec declaring a NARROW pattern on `GET /things/{id}`, a DIFFERENT
+    /// pattern on `DELETE /things/{id}` (so the method is provably load-bearing),
+    /// a `maxLength`, and `allowReserved: true` on a third path parameter (D-11).
+    const SPEC: &str = r#"{
+      "openapi": "3.0.0",
+      "info": { "title": "t", "version": "1" },
+      "paths": {
+        "/things/{id}": {
+          "get": {
+            "operationId": "getThing",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "pattern": "^G[0-9]+$", "maxLength": 12 } }
+            ],
+            "responses": { "200": { "description": "ok" } }
+          },
+          "delete": {
+            "operationId": "deleteThing",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "pattern": "^D[0-9]+$" } }
+            ],
+            "responses": { "200": { "description": "ok" } }
+          }
+        },
+        "/reserved/{seg}": {
+          "get": {
+            "operationId": "getReserved",
+            "parameters": [
+              { "name": "seg", "in": "path", "required": true,
+                "allowReserved": true,
+                "schema": { "type": "string" } }
+            ],
+            "responses": { "200": { "description": "ok" } }
+          }
+        }
+      }
+    }"#;
+
+    fn bare() -> HttpCodeExecutor {
+        let auth = create_auth_provider(&AuthConfig::None).expect("noauth");
+        HttpCodeExecutor::new(
+            reqwest::Client::new(),
+            "https://api.example".to_string(),
+            auth,
+        )
+    }
+
+    fn with_spec() -> HttpCodeExecutor {
+        bare().with_schema(Arc::new(
+            OpenApiSchema::parse(SPEC).expect("the fixture spec parses"),
+        ))
+    }
+
+    /// `new`'s signature is unchanged, so the schema starts absent and every
+    /// pre-existing construction site keeps compiling. A default-returning
+    /// executor is FLOORED AND CAPPED — the assertion below is about the absence
+    /// of NARROWING, not about the absence of checks.
+    #[test]
+    fn an_executor_with_no_schema_returns_the_default() {
+        let exec = bare();
+        let rules = exec.placeholder_rules("GET", "/things/{id}", "id");
+        assert_eq!(rules.declared_pattern, None);
+        assert_eq!(rules.declared_max_length, None);
+        assert!(!rules.allow_slash);
+    }
+
+    #[test]
+    fn a_declared_pattern_reaches_the_rules() {
+        let exec = with_spec();
+        let rules = exec.placeholder_rules("GET", "/things/{id}", "id");
+        assert_eq!(rules.declared_pattern, Some("^G[0-9]+$"));
+        assert_eq!(rules.declared_max_length, Some(12));
+    }
+
+    /// The `method` parameter is load-bearing, not decoration: two operations on
+    /// one path declare different patterns and each must get its own.
+    #[test]
+    fn the_method_selects_the_operation() {
+        let exec = with_spec();
+        assert_eq!(
+            exec.placeholder_rules("DELETE", "/things/{id}", "id")
+                .declared_pattern,
+            Some("^D[0-9]+$"),
+            "a DELETE must never be narrowed by the GET's declared pattern"
+        );
+        assert_eq!(
+            exec.placeholder_rules("get", "/things/{id}", "id")
+                .declared_pattern,
+            Some("^G[0-9]+$"),
+            "`operation_for` upper-cases the method, so a lowercase verb still hits"
+        );
+    }
+
+    #[test]
+    fn an_unknown_path_template_returns_the_default() {
+        let exec = with_spec();
+        // The `/users/{alias}` versus `/users/{id}` spelling-drift case: a template
+        // the spec does not carry loses the NARROWING and keeps the floor + cap.
+        let rules = exec.placeholder_rules("GET", "/things/{alias}", "alias");
+        assert_eq!(rules.declared_pattern, None);
+        assert_eq!(rules.declared_max_length, None);
+        assert!(!rules.allow_slash);
+    }
+
+    #[test]
+    fn an_unknown_method_on_a_known_path_returns_the_default() {
+        let exec = with_spec();
+        assert_eq!(
+            exec.placeholder_rules("PUT", "/things/{id}", "id")
+                .declared_pattern,
+            None
+        );
+    }
+
+    #[test]
+    fn an_unknown_parameter_name_returns_the_default() {
+        let exec = with_spec();
+        assert_eq!(
+            exec.placeholder_rules("GET", "/things/{id}", "nope")
+                .declared_pattern,
+            None
+        );
+    }
+
+    /// A QUERY-position parameter of the same name must not narrow a PATH
+    /// placeholder: `placeholder_rules` answers a question about the path.
+    #[test]
+    fn a_non_path_parameter_is_not_consulted() {
+        let spec = r#"{
+          "openapi": "3.0.0",
+          "info": { "title": "t", "version": "1" },
+          "paths": {
+            "/q": {
+              "get": {
+                "operationId": "q",
+                "parameters": [
+                  { "name": "id", "in": "query", "required": false,
+                    "schema": { "type": "string", "pattern": "^Q[0-9]+$" } }
+                ],
+                "responses": { "200": { "description": "ok" } }
+              }
+            }
+          }
+        }"#;
+        let exec = bare().with_schema(Arc::new(OpenApiSchema::parse(spec).expect("parses")));
+        assert_eq!(
+            exec.placeholder_rules("GET", "/q", "id").declared_pattern,
+            None
+        );
+    }
+
+    /// D-11 / T-128-37 — a spec's reserved-expansion keyword must never reach
+    /// `allow_slash`. Asserted for EVERY spec-derived result this fixture can
+    /// produce, not only the one that declares the keyword.
+    #[test]
+    fn allow_slash_is_false_for_every_spec_derived_result() {
+        let exec = with_spec();
+        for (method, template, param) in [
+            ("GET", "/things/{id}", "id"),
+            ("DELETE", "/things/{id}", "id"),
+            ("GET", "/reserved/{seg}", "seg"),
+            ("GET", "/things/{alias}", "alias"),
+            ("PUT", "/things/{id}", "id"),
+        ] {
+            assert!(
+                !exec.placeholder_rules(method, template, param).allow_slash,
+                "{method} {template} {param}: allow_slash is config-only (D-11)"
+            );
+        }
+    }
+
+    /// A miss is not a hole: the value a floored-and-capped default refuses is
+    /// still refused. This is T-128-36 stated as a test rather than as a doc
+    /// sentence.
+    #[test]
+    fn a_schema_miss_still_refuses_a_floor_denied_value() {
+        let exec = with_spec();
+        let rules = exec.placeholder_rules("GET", "/things/{alias}", "alias");
+        assert!(
+            pmcp_code_mode::validate_path_placeholder("alias", "current/../../etc", &rules)
+                .is_err(),
+            "the floor survives a schema miss"
+        );
+        assert!(
+            pmcp_code_mode::validate_path_placeholder("alias", &"x".repeat(257), &rules).is_err(),
+            "the always-on cap survives a schema miss"
+        );
+    }
+
+    /// The narrowing actually narrows: a value that CLEARS the floor is refused by
+    /// the spec's declared pattern, and accepted without the schema.
+    #[test]
+    fn the_narrowing_refuses_a_floor_clean_value_the_spec_forbids() {
+        let clean = "NOTMATCHING";
+        let spec_exec = with_spec();
+        let narrowed = spec_exec.placeholder_rules("GET", "/things/{id}", "id");
+        let err = pmcp_code_mode::validate_path_placeholder("id", clean, &narrowed)
+            .expect_err("the declared pattern must refuse it");
+        assert_eq!(err.rule, "pattern");
+        assert!(
+            !err.to_string().contains(clean),
+            "the refusal must not echo the value: {err}"
+        );
+
+        let bare_exec = bare();
+        let bare_rules = bare_exec.placeholder_rules("GET", "/things/{id}", "id");
+        assert!(
+            pmcp_code_mode::validate_path_placeholder("id", clean, &bare_rules).is_ok(),
+            "without the schema the same value passes — so the NARROWING refused it, not the floor"
+        );
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Phase 128 E1 — the Code Mode surface's outbound-policy seam.
+//
+// The exact mirror of `http::client`'s `request_policy_seam`: same contract, same
+// assertions, different surface. Selected by the `--lib code_mode::` filter.
+// -----------------------------------------------------------------------------
+
+/// The E1 hook on the Code Mode / script-tool surface.
+#[cfg(all(test, feature = "openapi-code-mode"))]
+mod request_policy_seam {
+    use super::HttpCodeExecutor;
+    use crate::http::auth::HttpAuthProvider;
+    use crate::http::HttpConnectorError;
+    use crate::policy::{OutboundRequest, PolicyRefusal, RequestPolicy};
+    use async_trait::async_trait;
+    use pmcp_code_mode::{HttpExecutor, ResolvedPath};
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// Records whether auth ran, so a refusal test proves the hook is BEFORE auth.
+    struct RecordingAuth {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpAuthProvider for RecordingAuth {
+        async fn apply(
+            &self,
+            headers: &mut HeaderMap,
+            query: &mut HashMap<String, String>,
+            _inbound_token: Option<&str>,
+        ) -> Result<(), HttpConnectorError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            headers.insert("authorization", HeaderValue::from_static("Bearer tok"));
+            // An API-key-in-query credential: the policy must NEVER see this pair.
+            query.insert("app_key".to_string(), "super-secret".to_string());
+            Ok(())
+        }
+    }
+
+    type Seen = Arc<Mutex<Vec<(String, String, Vec<(String, String)>, Option<String>)>>>;
+
+    struct Recorder {
+        seen: Seen,
+        refuse: Option<&'static str>,
+    }
+
+    #[async_trait]
+    impl RequestPolicy for Recorder {
+        async fn check(&self, req: &OutboundRequest<'_>) -> Result<(), PolicyRefusal> {
+            self.seen.lock().expect("lock").push((
+                req.tool.to_string(),
+                req.path.to_string(),
+                req.query.to_vec(),
+                req.body.map(ToString::to_string),
+            ));
+            match self.refuse {
+                Some(msg) => Err(PolicyRefusal::new(msg)),
+                None => Ok(()),
+            }
+        }
+    }
+
+    fn recorder(refuse: Option<&'static str>) -> (Arc<Recorder>, Seen) {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        (
+            Arc::new(Recorder {
+                seen: Arc::clone(&seen),
+                refuse,
+            }),
+            seen,
+        )
+    }
+
+    fn exec(
+        base_url: String,
+        policy: Option<Arc<dyn RequestPolicy>>,
+    ) -> (HttpCodeExecutor, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let auth = Arc::new(RecordingAuth {
+            calls: Arc::clone(&calls),
+        });
+        let e = HttpCodeExecutor::new(reqwest::Client::new(), base_url, auth);
+        let e = match policy {
+            Some(p) => e.with_request_policy(p),
+            None => e,
+        };
+        (e, calls)
+    }
+
+    #[tokio::test]
+    async fn a_refusing_policy_stops_the_request_before_auth_and_before_the_send() {
+        use wiremock::MockServer;
+        let server = MockServer::start().await;
+        let (policy, _seen) = recorder(Some("refused by test policy"));
+        let (executor, auth_calls) = exec(server.uri(), Some(policy));
+
+        let err = executor
+            .execute_request(
+                "GET",
+                ResolvedPath::from_checked("/users/42").expect("checked"),
+                None,
+            )
+            .await
+            .expect_err("the policy refuses");
+        assert!(
+            err.to_string().contains("refused by test policy"),
+            "the refusal must carry the policy's own message, got: {err}"
+        );
+        assert_eq!(
+            auth_calls.load(Ordering::SeqCst),
+            0,
+            "the auth provider must NOT have been invoked — the hook is before auth"
+        );
+        assert!(server
+            .received_requests()
+            .await
+            .expect("recorded")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_allowing_policy_lets_the_request_through_and_auth_is_applied() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/42"))
+            .and(header("authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .mount(&server)
+            .await;
+
+        let (policy, _seen) = recorder(None);
+        let (executor, auth_calls) = exec(server.uri(), Some(policy));
+        let out = executor
+            .execute_request(
+                "GET",
+                ResolvedPath::from_checked("/users/42").expect("checked"),
+                None,
+            )
+            .await
+            .expect("allowed");
+        assert_eq!(out["ok"], true);
+        assert_eq!(auth_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// The assertion that fails if the non-auth half of step (4) is moved back
+    /// BELOW the hook: a policy written to inspect query pairs would then inspect
+    /// an empty slice while the pairs about to be sent still sat in the body.
+    #[tokio::test]
+    async fn the_policy_sees_the_remaining_body_query_pairs_on_a_get() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (policy, seen) = recorder(None);
+        let (executor, _auth) = exec(server.uri(), Some(policy));
+        executor
+            .execute_request(
+                "GET",
+                ResolvedPath::from_checked("/search").expect("checked"),
+                Some(serde_json::json!({ "term": "aspirin", "limit": 5 })),
+            )
+            .await
+            .expect("allowed");
+
+        let seen = seen.lock().expect("lock");
+        assert_eq!(seen.len(), 1);
+        let (_tool, observed_path, query, body) = &seen[0];
+        assert!(observed_path.ends_with("/search"));
+        assert!(
+            !query.is_empty(),
+            "OutboundRequest.query must carry the remaining-body pairs a GET will send"
+        );
+        let keys: Vec<&str> = query.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(
+            keys.contains(&"term") && keys.contains(&"limit"),
+            "got {keys:?}"
+        );
+        assert!(
+            body.is_none(),
+            "a GET's remaining body became query pairs before the hook ran"
+        );
+    }
+
+    /// The credential must be absent from every field, in-crate as well as in the
+    /// integration binary: the auth provider above contributes BOTH a header and
+    /// an `app_key` query pair, and neither may be visible.
+    #[tokio::test]
+    async fn the_policy_never_sees_the_credential() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (policy, seen) = recorder(None);
+        let (executor, _auth) = exec(server.uri(), Some(policy));
+        executor
+            .execute_request(
+                "POST",
+                ResolvedPath::from_checked("/items").expect("checked"),
+                Some(serde_json::json!({ "name": "widget" })),
+            )
+            .await
+            .expect("allowed");
+
+        let seen = seen.lock().expect("lock");
+        let (tool, observed_path, query, body) = &seen[0];
+        for field in [tool.as_str(), observed_path.as_str()] {
+            assert!(
+                !field.contains("super-secret"),
+                "credential leaked: {field}"
+            );
+        }
+        assert!(
+            !query
+                .iter()
+                .any(|(k, v)| k == "app_key" || v.contains("super-secret")),
+            "the auth provider's query credential must be invisible to the policy"
+        );
+        assert!(!body.as_deref().unwrap_or("").contains("super-secret"));
+    }
+
+    #[tokio::test]
+    async fn no_policy_behaves_exactly_as_before() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+            .mount(&server)
+            .await;
+
+        let (executor, auth_calls) = exec(server.uri(), None);
+        assert!(!executor.has_request_policy());
+        let out = executor
+            .execute_request(
+                "GET",
+                ResolvedPath::from_checked("/x").expect("checked"),
+                None,
+            )
+            .await
+            .expect("succeeds");
+        assert_eq!(out["ok"], true);
+        assert_eq!(auth_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_policy_is_told_which_tool_the_executor_serves() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (policy, seen) = recorder(None);
+        let (executor, _auth) = exec(server.uri(), Some(policy));
+        let executor = executor.with_tool_label("lookup_code");
+        executor
+            .execute_request(
+                "GET",
+                ResolvedPath::from_checked("/x").expect("checked"),
+                None,
+            )
+            .await
+            .expect("allowed");
+        assert_eq!(seen.lock().expect("lock")[0].0, "lookup_code");
     }
 }

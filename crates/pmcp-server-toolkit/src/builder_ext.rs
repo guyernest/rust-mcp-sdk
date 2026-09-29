@@ -24,6 +24,7 @@ use pmcp::ServerBuilder;
 
 use crate::config::ServerConfig;
 use crate::error::Result;
+use crate::policy::ToolkitHooks;
 use crate::sql::SqlConnector;
 
 /// Composable builder extensions for config-driven `pmcp` servers.
@@ -255,6 +256,71 @@ pub trait ServerBuilderExt: Sized {
         config: &ServerConfig,
         connector: Arc<dyn SqlConnector>,
     ) -> Result<Self>;
+
+    /// [`Self::try_tools_from_config`] with registered E1/E2 hooks, and the
+    /// once-at-startup enforcement log (Phase 128).
+    ///
+    /// # Why hooks are a PARAMETER rather than accumulated on the builder
+    ///
+    /// This trait is implemented for CORE's [`pmcp::ServerBuilder`], whose fields
+    /// are private. A Rust extension trait cannot add a field to a foreign type, so
+    /// a `with_request_policy(self) -> Self` on this trait would have nowhere to
+    /// store anything. [`ToolkitHooks`] carries the registrations instead and
+    /// [`Self::try_tools_from_config`] became a thin wrapper passing a default — so
+    /// no pre-existing signature changed and no existing caller broke.
+    ///
+    /// # What E1 does NOT govern on this path
+    ///
+    /// This entry point synthesizes SQL / connectorless tools and owns no HTTP
+    /// egress surface, so a [`crate::RequestPolicy`] registered here has nothing to
+    /// govern. That is reported as a startup WARNING rather than accepted in
+    /// silence: a policy the operator registered and nothing consults is exactly
+    /// the present-but-inert defect this phase exists to close. E1 reaches the two
+    /// HTTP surfaces through `pmcp-openapi-server`'s `build_server`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_tools_from_config`].
+    fn try_tools_from_config_with(
+        self,
+        config: &ServerConfig,
+        hooks: &ToolkitHooks,
+    ) -> Result<Self>;
+
+    /// [`Self::try_tools_from_config_with_connector`] with registered E1/E2 hooks
+    /// (Phase 128). See [`Self::try_tools_from_config_with`] for the design and for
+    /// what E1 does and does not govern on this path.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_tools_from_config_with_connector`].
+    fn try_tools_from_config_with_connector_and_hooks(
+        self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+        hooks: &ToolkitHooks,
+    ) -> Result<Self>;
+}
+
+/// Warn when a [`ToolkitHooks`] carries a [`crate::RequestPolicy`] on an assembly
+/// path with no HTTP egress surface to apply it to (Phase 128).
+///
+/// An E1 policy governs the two HTTP surfaces. The `ServerBuilderExt` tool paths
+/// synthesize SQL / connectorless handlers, so a policy registered here is
+/// unreachable — and an unreachable policy that stays silent is a rule the
+/// operator believes is enforced and is not.
+fn warn_if_policy_has_no_surface(hooks: &ToolkitHooks, entry_point: &str) {
+    if hooks.request_policy().is_some() {
+        tracing::warn!(
+            target: "pmcp_server_toolkit::builder_ext",
+            entry_point = %entry_point,
+            "a RequestPolicy is registered but THIS assembly path has no HTTP egress \
+             surface to apply it to, so it will never run. E1 governs the curated HTTP \
+             connector and the Code Mode executor; SQL connector traffic is not \
+             intercepted. Register the policy on the path that builds those (the \
+             OpenAPI binary's build_server)."
+        );
+    }
 }
 
 impl ServerBuilderExt for ServerBuilder {
@@ -265,8 +331,18 @@ impl ServerBuilderExt for ServerBuilder {
         )
     }
 
-    fn try_tools_from_config(mut self, config: &ServerConfig) -> Result<Self> {
-        let synthesized = crate::tools::synthesize_from_config(config)?;
+    fn try_tools_from_config(self, config: &ServerConfig) -> Result<Self> {
+        self.try_tools_from_config_with(config, &ToolkitHooks::default())
+    }
+
+    fn try_tools_from_config_with(
+        mut self,
+        config: &ServerConfig,
+        hooks: &ToolkitHooks,
+    ) -> Result<Self> {
+        crate::policy::emit_validation_report(config, hooks);
+        warn_if_policy_has_no_surface(hooks, "try_tools_from_config_with");
+        let synthesized = crate::tools::synthesize_from_config_and_hooks(config, hooks)?;
         // T-83-08-02 mitigation: emit a visible signal when the [[tools]]
         // block is empty so an operator notices the gap rather than seeing a
         // silently-empty server.
@@ -297,11 +373,28 @@ impl ServerBuilderExt for ServerBuilder {
     }
 
     fn try_tools_from_config_with_connector(
-        mut self,
+        self,
         config: &ServerConfig,
         connector: Arc<dyn SqlConnector>,
     ) -> Result<Self> {
-        let synthesized = crate::tools::synthesize_from_config_with_connector(config, connector)?;
+        self.try_tools_from_config_with_connector_and_hooks(
+            config,
+            connector,
+            &ToolkitHooks::default(),
+        )
+    }
+
+    fn try_tools_from_config_with_connector_and_hooks(
+        mut self,
+        config: &ServerConfig,
+        connector: Arc<dyn SqlConnector>,
+        hooks: &ToolkitHooks,
+    ) -> Result<Self> {
+        crate::policy::emit_validation_report(config, hooks);
+        warn_if_policy_has_no_surface(hooks, "try_tools_from_config_with_connector_and_hooks");
+        let synthesized = crate::tools::synthesize_from_config_with_connector_and_hooks(
+            config, connector, hooks,
+        )?;
         // T-83-08-02 mitigation: visible signal when the [[tools]] block is
         // empty so an operator notices the gap rather than a silently-empty server.
         if synthesized.is_empty() {
@@ -412,6 +505,96 @@ mod tests {
         assert!(
             server.get_tool("ping").is_some(),
             "tools_from_config must wire each [[tools]] entry via tool_arc (Phase 82)"
+        );
+    }
+
+    /// Phase 128: the hooks-taking entry point registers the same handlers, and a
+    /// registered E2 validator actually reaches the tool it names.
+    #[test]
+    fn try_tools_from_config_with_registers_handlers_and_reaches_the_validator() {
+        use crate::policy::{ArgumentRefusal, ArgumentValidator, ToolkitHooks};
+        use serde_json::Value;
+        use std::sync::Arc;
+
+        struct RefuseAll;
+        impl ArgumentValidator for RefuseAll {
+            fn validate(&self, _args: &Value) -> std::result::Result<(), ArgumentRefusal> {
+                Err(ArgumentRefusal::new(
+                    "this tool is administratively disabled",
+                ))
+            }
+        }
+
+        let cfg = min_cfg();
+        let hooks = ToolkitHooks::default().with_argument_validator("ping", Arc::new(RefuseAll));
+        let server = Server::builder()
+            .name("test")
+            .version("0.1.0")
+            .try_tools_from_config_with(&cfg, &hooks)
+            .expect("ok")
+            .build()
+            .expect("build");
+        assert!(
+            server.get_tool("ping").is_some(),
+            "the hooks-taking entry point must register handlers exactly as the wrapper does"
+        );
+    }
+
+    /// The pre-existing method must behave identically to the wrapper it became —
+    /// an empty `ToolkitHooks` changes nothing.
+    #[test]
+    fn try_tools_from_config_is_a_thin_wrapper_over_the_hooks_variant() {
+        use crate::policy::ToolkitHooks;
+
+        let cfg = min_cfg();
+        let via_wrapper = Server::builder()
+            .name("t")
+            .version("0.1.0")
+            .try_tools_from_config(&cfg)
+            .expect("ok")
+            .build()
+            .expect("build");
+        let via_hooks = Server::builder()
+            .name("t")
+            .version("0.1.0")
+            .try_tools_from_config_with(&cfg, &ToolkitHooks::default())
+            .expect("ok")
+            .build()
+            .expect("build");
+        assert!(via_wrapper.get_tool("ping").is_some());
+        assert!(via_hooks.get_tool("ping").is_some());
+    }
+
+    /// A `RequestPolicy` registered on this path has no HTTP egress surface to
+    /// govern. It must not be an ERROR (a config edit may add one later) and it must
+    /// not be silent either — `warn_if_policy_has_no_surface` is the report. This
+    /// asserts the non-error half and that the helper is reached at all.
+    #[test]
+    fn a_policy_on_the_sql_path_is_reported_and_not_an_error() {
+        use crate::policy::{OutboundRequest, PolicyRefusal, RequestPolicy, ToolkitHooks};
+        use std::sync::Arc;
+
+        struct RefuseAll;
+        #[async_trait::async_trait]
+        impl RequestPolicy for RefuseAll {
+            async fn check(
+                &self,
+                _req: &OutboundRequest<'_>,
+            ) -> std::result::Result<(), PolicyRefusal> {
+                Err(PolicyRefusal::new("refused"))
+            }
+        }
+
+        let hooks = ToolkitHooks::default().with_request_policy(Arc::new(RefuseAll));
+        super::warn_if_policy_has_no_surface(&hooks, "unit-test");
+        let cfg = min_cfg();
+        let builder = Server::builder()
+            .name("t")
+            .version("0.1.0")
+            .try_tools_from_config_with(&cfg, &hooks);
+        assert!(
+            builder.is_ok(),
+            "an unreachable policy warns; it must never fail the build"
         );
     }
 

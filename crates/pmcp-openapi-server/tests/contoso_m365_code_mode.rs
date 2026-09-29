@@ -53,7 +53,7 @@ use pmcp_server_toolkit::http::auth::{create_passthrough_auth_provider, AuthConf
 
 use pmcp::server::auth::AuthContext;
 use serde_json::{json, Value};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ============================================================================
@@ -270,6 +270,13 @@ async fn contoso_m365_code_mode_headline_query_returns_deterministic_set() {
     Mock::given(method("GET"))
         .and(path(customers_path))
         .and(header("authorization", "Bearer contoso-user-tok"))
+        // The `$select` projection the script writes as a literal `?$select=values`
+        // MUST arrive on the wire. `path()` ignores the query string entirely, so
+        // without this matcher the projection could be silently dropped — or
+        // mangled by the Phase-128 composed-path check — and the test would still
+        // pass. It also pins the `?` narrowing from the consumer side: a regression
+        // that refused or stripped an author-written query separator fails HERE.
+        .and(query_param("$select", "values"))
         .respond_with(ResponseTemplate::new(200).set_body_json(customers_values_body(&wb)))
         .expect(1)
         .mount(&server)
@@ -280,6 +287,7 @@ async fn contoso_m365_code_mode_headline_query_returns_deterministic_set() {
     Mock::given(method("GET"))
         .and(path(orders_path))
         .and(header("authorization", "Bearer contoso-user-tok"))
+        .and(query_param("$select", "values"))
         .respond_with(ResponseTemplate::new(200).set_body_json(orders_values_body(&wb)))
         .expect(1)
         .mount(&server)

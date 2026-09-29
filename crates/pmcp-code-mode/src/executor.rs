@@ -2417,19 +2417,187 @@ impl Default for PlanCompiler {
 // PLAN EXECUTOR - Executes the compiled execution plan
 // ============================================================================
 
+/// A request path that has already been fully resolved and checked.
+///
+/// # What the value guarantees
+///
+/// Every value of this type was produced by [`ResolvedPath::from_checked`], which
+/// is the only constructor. So, for any `ResolvedPath` an implementor receives:
+///
+/// - Every `${var}` template-literal interpolation (LAYER 1) and every `{key}`
+///   placeholder (LAYER 2) has already been substituted. **There is nothing left
+///   to resolve** and an implementor must not attempt its own placeholder
+///   resolution.
+/// - Each substituted contribution passed
+///   [`validate_path_placeholder`](crate::validate_path_placeholder) where it was
+///   produced.
+/// - The COMPOSED string passed
+///   [`validate_resolved_path`](crate::validate_resolved_path) — so it carries no
+///   parent-directory sequence, no residual `{`/`}`, no `#`, no backslash, no
+///   ASCII control byte, no over-cap segment and no empty interior segment, on
+///   EITHER side of an author-written `?`. None of those is visible to a per-value
+///   check, because a composition belongs to no single value.
+/// - **At most one `?`,** and only one an author wrote into a
+///   `PathPart::Literal`. See [`ResolvedPath::from_checked`] for why that single
+///   exemption is safe.
+/// - The `body` passed alongside has already had the path-consumed keys removed.
+///
+/// # What the value does NOT guarantee
+///
+/// It does not prove that a *spec-declared* narrowing (an OpenAPI `pattern` or
+/// `maxLength`) was applied — that depends on the implementor's
+/// [`HttpExecutor::placeholder_rules`] override, and an implementor that keeps the
+/// default still gets the unconditional floor and the always-on cap but no
+/// narrowing. It is also a **migration marker** as much as a proof carrier: its
+/// job is to make a stale implementor written against the old `&str` parameter
+/// fail to COMPILE rather than silently receive already-resolved data and
+/// double-resolve it (Phase 128, D-09).
+///
+/// # Constructor shape
+///
+/// There is deliberately no `new` and no `new_unchecked`. A public unchecked
+/// constructor whose rustdoc claims an invariant is exactly the
+/// documented-but-absent class Phase 128 exists to correct, so the check lives
+/// *inside* the one constructor and the type cannot be forged from outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedPath<'a>(&'a str);
+
+impl<'a> ResolvedPath<'a> {
+    /// Check `path` as a composed request path and wrap it on success.
+    ///
+    /// This is the only constructor: it runs
+    /// [`validate_resolved_target`](crate::validate_resolved_target), so the
+    /// invariant documented on the type is established here rather than
+    /// asserted.
+    ///
+    /// # The one narrowing: an author-written `?` is permitted
+    ///
+    /// `validate_resolved_path` refuses a query separator ANYWHERE, and core keeps
+    /// that strict rule — it is a general-purpose composed-path checker and other
+    /// callers want it. Its core SIBLING `validate_resolved_target` — which this
+    /// constructor calls, and which the curated surface
+    /// (`pmcp_server_toolkit::http::HttpClient::check_composed_path`) calls too, so
+    /// the two cannot drift — splits at the FIRST `?` and applies the full rule set
+    /// to each side, which exempts exactly that one separator and nothing else.
+    ///
+    /// Why that is safe rather than a hole. Both per-value floors already refuse
+    /// `?` in a substituted value, in literal AND percent-encoded form, with a
+    /// decode-once pass so `%253F`-style regress cannot slip through. So a `?`
+    /// surviving into the composed string can only have come from a
+    /// `PathPart::Literal` — script text the operator authored and shipped, not
+    /// caller data. The asymmetry with traversal is the whole point: refusing `..`
+    /// from a literal catches a traversal bug, while refusing `?` from a literal
+    /// rejects legitimate authoring. Same rule, different work.
+    ///
+    /// What the split does NOT relax, because a narrowing must not become a hole:
+    ///
+    /// - Traversal, control bytes, backslash, `#`, residual `{`/`}`, over-cap
+    ///   segments and empty interior segments are checked on **both** sides. So
+    ///   `/a/../b?x=1` is still refused for the traversal, and `/a?x=%00` is still
+    ///   refused for the control byte.
+    /// - A SECOND `?` is still refused: only the first is split off, so the query
+    ///   portion is checked by the unmodified rule, which denies `?`.
+    /// - An empty query portion is still refused — a dangling `/x?` is a doubled
+    ///   or trailing separator, which is the same class as a trailing `/`.
+    /// - A `?` reaching the composed string from a VALUE never gets here: the
+    ///   per-value floor has already refused it.
+    ///
+    /// One inherited conservatism, stated so it is not a surprise: `%25` is
+    /// refused outright (it is what bounds the decode to a single pass), so a query
+    /// carrying a percent-encoded percent sign is refused. That is unchanged from
+    /// the path portion's long-standing behaviour, not new here.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`PlaceholderRefusal`](crate::PlaceholderRefusal) from
+    /// `validate_resolved_target`. The refusal is value-free: it names the rule and
+    /// the declared expectation, never any byte of the path it refused.
+    pub fn from_checked(path: &'a str) -> Result<Self, crate::PlaceholderRefusal> {
+        crate::validate_resolved_target(path)?;
+        Ok(Self(path))
+    }
+
+    /// The resolved path as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ResolvedPath<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
 /// Trait for making HTTP requests during execution.
 ///
 /// This abstraction allows the executor to be used with different HTTP clients
 /// and enables easy testing with mock implementations.
+///
+/// # The D-09 contract change (Phase 128)
+///
+/// `execute_request`'s path parameter used to be a bare `&str` carrying the
+/// TEMPLATE the script wrote, and each implementor resolved its own `{key}`
+/// placeholders inside its own impl. That made the public trait a blind seam: a
+/// decorator wrapping `HttpExecutor` to inspect outbound requests saw only the
+/// template and never the values, so a placeholder carrying a query separator
+/// became a different endpoint with nothing in a position to notice.
+///
+/// Resolution now happens in [`PlanExecutor`] BEFORE dispatch, and the parameter
+/// is a [`ResolvedPath`] rather than a `&str` so the change is a **compile error**
+/// for a stale implementor instead of a silent semantic shift. A stale
+/// implementor that kept compiling would quietly double-resolve an
+/// already-resolved path, which for a security fix is the worst available
+/// outcome.
 #[async_trait::async_trait]
 pub trait HttpExecutor: Send + Sync {
     /// Execute an HTTP request.
+    ///
+    /// `path` is already fully resolved and checked — see [`ResolvedPath`]. Do
+    /// NOT perform placeholder substitution here; `body` has already had the
+    /// path-consumed keys removed.
     async fn execute_request(
         &self,
         method: &str,
-        path: &str,
+        path: ResolvedPath<'_>,
         body: Option<JsonValue>,
     ) -> Result<JsonValue, ExecutionError>;
+
+    /// The placeholder rules to apply to one LAYER-2 `{param}` value.
+    ///
+    /// This is the D4(b) seam on the Code Mode surface. [`PlanExecutor`] has no
+    /// access to an OpenAPI document; the only component that does is the
+    /// executor implementation, so the narrowing has to be asked for here.
+    ///
+    /// `method` is part of the signature and not decoration: an OpenAPI schema
+    /// indexes operations by `(path, METHOD)`, so `GET /things/{id}` and
+    /// `DELETE /things/{id}` are two operations that may declare different
+    /// constraints for the same `id`. A `(path_template, param)` signature could
+    /// not disambiguate them and would have to either scan linearly or narrow
+    /// from the wrong operation.
+    ///
+    /// `path_template` is the path as it reaches layer 2 — after layer-1
+    /// `${var}` interpolation and before `{key}` substitution. For the ordinary
+    /// case of a string-literal path that is byte-identical to the OpenAPI path
+    /// template, which is what makes a spec lookup work.
+    ///
+    /// # The default is safe
+    ///
+    /// The default returns [`PlaceholderRules::default()`](crate::PlaceholderRules),
+    /// which is FLOOR-PLUS-CAP-WITH-NO-NARROWING. An implementor that keeps the
+    /// default still gets the unconditional character floor and the always-on
+    /// 256-code-point cap on every value; what is absent is only the
+    /// spec-declared narrowing. The floor is never what a missing override costs.
+    fn placeholder_rules(
+        &self,
+        method: &str,
+        path_template: &str,
+        param: &str,
+    ) -> crate::PlaceholderRules<'_> {
+        let _ = (method, path_template, param);
+        crate::PlaceholderRules::default()
+    }
 }
 
 /// Executor for MCP foundation server calls.
@@ -2512,6 +2680,14 @@ pub enum MockExecutionMode {
 ///     println!("Would call: {} {}", call.method, call.path);
 /// }
 /// ```
+///
+/// # Migration note for downstream test authors (Phase 128, D-09)
+///
+/// The recorded `path` is now the RESOLVED path, and any direct
+/// `execute_request` call must pass a [`ResolvedPath`] built with
+/// [`ResolvedPath::from_checked`] rather than a bare `&str` — so a mock
+/// expectation written against a `{key}` TEMPLATE must be rewritten against the
+/// substituted path it expects to see.
 pub struct MockHttpExecutor {
     /// Mock responses by path pattern (exact match or glob pattern with *)
     responses: std::sync::RwLock<HashMap<String, JsonValue>>,
@@ -2673,9 +2849,10 @@ impl HttpExecutor for MockHttpExecutor {
     async fn execute_request(
         &self,
         method: &str,
-        path: &str,
+        path: ResolvedPath<'_>,
         body: Option<JsonValue>,
     ) -> Result<JsonValue, ExecutionError> {
+        let path = path.as_str();
         let response = self.find_response(path);
 
         // Record the call
@@ -2711,7 +2888,15 @@ pub struct ExecutionResult {
 pub struct ApiCallLog {
     /// HTTP method
     pub method: String,
-    /// Resolved path
+    /// The fully resolved request path.
+    ///
+    /// **Disclosure note (Phase 128, T-128-23 — an ACCEPTED residual.)** This is
+    /// an internal execution log and not a client-facing message, which is why it
+    /// keeps the resolved path: redacting it would remove the diagnostic signal
+    /// the log exists for. But any caller-facing surface that exposes
+    /// [`ExecutionResult::api_calls`] inherits the disclosure — a refused or
+    /// attacker-shaped path that was deliberately kept out of the error message
+    /// is still present here. Such a surface MUST redact this field.
     pub path: String,
     /// Request body (if any)
     pub body: Option<JsonValue>,
@@ -2719,6 +2904,178 @@ pub struct ApiCallLog {
     pub response: JsonValue,
     /// Time taken in milliseconds
     pub duration_ms: u64,
+}
+
+/// Map a value-free [`PlaceholderRefusal`](crate::PlaceholderRefusal) into the
+/// executor's error type.
+///
+/// `PlaceholderRefusal`'s `Display` names the parameter and the DECLARED
+/// expectation and never any byte of the value it refused, so the resulting
+/// message is safe to surface to an MCP client as-is. Kept a free function so the
+/// two `ApiCall` arms cannot drift into two different renderings.
+fn refusal_to_execution_error(refusal: crate::PlaceholderRefusal) -> ExecutionError {
+    ExecutionError::RuntimeError {
+        message: refusal.to_string(),
+    }
+}
+
+/// Apply the LAYER-1 floor to one rendered `${var}` / `${expr}` contribution.
+///
+/// `PlaceholderRules::default()` and deliberately NOT
+/// [`HttpExecutor::placeholder_rules`]: a layer-1 part is not a spec-declared
+/// path parameter. It can appear anywhere in the template, including mid-segment,
+/// so there is no OpenAPI `Parameter` to narrow from — the unconditional
+/// character floor plus the always-on 256-code-point cap is exactly the right
+/// level here. A reader who expects a `placeholder_rules` consultation at this
+/// layer is looking for something that has no well-defined answer.
+fn floor_layer_one_contribution(param: &str, rendered: &str) -> Result<(), ExecutionError> {
+    crate::validate_path_placeholder(param, rendered, &crate::PlaceholderRules::default())
+        .map_err(refusal_to_execution_error)
+}
+
+/// Render a JSON scalar for a LAYER-2 `{key}` substitution, REJECTING non-scalars
+/// (WR-03 / GAP 4).
+///
+/// Moved up from `pmcp-server-toolkit`'s `HttpCodeExecutor::scalar_str` by D-09,
+/// with the rule preserved byte for byte: a scalar (`String`, `Number`, `Bool`,
+/// `Null`) renders to a bare string (`Null` -> `"null"`, preserving prior
+/// behaviour); an `Object` or `Array` is rejected rather than silently
+/// JSON-stringified into the URL.
+///
+/// # Errors
+///
+/// Returns [`ExecutionError::RuntimeError`] naming `key`. Per Pitfall 5 the
+/// message names the KEY only — never the value.
+fn render_path_scalar(key: &str, value: JsonValue) -> Result<String, ExecutionError> {
+    match value {
+        JsonValue::String(s) => Ok(s),
+        JsonValue::Null => Ok("null".to_string()),
+        JsonValue::Number(n) => Ok(n.to_string()),
+        JsonValue::Bool(b) => Ok(b.to_string()),
+        JsonValue::Object(_) | JsonValue::Array(_) => Err(ExecutionError::RuntimeError {
+            message: format!("path/query param '{key}' must be a scalar"),
+        }),
+    }
+}
+
+/// Apply PASS 1's `substitutions` to `template` in ONE left-to-right scan.
+///
+/// Deliberately NOT a sequence of `String::replace` calls over a progressively
+/// substituted string. That form re-scans text a PREVIOUS value contributed, so a
+/// value holding a literal `{other_key}` manufactures a placeholder for a later
+/// key to fill — which is exactly the invariant
+/// [`resolve_layer_two_placeholders`] documents and, before this scan existed, did
+/// not hold. Measured on the sequential form: template `/p/{a}/q/{b}` with body
+/// `{"a": "x{b}y", "b": "zzz"}` composed to `/p/xzzzy/q/zzz`, putting `b`'s value
+/// inside `a`'s segment. `ResolvedPath::from_checked` could not catch it: `{`/`}`
+/// are not on `denied_byte`'s list, so `x{b}y` passes the per-value floor, and a
+/// MANUFACTURED placeholder leaves no residual brace behind for the composed check
+/// to refuse. Scanning the template once means a substituted value is never
+/// re-examined: the `{b}` stays a LITERAL, so the composed string still carries a
+/// brace and `ResolvedPath::from_checked` refuses it as an unsubstituted
+/// placeholder. A silent injection became a refusal, which is the point. Pinned by
+/// `layer_two::layer_two_value_cannot_manufacture_a_placeholder_for_a_later_key`.
+///
+/// The longest matching placeholder wins at any position, so a key whose `{key}`
+/// token is a prefix of another's cannot shadow it.
+fn apply_substitutions(template: &str, substitutions: &[(String, String)]) -> String {
+    let mut order: Vec<(&str, &str)> = substitutions
+        .iter()
+        .map(|(placeholder, rendered)| (placeholder.as_str(), rendered.as_str()))
+        .collect();
+    order.sort_by_key(|(placeholder, _)| std::cmp::Reverse(placeholder.len()));
+
+    let mut resolved = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(ch) = rest.chars().next() {
+        match order.iter().copied().find(|(p, _)| rest.starts_with(*p)) {
+            Some((placeholder, rendered)) => {
+                resolved.push_str(rendered);
+                rest = &rest[placeholder.len()..];
+            },
+            None => {
+                resolved.push(ch);
+                rest = &rest[ch.len_utf8()..];
+            },
+        }
+    }
+    resolved
+}
+
+/// LAYER-2 `{key}` placeholder resolution, moved ahead of
+/// [`HttpExecutor::execute_request`] by Phase 128 D-09.
+///
+/// Returns the substituted path plus the body with the path-consumed keys
+/// removed. An implementor used to do this inside its own impl, which is what
+/// made the public trait a blind seam (T-128-20).
+///
+/// # Ordering
+///
+/// Two passes on purpose. Pass one renders and CHECKS every contribution; pass
+/// two applies them. So a refusal on any one placeholder aborts with no
+/// substitution having been applied at all, rather than leaving a
+/// half-substituted path one `?` away from being dispatched. Pass one also tests
+/// containment against the ORIGINAL template rather than a progressively
+/// substituted copy, so a value that itself contains `{`/`}` cannot manufacture a
+/// placeholder for a later key to fill. Body iteration order is
+/// `serde_json::Map`'s, which is deterministic (insertion order under this
+/// workspace's `preserve_order`, key order otherwise).
+///
+/// # Errors
+///
+/// Returns [`ExecutionError::RuntimeError`] on a non-scalar value or a
+/// [`PlaceholderRefusal`](crate::PlaceholderRefusal). Both messages are
+/// value-free.
+fn resolve_layer_two_placeholders<H: HttpExecutor + ?Sized>(
+    http: &H,
+    method: &str,
+    template: &str,
+    body: Option<JsonValue>,
+) -> Result<(String, Option<JsonValue>), ExecutionError> {
+    // Destructured BY VALUE: this function owns `body`, so a non-placeholder entry
+    // can be MOVED into `remaining` rather than deep-cloned. Cloning here copied
+    // essentially the whole request payload — every nested object and array — on
+    // every Code Mode HTTP call.
+    let obj = match body {
+        Some(JsonValue::Object(obj)) => obj,
+        other => return Ok((template.to_string(), other)),
+    };
+
+    // PASS 1 — render + check, mutating nothing.
+    let mut substitutions: Vec<(String, String)> = Vec::new();
+    let mut remaining = serde_json::Map::new();
+    // One reusable buffer for the containment test. Most body keys are NOT path
+    // placeholders — the `else` arm is the common one — so building a fresh
+    // `format!("{{{key}}}")` per key allocated once for every key in every request
+    // body and threw most of them away. The buffer is cloned only on a match.
+    let mut probe = String::new();
+    for (key, value) in obj {
+        probe.clear();
+        probe.push('{');
+        probe.push_str(&key);
+        probe.push('}');
+        if template.contains(probe.as_str()) {
+            let rules = http.placeholder_rules(method, template, &key);
+            // `value` is owned and dropped right here, so render by value rather
+            // than cloning the `String` out of a `JsonValue::String`.
+            let rendered = render_path_scalar(&key, value)?;
+            crate::validate_path_placeholder(&key, &rendered, &rules)
+                .map_err(refusal_to_execution_error)?;
+            substitutions.push((probe.clone(), rendered));
+        } else {
+            remaining.insert(key, value);
+        }
+    }
+
+    // PASS 2 — apply, in ONE left-to-right scan over the TEMPLATE.
+    let resolved = apply_substitutions(template, &substitutions);
+
+    let remaining = if remaining.is_empty() {
+        None
+    } else {
+        Some(JsonValue::Object(remaining))
+    };
+    Ok((resolved, remaining))
 }
 
 /// Executes a compiled execution plan.
@@ -2831,19 +3188,40 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         });
                     }
 
-                    let resolved_path = self.resolve_path(path)?;
-                    let resolved_body = match body {
+                    // LAYER 1 — `${var}` / `${expr}` interpolation, each
+                    // contribution floored inside `resolve_path` (FORK 2).
+                    let templated_path = self.resolve_path(path)?;
+                    let evaluated_body = match body {
                         Some(expr) => Some(self.evaluate(expr)?),
                         None => None,
                     };
+                    // LAYER 2 — `{key}` resolution, moved ahead of dispatch (D-09).
+                    let (resolved_path, resolved_body) = resolve_layer_two_placeholders(
+                        &self.http,
+                        method,
+                        &templated_path,
+                        evaluated_body,
+                    )?;
+                    // THE COMPOSED CHECK — the only check that can see an
+                    // adjacency (T-128-20b). `.` + `.` composes to a traversal and
+                    // 180 + 200 code points compose over the cap, from values that
+                    // each passed both per-value checks above; a residual `{`/`}`
+                    // from an unsubstituted placeholder is refused here too.
+                    let checked_path = ResolvedPath::from_checked(&resolved_path)
+                        .map_err(refusal_to_execution_error)?;
 
                     let call_start = std::time::Instant::now();
                     let raw_response = self
                         .http
-                        .execute_request(method, &resolved_path, resolved_body.clone())
+                        .execute_request(method, checked_path, resolved_body.clone())
                         .await
                         .map_err(|e| ExecutionError::RuntimeError {
-                            message: format!("{} {} failed: {}", method, resolved_path, e),
+                            // The resolved path is deliberately NOT formatted in
+                            // (RESEARCH Pitfall 7 / SC-7): a D4 refusal is
+                            // value-free where it is raised, and re-attaching the
+                            // path here is what would deliver the exact injected
+                            // path to the client.
+                            message: format!("{method} api call '{result_var}' failed: {e}"),
                         })?;
                     let duration_ms = call_start.elapsed().as_millis() as u64;
 
@@ -2997,7 +3375,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                 // results collected into an array assigned to result_var.
                 PlanStep::ParallelApiCalls { result_var, calls } => {
                     let mut results = Vec::with_capacity(calls.len());
-                    for (_temp_var, method, path, body) in calls {
+                    for (temp_var, method, path, body) in calls {
                         self.api_call_count += 1;
                         if self.api_call_count > self.config.max_api_calls {
                             return Err(ExecutionError::RuntimeError {
@@ -3008,15 +3386,28 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             });
                         }
 
-                        let resolved_path = self.resolve_path(path)?;
-                        let resolved_body = body.as_ref().map(|b| self.evaluate(b)).transpose()?;
+                        // LAYER 1, then LAYER 2, then the COMPOSED check — the same
+                        // three steps as the single `ApiCall` arm. See that arm's
+                        // comments; both arms must carry all three or the class is
+                        // closed on only one of them.
+                        let templated_path = self.resolve_path(path)?;
+                        let evaluated_body = body.as_ref().map(|b| self.evaluate(b)).transpose()?;
+                        let (resolved_path, resolved_body) = resolve_layer_two_placeholders(
+                            &self.http,
+                            method,
+                            &templated_path,
+                            evaluated_body,
+                        )?;
+                        let checked_path = ResolvedPath::from_checked(&resolved_path)
+                            .map_err(refusal_to_execution_error)?;
                         let call_start = std::time::Instant::now();
                         let raw_response = self
                             .http
-                            .execute_request(method, &resolved_path, resolved_body.clone())
+                            .execute_request(method, checked_path, resolved_body.clone())
                             .await
                             .map_err(|e| ExecutionError::RuntimeError {
-                                message: format!("{} {} failed: {}", method, resolved_path, e),
+                                // No resolved path here either (Pitfall 7 / SC-7).
+                                message: format!("{method} api call '{temp_var}' failed: {e}"),
                             })?;
                         let duration_ms = call_start.elapsed().as_millis() as u64;
                         let response =
@@ -3142,10 +3533,31 @@ impl<H: HttpExecutor> PlanExecutor<H> {
         })
     }
 
-    /// Resolve a path template to a concrete path string.
+    /// Resolve a path template to a concrete path string — LAYER 1.
+    ///
+    /// # The FORK-2 floor (Phase 128, T-128-20a)
+    ///
+    /// Every DYNAMIC contribution is passed through
+    /// [`validate_path_placeholder`](crate::validate_path_placeholder) before it is
+    /// pushed, and the first refusal returns so nothing reaches `result`. This arm
+    /// used to push the stringified value straight in, which meant a script
+    /// writing `` api.get(`/search/${v}`) `` never touched a `{key}` placeholder,
+    /// never entered layer 2, and was never floored at all. Code Mode scripts are
+    /// model-authored, so that was the untrusted route.
+    ///
+    /// `PathPart::Literal` parts are deliberately NOT checked: they are the
+    /// script's own literal text from the compiled template, not
+    /// caller-substituted data, and flooring them would refuse every legitimate
+    /// template whose literal segments contain `/`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::RuntimeError`] on an undefined variable, an
+    /// expression-evaluation failure, or a placeholder refusal. A refusal's
+    /// message comes from the refusal's own value-free `Display`.
     fn resolve_path(&self, path: &PathTemplate) -> Result<String, ExecutionError> {
         let mut result = String::new();
-        for part in &path.parts {
+        for (index, part) in path.parts.iter().enumerate() {
             match part {
                 PathPart::Literal(s) => result.push_str(s),
                 PathPart::Variable(var) => {
@@ -3155,17 +3567,44 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             .ok_or_else(|| ExecutionError::RuntimeError {
                                 message: format!("Undefined variable in path: {}", var),
                             })?;
-                    result.push_str(&shared_json_to_string_with_mode(
-                        value,
-                        JsonStringMode::Json,
-                    ));
+                    let rendered = shared_json_to_string_with_mode(value, JsonStringMode::Json);
+                    // The refusal names the variable IDENTIFIER, which the part
+                    // carries. This is safe because the identifier is CALLER-CHOSEN,
+                    // not because it is trusted: echoing it back discloses nothing
+                    // the caller does not already know, and the JS identifier grammar
+                    // admits no whitespace, newline or punctuation beyond `$`/`_`, so
+                    // it cannot carry a log-injection payload. The VALUE is always
+                    // redacted. T-128-21b (accept, low) — Phase 128 security audit.
+                    //
+                    // An earlier revision justified this as "a script-chosen identifier
+                    // is operator-shipped content, unlike the value". That was FALSE on
+                    // the `execute_code` surface, whose own tool definition says it
+                    // "runs caller-supplied code" (`handler.rs` `build_execute_tool`),
+                    // and it contradicted this function's own doc 25 lines above
+                    // ("Code Mode scripts are model-authored, so that was the untrusted
+                    // route"). Correcting it is the same documented-but-untrue class
+                    // Phase 128 exists to close, applied to this phase's own comment.
+                    //
+                    // Note the identifier class already reaches the client at three
+                    // other sites (the `Undefined variable in path` message just above,
+                    // and `result_var`/`temp_var` in the two `ApiCall` error wraps), so
+                    // routing ONLY this arm through a positional descriptor would be a
+                    // partial fix that reads as a complete one. The sibling
+                    // `PathPart::Expression` arm below uses a fixed descriptor for a
+                    // different reason: an expression has no name, and rendering its
+                    // body could itself echo caller DATA.
+                    floor_layer_one_contribution(var, &rendered)?;
+                    result.push_str(&rendered);
                 },
                 PathPart::Expression(expr) => {
                     let value = self.evaluate(expr)?;
-                    result.push_str(&shared_json_to_string_with_mode(
-                        &value,
-                        JsonStringMode::Json,
-                    ));
+                    let rendered = shared_json_to_string_with_mode(&value, JsonStringMode::Json);
+                    // An expression has NO name, and a rendering of the expression
+                    // body could itself contain caller text — so the refusal
+                    // carries a fixed positional descriptor and never interpolates
+                    // either the body or the evaluated value.
+                    floor_layer_one_contribution(&format!("path expression #{index}"), &rendered)?;
+                    result.push_str(&rendered);
                 },
             }
         }
@@ -3371,9 +3810,10 @@ mod tests {
         async fn execute_request(
             &self,
             _method: &str,
-            path: &str,
+            path: ResolvedPath<'_>,
             _body: Option<JsonValue>,
         ) -> Result<JsonValue, ExecutionError> {
+            let path = path.as_str();
             self.responses
                 .get(path)
                 .cloned()
@@ -5036,5 +5476,797 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
         let mut executor = PlanExecutor::new(mock_http, ExecutionConfig::default());
         let result = executor.execute(&plan).await.unwrap();
         assert_eq!(result.value["success"], serde_json::json!(true));
+    }
+}
+
+// ============================================================================
+// PHASE 128 D-09 — resolve-and-check-before-dispatch test support
+// ============================================================================
+
+/// Shared fixtures for the `layer_one` / `layer_two` / `composition` /
+/// `error_does_not_echo_path` modules below.
+///
+/// Those four modules sit at THIS level (siblings of `tests`) rather than inside
+/// it on purpose: the plan's verify selections are `executor::layer_one`,
+/// `executor::composition` and `executor::error_does_not_echo_path`, and libtest
+/// matches the FULL test path. A test nested in `tests` would be
+/// `executor::tests::layer_one_…`, which those filters do NOT match — a
+/// zero-selection that exits 0 and measures nothing.
+#[cfg(test)]
+mod d09_support {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// One observation of an `execute_request` call.
+    #[derive(Debug, Clone)]
+    pub(super) struct Seen {
+        pub(super) method: String,
+        pub(super) path: String,
+        pub(super) body: Option<JsonValue>,
+    }
+
+    /// A recording `HttpExecutor` whose log stays observable after the executor
+    /// has been moved into a `PlanExecutor`.
+    pub(super) struct RecordingHttp {
+        seen: Arc<Mutex<Vec<Seen>>>,
+        response: JsonValue,
+    }
+
+    impl RecordingHttp {
+        /// Returns the executor plus a handle onto its call log.
+        pub(super) fn new() -> (Self, Arc<Mutex<Vec<Seen>>>) {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    seen: Arc::clone(&seen),
+                    response: JsonValue::Object(serde_json::Map::new()),
+                },
+                seen,
+            )
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpExecutor for RecordingHttp {
+        async fn execute_request(
+            &self,
+            method: &str,
+            path: ResolvedPath<'_>,
+            body: Option<JsonValue>,
+        ) -> Result<JsonValue, ExecutionError> {
+            self.seen.lock().unwrap().push(Seen {
+                method: method.to_string(),
+                path: path.as_str().to_string(),
+                body,
+            });
+            Ok(self.response.clone())
+        }
+    }
+
+    /// An `HttpExecutor` that always fails, for the Pitfall-7 wrap tests.
+    pub(super) struct FailingHttp;
+
+    #[async_trait::async_trait]
+    impl HttpExecutor for FailingHttp {
+        async fn execute_request(
+            &self,
+            _method: &str,
+            _path: ResolvedPath<'_>,
+            _body: Option<JsonValue>,
+        ) -> Result<JsonValue, ExecutionError> {
+            Err(ExecutionError::RuntimeError {
+                message: "simulated transport failure".to_string(),
+            })
+        }
+    }
+
+    pub(super) fn plan(steps: Vec<PlanStep>) -> ExecutionPlan {
+        ExecutionPlan {
+            steps,
+            metadata: PlanMetadata {
+                api_call_count: 0,
+                has_mutations: false,
+                endpoints: Vec::new(),
+                methods_used: Vec::new(),
+            },
+        }
+    }
+
+    /// A GET `ApiCall` step over the given path parts and optional body literal.
+    pub(super) fn get_step(parts: Vec<PathPart>, body: Option<JsonValue>) -> PlanStep {
+        PlanStep::ApiCall {
+            result_var: "out".to_string(),
+            method: "GET".to_string(),
+            path: PathTemplate { parts },
+            body: body.map(ValueExpr::Literal),
+        }
+    }
+
+    /// `literal` is the common case: a string-literal path template.
+    pub(super) fn literal(path: &str) -> Vec<PathPart> {
+        vec![PathPart::Literal(path.to_string())]
+    }
+}
+
+/// FORK 2 — LAYER-1 `${var}` template-literal interpolation is floored.
+///
+/// `PathPart::Variable` and `PathPart::Expression` are what the JS compiler emits
+/// for `` api.get(`/search/${v}`) ``, and their rendered values used to be pushed
+/// into the path unchecked. A script taking that route never touches a `{key}`
+/// placeholder, so before this phase it was never floored at all (T-128-20a).
+#[cfg(test)]
+mod layer_one {
+    use super::d09_support::{get_step, literal, plan, RecordingHttp};
+    use super::*;
+
+    async fn run_with_var(
+        var: &str,
+        value: JsonValue,
+    ) -> (Result<ExecutionResult, ExecutionError>, usize) {
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            vec![
+                PathPart::Literal("/search/".to_string()),
+                PathPart::Variable(var.to_string()),
+            ],
+            None,
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        executor.set_variable(var, value);
+        let result = executor.execute(&plan(vec![step])).await;
+        let count = seen.lock().unwrap().len();
+        (result, count)
+    }
+
+    #[tokio::test]
+    async fn layer_one_refuses_a_query_separator_in_a_variable_part() {
+        let payload = format!("2026AA?string={}", "z".repeat(60));
+        let (result, calls) = run_with_var("lookupKey", JsonValue::String(payload.clone())).await;
+        let err = result.expect_err("a query separator in a ${var} part must be refused");
+        let rendered = err.to_string();
+        assert_eq!(
+            calls, 0,
+            "no upstream request may be dispatched: {rendered}"
+        );
+        assert!(
+            rendered.contains("lookupKey"),
+            "a Variable part's refusal names its identifier, which is what proves \
+             the refusal came from LAYER 1 and not from the composed check: {rendered}"
+        );
+        assert!(
+            !rendered.contains("2026AA") && !rendered.contains('?'),
+            "the refusal must carry no byte of the value: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn layer_one_refuses_parent_traversal_in_a_variable_part() {
+        let (result, calls) =
+            run_with_var("lookupKey", JsonValue::String("../etc".to_string())).await;
+        let rendered = result
+            .expect_err("parent traversal in a ${var} part must be refused")
+            .to_string();
+        assert_eq!(
+            calls, 0,
+            "no upstream request may be dispatched: {rendered}"
+        );
+        assert!(rendered.contains("lookupKey"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn layer_one_refuses_an_over_cap_variable_part() {
+        let over = "a".repeat(crate::PLACEHOLDER_MAX_LENGTH + 1);
+        let (result, calls) = run_with_var("lookupKey", JsonValue::String(over)).await;
+        let rendered = result
+            .expect_err("an over-cap ${var} part must be refused")
+            .to_string();
+        assert_eq!(
+            calls, 0,
+            "no upstream request may be dispatched: {rendered}"
+        );
+        assert!(rendered.contains("lookupKey"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn layer_one_refuses_a_query_separator_in_an_expression_part() {
+        // An Expression part has no name, and a rendering of the expression body
+        // could itself contain caller text — so the refusal must use a FIXED
+        // positional descriptor and never interpolate either one.
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            vec![
+                PathPart::Literal("/search/".to_string()),
+                PathPart::Expression(ValueExpr::PropertyAccess {
+                    object: Box::new(ValueExpr::Variable("holder".to_string())),
+                    property: "secretField".to_string(),
+                }),
+            ],
+            None,
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        executor.set_variable(
+            "holder",
+            serde_json::json!({ "secretField": "2026AA?string=payload" }),
+        );
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("a query separator in an ${expr} part must be refused")
+            .to_string();
+        assert_eq!(seen.lock().unwrap().len(), 0, "{rendered}");
+        assert!(
+            rendered.contains("path expression"),
+            "an Expression part uses a fixed positional descriptor: {rendered}"
+        );
+        for forbidden in ["2026AA", "payload", "secretField", "holder", "?"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "the refusal must carry neither the evaluated value nor a rendering \
+                 of the expression body; found {forbidden:?} in {rendered:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn layer_one_accepts_a_literal_only_template_including_slashes() {
+        // Literal parts are the SCRIPT's own compiled text, not caller-substituted
+        // data. Flooring them would refuse every legitimate multi-segment template.
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(literal("/Line/Mode/tube/Status"), None);
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect("a literal-only template with slashes must still resolve");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/Line/Mode/tube/Status");
+    }
+}
+
+/// LAYER-2 `{key}` placeholder resolution, moved ahead of dispatch by D-09.
+#[cfg(test)]
+mod layer_two {
+    use super::d09_support::{get_step, literal, plan, RecordingHttp};
+    use super::*;
+
+    async fn run(
+        path: &str,
+        body: JsonValue,
+    ) -> (
+        Result<ExecutionResult, ExecutionError>,
+        Vec<super::d09_support::Seen>,
+    ) {
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(literal(path), Some(body));
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let result = executor.execute(&plan(vec![step])).await;
+        let seen = seen.lock().unwrap().clone();
+        (result, seen)
+    }
+
+    #[tokio::test]
+    async fn layer_two_substitutes_and_removes_the_consumed_key_from_the_body() {
+        let (result, seen) = run("/users/{v}", serde_json::json!({"v": "7", "q": "keep"})).await;
+        result.expect("a conforming placeholder must resolve");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/users/7");
+        assert_eq!(
+            seen[0].body,
+            Some(serde_json::json!({"q": "keep"})),
+            "the path-consumed key must not also reach the body"
+        );
+    }
+
+    /// The `# Ordering` invariant on [`resolve_layer_two_placeholders`], asserted
+    /// end-to-end: "a value that itself contains `{`/`}` cannot manufacture a
+    /// placeholder for a later key to fill."
+    ///
+    /// It did NOT hold while PASS 2 was a sequence of `String::replace` calls over a
+    /// progressively substituted string — `a`'s literal `{b}` was expanded by the
+    /// next iteration, composing `/p/xzzzy/q/zzz`. Nothing caught it: `{`/`}` are
+    /// not denied bytes, so `x{b}y` passes the per-value floor, and a MANUFACTURED
+    /// placeholder leaves no residual brace for `ResolvedPath::from_checked` to
+    /// refuse. `apply_substitutions`' single scan over the TEMPLATE is what makes
+    /// the claim true; this row is what keeps it true.
+    #[tokio::test]
+    async fn layer_two_value_cannot_manufacture_a_placeholder_for_a_later_key() {
+        let (result, seen) = run(
+            "/p/{a}/q/{b}",
+            serde_json::json!({"a": "x{b}y", "b": "zzz"}),
+        )
+        .await;
+        let rendered = result
+            .expect_err("a value's literal `{b}` must never be expanded as a placeholder")
+            .to_string();
+        assert!(
+            seen.is_empty(),
+            "no upstream request may be dispatched: {rendered}"
+        );
+        // `a`'s `{b}` survives PASS 2 as a LITERAL, so the composed string still
+        // carries a brace and `ResolvedPath::from_checked` refuses it as an
+        // unsubstituted placeholder. Under the old sequential `String::replace` the
+        // brace was CONSUMED — composing `/p/xzzzy/q/zzz`, with `b`'s value inside
+        // `a`'s segment and nothing left for the composed check to refuse. Turning a
+        // silent injection into a refusal is the point.
+        assert!(
+            !rendered.contains("zzz"),
+            "the refusal must carry no byte of any value: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn layer_two_conforming_call_produces_exactly_one_request() {
+        let (result, seen) = run("/users/{v}", serde_json::json!({"v": "ada"})).await;
+        result.expect("a conforming placeholder must resolve");
+        assert_eq!(seen.len(), 1, "exactly one upstream request");
+        assert_eq!(seen[0].method, "GET");
+        assert_eq!(seen[0].path, "/users/ada");
+    }
+
+    #[tokio::test]
+    async fn layer_two_refuses_a_query_separator_in_a_placeholder_value() {
+        let payload = format!("2026AA?string={}", "z".repeat(60));
+        let (result, seen) = run("/search/{v}", serde_json::json!({"v": payload})).await;
+        let rendered = result
+            .expect_err("a query separator in a {key} value must be refused")
+            .to_string();
+        assert!(
+            seen.is_empty(),
+            "no upstream request may be dispatched: {rendered}"
+        );
+        assert!(
+            !rendered.contains("2026AA") && !rendered.contains('?'),
+            "the refusal must carry no byte of the value: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn layer_two_refuses_parent_traversal_in_a_placeholder_value() {
+        let (result, seen) = run("/files/{v}", serde_json::json!({"v": "../../etc/passwd"})).await;
+        let rendered = result
+            .expect_err("parent traversal in a {key} value must be refused")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+        assert!(!rendered.contains("passwd"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn layer_two_refuses_an_object_valued_placeholder_naming_the_key_only() {
+        // Preserves the WR-03 rule the toolkit's `scalar_str` used to apply, now
+        // that resolution has moved up.
+        let (result, seen) = run(
+            "/users/{userId}",
+            serde_json::json!({"userId": {"nested": [1, 2]}}),
+        )
+        .await;
+        let rendered = result
+            .expect_err("a non-scalar {key} value must be refused")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+        assert!(rendered.contains("userId"), "must name the key: {rendered}");
+        for forbidden in ['{', '[', '"'] {
+            assert!(
+                !rendered.contains(forbidden),
+                "must not echo JSON: {rendered}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn layer_two_refuses_an_unsubstituted_placeholder_before_dispatch() {
+        // No body key matches `{missing}`, so the placeholder survives. It must be
+        // refused rather than sent upstream as literal braces.
+        let (result, seen) = run("/users/{missing}", serde_json::json!({"other": "x"})).await;
+        let rendered = result
+            .expect_err("an unsubstituted placeholder must be refused")
+            .to_string();
+        assert!(
+            seen.is_empty(),
+            "literal braces must never reach the wire: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn layer_two_aborts_before_any_substitution_reaches_a_request() {
+        // Ordering: one conforming value and one refused value in the same path.
+        // The refusal must abort the step, not dispatch a half-substituted path.
+        let (result, seen) = run(
+            "/a/{good}/b/{bad}",
+            serde_json::json!({"good": "ok", "bad": "../escape"}),
+        )
+        .await;
+        let rendered = result
+            .expect_err("a refusal on any placeholder aborts the step")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+    }
+}
+
+/// The COMPOSED path check — the only check that can see an adjacency.
+///
+/// Per-value checking is insufficient BY CONSTRUCTION: 180 plus 200 code points
+/// compose to an over-cap segment and `.` plus `.` composes to a traversal, from
+/// contributions that each pass on their own (T-128-20b).
+#[cfg(test)]
+mod composition {
+    use super::d09_support::{get_step, plan, RecordingHttp};
+    use super::*;
+
+    #[tokio::test]
+    async fn composition_refuses_two_adjacent_values_over_the_cap_that_each_pass_alone() {
+        let first = "a".repeat(180);
+        let second = "b".repeat(200);
+
+        // HALF ONE — each value passes `validate_path_placeholder` in isolation.
+        // Without this assertion the test would still pass with the composed check
+        // deleted, because some other rule could be doing the refusing.
+        let rules = crate::PlaceholderRules::default();
+        crate::validate_path_placeholder("a", &first, &rules)
+            .expect("180 code points is under the cap and must pass alone");
+        crate::validate_path_placeholder("b", &second, &rules)
+            .expect("200 code points is under the cap and must pass alone");
+
+        // HALF TWO — composed, the same two values are refused.
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            super::d09_support::literal("/search/{a}{b}"),
+            Some(serde_json::json!({"a": first, "b": second})),
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("380 composed code points exceed the cap and must be refused")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+        assert!(
+            !rendered.contains("aaaa") && !rendered.contains("bbbb"),
+            "the composed refusal must carry no byte of either value: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn composition_refuses_traversal_assembled_from_unchecked_literal_parts() {
+        // The ISOLATING row. `PathPart::Literal` parts are deliberately NOT
+        // floored, so NO per-value check runs here at all — the refusal can only
+        // come from the composed check. This is the row that fails if
+        // `validate_resolved_path` is removed.
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            vec![
+                PathPart::Literal("/a/.".to_string()),
+                PathPart::Literal(".".to_string()),
+                PathPart::Literal("/b".to_string()),
+            ],
+            None,
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("a composed `..` segment must be refused")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn composition_refuses_two_adjacent_single_dot_placeholders() {
+        // The change request's row. After plan 02's single-dot floor this is
+        // refused TWICE over — once per value, once composed — so it is the
+        // `…_unchecked_literal_parts` sibling above that isolates the mechanism.
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            super::d09_support::literal("/a/{x}{y}/b"),
+            Some(serde_json::json!({"x": ".", "y": "."})),
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("`.` + `.` composes to traversal and must be refused")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn composition_refuses_a_mixed_layer_one_and_layer_two_over_cap_segment() {
+        // One `${var}` part and one `{key}` placeholder adjacent in the SAME
+        // segment. Neither layer alone can see this composition.
+        let first = "a".repeat(180);
+        let second = "b".repeat(200);
+        let rules = crate::PlaceholderRules::default();
+        crate::validate_path_placeholder("lookupKey", &first, &rules)
+            .expect("the layer-1 contribution passes alone");
+        crate::validate_path_placeholder("b", &second, &rules)
+            .expect("the layer-2 contribution passes alone");
+
+        let (http, seen) = RecordingHttp::new();
+        let step = get_step(
+            vec![
+                PathPart::Literal("/search/".to_string()),
+                PathPart::Variable("lookupKey".to_string()),
+                PathPart::Literal("{b}".to_string()),
+            ],
+            Some(serde_json::json!({"b": second})),
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        executor.set_variable("lookupKey", JsonValue::String(first));
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("a mixed-layer composed segment over the cap must be refused")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+    }
+}
+
+/// RESEARCH Pitfall 7 / SC-7 — no refusal reaching a client carries the path.
+///
+/// The module is named for the invariant so the plan's
+/// `executor::error_does_not_echo_path` verify selection resolves.
+#[cfg(test)]
+mod error_does_not_echo_path {
+    use super::d09_support::{get_step, literal, plan, FailingHttp};
+    use super::*;
+
+    #[tokio::test]
+    async fn error_does_not_echo_path_when_the_executor_itself_fails() {
+        let step = get_step(literal("/secret/inventory/endpoint"), None);
+        let mut executor = PlanExecutor::new(FailingHttp, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("the failing executor must surface an error")
+            .to_string();
+        assert!(
+            rendered.contains("GET"),
+            "the wrap must still name the method: {rendered}"
+        );
+        assert!(
+            rendered.contains("simulated transport failure"),
+            "the wrap must still carry the underlying cause: {rendered}"
+        );
+        assert!(
+            !rendered.contains("/secret/inventory/endpoint"),
+            "the wrap must NOT re-attach the resolved path: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_does_not_echo_path_in_the_parallel_arm() {
+        let step = PlanStep::ParallelApiCalls {
+            result_var: "out".to_string(),
+            calls: vec![(
+                "t0".to_string(),
+                "GET".to_string(),
+                PathTemplate {
+                    parts: literal("/secret/inventory/endpoint"),
+                },
+                None,
+            )],
+        };
+        let mut executor = PlanExecutor::new(FailingHttp, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("the failing executor must surface an error")
+            .to_string();
+        assert!(rendered.contains("GET"), "{rendered}");
+        assert!(
+            !rendered.contains("/secret/inventory/endpoint"),
+            "the parallel arm's wrap must NOT re-attach the resolved path: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_does_not_echo_path_on_a_refused_placeholder() {
+        let (http, seen) = super::d09_support::RecordingHttp::new();
+        let step = get_step(
+            literal("/inventory/{sku}"),
+            Some(serde_json::json!({"sku": "../../etc/shadow"})),
+        );
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let rendered = executor
+            .execute(&plan(vec![step]))
+            .await
+            .expect_err("a refused placeholder must error")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+        for forbidden in ["shadow", "/inventory/", ".."] {
+            assert!(
+                !rendered.contains(forbidden),
+                "a refusal carries neither the value nor the resolved path; \
+                 found {forbidden:?} in {rendered:?}"
+            );
+        }
+    }
+}
+
+/// The `?` narrowing, pinned in BOTH directions so it cannot become a hole.
+///
+/// `ResolvedPath::from_checked` calls core's `validate_resolved_target`, which
+/// splits at the first `?` and applies the full rule set to each side, exempting
+/// exactly one author-written query separator.
+/// These rows assert what that buys AND everything it does not relax. A narrowing
+/// with only accept-rows is indistinguishable from a deleted check.
+#[cfg(test)]
+mod query_separator {
+    use super::d09_support::{get_step, literal, plan, RecordingHttp};
+    use super::*;
+
+    async fn run(
+        parts: Vec<PathPart>,
+        body: Option<JsonValue>,
+    ) -> (
+        Result<ExecutionResult, ExecutionError>,
+        Vec<super::d09_support::Seen>,
+    ) {
+        let (http, seen) = RecordingHttp::new();
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        let result = executor.execute(&plan(vec![get_step(parts, body)])).await;
+        let seen = seen.lock().unwrap().clone();
+        (result, seen)
+    }
+
+    // ---- ACCEPTED: the separator an author wrote into a literal ----
+
+    #[tokio::test]
+    async fn query_separator_accepts_an_author_written_query_string() {
+        // The row the operator's narrowing exists for: a `?` in the script's own
+        // literal path text reaches the wire instead of being refused.
+        let (result, seen) = run(literal("/Line/Mode/tube/Status?detail=true"), None).await;
+        result.expect("an author-written query string must be accepted");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/Line/Mode/tube/Status?detail=true");
+    }
+
+    #[tokio::test]
+    async fn query_separator_accepts_a_literal_query_alongside_a_floored_placeholder() {
+        // The separator is author-written; the `{v}` value still goes through the
+        // per-value floor. Both mechanisms coexist on one path.
+        let (result, seen) = run(
+            literal("/content/{version}/CUI?string=headache"),
+            Some(serde_json::json!({"version": "current"})),
+        )
+        .await;
+        result.expect("an author query plus a conforming placeholder must be accepted");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].path, "/content/current/CUI?string=headache");
+    }
+
+    #[tokio::test]
+    async fn query_separator_accepts_a_graph_style_dollar_projection() {
+        // The exact shape the in-tree Contoso M365 scripts author.
+        let (result, seen) = run(
+            literal("/drives/D/items/I/workbook/worksheets/Customers/range(address='A2:D7')?$select=values"),
+            None,
+        )
+        .await;
+        result.expect("a Graph $select projection in the path must be accepted");
+        assert_eq!(seen.len(), 1);
+        assert!(
+            seen[0].path.ends_with("?$select=values"),
+            "{:?}",
+            seen[0].path
+        );
+    }
+
+    // ---- STILL REFUSED: everything the split does not relax ----
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_traversal_in_the_path_portion() {
+        // `/a/../b?x=1` — the traversal rule applies to the whole string, so
+        // appending a query does NOT launder a traversal past the composed check.
+        let (result, seen) = run(literal("/a/../b?x=1"), None).await;
+        let rendered = result
+            .expect_err("traversal must still be refused when a query follows it")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_traversal_in_the_query_portion() {
+        let (result, seen) = run(literal("/search?next=../../etc/passwd"), None).await;
+        let rendered = result
+            .expect_err("traversal inside the query portion must still be refused")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+        assert!(!rendered.contains("passwd"), "{rendered}");
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_a_control_byte_in_the_query_portion() {
+        // Percent-encoded NUL, so the decode-once pass is what has to catch it.
+        let (result, seen) = run(literal("/search?x=a%00b"), None).await;
+        assert!(
+            result.is_err(),
+            "a control byte in the query portion must still be refused"
+        );
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_an_over_cap_query_portion() {
+        let long = "z".repeat(crate::PLACEHOLDER_MAX_LENGTH + 1);
+        let (result, seen) = run(literal(&format!("/search?q={long}")), None).await;
+        assert!(
+            result.is_err(),
+            "an over-cap query portion must still be refused"
+        );
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_a_second_question_mark() {
+        // Only the FIRST `?` is split off, so the query portion faces the
+        // unmodified rule — which denies `?`. One exemption, not a general licence.
+        let (result, seen) = run(literal("/search?a=1?b=2"), None).await;
+        assert!(result.is_err(), "a second `?` must still be refused");
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_an_empty_query_portion() {
+        // A dangling `/x?` is a trailing separator — the same class as a trailing
+        // `/`, which plan 02 refuses deliberately.
+        let (result, seen) = run(literal("/search?"), None).await;
+        assert!(result.is_err(), "a dangling `?` must still be refused");
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_a_fragment_marker() {
+        // The split is `?`-only. `#` is never sent to a server and stays denied.
+        let (result, seen) = run(literal("/search#frag"), None).await;
+        assert!(result.is_err(), "a fragment marker must still be refused");
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_an_injected_separator_from_a_value() {
+        // THE row that proves the narrowing is not a hole. The template carries an
+        // author-written `?` (now legal) AND a placeholder value carries an
+        // injected one (still refused, by the per-value floor — which is the
+        // mechanism the narrowing relies on for its safety argument).
+        let payload = format!("2026AA?string={}", "z".repeat(60));
+        let (result, seen) = run(
+            literal("/search/{v}?detail=true"),
+            Some(serde_json::json!({"v": payload})),
+        )
+        .await;
+        let rendered = result
+            .expect_err("an injected `?` in a VALUE must still be refused")
+            .to_string();
+        assert!(seen.is_empty(), "{rendered}");
+        assert!(
+            !rendered.contains("2026AA") && !rendered.contains('?'),
+            "the refusal must still carry no byte of the value: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_separator_still_refuses_an_injected_separator_from_a_layer_one_variable() {
+        // Same boundary, layer-1 route: `${v}` rather than `{v}`.
+        let (http, seen) = RecordingHttp::new();
+        let mut executor = PlanExecutor::new(http, ExecutionConfig::default());
+        executor.set_variable(
+            "lookupKey",
+            JsonValue::String("2026AA?string=x".to_string()),
+        );
+        let rendered = executor
+            .execute(&plan(vec![get_step(
+                vec![
+                    PathPart::Literal("/search/".to_string()),
+                    PathPart::Variable("lookupKey".to_string()),
+                    PathPart::Literal("?detail=true".to_string()),
+                ],
+                None,
+            )]))
+            .await
+            .expect_err("an injected `?` in a ${var} part must still be refused")
+            .to_string();
+        assert!(seen.lock().unwrap().is_empty(), "{rendered}");
+        assert!(rendered.contains("lookupKey"), "{rendered}");
     }
 }

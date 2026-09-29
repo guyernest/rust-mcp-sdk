@@ -70,7 +70,8 @@ pub mod http_middleware;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod middleware_executor;
 // Warn-only emit-time validation of `structuredContent` against a declared
-// `outputSchema` (no-op unless the `validation` feature is enabled).
+// `outputSchema` (no-op unless the `schema-validation` feature is enabled —
+// Phase 128 D-04 split that out of `validation`, which is now its superset).
 //
 // Deliberately NOT gated by target: the module compiles everywhere so dispatcher
 // call sites stay plain one-liners. The second `#[cfg]` widens the module's
@@ -83,7 +84,7 @@ pub mod middleware_executor;
 #[cfg(not(feature = "fuzzing"))]
 pub(crate) mod output_validation;
 /// Warn-only emit-time validation of `structuredContent` against a declared
-/// `outputSchema` (no-op unless the `validation` feature is enabled).
+/// `outputSchema` (no-op unless the `schema-validation` feature is enabled).
 #[cfg(feature = "fuzzing")]
 pub mod output_validation;
 /// Concrete `PeerHandle` implementation delegating to the
@@ -95,6 +96,16 @@ pub mod preset;
 /// Progress reporting support for long-running operations.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod progress;
+/// Runtime enforcement of a tool's declared `inputSchema` at `tools/call` time
+/// (Phase 128, D-01).
+///
+/// The input counterpart to `output_validation`, and deliberately a SEPARATE
+/// module rather than a widening of it: inputs REFUSE where outputs only warn,
+/// inputs pin Draft 2020-12 on both protocol eras where outputs keep v1's
+/// `$schema` auto-detect (D-02), and input refusals are rendered value-free
+/// where the output diagnostic echoes the offending value.
+#[cfg(feature = "schema-validation")]
+pub mod schema_validation;
 // Server-owned `requestState` AEAD continuation tokens (Phase 113, HTTP-02).
 //
 // D-14 locks MRTR AEAD to native + `streamable-http`: `ring` is only enabled by
@@ -202,7 +213,25 @@ pub mod skills;
 pub use skills::{Skill, SkillReference, Skills};
 
 /// Validation helpers for typed tools.
+///
+/// DEPRECATED and HIDDEN (Phase 128, D-03). Eleven public validators with zero
+/// callers anywhere in `src/` — a surface the codebase map advertised as the live
+/// input-validation path while nothing in the SDK ever called it. The live paths
+/// are `pmcp::server::schema_validation::validate_input` for config-driven tools
+/// and the `new_validated` constructors on `TypedTool` / `TypedSyncTool` for
+/// hand-written ones. (Plain backticks, not intra-doc links: this module carries
+/// BOTH an outer doc here and inner `//!` docs in `validation.rs`, and rustdoc
+/// resolves the combined set in the parent module's scope.)
+///
+/// Deprecated rather than deleted on purpose: removing a `pub mod` from the 2.x
+/// line is a semver break, and CLAUDE.md's compat philosophy keeps core additive
+/// when that is cheap. Removal is booked against the next major.
 #[cfg(not(target_arch = "wasm32"))]
+#[deprecated(
+    since = "2.21.0",
+    note = "no caller in the SDK; use `pmcp::server::schema_validation::validate_input` for config-driven tools, or `TypedTool::new_validated` / `TypedSyncTool::new_validated` for hand-written ones. Removal is booked against the next major (3.0)."
+)]
+#[doc(hidden)]
 pub mod validation;
 
 /// Schema utilities for normalizing and inlining JSON schemas.

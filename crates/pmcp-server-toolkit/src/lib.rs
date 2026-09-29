@@ -26,6 +26,28 @@
 //! `.planning/phases/83-toolkit-core-lift-pmcp-server-toolkit/` design log for
 //! the architectural responsibility map and review notes.
 
+/// This toolkit build's own version, captured at compile time.
+///
+/// # Why this is public API (Phase 128, SC-3)
+///
+/// `ServerConfig::lint()` is the ONE implementation of the input-validation
+/// review rules, and both `cargo pmcp validate config` and a running server
+/// report from it. That makes the two surfaces agree for a **same-version**
+/// pair and says nothing about a mixed one: a config that lints clean under the
+/// toolkit a reviewer's CLI was BUILT against may lint dirty under the toolkit
+/// the deployed server RUNS. A clean lint is therefore a version-scoped
+/// statement, never an absolute guarantee about production.
+///
+/// So the lint surface prints which toolkit performed it, and this constant is
+/// what it prints. It is `env!("CARGO_PKG_VERSION")` rather than a string read
+/// from a manifest on disk, so it names the crate that is actually LINKED in and
+/// cannot drift from it.
+///
+/// Deliberately NOT a hard error on mismatch: the CLI has no way to know which
+/// toolkit the deployment will run, so refusing would be refusing on a guess.
+/// The operator gets the number and can compare it to what they deploy.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod auth;
 pub mod builder_ext;
 pub mod config;
@@ -48,6 +70,7 @@ pub mod config;
 pub mod env_ref;
 
 pub mod error;
+pub mod policy;
 pub mod prompts;
 pub mod resources;
 pub mod secrets;
@@ -137,6 +160,15 @@ pub use crate::tools::synthesize_from_config_with_connector;
 #[cfg(feature = "http")]
 pub use crate::tools::synthesize_from_config_with_http_connector;
 
+// Phase 128 E2 — the hooks-carrying siblings of the two entry points above, at the
+// crate root for the same reason the originals are: a consumer's imports are ONE
+// crate-root block, and an integration test is an external consumer.
+#[cfg(feature = "http")]
+pub use crate::tools::synthesize_from_config_with_http_connector_and_hooks;
+pub use crate::tools::{
+    synthesize_from_config_and_hooks, synthesize_from_config_with_connector_and_hooks,
+};
+
 // Phase 90 (OAPI-02b / D-01 / D-02) — single-call + SCRIPT HTTP synthesizer.
 // Gated `openapi-code-mode` (the umbrella that forwards
 // `pmcp-code-mode/js-runtime`). Adds the shared `HttpCodeExecutor` + bounds so a
@@ -144,6 +176,13 @@ pub use crate::tools::synthesize_from_config_with_http_connector;
 // JS over the SAME engine Code Mode uses (one engine, two surfaces).
 #[cfg(feature = "openapi-code-mode")]
 pub use crate::tools::synthesize_from_config_with_http_connector_and_scripts;
+
+// Phase 128 E2 — the hooks-carrying variant `pmcp-openapi-server`'s `build_server`
+// calls. Re-exported at the crate root alongside the variant above, because that
+// binary is a DIFFERENT crate and this is its only route to registering an
+// `ArgumentValidator` (T-128-39b).
+#[cfg(feature = "openapi-code-mode")]
+pub use crate::tools::synthesize_from_config_with_http_connector_and_scripts_and_hooks;
 
 // Builder extensions (TKIT-08) — Plan 08 headline re-export per D-15 + review R3.
 // The trait method set is the Shape C ≤15-line `main.rs` surface; lifting it
@@ -159,10 +198,43 @@ pub use crate::builder_ext::ServerBuilderExt;
 // contract. `MockSqlConnector` stays `pub(crate)` — it's test-only.
 pub use crate::sql::{ConnectorError, Dialect, SqlConnector};
 
+// Phase 128 E1/E2 escape hatches — the FULL registration surface at the crate
+// root, deliberately not feature-gated. A toolkit example's imports are ONE
+// crate-root block (D-15), and this is the re-export that keeps it so: if an
+// example cannot name `RequestPolicy` this way the fix is here, never a
+// module-path-qualified import in the example.
+//
+// `policy` carries no `#[cfg]` because `ToolkitHooks` is a parameter of the
+// always-present `ServerBuilderExt::try_tools_from_config_with`; gating it on
+// `http` would make the registration surface exist only in HTTP builds while the
+// E2 half has nothing to do with HTTP.
+/// The `#[async_trait]` attribute, re-exported so an out-of-crate implementor of
+/// [`RequestPolicy`] (or [`http::auth::HttpAuthProvider`]) does not have to add an
+/// `async-trait` dependency of its own — and, more importantly, cannot end up on a
+/// DIFFERENT version of it than the trait was declared with, which produces a
+/// signature-mismatch error that reads as a lifetime bug.
+pub use async_trait::async_trait;
+
+pub use crate::policy::{
+    emit_validation_report, render_validation_report, ArgumentRefusal, ArgumentValidator,
+    ArgumentValidators, OutboundRequest, PolicyRefusal, ReportLevel, ReportLine, RequestPolicy,
+    ToolkitHooks,
+};
+
 // HTTP connector (Phase 90 OAPI-01) — crate-root re-export of the headline
 // types, mirroring the SQL connector re-export. Feature-gated on `http`.
 #[cfg(feature = "http")]
 pub use crate::http::{HttpConnector, HttpConnectorError, Operation};
+
+// Phase 128 — the rest of what an E1 example needs to build a governed connector in
+// ONE crate-root import block (D-15). `HttpClient` is the connector a
+// `RequestPolicy` is attached to, and the auth pair is what makes the
+// "the policy never sees the credential" demonstration meaningful: without a real
+// credential in play, a clean scan proves nothing.
+#[cfg(feature = "http")]
+pub use crate::http::auth::{create_auth_provider, AuthConfig};
+#[cfg(feature = "http")]
+pub use crate::http::HttpClient;
 
 // Workbook served-tool boot surface (Phase 92, WBSV-01/08/09 / D-11) — the
 // FULL consumer-side contract at the crate root so Shape A/B servers register a

@@ -33,7 +33,8 @@
 //! 1. `cargo metadata --no-deps` → every workspace package's DECLARED
 //!    dependency, with `rename`, `optional`, `uses_default_features` and
 //!    `features` as structured fields;
-//! 2. `cargo metadata --features validation` → the RESOLVED graph's
+//! 2. `cargo metadata --features validation` — and, since phase 128 D-04 split
+//!    the feature, `--features schema-validation` as well → the RESOLVED graph's
 //!    `resolve.nodes[].features`, which is the definitive unification answer and
 //!    the only layer that sees a dev-dependency or an example turning a feature
 //!    on.
@@ -125,8 +126,18 @@ const RETRIEVER_NEEDLES: &[&str] = &[
     "Retriever",
 ];
 
-/// The two identifiers that construct a `jsonschema` validator.
-const VALIDATOR_NEEDLES: &[&str] = &["validator_for", "draft202012"];
+/// The identifiers that construct a `jsonschema` validator, in every spelling the
+/// crate offers.
+///
+/// `validator_for` is the auto-detecting entry point and `draft202012` the
+/// pinned-module one. `jsonschema::options` is the BUILDER form, and it was added
+/// by Phase 128 CR-04: `schema_validation::compile_input_2020_12` builds through
+/// `jsonschema::options().with_draft(Draft::Draft202012)` and matched neither of
+/// the other two needles, so the whole point of the accounting test below — that
+/// every validator construction has to state its dialect policy — was invisible to
+/// it for this phase's own validator. The site was not unaccounted-for; it was
+/// unseen, which is worse, because the test passed.
+const VALIDATOR_NEEDLES: &[&str] = &["validator_for", "draft202012", "jsonschema::options"];
 
 /// The remedy every SEP-2106 failure message points at.
 const SEP_2106_WHY: &str = "\
@@ -776,19 +787,30 @@ struct ResolvedNode {
     id: String,
 }
 
-/// Every resolved [`JSONSCHEMA`] node, with the features unification settled on.
+/// Every resolved [`JSONSCHEMA`] node under the `validation` feature.
 ///
 /// This is the definitive answer: `.resolve.nodes[].features` is what will
 /// actually be compiled, after every workspace member, example, dev-dependency
 /// and transitive dependency has had its say.
 fn resolved_jsonschema_nodes() -> Vec<ResolvedNode> {
-    let meta = cargo_metadata(&[
-        "metadata",
-        "--format-version",
-        "1",
-        "--features",
-        "validation",
-    ]);
+    resolved_jsonschema_nodes_for(VALIDATION_FEATURE)
+}
+
+/// The feature that has always gated output validation.
+const VALIDATION_FEATURE: &str = "validation";
+
+/// The feature phase 128 D-04 split out of [`VALIDATION_FEATURE`].
+///
+/// `validation` is now redefined as `["schema-validation", "dep:garde"]`, so it
+/// is a strict SUPERSET. A consumer that enables only `schema-validation` gets
+/// the same `jsonschema` resolver-feature exposure — which is why the fence needs
+/// an arm under this name too (RESEARCH Finding 8b).
+const SCHEMA_VALIDATION_FEATURE: &str = "schema-validation";
+
+/// Every resolved [`JSONSCHEMA`] node under `feature`, with the features
+/// unification settled on.
+fn resolved_jsonschema_nodes_for(feature: &str) -> Vec<ResolvedNode> {
+    let meta = cargo_metadata(&["metadata", "--format-version", "1", "--features", feature]);
     let packages = meta["packages"]
         .as_array()
         .expect("`cargo metadata` always reports a `packages` array");
@@ -801,7 +823,7 @@ fn resolved_jsonschema_nodes() -> Vec<ResolvedNode> {
         .expect("a resolving `cargo metadata` run always reports `resolve.nodes`");
     assert!(
         !nodes.is_empty(),
-        "`cargo metadata --features validation` resolved ZERO nodes; the unification check would \
+        "`cargo metadata --features {feature}` resolved ZERO nodes; the unification check would \
          pass over nothing"
     );
     let mut out = Vec::new();
@@ -934,25 +956,48 @@ fn v2_schema_tripwires_no_manifest_declares_jsonschema_with_default_features() {
 /// The RESOLVED graph — the definitive unification answer.
 #[test]
 fn v2_schema_tripwires_the_resolved_graph_enables_no_jsonschema_resolver_feature() {
-    let nodes = resolved_jsonschema_nodes();
+    assert_resolved_graph_enables_no_resolver_feature(VALIDATION_FEATURE);
+}
+
+/// The SAME fence, under the feature name phase 128 D-04 split out.
+///
+/// Additive to the arm above, not a replacement. `validation` is now
+/// `["schema-validation", "dep:garde"]`, so the original arm exercises only the
+/// SUPERSET path: a consumer enabling only `schema-validation` reaches the same
+/// `jsonschema` with nothing watching it. That is the gap RESEARCH Finding 8b
+/// measured, and this is the arm that closes it (T-128-09).
+#[test]
+fn v2_schema_tripwires_the_resolved_graph_enables_no_jsonschema_resolver_feature_under_schema_validation(
+) {
+    assert_resolved_graph_enables_no_resolver_feature(SCHEMA_VALIDATION_FEATURE);
+}
+
+/// The body both arms of the resolver-feature fence share.
+///
+/// Shared rather than restated so the two feature names cannot drift apart —
+/// which is the failure mode that let the split ship with a fence over only one
+/// of them in the first place.
+fn assert_resolved_graph_enables_no_resolver_feature(feature: &str) {
+    let nodes = resolved_jsonschema_nodes_for(feature);
 
     assert_eq!(
         nodes.len(),
         1,
-        "expected EXACTLY ONE resolved `{JSONSCHEMA}` node and found {}: {nodes:#?}.\n  Two nodes \
-         means two copies are compiled into the same graph, which is the state 115-03's \
-         workspace-wide bump to a single `0.49` requirement exists to prevent: one validator \
-         could then be pinned and the other not.",
+        "expected EXACTLY ONE resolved `{JSONSCHEMA}` node under `--features {feature}` and found \
+         {}: {nodes:#?}.\n  Two nodes means two copies are compiled into the same graph, which is \
+         the state 115-03's workspace-wide bump to a single `0.49` requirement exists to prevent: \
+         one validator could then be pinned and the other not.",
         nodes.len()
     );
 
     for node in &nodes {
         assert!(
             node.features.is_empty(),
-            "{SEP_2106_WHY}\n  RESOLVED node `{}` compiles with features {:?}, not [].\n  This is \
-             the ONLY check that sees the effect of a DEV-dependency, an example, or a sibling \
-             workspace crate turning a feature on: unification is graph-wide, so the declared \
-             dependency check above would still pass while the retriever is compiled in.",
+            "{SEP_2106_WHY}\n  Under `--features {feature}`, RESOLVED node `{}` compiles with \
+             features {:?}, not [].\n  This is the ONLY check that sees the effect of a \
+             DEV-dependency, an example, or a sibling workspace crate turning a feature on: \
+             unification is graph-wide, so the declared dependency check above would still pass \
+             while the retriever is compiled in.",
             node.id,
             node.features
         );
@@ -973,18 +1018,26 @@ fn v2_schema_tripwires_the_resolved_graph_enables_no_jsonschema_resolver_feature
 fn v2_schema_tripwires_the_manifest_scan_is_not_vacuous() {
     let declared = declared_jsonschema_deps();
     assert!(
-        declared.len() >= 3,
-        "expected at least three DECLARED `{JSONSCHEMA}` dependencies and found {}: {declared:#?}\
+        declared.len() >= 2,
+        "expected at least two DECLARED `{JSONSCHEMA}` dependencies and found {}: {declared:#?}\
          \n  Without this the two checks above would pass over an empty set, which is a green run \
          over nothing rather than a clean bill of health.",
         declared.len()
     );
 
+    // Floor lowered 3 -> 2 and `pmcp-server-toolkit` dropped from the required list by
+    // phase 128 plan 01: the toolkit's own optional `jsonschema` edge
+    // (`crates/pmcp-server-toolkit/Cargo.toml`) was REMOVED when `input-validation` became a
+    // forward to `pmcp/schema-validation` (D-01 / SC-1 — input and output must not be able to
+    // validate under different dialects, which a second `jsonschema` path in the toolkit
+    // permits). Two is the real count, not a number chosen to go green: this assertion is the
+    // positive control for the declared- and resolved-scan checks above, so its floor must
+    // equal the measured topology or it silently stops guarding them.
     let packages: BTreeSet<&str> = declared.iter().map(|dep| dep.package.as_str()).collect();
-    for required in ["pmcp", "pmcp-agent", "pmcp-server-toolkit"] {
+    for required in ["pmcp", "pmcp-agent"] {
         assert!(
             packages.contains(required),
-            "`{required}` declares `{JSONSCHEMA}` (measured 2026-08-01) yet the metadata scan did \
+            "`{required}` declares `{JSONSCHEMA}` (measured 2026-09-26) yet the metadata scan did \
              not find it. Observed: {packages:?}.\n  Either the declaration moved — in which case \
              update this list deliberately — or the scan is broken."
         );
@@ -1031,6 +1084,7 @@ fn v2_schema_tripwires_no_source_installs_a_ref_retriever() {
 }
 
 /// Why a `jsonschema` validator construction site is accounted for.
+#[derive(Debug, PartialEq, Eq)]
 enum ValidatorDisposition {
     /// The v2 arm: explicitly pinned to Draft 2020-12 (D-02 / SCHM-01).
     PinnedByPolicy,
@@ -1046,6 +1100,17 @@ struct ValidatorSite {
     function: &'static str,
     hits: usize,
     disposition: ValidatorDisposition,
+    /// The exact token that IMPLEMENTS this site's dialect policy, asserted to be
+    /// present inside `function`'s body.
+    ///
+    /// Per-site rather than per-[`ValidatorDisposition`] since Phase 128 CR-04: two
+    /// sites can both be `PinnedByPolicy` and pin through different idioms —
+    /// `output_validation::compile_2020_12` through the `draft202012` module,
+    /// `schema_validation::compile_input_2020_12` through
+    /// `jsonschema::options().with_draft(…)`. Naming the token that carries the pin
+    /// (`with_draft`, not the builder entry point) is what makes deleting the pin a
+    /// FAILURE rather than a silent policy swap at a constant site count.
+    constructor: &'static str,
     why: &'static str,
 }
 
@@ -1056,30 +1121,53 @@ struct ValidatorSite {
 /// takes, and a file-level or function-level presence check cannot see it.
 const VALIDATOR_SITES: &[ValidatorSite] = &[
     ValidatorSite {
-        file: "src/server/output_validation.rs",
+        file: OUTPUT_VALIDATION,
         function: "compile_2020_12",
         hits: 1,
         disposition: ValidatorDisposition::PinnedByPolicy,
+        constructor: "draft202012",
         why: "The v2 arm. MCP 2026-07-28 pins outputSchema to JSON Schema Draft 2020-12, so this \
               site must construct through `draft202012::new` on a document whose `$schema` has \
               been normalized first — never through the auto-detecting `validator_for`, which \
               would silently honour a tool author's declared dialect instead of the spec's.",
     },
     ValidatorSite {
-        file: "src/server/output_validation.rs",
+        file: OUTPUT_VALIDATION,
         function: "compile_for_era",
         hits: 1,
         disposition: ValidatorDisposition::EraFrozenV1,
+        constructor: "validator_for",
         why: "The v1 arm, deliberately frozen by D-01 at today's behaviour: the dialect is \
               auto-detected from the document's own `$schema` declaration. Changing this site \
               would alter validation outcomes for every existing 2025-11-25 server, which is a \
               breaking change this phase explicitly declined to make.",
     },
     ValidatorSite {
+        file: "src/server/schema_validation.rs",
+        function: "compile_input_2020_12",
+        hits: 1,
+        disposition: ValidatorDisposition::PinnedByPolicy,
+        // NOT `jsonschema::options` — that is only the builder entry point, and it
+        // survives the deletion of the pin. `with_draft` IS the pin (measured:
+        // removing `.with_draft(jsonschema::Draft::Draft202012)` fires nothing else
+        // in the repository).
+        constructor: "with_draft",
+        why: "Phase 128 D-02: tool INPUT schemas pin Draft 2020-12 on BOTH protocol eras, on a \
+              document `normalize_schema_dialect` has already rewritten, and additionally turn \
+              format ASSERTION on (Q1) — which is why inputs have their own compile entry point \
+              instead of sharing `output_validation::compile_2020_12`. `Era` is deliberately not \
+              a parameter here: an era-conditional input dialect would be a distinction that \
+              does not exist. The `.with_draft(Draft::Draft202012)` call is the ONLY thing \
+              pinning it, and deleting that line fires nothing else in the repository — not the \
+              unit tests (their schemas are 2020-12-compatible) and not the fuzz target (its \
+              oracle is provenance-based), so this entry is the pin's only guard.",
+    },
+    ValidatorSite {
         file: "crates/pmcp-agent/src/iteration/decide.rs",
         function: "evaluate_submit_result",
         hits: 1,
         disposition: ValidatorDisposition::OutOfScopeAllowlisted,
+        constructor: "validator_for",
         why: "Out of scope, recorded rather than fixed. This validates an AGENT's submit-result \
               payload against a caller-supplied schema; it is not the MCP outputSchema seam. \
               SCHM-01 scopes to the server output-validation path, and pinning the draft here \
@@ -1165,17 +1253,25 @@ fn v2_schema_tripwires_validator_construction_sites_are_accounted_for() {
         "the `{JSONSCHEMA}` validator construction population changed:{failures}"
     );
 
-    // The v2 arm must construct through the PINNED constructor, and the v1 arm
-    // through the auto-detecting one. A straight swap keeps the counts identical.
-    let pinned = read(OUTPUT_VALIDATION);
-    let stripped = strip(&pinned);
-    let spans = fn_spans(&stripped);
+    // Each site must still IMPLEMENT its recorded dialect policy. A straight swap
+    // of one constructor for another keeps the site count identical, so the
+    // population check above cannot see it.
+    //
+    // Reads `site.file` and `site.constructor` rather than assuming
+    // `OUTPUT_VALIDATION` and deriving the needle from the disposition (Phase 128
+    // CR-04): `schema_validation::compile_input_2020_12` is a THIRD in-scope site,
+    // it lives in a different file, and it pins through `with_draft` rather than
+    // through the `draft202012` module.
     for site in VALIDATOR_SITES {
-        let needle = match site.disposition {
-            ValidatorDisposition::PinnedByPolicy => "draft202012",
-            ValidatorDisposition::EraFrozenV1 => "validator_for",
-            ValidatorDisposition::OutOfScopeAllowlisted => continue,
-        };
+        if matches!(
+            site.disposition,
+            ValidatorDisposition::OutOfScopeAllowlisted
+        ) {
+            continue;
+        }
+        let source = read(site.file);
+        let stripped = strip(&source);
+        let spans = fn_spans(&stripped);
         let Some((_, span)) = spans.iter().find(|(name, _)| name == site.function) else {
             panic!(
                 "`{}` must still exist in {}; the dialect-policy check cannot run over a \
@@ -1185,11 +1281,13 @@ fn v2_schema_tripwires_validator_construction_sites_are_accounted_for() {
         };
         let body = &stripped.text[span.clone()];
         assert!(
-            !token_hits(body, needle).is_empty(),
-            "`{}` no longer constructs through `{needle}`. The dialect policy of that arm was \
-             swapped while the site COUNT stayed the same, which the population check above \
-             cannot see.",
-            site.function
+            !token_hits(body, site.constructor).is_empty(),
+            "`{}` in {} no longer constructs through `{}`. The dialect policy of that site was \
+             swapped or its pin deleted while the site COUNT stayed the same, which the \
+             population check above cannot see.",
+            site.function,
+            site.file,
+            site.constructor
         );
     }
 
@@ -1221,12 +1319,33 @@ fn v2_schema_tripwires_the_source_scan_is_not_vacuous() {
          iterate over an empty map and pass"
     );
 
-    let source = read(OUTPUT_VALIDATION);
-    for needle in VALIDATOR_NEEDLES {
+    // POSITIVE CONTROL, per site rather than per needle. Asserting that
+    // `OUTPUT_VALIDATION` mentions EVERY needle was the wrong shape: it is true only
+    // as long as every needle happens to belong to that one file, so Phase 128
+    // CR-04's `jsonschema::options` needle made it fail for a scan that was working
+    // correctly. Each site's own file must mention its own constructor.
+    for site in VALIDATOR_SITES {
+        let source = read(site.file);
         assert!(
-            source.contains(needle),
-            "{OUTPUT_VALIDATION} no longer mentions `{needle}`; the era-keyed compilation this \
-             file fences has moved and the scan is looking in the wrong place"
+            source.contains(site.constructor),
+            "{} no longer mentions `{}`; the construction `{}` fences has moved and the scan is \
+             looking in the wrong place",
+            site.file,
+            site.constructor,
+            site.function
+        );
+    }
+
+    // And every needle must be live SOMEWHERE, or it is a dead entry that makes the
+    // population scan narrower than it reads.
+    for needle in VALIDATOR_NEEDLES {
+        let matched = workspace_rs_files()
+            .iter()
+            .any(|path| fs::read_to_string(path).is_ok_and(|raw| raw.contains(needle)));
+        assert!(
+            matched,
+            "no workspace source mentions `{needle}`; a needle that matches nothing widens the \
+             population scan on paper only"
         );
     }
 
@@ -1234,6 +1353,22 @@ fn v2_schema_tripwires_the_source_scan_is_not_vacuous() {
         !VALIDATOR_SITES.is_empty(),
         "VALIDATOR_SITES is empty, so the population check passes over nothing"
     );
+
+    // The era-keyed pair this file fences must still be REGISTERED, not merely
+    // present in the tree. `OUTPUT_VALIDATION` is the authority for both entries'
+    // `file` field, so the constant and the allowlist cannot drift apart.
+    for disposition in [
+        ValidatorDisposition::PinnedByPolicy,
+        ValidatorDisposition::EraFrozenV1,
+    ] {
+        assert!(
+            VALIDATOR_SITES
+                .iter()
+                .any(|site| site.file == OUTPUT_VALIDATION && site.disposition == disposition),
+            "{OUTPUT_VALIDATION} must still carry a {disposition:?} entry; the era-keyed \
+             output-validation pair is what SEP-2106 and D-01 are about"
+        );
+    }
     assert!(
         !RETRIEVER_NEEDLES.is_empty() && !RESOLVER_FEATURES.is_empty(),
         "the retriever and resolver-feature needle lists must be non-empty or their scans are \
