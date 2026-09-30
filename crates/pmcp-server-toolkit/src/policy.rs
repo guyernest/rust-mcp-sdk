@@ -32,6 +32,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
@@ -117,6 +118,56 @@ pub struct OutboundRequest<'a> {
     /// `None` for a GET-like request, whose remaining fields have already been
     /// converted into [`Self::query`] by the time the policy runs.
     pub body: Option<&'a Value>,
+
+    /// An opaque identifier for the `tools/call` that produced this request.
+    ///
+    /// **Stable across every request ONE `tools/call` makes.** On the Code Mode
+    /// surface a single `execute_code` run can send many requests, and all of them
+    /// carry the same id, so a policy can budget a whole run (total bytes, request
+    /// count, distinct endpoints) instead of seeing each request in isolation. A
+    /// per-request cap alone lets a caller split free text across several requests
+    /// that each fit under it. On the curated surface a `tools/call` is one
+    /// request, so the id is simply unique per request.
+    ///
+    /// Unique across calls within a process, and with overwhelming probability
+    /// across restarts. It is NOT a secret and NOT a distributed trace id: it is
+    /// generated here, never taken from the client, and it should not be put on
+    /// the wire.
+    ///
+    /// Empty ONLY when unattributed (a caller driving a connector directly rather
+    /// than through a synthesized handler), the same convention as [`Self::tool`].
+    /// Treat the empty string as "no grouping", never as one shared bucket.
+    pub call_id: &'a str,
+
+    /// Whether this request is about to be SENT or is a validation-time preview.
+    ///
+    /// [`RequestPhase::Validate`] marks a dry run: Code Mode's `validate_code`
+    /// asks the policy about the fully literal calls in a script before any
+    /// approval token is issued, so a refusal reaches the model at validation
+    /// instead of after it has been approved. Nothing is sent.
+    ///
+    /// A **stateless** policy (an allowlist, a size cap) should ignore this: it
+    /// gives the same answer in both phases, which is the point. A **stateful**
+    /// policy (a request or byte budget, a rate limiter) MUST NOT charge a
+    /// `Validate` request, or a script validated three times would spend its
+    /// budget before it ran once.
+    pub phase: RequestPhase,
+}
+
+/// Whether an [`OutboundRequest`] is about to be sent or is only being previewed,
+/// see [`OutboundRequest::phase`].
+///
+/// `#[non_exhaustive]`: a policy must have a wildcard arm, so a later phase is
+/// not a breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestPhase {
+    /// The request is about to be sent. What every request was before validation
+    /// previews existed, and the default.
+    #[default]
+    Execute,
+    /// A dry-run preview made by `validate_code`. Nothing is sent.
+    Validate,
 }
 
 impl<'a> OutboundRequest<'a> {
@@ -139,8 +190,47 @@ impl<'a> OutboundRequest<'a> {
             path,
             query,
             body,
+            call_id: "",
+            phase: RequestPhase::Execute,
         }
     }
+
+    /// Mark the request as a validation-time preview, see [`Self::phase`].
+    #[must_use]
+    pub fn with_phase(mut self, phase: RequestPhase) -> Self {
+        self.phase = phase;
+        self
+    }
+
+    /// Attach the per-`tools/call` identifier, see [`Self::call_id`].
+    ///
+    /// A builder rather than a sixth parameter of [`Self::new`], so existing
+    /// callers of `new` keep compiling. The type is `#[non_exhaustive]`, which is
+    /// what makes adding the field itself additive.
+    #[must_use]
+    pub fn with_call_id(mut self, call_id: &'a str) -> Self {
+        self.call_id = call_id;
+        self
+    }
+}
+
+/// Mint the identifier for ONE `tools/call`, see [`OutboundRequest::call_id`].
+///
+/// A process-wide counter under a per-process prefix taken from the clock and the
+/// process id. Dependency-free on purpose: this needs uniqueness, not
+/// unpredictability, because the id is a grouping key for a policy and is never a
+/// credential.
+pub(crate) fn next_call_id() -> String {
+    static PREFIX: OnceLock<u64> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let prefix = *PREFIX.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        nanos ^ (u64::from(std::process::id()) << 32)
+    });
+    format!("{prefix:x}-{:x}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 /// A [`RequestPolicy`]'s refusal of one outbound request.
@@ -364,17 +454,11 @@ pub trait ArgumentValidator: Send + Sync {
 /// `tracing::warn!` — a silently discarded validator is a rule the operator
 /// believes is enforced and is not.
 #[derive(Clone, Default)]
-pub struct ArgumentValidators {
+pub(crate) struct ArgumentValidators {
     map: HashMap<String, Arc<dyn ArgumentValidator>>,
 }
 
 impl ArgumentValidators {
-    /// An empty registry.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Register `validator` for the tool named `tool`, REPLACING any validator
     /// already registered under that name and warning once when it does.
     pub fn insert(&mut self, tool: impl Into<String>, validator: Arc<dyn ArgumentValidator>) {
@@ -400,12 +484,6 @@ impl ArgumentValidators {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
-    }
-
-    /// How many validators are registered.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.map.len()
     }
 
     /// Registered tool names, sorted, so the startup log is deterministic.
@@ -772,8 +850,8 @@ fn claim_report_emission(name: &str, version: &str, lines: &[ReportLine]) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        ArgumentRefusal, ArgumentValidator, ArgumentValidators, OutboundRequest, PolicyRefusal,
-        RequestPolicy, ToolkitHooks,
+        next_call_id, ArgumentRefusal, ArgumentValidator, ArgumentValidators, OutboundRequest,
+        PolicyRefusal, RequestPolicy, ToolkitHooks,
     };
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -830,11 +908,15 @@ mod tests {
     fn validator_registration_is_last_one_wins() {
         let first = Arc::new(AtomicUsize::new(0));
         let second = Arc::new(AtomicUsize::new(0));
-        let mut reg = ArgumentValidators::new();
+        let mut reg = ArgumentValidators::default();
         assert!(reg.is_empty());
         reg.insert("t", Arc::new(CountingValidator(Arc::clone(&first))));
         reg.insert("t", Arc::new(CountingValidator(Arc::clone(&second))));
-        assert_eq!(reg.len(), 1);
+        assert_eq!(
+            reg.names(),
+            vec!["t"],
+            "the second registration replaced the first"
+        );
         reg.get("t")
             .expect("registered")
             .validate(&json!({}))
@@ -879,5 +961,36 @@ mod tests {
         let rendered = format!("{hooks:?}");
         assert!(rendered.contains("request_policy: true"));
         assert!(!rendered.contains("secret-ish"));
+    }
+
+    /// `OutboundRequest::new` leaves `call_id` empty ("unattributed") and
+    /// `with_call_id` sets it, so existing five-argument callers keep compiling and
+    /// keep their old meaning.
+    #[test]
+    fn call_id_defaults_to_unattributed_and_the_builder_sets_it() {
+        let req = OutboundRequest::new("t", "GET", "/p", &[], None);
+        assert_eq!(req.call_id, "", "new() must not invent an id");
+        assert_eq!(req.with_call_id("abc").call_id, "abc");
+    }
+
+    /// A grouping key that repeats is worse than none: a budget keyed on it would
+    /// charge one caller for another's traffic.
+    #[test]
+    fn next_call_id_is_non_empty_and_never_repeats() {
+        let ids: std::collections::HashSet<String> = (0..2000).map(|_| next_call_id()).collect();
+        assert_eq!(ids.len(), 2000, "every minted id must be distinct");
+        assert!(ids.iter().all(|id| !id.is_empty()));
+    }
+
+    /// A request is an `Execute` request unless a caller says otherwise, so every
+    /// existing construction keeps its meaning after `phase` was added.
+    #[test]
+    fn a_request_defaults_to_the_execute_phase_and_can_be_marked_validate() {
+        let req = OutboundRequest::new("t", "GET", "/x", &[], None);
+        assert_eq!(req.phase, super::RequestPhase::Execute);
+        assert_eq!(
+            req.with_phase(super::RequestPhase::Validate).phase,
+            super::RequestPhase::Validate
+        );
     }
 }

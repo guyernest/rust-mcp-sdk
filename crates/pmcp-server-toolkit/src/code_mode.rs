@@ -136,7 +136,12 @@ pub fn request_executor_from_extra(
     extra: &pmcp::RequestHandlerExtra,
 ) -> HttpCodeExecutor {
     let token = extra.auth_context().and_then(|ctx| ctx.token.clone());
-    base.clone().with_inbound_token(token)
+    // Every derivation is ONE `tools/call`, so this is where the call id is minted:
+    // every request that call makes carries the same id, and the next call gets a
+    // fresh one. Both Code Mode (`execute_code`) and script tools derive here.
+    base.clone()
+        .with_inbound_token(token)
+        .with_call_id(crate::policy::next_call_id())
 }
 
 // =============================================================================
@@ -259,11 +264,15 @@ pub fn code_mode_tools_from_executor(
         pipeline: Arc::clone(&pipeline),
         config: cm_config,
         flavor,
+        description_notice: section.description_notice.clone(),
+        #[cfg(feature = "openapi-code-mode")]
+        preview: None,
     };
     let execute_handler = tool_handlers::ExecuteCodeHandler {
         pipeline,
         source: tool_handlers::ExecSource::Static(executor),
         flavor,
+        description_notice: section.description_notice.clone(),
     };
 
     Ok(builder
@@ -325,10 +334,22 @@ pub fn code_mode_http_tools_from_executor(
     .map_err(|e| ToolkitError::CodeMode(format!("ValidationPipeline construction failed: {e}")))?;
     let pipeline = Arc::new(pipeline);
 
+    // The preview asks the policy about a call under the label `execute_code`
+    // will use, so a policy keyed on the tool name answers identically in both
+    // phases. Only kept when a policy is registered: with none there is nothing
+    // that could refuse.
+    let preview = base.has_request_policy().then(|| {
+        (
+            base.clone().with_tool_label("execute_code"),
+            exec_config.clone(),
+        )
+    });
     let validate_handler = tool_handlers::ValidateCodeHandler {
         pipeline: Arc::clone(&pipeline),
         config: cm_config,
         flavor,
+        description_notice: section.description_notice.clone(),
+        preview,
     };
     let execute_handler = tool_handlers::ExecuteCodeHandler {
         pipeline,
@@ -341,6 +362,7 @@ pub fn code_mode_http_tools_from_executor(
             exec_config,
         },
         flavor,
+        description_notice: section.description_notice.clone(),
     };
 
     Ok(builder
@@ -381,6 +403,151 @@ pub fn register_code_mode_tools(
     // this is the documented connectorless validation-only path.
     let _pipeline = validation_pipeline_from_config(config)?;
     Ok(builder)
+}
+
+/// The literal JSON a plan expression is guaranteed to evaluate to, or `None` when
+/// any part of it depends on runtime state (a variable, an operator, a spread).
+#[cfg(feature = "openapi-code-mode")]
+fn literal_json(expr: &pmcp_code_mode::ValueExpr) -> Option<serde_json::Value> {
+    use pmcp_code_mode::executor::ObjectField;
+    use pmcp_code_mode::ValueExpr;
+    match expr {
+        ValueExpr::Literal(v) => Some(v.clone()),
+        ValueExpr::ArrayLiteral { items } => items
+            .iter()
+            .map(literal_json)
+            .collect::<Option<Vec<_>>>()
+            .map(serde_json::Value::Array),
+        ValueExpr::ObjectLiteral { fields } => {
+            let mut map = serde_json::Map::new();
+            for field in fields {
+                match field {
+                    ObjectField::KeyValue { key, value } => {
+                        map.insert(key.clone(), literal_json(value)?);
+                    },
+                    ObjectField::Spread { .. } => return None,
+                }
+            }
+            Some(serde_json::Value::Object(map))
+        },
+        _ => None,
+    }
+}
+
+/// One call whose complete request is known before the script runs.
+#[cfg(feature = "openapi-code-mode")]
+type LiteralCall = (String, String, Option<serde_json::Value>);
+
+/// Collect every call in `steps`, nested blocks included, that is fully literal:
+/// a path made only of literal text with no `{placeholder}`, and a body that is
+/// absent or a literal. A call built from a variable, a loop item or a template is
+/// skipped, because its request is not known until it runs and execution stays the
+/// authority for it.
+#[cfg(feature = "openapi-code-mode")]
+fn collect_literal_calls(steps: &[pmcp_code_mode::PlanStep], out: &mut Vec<LiteralCall>) {
+    use pmcp_code_mode::PlanStep;
+    for step in steps {
+        match step {
+            PlanStep::ApiCall {
+                method, path, body, ..
+            } => push_literal_call(method, path, body.as_ref(), out),
+            PlanStep::ParallelApiCalls { calls, .. } => {
+                for (_, method, path, body) in calls {
+                    push_literal_call(method, path, body.as_ref(), out);
+                }
+            },
+            other => nested_blocks(other)
+                .into_iter()
+                .for_each(|block| collect_literal_calls(block, out)),
+        }
+    }
+}
+
+/// The step lists nested inside a branch, loop or `try` step (none for any other
+/// step), so [`collect_literal_calls`] can recurse into each.
+#[cfg(feature = "openapi-code-mode")]
+fn nested_blocks(step: &pmcp_code_mode::PlanStep) -> Vec<&[pmcp_code_mode::PlanStep]> {
+    use pmcp_code_mode::PlanStep;
+    match step {
+        PlanStep::Conditional {
+            then_steps,
+            else_steps,
+            ..
+        } => vec![then_steps, else_steps],
+        PlanStep::BoundedLoop { body, .. } => vec![body],
+        PlanStep::TryCatch {
+            try_steps,
+            catch_steps,
+            finally_steps,
+            ..
+        } => vec![try_steps, catch_steps, finally_steps],
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(feature = "openapi-code-mode")]
+fn push_literal_call(
+    method: &str,
+    path: &pmcp_code_mode::PathTemplate,
+    body: Option<&pmcp_code_mode::ValueExpr>,
+    out: &mut Vec<LiteralCall>,
+) {
+    let mut joined = String::new();
+    for part in &path.parts {
+        match part {
+            pmcp_code_mode::PathPart::Literal(text) => joined.push_str(text),
+            _ => return,
+        }
+    }
+    if joined.contains('{') {
+        return;
+    }
+    let body = match body {
+        None => None,
+        Some(expr) => match literal_json(expr) {
+            Some(value) => Some(value),
+            None => return,
+        },
+    };
+    out.push((method.to_string(), joined, body));
+}
+
+/// `validate_code`'s outbound-policy preview: the first refusal, as a
+/// `PolicyViolation`, for a call in `code` whose request is fully known.
+///
+/// `None` when the code does not compile to a plan (validation already reported
+/// that), or when no literal call is refused. One call id is minted for the whole
+/// validation, so a policy sees the calls of one script as one run.
+#[cfg(feature = "openapi-code-mode")]
+async fn preview_policy_violation(
+    base: &HttpCodeExecutor,
+    exec_config: &ExecutionConfig,
+    code: &str,
+) -> Option<pmcp_code_mode::PolicyViolation> {
+    let plan = pmcp_code_mode::PlanCompiler::with_config(exec_config)
+        .compile_code(code)
+        .ok()?;
+    let mut calls = Vec::new();
+    collect_literal_calls(&plan.steps, &mut calls);
+    let call_id = crate::policy::next_call_id();
+    for (index, (method, path, body)) in calls.into_iter().enumerate() {
+        if let Err(error) = base.preview_request(&method, &path, body, &call_id).await {
+            let message = match error {
+                ExecutionError::RequestRefused { message } => message,
+                other => other.to_string(),
+            };
+            // The call is named by its position, never by its method or path: those
+            // are caller-written text, and a refusal that echoes them would put a
+            // caller-supplied value (a PHI literal in a path) back into a message
+            // the SDK promises is value-free.
+            return Some(pmcp_code_mode::PolicyViolation::new(
+                "outbound_request_policy",
+                "request_refused",
+                format!("literal api call #{}: {message}", index + 1),
+            ));
+        }
+    }
+    None
 }
 
 // =============================================================================
@@ -426,6 +593,41 @@ mod tool_handlers {
         }
     }
 
+    /// Append the operator's `[code_mode] description_notice`, if any, to a tool
+    /// description, after the SDK's own text and a blank line. A blank or unset
+    /// notice leaves the description exactly as the SDK wrote it.
+    fn with_notice(mut info: pmcp::types::ToolInfo, notice: Option<&str>) -> pmcp::types::ToolInfo {
+        if let Some(notice) = notice.map(str::trim).filter(|n| !n.is_empty()) {
+            info.description = Some(match info.description.take() {
+                Some(base) => format!("{base}\n\n{notice}"),
+                None => notice.to_string(),
+            });
+        }
+        info
+    }
+
+    /// Classify an `execute_code` failure for the tool boundary.
+    ///
+    /// A refused request ([`ExecutionError::RequestRefused`]: the path floor, a
+    /// non-scalar value, or an embedder's outbound policy) is the CALLER's to fix by
+    /// changing what the script sends, so it is a tool-level rejection the model can
+    /// act on. Every other error stays `Internal`: a backend or runtime fault is not
+    /// something the caller can correct by changing input.
+    ///
+    /// Until pmcp-code-mode 0.7 a refusal was indistinguishable from a fault, so a
+    /// policy refusal reached the model as `Internal error: Execution error: Runtime
+    /// error: ...` and read as a server crash.
+    ///
+    /// The wildcard arm is required: `ExecutionError` is `#[non_exhaustive]`.
+    pub(super) fn execution_failure(error: pmcp_code_mode::ExecutionError) -> pmcp::Error {
+        match error {
+            pmcp_code_mode::ExecutionError::RequestRefused { message } => {
+                pmcp::Error::tool_rejected(message, None)
+            },
+            other => pmcp::Error::Internal(format!("Execution error: {other}")),
+        }
+    }
+
     /// `validate_code` tool handler: runs the code through the policy-bearing
     /// [`ValidationPipeline`](pmcp_code_mode::ValidationPipeline) (SQL or JS per
     /// [`ValidationFlavor`]) and returns the explanation + (on success) an HMAC
@@ -434,6 +636,13 @@ mod tool_handlers {
         pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
         pub(super) config: pmcp_code_mode::CodeModeConfig,
         pub(super) flavor: ValidationFlavor,
+        /// `[code_mode] description_notice`, appended to the tool description.
+        pub(super) description_notice: Option<String>,
+        /// The executor and limits `validate_code` previews literal calls
+        /// against, when an E1 policy could refuse one. `None` on the SQL path and
+        /// on any server that registered no outbound policy.
+        #[cfg(feature = "openapi-code-mode")]
+        pub(super) preview: Option<(super::HttpCodeExecutor, pmcp_code_mode::ExecutionConfig)>,
     }
 
     #[pmcp_code_mode::async_trait]
@@ -461,8 +670,26 @@ mod tool_handlers {
                 "perms-hash",
             );
 
-            let result = run_flavored_validation(&self.pipeline, self.flavor, code, &context)
+            #[cfg_attr(not(feature = "openapi-code-mode"), allow(unused_mut))]
+            // Why: only the `openapi-code-mode` preview below mutates it.
+            let mut result = run_flavored_validation(&self.pipeline, self.flavor, code, &context)
                 .map_err(pmcp::Error::Internal)?;
+
+            // Run the outbound policy over the calls whose request is already known.
+            // A refusal here reaches the model as a rejected validation, with no
+            // approval token, instead of as a failure after it was approved.
+            #[cfg(feature = "openapi-code-mode")]
+            if result.is_valid {
+                if let Some((base, exec_config)) = &self.preview {
+                    if let Some(violation) =
+                        super::preview_policy_violation(base, exec_config, code).await
+                    {
+                        result.is_valid = false;
+                        result.approval_token = None;
+                        result.violations.push(violation);
+                    }
+                }
+            }
 
             let mut response = pmcp_code_mode::ValidationResponse::from_result(result);
             if response.result.is_valid {
@@ -499,10 +726,11 @@ mod tool_handlers {
         }
 
         fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-            Some(
+            Some(with_notice(
                 pmcp_code_mode::CodeModeToolBuilder::new(self.flavor.code_format())
                     .build_validate_tool(),
-            )
+                self.description_notice.as_deref(),
+            ))
         }
     }
 
@@ -543,6 +771,8 @@ mod tool_handlers {
         pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
         pub(super) source: ExecSource,
         pub(super) flavor: ValidationFlavor,
+        /// `[code_mode] description_notice`, appended to the tool description.
+        pub(super) description_notice: Option<String>,
     }
 
     impl ExecuteCodeHandler {
@@ -634,15 +864,16 @@ mod tool_handlers {
             let result = self
                 .run_code(code, input.variables.as_ref(), &extra)
                 .await
-                .map_err(|e| pmcp::Error::Internal(format!("Execution error: {e}")))?;
+                .map_err(execution_failure)?;
             Ok(result)
         }
 
         fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-            Some(
+            Some(with_notice(
                 pmcp_code_mode::CodeModeToolBuilder::new(self.flavor.code_format())
                     .build_execute_tool(),
-            )
+                self.description_notice.as_deref(),
+            ))
         }
     }
 }
@@ -884,6 +1115,9 @@ pub struct HttpCodeExecutor {
     /// `execute_code` for the generic Code Mode tool. `Arc<str>` because the
     /// executor is cloned per request.
     tool_label: Option<Arc<str>>,
+    /// The per-`tools/call` id stamped onto every policy request this executor
+    /// makes. `None` on a base executor, set by [`request_executor_from_extra`].
+    call_id: Option<Arc<str>>,
 }
 
 #[cfg(feature = "openapi-code-mode")]
@@ -906,6 +1140,7 @@ impl HttpCodeExecutor {
             schema: None,
             policy: None,
             tool_label: None,
+            call_id: None,
         }
     }
 
@@ -929,6 +1164,111 @@ impl HttpCodeExecutor {
         self.tool_label.as_deref().unwrap_or("")
     }
 
+    /// Stamp the per-`tools/call` id onto every policy request this executor makes,
+    /// see [`crate::policy::OutboundRequest::call_id`].
+    ///
+    /// [`request_executor_from_extra`] calls this once per `tools/call`, so an
+    /// embedder normally never does. It is public for an embedder that derives its
+    /// own per-call executor and wants its requests grouped the same way.
+    #[must_use]
+    pub fn with_call_id(mut self, call_id: impl AsRef<str>) -> Self {
+        self.call_id = Some(Arc::from(call_id.as_ref()));
+        self
+    }
+
+    /// The id of the `tools/call` this executor serves, or `""` on a base executor
+    /// that no call has derived from (nothing to group by).
+    #[must_use]
+    pub fn call_id(&self) -> &str {
+        self.call_id.as_deref().unwrap_or("")
+    }
+
+    /// Steps (2) and (2a) of a request: the base-URL join and the non-auth half of
+    /// the remaining-body-to-query conversion.
+    ///
+    /// Shared by [`Self::execute_request`] and [`Self::preview_request`] on purpose:
+    /// a preview that assembled the request by its own code would be a second copy
+    /// of the rules, and a policy that passes the preview but refuses the send (or
+    /// the reverse) is exactly the drift this one function prevents.
+    ///
+    /// `join_url` preserves an API-Gateway stage prefix (Pitfall 2; it is NOT the
+    /// RFC-3986 path-replacing join). The query pairs are appended by the caller
+    /// through `url::Url` because reqwest 0.13 gates `RequestBuilder::query` behind
+    /// a `query` feature the toolkit deliberately does not enable.
+    ///
+    /// The conversion runs BEFORE the E1 hook: a policy documented to inspect the
+    /// query pairs would otherwise inspect an EMPTY slice while the pairs about to
+    /// be sent still sat in the body, a security hook that is present, documented
+    /// and blind. D-12 is preserved: only the AUTH-supplied additions stay behind
+    /// the hook.
+    fn prepare_request(
+        &self,
+        is_get_like: bool,
+        resolved_path: &str,
+        remaining_body: Option<serde_json::Value>,
+    ) -> std::result::Result<
+        (String, Vec<(String, String)>, Option<serde_json::Value>),
+        ExecutionError,
+    > {
+        let url = crate::http::join_url(&self.base_url, resolved_path);
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        let request_body = if is_get_like {
+            if let Some(serde_json::Value::Object(obj)) = &remaining_body {
+                for (key, value) in obj {
+                    // A non-scalar GET-query value is rejected (WR-03) rather than
+                    // silently JSON-stringified into the URL.
+                    query_params.push((key.clone(), Self::scalar_str(key, value)?));
+                }
+            }
+            None
+        } else {
+            remaining_body
+        };
+        Ok((url, query_params, request_body))
+    }
+
+    /// Ask the registered E1 policy about one fully literal call, WITHOUT sending
+    /// it: the validation-time preview behind `validate_code`.
+    ///
+    /// Applies the same layer-0 path floor the executor applies, assembles the
+    /// request through [`Self::prepare_request`], and consults the policy with
+    /// [`RequestPhase::Validate`](crate::policy::RequestPhase::Validate). `Ok(())`
+    /// when no policy is registered.
+    pub(crate) async fn preview_request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        call_id: &str,
+    ) -> std::result::Result<(), ExecutionError> {
+        let Some(policy) = self.policy.as_ref() else {
+            return Ok(());
+        };
+        pmcp_code_mode::validate_resolved_target(path).map_err(|e| {
+            ExecutionError::RequestRefused {
+                message: format!("{e}"),
+            }
+        })?;
+        let upper = method.to_uppercase();
+        let is_get_like = matches!(upper.as_str(), "GET" | "HEAD" | "OPTIONS");
+        let (url, query, body) = self.prepare_request(is_get_like, path, body)?;
+        let req = crate::policy::OutboundRequest::new(
+            self.tool_label(),
+            &upper,
+            &url,
+            &query,
+            body.as_ref(),
+        )
+        .with_call_id(call_id)
+        .with_phase(crate::policy::RequestPhase::Validate);
+        policy
+            .check(&req)
+            .await
+            .map_err(|refusal| ExecutionError::RequestRefused {
+                message: format!("outbound request refused by policy: {refusal}"),
+            })
+    }
+
     /// Consult the registered E1 policy, if any, for one already-assembled
     /// outbound request (Phase 128).
     ///
@@ -946,11 +1286,12 @@ impl HttpCodeExecutor {
         let Some(policy) = self.policy.as_ref() else {
             return Ok(());
         };
-        let req = crate::policy::OutboundRequest::new(self.tool_label(), method, path, query, body);
+        let req = crate::policy::OutboundRequest::new(self.tool_label(), method, path, query, body)
+            .with_call_id(self.call_id());
         policy
             .check(&req)
             .await
-            .map_err(|refusal| ExecutionError::RuntimeError {
+            .map_err(|refusal| ExecutionError::RequestRefused {
                 message: format!("outbound request refused by policy: {refusal}"),
             })
     }
@@ -1068,8 +1409,9 @@ impl HttpCodeExecutor {
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionError::RuntimeError`] naming `key` when `value` is a
-    /// non-scalar. Per Pitfall 5 the message names the KEY only — never the value.
+    /// Returns [`ExecutionError::RequestRefused`] naming `key` when `value` is a
+    /// non-scalar: a script that sends an object as a path value is the script's to
+    /// fix. Per Pitfall 5 the message names the KEY only — never the value.
     fn scalar_str(
         key: &str,
         value: &serde_json::Value,
@@ -1080,7 +1422,7 @@ impl HttpCodeExecutor {
             serde_json::Value::Number(n) => Ok(n.to_string()),
             serde_json::Value::Bool(b) => Ok(b.to_string()),
             serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                Err(ExecutionError::RuntimeError {
+                Err(ExecutionError::RequestRefused {
                     message: format!("path/query param '{key}' must be a scalar"),
                 })
             },
@@ -1304,38 +1646,13 @@ impl pmcp_code_mode::HttpExecutor for HttpCodeExecutor {
         let resolved_path = path;
         let remaining_body = body;
 
-        // (2) Shared join_url helper (Pitfall 2 — preserves an API-Gateway
-        //     stage prefix; it does NOT use the RFC-3986 path-replacing join).
-        //     join_url does the base+path CONCAT; we still parse the result to
-        //     append query pairs because reqwest 0.13 gates
-        //     RequestBuilder::query behind a `query` feature the toolkit
-        //     deliberately does not enable (Plan 01 Rule 1).
-        let url = crate::http::join_url(&self.base_url, resolved_path);
-
-        // (2a) Phase 128 — the NON-AUTH half of step (4) moved ABOVE the E1 hook.
-        //      Step (4) used to run entirely after `auth.apply` at (3), which put
-        //      the remaining-body-to-query conversion after any hook placed before
-        //      auth. A policy documented to inspect the query pairs would then have
-        //      inspected an EMPTY slice while the pairs about to be sent still sat
-        //      in `body` — a security hook that is present, documented and blind,
-        //      which is worse than an absent one. D-12 is preserved exactly: only
-        //      the AUTH-supplied query additions stay behind the hook, so the
-        //      credential's contribution is still invisible to the policy.
-        //
-        //      Nothing is renumbered; the auth-supplied pairs are appended at (3a).
-        let mut query_params: Vec<(String, String)> = Vec::new();
-        let request_body = if is_get_like {
-            if let Some(serde_json::Value::Object(obj)) = &remaining_body {
-                for (key, value) in obj {
-                    // A non-scalar GET-query value is rejected (WR-03) rather than
-                    // silently JSON-stringified into the URL.
-                    query_params.push((key.clone(), Self::scalar_str(key, value)?));
-                }
-            }
-            None
-        } else {
-            remaining_body
-        };
+        // (2)+(2a) join_url + the non-auth remaining-body-to-query conversion. ONE
+        //      helper shared with `preview_request`, so what `validate_code` asks the
+        //      policy about is assembled by the same code that assembles what is
+        //      sent and the two cannot drift. See `prepare_request` for why the
+        //      conversion sits above the E1 hook.
+        let (url, mut query_params, request_body) =
+            self.prepare_request(is_get_like, resolved_path, remaining_body)?;
 
         // (2b) Phase 128 E1 / D-12 — the outbound-policy hook. AFTER `join_url` so
         //      the policy sees the URL as it will be sent, and BEFORE `auth.apply`
@@ -1869,6 +2186,7 @@ mod tests {
                 max_join_depth: Some(3),
                 max_subquery_depth: Some(2),
             }),
+            description_notice: None,
         }
     }
 
