@@ -693,9 +693,11 @@ mod tool_handlers {
             // Static-policy ValidationContext — the toolkit binds approval
             // tokens to a fixed config-derived context (no live user/session
             // surface in the pure-config binary). Static `[code_mode]` policy
-            // (allow_writes/deletes/ddl for SQL; openapi_blocked_paths /
-            // disallowed ops for OpenApi) is enforced inside the validation
-            // surface selected by `flavor`.
+            // is enforced inside the validation surface selected by `flavor`:
+            // allow_writes/deletes/ddl for SQL, and pmcp-code-mode's
+            // OpenApiClassPolicy for OpenApi. `build_cm_config` does not yet
+            // map any OpenAPI key, so an OpenApi server runs that policy's
+            // defaults: reads allowed, writes, deletes and admin denied.
             let context = pmcp_code_mode::ValidationContext::new(
                 "code-mode-config",
                 "code-mode-session",

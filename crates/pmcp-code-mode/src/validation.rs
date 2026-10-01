@@ -144,6 +144,10 @@ pub struct ValidationPipeline<
     javascript_validator: JavaScriptValidator,
     #[cfg(feature = "openapi-code-mode")]
     operation_registry: OperationRegistry,
+    /// The static OpenAPI class policy: derived from `config`, or installed
+    /// with [`Self::with_openapi_class_policy`].
+    #[cfg(feature = "openapi-code-mode")]
+    openapi_policy: crate::openapi_policy::OpenApiClassPolicy,
     token_generator: T,
     explanation_generator: E,
     policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
@@ -179,6 +183,8 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
                 .with_sdk_operations(config.sdk_operations.clone()),
             #[cfg(feature = "openapi-code-mode")]
             operation_registry,
+            #[cfg(feature = "openapi-code-mode")]
+            openapi_policy: crate::openapi_policy::OpenApiClassPolicy::from_config(&config),
             token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: None,
@@ -242,6 +248,8 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
                 .with_sdk_operations(config.sdk_operations.clone()),
             #[cfg(feature = "openapi-code-mode")]
             operation_registry,
+            #[cfg(feature = "openapi-code-mode")]
+            openapi_policy: crate::openapi_policy::OpenApiClassPolicy::from_config(&config),
             token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: Some(evaluator),
@@ -286,6 +294,8 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 .with_sdk_operations(config.sdk_operations.clone()),
             #[cfg(feature = "openapi-code-mode")]
             operation_registry,
+            #[cfg(feature = "openapi-code-mode")]
+            openapi_policy: crate::openapi_policy::OpenApiClassPolicy::from_config(&config),
             token_generator,
             explanation_generator,
             policy_evaluator: None,
@@ -301,6 +311,26 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
     /// Check if a policy evaluator is configured.
     pub fn has_policy_evaluator(&self) -> bool {
         self.policy_evaluator.is_some()
+    }
+
+    /// Replace the static OpenAPI class policy derived from the config's
+    /// `openapi_*` keys, for a caller whose config can say more (a read
+    /// allowlist, an `admin` mode). It is enforced exactly as the derived one:
+    /// before any policy evaluator, which can only narrow it.
+    #[cfg(feature = "openapi-code-mode")]
+    #[must_use]
+    pub fn with_openapi_class_policy(
+        mut self,
+        policy: crate::openapi_policy::OpenApiClassPolicy,
+    ) -> Self {
+        self.openapi_policy = policy;
+        self
+    }
+
+    /// The static OpenAPI class policy this pipeline enforces.
+    #[cfg(feature = "openapi-code-mode")]
+    pub fn openapi_class_policy(&self) -> &crate::openapi_policy::OpenApiClassPolicy {
+        &self.openapi_policy
     }
 
     /// Check mutation and query authorization against config (blocklists, allowlists).
@@ -733,45 +763,18 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         code_info: &JavaScriptCodeInfo,
         start: Instant,
     ) -> Option<ValidationResult> {
-        if code_info.is_read_only {
+        // The whole static OpenAPI policy, complete without an evaluator. An
+        // evaluator, when configured, runs after this and can only narrow it.
+        let violations = self
+            .openapi_policy
+            .check_script(code_info, &self.operation_registry);
+        if violations.is_empty() {
             return None;
         }
-
-        for method in &code_info.methods_used {
-            if !self.config.openapi_blocked_writes.is_empty()
-                && self.config.openapi_blocked_writes.contains(method)
-            {
-                return Some(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "blocked_method",
-                        &format!("HTTP method '{}' is blocked for this server", method),
-                    )
-                    .with_suggestion("This method is in the blocklist and cannot be used")],
-                    self.build_js_metadata(code_info, start.elapsed().as_millis() as u64),
-                ));
-            }
-        }
-
-        if !self.config.openapi_allowed_writes.is_empty() {
-            tracing::debug!(
-                target: "code_mode",
-                "Skipping method-level check - policy evaluator will check operation allowlist ({} entries)",
-                self.config.openapi_allowed_writes.len()
-            );
-        } else if !self.config.openapi_allow_writes {
-            return Some(ValidationResult::failure(
-                vec![PolicyViolation::new(
-                    "code_mode",
-                    "allow_mutations",
-                    "Write HTTP methods (POST, PUT, DELETE, PATCH) are not enabled for this server",
-                )
-                .with_suggestion("Only read-only methods (GET, HEAD, OPTIONS) are allowed. Contact your administrator to enable write operations.")],
-                self.build_js_metadata(code_info, start.elapsed().as_millis() as u64),
-            ));
-        }
-
-        None
+        Some(ValidationResult::failure(
+            violations,
+            self.build_js_metadata(code_info, start.elapsed().as_millis() as u64),
+        ))
     }
 
     /// Complete JavaScript validation after policy checks pass.
@@ -1858,6 +1861,142 @@ mod tests {
                 .violations
                 .iter()
                 .any(|v| v.rule == "excessive_joins"));
+        }
+    }
+
+    /// The static OpenAPI policy enforced at the pipeline boundary, under the
+    /// Noop evaluator a config-driven server runs with. Each test fails when
+    /// the static gate defers the key to an evaluator.
+    #[cfg(feature = "openapi-code-mode")]
+    mod openapi_static_policy_tests {
+        use super::*;
+        use crate::config::OperationEntry;
+        use crate::policy::NoopPolicyEvaluator;
+
+        fn noop_pipeline(config: CodeModeConfig) -> ValidationPipeline {
+            ValidationPipeline::with_policy_evaluator(
+                config,
+                b"test-secret-key!".to_vec(),
+                Arc::new(NoopPolicyEvaluator::new()),
+            )
+            .unwrap()
+        }
+
+        async fn verdict(config: CodeModeConfig, code: &str) -> ValidationResult {
+            let pipeline = noop_pipeline(config.clone());
+            let sync = pipeline
+                .validate_javascript_code(code, &test_context())
+                .unwrap();
+            let async_result = pipeline
+                .validate_javascript_code_async(code, &test_context())
+                .await
+                .unwrap();
+            assert_eq!(sync.is_valid, async_result.is_valid, "sync and async agree");
+            async_result
+        }
+
+        fn rules(result: &ValidationResult) -> Vec<&str> {
+            result.violations.iter().map(|v| v.rule.as_str()).collect()
+        }
+
+        fn enabled() -> CodeModeConfig {
+            let mut config = CodeModeConfig::enabled();
+            config.server_id = Some("umls".into());
+            config
+        }
+
+        const WRITE: &str = "await api.post('/items', {}); return 1;";
+
+        /// D1 (T-191-40): a write allowlist widened to allow-all under Noop.
+        #[tokio::test]
+        async fn write_allowlist_does_not_widen_under_noop() {
+            let mut config = enabled();
+            config.openapi_allow_writes = true;
+            config.openapi_allowed_writes = ["POST /items".to_string()].into();
+            assert!(verdict(config.clone(), WRITE).await.is_valid);
+            let refused = verdict(config, "await api.post('/admin/reset', {}); return 1;").await;
+            assert!(!refused.is_valid);
+            assert_eq!(rules(&refused), ["not_in_allowlist"]);
+        }
+
+        /// D2: reads could not be denied.
+        #[tokio::test]
+        async fn read_deny_refuses_a_get_only_script() {
+            let mut config = enabled();
+            config.openapi_reads_enabled = false;
+            let refused = verdict(config, "const r = await api.get('/items'); return r;").await;
+            assert!(!refused.is_valid);
+            assert!(refused.violations[0]
+                .message
+                .contains("read operations are deny_all"));
+        }
+
+        /// UMLS probe 1: a declared read-only server refuses a write.
+        #[tokio::test]
+        async fn read_only_server_refuses_a_write() {
+            let refused = verdict(enabled(), WRITE).await;
+            assert!(!refused.is_valid);
+            assert_eq!(rules(&refused), ["class_denied"]);
+        }
+
+        #[tokio::test]
+        async fn deletes_need_allow_deletes() {
+            let mut config = enabled();
+            config.openapi_allow_writes = true;
+            let refused = verdict(config, "await api.delete('/items/1'); return 1;").await;
+            assert!(!refused.is_valid);
+            assert!(refused.violations[0].message.contains("delete operations"));
+        }
+
+        #[tokio::test]
+        async fn blocked_paths_are_enforced_under_noop() {
+            let mut config = enabled();
+            config.openapi_blocked_paths = ["/internal".to_string()].into();
+            let refused = verdict(config, "await api.get('/internal/keys'); return 1;").await;
+            assert!(!refused.is_valid);
+            assert_eq!(rules(&refused), ["blocked_path"]);
+        }
+
+        #[tokio::test]
+        async fn an_installed_class_policy_replaces_the_derived_one() {
+            use crate::openapi_policy::{ClassMode, OpenApiClassPolicy};
+            let get = "const r = await api.get('/items'); return r;";
+            let config = enabled();
+            let policy = OpenApiClassPolicy::from_config(&config)
+                .with_mode(crate::types::UnifiedAction::Read, ClassMode::DenyAll);
+            let pipeline = noop_pipeline(config).with_openapi_class_policy(policy);
+            let refused = pipeline
+                .validate_javascript_code_async(get, &test_context())
+                .await
+                .unwrap();
+            assert!(!refused.is_valid);
+            assert!(pipeline
+                .openapi_class_policy()
+                .to_string()
+                .starts_with("read=deny_all"));
+        }
+
+        /// UMLS probe 4 / platform probe: reclassifying an operation changes
+        /// the verdict with no evaluator.
+        #[tokio::test]
+        async fn reclassifying_an_operation_changes_the_verdict() {
+            let search = "await api.post('/search', {q: 'aspirin'}); return 1;";
+            assert!(!verdict(enabled(), search).await.is_valid);
+
+            let mut config = enabled();
+            config.operations = vec![OperationEntry {
+                id: "search".into(),
+                category: "read".into(),
+                description: String::new(),
+                path: Some("POST /search".into()),
+            }];
+            assert!(verdict(config.clone(), search).await.is_valid);
+
+            config.operations[0].category = "admin".into();
+            let refused = verdict(config, search).await;
+            assert!(refused.violations[0]
+                .message
+                .contains("admin operations are deny_all"));
         }
     }
 }

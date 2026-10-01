@@ -43,50 +43,151 @@ pub struct OperationEntry {
     #[serde(default)]
     pub description: String,
 
-    /// Raw API path this ID maps to (e.g., "/getCostAnomalies").
-    /// Used to match against api_call.path from JavaScript analysis.
+    /// API path this ID maps to (e.g., "/getCostAnomalies"), matched against
+    /// the `api.*()` calls of a script.
+    ///
+    /// May start with an HTTP method (`"GET /items/{id}"` or
+    /// `"GET:/items/{id}"`), in which case only calls with that method match.
+    /// A `{param}` segment matches any one segment. See
+    /// [`OperationRegistry::lookup_entry`].
     #[serde(default)]
     pub path: Option<String>,
 }
 
 /// Registry built from [[code_mode.operations]] config entries.
-/// Maps raw paths to canonical operation IDs and categories.
+/// Maps API calls to canonical operation IDs and categories.
 #[derive(Debug, Clone, Default)]
 pub struct OperationRegistry {
-    path_to_id: HashMap<String, String>,
-    path_to_category: HashMap<String, String>,
+    entries: Vec<RegisteredOperation>,
+}
+
+#[derive(Debug, Clone)]
+struct RegisteredOperation {
+    entry: OperationEntry,
+    method: Option<String>,
+    path: String,
+}
+
+impl RegisteredOperation {
+    /// How specifically this entry matches a call: `None` when it does not
+    /// match, otherwise (exact path, literal segment count, has a method).
+    fn match_rank(&self, method: Option<&str>, path: &str) -> Option<(bool, usize, bool)> {
+        if let (Some(own), Some(call)) = (&self.method, method) {
+            if !own.eq_ignore_ascii_case(call) {
+                return None;
+            }
+        }
+        let has_method = self.method.is_some();
+        if self.path == path {
+            return Some((true, usize::MAX, has_method));
+        }
+        let own: Vec<&str> = self.path.split('/').collect();
+        let call: Vec<&str> = path.split('/').collect();
+        if own.len() != call.len() {
+            return None;
+        }
+        let mut literals = 0;
+        for (o, c) in own.iter().zip(&call) {
+            if is_template_param(o) {
+                if c.is_empty() {
+                    return None;
+                }
+            } else if o == c && !c.contains('{') {
+                literals += 1;
+            } else {
+                return None;
+            }
+        }
+        Some((false, literals, has_method))
+    }
+}
+
+fn is_template_param(segment: &str) -> bool {
+    segment.len() > 2 && segment.starts_with('{') && segment.ends_with('}')
+}
+
+/// Split an optional leading HTTP method off an entry path.
+fn split_entry_path(raw: &str) -> (Option<String>, String) {
+    let trimmed = raw.trim();
+    if let Some(idx) = trimmed.find([' ', ':']) {
+        let (head, rest) = trimmed.split_at(idx);
+        let rest = rest[1..].trim();
+        if rest.starts_with('/')
+            && matches!(
+                head.to_ascii_uppercase().as_str(),
+                "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" | "PATCH" | "DELETE"
+            )
+        {
+            return (Some(head.to_ascii_uppercase()), rest.to_string());
+        }
+    }
+    (None, trimmed.to_string())
+}
+
+/// Rank used to break ties between equally specific entries: the stricter
+/// declared category wins, and an unrecognised one counts as strictest so it
+/// is refused rather than silently passed over.
+fn category_rank(category: &str) -> u8 {
+    match category.trim().to_ascii_lowercase().as_str() {
+        "" => 0,
+        "read" => 1,
+        "write" => 2,
+        "delete" => 3,
+        "admin" => 4,
+        _ => 5,
+    }
 }
 
 impl OperationRegistry {
     pub fn from_entries(entries: &[OperationEntry]) -> Self {
-        let mut path_to_id = HashMap::with_capacity(entries.len());
-        let mut path_to_category = HashMap::with_capacity(entries.len());
-        for entry in entries {
-            if let Some(ref path) = entry.path {
-                path_to_id.insert(path.clone(), entry.id.clone());
-                if !entry.category.is_empty() {
-                    path_to_category.insert(path.clone(), entry.category.clone());
-                }
-            }
-        }
-        Self {
-            path_to_id,
-            path_to_category,
-        }
+        let entries = entries
+            .iter()
+            .filter_map(|entry| {
+                let (method, path) = split_entry_path(entry.path.as_deref()?);
+                Some(RegisteredOperation {
+                    entry: entry.clone(),
+                    method,
+                    path,
+                })
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// The entry a call to `path` (with `method`, when known) maps to.
+    ///
+    /// The most specific match wins: an exact path over a template, then the
+    /// template with more literal segments, then an entry that names the
+    /// method. A `{param}` segment in an entry matches any one non-empty
+    /// segment; a segment of `path` that is itself a placeholder (contains
+    /// `{`) matches only a `{param}` segment. Among equally specific entries
+    /// the one with the strictest category is returned.
+    pub fn lookup_entry(&self, method: Option<&str>, path: &str) -> Option<&OperationEntry> {
+        self.entries
+            .iter()
+            .filter_map(|op| op.match_rank(method, path).map(|rank| (rank, op)))
+            .max_by(|(a_rank, a), (b_rank, b)| {
+                a_rank.cmp(b_rank).then_with(|| {
+                    category_rank(&a.entry.category).cmp(&category_rank(&b.entry.category))
+                })
+            })
+            .map(|(_, op)| &op.entry)
     }
 
     pub fn lookup(&self, path: &str) -> Option<&str> {
-        self.path_to_id.get(path).map(|s| s.as_str())
+        self.lookup_entry(None, path).map(|e| e.id.as_str())
     }
 
     /// Look up the declared category for a path (e.g., "read", "write", "delete", "admin").
     /// Returns `None` if the path has no registry entry or no category declared.
     pub fn lookup_category(&self, path: &str) -> Option<&str> {
-        self.path_to_category.get(path).map(|s| s.as_str())
+        self.lookup_entry(None, path)
+            .map(|e| e.category.as_str())
+            .filter(|c| !c.is_empty())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.path_to_id.is_empty()
+        self.entries.is_empty()
     }
 }
 
@@ -703,6 +804,54 @@ mod tests {
         }];
         let registry = OperationRegistry::from_entries(&entries);
         assert!(!registry.is_empty());
+    }
+
+    fn op(id: &str, category: &str, path: &str) -> OperationEntry {
+        OperationEntry {
+            id: id.to_string(),
+            category: category.to_string(),
+            description: String::new(),
+            path: Some(path.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_operation_registry_matches_templates() {
+        let registry = OperationRegistry::from_entries(&[
+            op("getItem", "read", "/items/{id}"),
+            op("searchItems", "read", "/items/search"),
+        ]);
+        assert_eq!(registry.lookup("/items/42"), Some("getItem"));
+        assert_eq!(registry.lookup("/items/{id}"), Some("getItem"));
+        // A literal segment beats a template segment.
+        assert_eq!(registry.lookup("/items/search"), Some("searchItems"));
+        // Segment counts must agree, and a param needs a non-empty segment.
+        assert_eq!(registry.lookup("/items/42/owner"), None);
+        assert_eq!(registry.lookup("/items/"), None);
+        // A placeholder in the call matches only a param, never a literal.
+        let literal_only = OperationRegistry::from_entries(&[op("s", "read", "/items/search")]);
+        assert_eq!(literal_only.lookup("/items/{...}"), None);
+    }
+
+    #[test]
+    fn test_operation_registry_method_prefix() {
+        let registry = OperationRegistry::from_entries(&[
+            op("listItems", "read", "GET /items"),
+            op("createItem", "write", "POST:/items"),
+        ]);
+        let id = |m, p| registry.lookup_entry(Some(m), p).map(|e| e.id.as_str());
+        assert_eq!(id("GET", "/items"), Some("listItems"));
+        assert_eq!(id("post", "/items"), Some("createItem"));
+        assert_eq!(id("DELETE", "/items"), None);
+    }
+
+    #[test]
+    fn test_operation_registry_ties_resolve_to_the_strictest_category() {
+        let registry = OperationRegistry::from_entries(&[
+            op("a", "read", "/x/{id}"),
+            op("b", "admin", "/x/{key}"),
+        ]);
+        assert_eq!(registry.lookup_category("/x/1"), Some("admin"));
     }
 
     #[test]

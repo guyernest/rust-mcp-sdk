@@ -803,10 +803,11 @@ impl SafetyVisitor {
             Expr::Tpl(tpl) => {
                 // Template literal - extract static parts
                 let mut path = String::new();
-                for quasi in &tpl.quasis {
+                for (i, quasi) in tpl.quasis.iter().enumerate() {
                     // quasi.raw is an Atom (UTF-8), not Wtf8Atom
                     path.push_str(quasi.raw.as_ref());
-                    if !tpl.exprs.is_empty() {
+                    // One marker per interpolation, between the static parts.
+                    if i < tpl.exprs.len() {
                         path.push_str("{...}");
                     }
                 }
@@ -1122,6 +1123,9 @@ mod tests {
         assert!(info.is_read_only);
         assert_eq!(info.api_calls.len(), 2);
         assert!(info.api_calls[1].is_dynamic_path);
+        // One marker per interpolation: the trailing `/orders` segment stays
+        // literal, so it can be matched against a catalog template.
+        assert_eq!(info.api_calls[1].path, "/users/{...}/orders");
     }
 
     #[test]
