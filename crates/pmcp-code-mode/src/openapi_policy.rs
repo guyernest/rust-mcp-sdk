@@ -494,6 +494,11 @@ fn operation_candidates(call: &Call<'_>, catalog_id: Option<&str>) -> Vec<String
 /// Whether a normalized list entry names a call candidate. A `*` segment in
 /// the entry matches any one segment; a `*` in the candidate (a segment the
 /// validator cannot see) matches only a `*` in the entry.
+///
+/// Both sides come from `normalize_operation_format`, which also turns the
+/// empty segment before a leading `/` into `*` (an empty string is "all
+/// digits"). The Cedar side depends on that form, so it is matched as is: the
+/// leading `*` lines up on both sides.
 fn operation_matches(entry: &str, candidate: &str) -> bool {
     if entry == candidate {
         return true;
@@ -503,7 +508,7 @@ fn operation_matches(entry: &str, candidate: &str) -> bool {
     else {
         return false;
     };
-    if entry_method != cand_method || !entry_path.starts_with('/') {
+    if entry_method != cand_method {
         return false;
     }
     let entry_segments: Vec<&str> = entry_path.split('/').collect();
@@ -766,6 +771,8 @@ mod tests {
             &reg
         )
         .is_empty());
+        // A template entry admits a literal, non-numeric segment.
+        assert!(rules(&policy, "await api.put('/items/abc', {}); return 1;", &reg).is_empty());
         assert_eq!(
             rules(
                 &policy,
