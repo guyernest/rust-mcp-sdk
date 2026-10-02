@@ -822,7 +822,7 @@ mod tests {
         // The next chunk completes it, and nothing was lost across the split.
         buffer.push(0x82);
         assert_eq!(take_utf8_prefix(&mut buffer), "\u{2602}");
-        assert!(buffer.is_empty());
+        assert_eq!(buffer, [] as [u8; 0]);
     }
 
     /// The OUTPUT of a LARGE invalid-byte run (review CR-02).
@@ -1367,7 +1367,7 @@ mod tests {
         // The next chunk completes it and nothing was lost across the split.
         buffer.push(0x80);
         assert_eq!(take_utf8_prefix(&mut buffer), "\u{1F600}");
-        assert!(buffer.is_empty());
+        assert_eq!(buffer, [] as [u8; 0]);
     }
 
     proptest::proptest! {
@@ -1616,7 +1616,10 @@ mod tests {
         let flood = "x".repeat(256);
 
         let mut tight = SseParser::with_max_buffer_size(64);
-        assert!(tight.feed(&flood).is_empty());
+        assert_eq!(
+            tight.feed(&flood),
+            [] as [crate::shared::sse_parser::SseEvent; 0]
+        );
         assert!(tight.overflowed(), "256 bytes is past a 64-byte bound");
         assert!(tight.buffer.is_empty(), "the oversized line was discarded");
 
@@ -1633,7 +1636,10 @@ mod tests {
     #[test]
     fn the_overflow_flag_latches() {
         let mut parser = SseParser::with_max_buffer_size(64);
-        assert!(parser.feed(&"x".repeat(256)).is_empty());
+        assert_eq!(
+            parser.feed(&"x".repeat(256)),
+            [] as [crate::shared::sse_parser::SseEvent; 0]
+        );
         assert!(parser.overflowed());
 
         let events = parser.feed("data: ok\n\n");

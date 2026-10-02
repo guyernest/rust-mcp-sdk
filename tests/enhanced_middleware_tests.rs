@@ -47,7 +47,7 @@ async fn test_circuit_breaker_middleware() {
     assert!(result.is_ok());
 
     // Test name and priority
-    assert!(!circuit_breaker.name().is_empty());
+    assert_ne!(circuit_breaker.name(), "");
     assert!(matches!(
         circuit_breaker.priority(),
         MiddlewarePriority::High | MiddlewarePriority::Normal | MiddlewarePriority::Low
@@ -69,7 +69,7 @@ async fn test_rate_limit_middleware() {
     assert!(result.is_ok() || result.is_err()); // Either is acceptable for rate limiting
 
     // Test name and priority
-    assert!(!rate_limiter.name().is_empty());
+    assert_ne!(rate_limiter.name(), "");
     assert!(matches!(
         rate_limiter.priority(),
         MiddlewarePriority::High | MiddlewarePriority::Normal | MiddlewarePriority::Low
@@ -94,7 +94,7 @@ async fn test_metrics_middleware() {
     let _request_count = metrics.get_request_count("test_method");
 
     // Test name and priority
-    assert!(!metrics.name().is_empty());
+    assert_ne!(metrics.name(), "");
     assert!(matches!(
         metrics.priority(),
         MiddlewarePriority::High | MiddlewarePriority::Normal | MiddlewarePriority::Low
@@ -135,7 +135,7 @@ async fn test_compression_middleware() {
     assert!(result.is_ok());
 
     // Test name and priority
-    assert!(!compression.name().is_empty());
+    assert_ne!(compression.name(), "");
     assert!(matches!(
         compression.priority(),
         MiddlewarePriority::High | MiddlewarePriority::Normal | MiddlewarePriority::Low
@@ -241,10 +241,10 @@ async fn test_middleware_types_instantiation() {
     let rate_limiter = RateLimitMiddleware::new(5, 10, Duration::from_secs(1));
 
     // Test that all middlewares have proper names and priorities
-    assert!(!circuit_breaker.name().is_empty());
-    assert!(!metrics.name().is_empty());
-    assert!(!compression.name().is_empty());
-    assert!(!rate_limiter.name().is_empty());
+    assert_ne!(circuit_breaker.name(), "");
+    assert_ne!(metrics.name(), "");
+    assert_ne!(compression.name(), "");
+    assert_ne!(rate_limiter.name(), "");
 
     // Test that they all implement the required trait methods
     assert!(matches!(

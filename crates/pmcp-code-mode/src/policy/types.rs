@@ -261,15 +261,17 @@ impl ScriptEntity {
 
             // Build called operation string: use canonical ID from registry if available,
             // fall back to METHOD:/path format when no registry entry matches.
-            let op_id = registry
-                .and_then(|r| r.lookup(&api_call.path))
-                .map(|id| id.to_string())
+            // The same lookup as the static class gate (openapi_policy), so both
+            // see one operation for one call.
+            let entry = registry.and_then(|r| r.lookup_entry(Some(&method_str), &api_call.path));
+            let op_id = entry
+                .map(|e| e.id.clone())
                 .unwrap_or_else(|| format!("{}:{}", method_str, pattern));
             called_operations.insert(op_id);
 
             // Count by declared category (from [[code_mode.operations]]) when available,
             // fall back to HTTP method when no registry entry or no category declared.
-            let call_category = registry.and_then(|r| r.lookup_category(&api_call.path));
+            let call_category = entry.map(|e| e.category.as_str()).filter(|c| !c.is_empty());
             match call_category {
                 Some("read") => read_calls += 1,
                 Some("delete") => delete_calls += 1,

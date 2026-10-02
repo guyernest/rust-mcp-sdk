@@ -176,7 +176,7 @@ async fn v1_session_unchanged() {
         .mcp_session_id
         .clone()
         .expect("a v1 initialize on a stateful server MUST mint a session id");
-    assert!(!session_id.is_empty());
+    assert_ne!(session_id, "");
 
     // 2. A subsequent v1 request VALIDATES against it and is served.
     let listed = post(

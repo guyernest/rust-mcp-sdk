@@ -564,7 +564,7 @@ mod tests {
         assert!(trace_json.is_some());
 
         let trace: TraceContext = serde_json::from_str(trace_json.unwrap()).unwrap();
-        assert!(!trace.trace_id.is_empty());
+        assert_ne!(trace.trace_id, "");
         assert_eq!(trace.depth, 0);
     }
 

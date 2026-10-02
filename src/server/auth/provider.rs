@@ -934,7 +934,7 @@ mod tests {
         let discovery: OidcDiscovery = serde_json::from_str(json).unwrap();
         assert_eq!(discovery.issuer, "https://example.com");
         assert!(discovery.userinfo_endpoint.is_none());
-        assert!(discovery.scopes_supported.is_empty());
+        assert_eq!(discovery.scopes_supported, [] as [std::string::String; 0]);
     }
 
     // =========================================================================
@@ -1397,14 +1397,14 @@ mod tests {
     #[test]
     fn test_provider_registry_new() {
         let registry = ProviderRegistry::new();
-        assert!(registry.list().is_empty());
+        assert_eq!(registry.list(), [] as [&str; 0]);
         assert!(!registry.has("google"));
     }
 
     #[test]
     fn test_provider_registry_default() {
         let registry = ProviderRegistry::default();
-        assert!(registry.list().is_empty());
+        assert_eq!(registry.list(), [] as [&str; 0]);
     }
 
     #[test]

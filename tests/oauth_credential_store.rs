@@ -348,7 +348,7 @@ fn keys_reflects_insertions_and_removals() {
     let beta = CredentialKey::new(AS_BETA, "acct", MCP_BETA);
 
     let mut snapshot = CredentialSnapshot::new();
-    assert!(snapshot.keys().is_empty());
+    assert_eq!(snapshot.keys(), [] as [pmcp::CredentialKey; 0]);
 
     snapshot.insert(alpha.clone(), creds("at-alpha", "cid-alpha"));
     snapshot.insert(beta.clone(), creds("at-beta", "cid-beta"));
@@ -394,7 +394,7 @@ fn clear_returns_the_number_removed_and_empties_the_snapshot() {
     );
 
     assert_eq!(snapshot.clear(), 2);
-    assert!(snapshot.keys().is_empty());
+    assert_eq!(snapshot.keys(), [] as [pmcp::CredentialKey; 0]);
     assert_eq!(snapshot.clear(), 0);
 }
 
@@ -464,7 +464,7 @@ fn parse_round_trips_a_serialized_snapshot_and_reports_a_noop() {
     assert_eq!(parsed, original);
     assert!(report.is_noop());
     assert_eq!(report.migrated(), 0);
-    assert!(report.dropped().is_empty());
+    assert_eq!(report.dropped(), []);
     assert_eq!(parsed.last_issuer(MCP_ALPHA), Some(AS_ALPHA));
 }
 
@@ -478,7 +478,7 @@ fn a_schema_1_document_migrates_every_entry_that_records_an_issuer() {
         parse_credential_snapshot(V1_TWO_SERVERS_ONE_ISSUER.as_bytes()).expect("parse");
 
     assert_eq!(report.migrated(), 2);
-    assert!(report.dropped().is_empty());
+    assert_eq!(report.dropped(), []);
     assert!(!report.is_noop());
 
     let alpha = CredentialKey::new(AS_ALPHA, "", MCP_ALPHA);
@@ -595,7 +595,7 @@ fn corrupt_bytes_are_an_error_that_echoes_no_input() {
         !message.contains(canary),
         "the refusal reproduced peer-controlled input: {message}"
     );
-    assert!(!message.is_empty());
+    assert_ne!(message, "");
 }
 
 #[test]
@@ -610,9 +610,9 @@ fn empty_input_is_an_error_not_an_empty_snapshot() {
 fn a_schema_1_document_with_no_entries_migrates_to_an_empty_snapshot() {
     let (snapshot, report) =
         parse_credential_snapshot(br#"{"schema_version": 1, "entries": {}}"#).expect("parse");
-    assert!(snapshot.keys().is_empty());
+    assert_eq!(snapshot.keys(), [] as [pmcp::CredentialKey; 0]);
     assert_eq!(report.migrated(), 0);
-    assert!(report.dropped().is_empty());
+    assert_eq!(report.dropped(), []);
 }
 
 // ---------------------------------------------------------------------------

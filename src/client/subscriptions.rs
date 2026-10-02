@@ -1,7 +1,7 @@
 //! The CLIENT half of `subscriptions/listen` (MCP 2026-07-28, HTTP-04).
 //!
 //! Plan 10 built the SERVER route and proved it with a raw HTTP/1.1 client. This
-//! module is the other half: a pmcp [`Client`](crate::Client) that opts into
+//! module is the other half: a pmcp [`Client`] that opts into
 //! `2026-07-28` opens the long-lived stream and consumes its frames as a typed
 //! [`futures::Stream`] of `ServerNotification`s — which is what HTTP-04's
 //! requirement text ("**v2 clients get change notifications**") actually asks
@@ -1023,7 +1023,10 @@ mod tests {
     #[test]
     fn a_payload_split_across_chunks_is_reassembled() {
         let mut parser = SseParser::new();
-        assert!(drain_sse_payloads(&mut parser, "data: {\"a\"").is_empty());
+        assert_eq!(
+            drain_sse_payloads(&mut parser, "data: {\"a\""),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             drain_sse_payloads(&mut parser, ":1}\n\n"),
             vec!["{\"a\":1}".to_string()]

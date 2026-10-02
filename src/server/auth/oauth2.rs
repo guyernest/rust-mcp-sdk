@@ -812,7 +812,7 @@ mod tests {
         };
 
         let registered = provider.register_client(client).await.unwrap();
-        assert!(!registered.client_id.is_empty());
+        assert_ne!(registered.client_id, "");
         assert!(registered.client_secret.is_some());
 
         // Validate authorization request

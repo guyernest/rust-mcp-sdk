@@ -158,20 +158,21 @@ impl StdioTransport {
         // write side. That is the other half of #316: `send()` no longer gives
         // up on stdin EOF, so the write side must still latch shut when stdout
         // itself is gone, or a dead pipe would be retried forever.
-        let mut fail = |e: std::io::Error| {
+        // `Fn` and `Copy` (it captures only `&self`), so it is passed by value.
+        let fail = |e: std::io::Error| {
             self.write_closed
                 .store(true, std::sync::atomic::Ordering::Release);
             TransportError::from(e)
         };
 
         // Write message payload
-        stdout.write_all(json_bytes).await.map_err(&mut fail)?;
+        stdout.write_all(json_bytes).await.map_err(fail)?;
 
         // Write newline delimiter (MCP spec requirement)
-        stdout.write_all(b"\n").await.map_err(&mut fail)?;
+        stdout.write_all(b"\n").await.map_err(fail)?;
 
         // Always flush stdio
-        stdout.flush().await.map_err(&mut fail)?;
+        stdout.flush().await.map_err(fail)?;
         drop(stdout);
 
         Ok(())

@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(cfg.database, "default");
         assert_eq!(cfg.output_location, "");
         assert_eq!(cfg.query_timeout_ms, 60_000);
-        assert!(cfg.tables.is_empty());
+        assert_eq!(cfg.tables, [] as [std::string::String; 0]);
     }
 
     // REVIEWS M4: execute() rejects an empty output_location BEFORE any AWS call.

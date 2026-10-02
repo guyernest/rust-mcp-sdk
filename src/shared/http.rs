@@ -743,7 +743,10 @@ mod tests {
         let payload = sse_frame_of_len(base + 1);
 
         let mut low = sse_reader_parser(base);
-        assert!(low.feed(&payload).is_empty());
+        assert_eq!(
+            low.feed(&payload),
+            [] as [crate::shared::sse_parser::SseEvent; 0]
+        );
         assert!(report_sse_overflow(&low), "refused at the lower ceiling");
 
         let raised = HttpTransport::new(HttpConfig::default()).with_sse_buffered_bytes(base * 4);

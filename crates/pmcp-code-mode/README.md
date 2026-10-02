@@ -308,6 +308,27 @@ The pipeline enforces config-level authorization checks before policy evaluation
 - **Query control:** `blocked_queries` (blocklist), `allowed_queries` (allowlist). Same allowlist-takes-precedence semantics as mutations.
 - **Policy evaluation:** After config checks pass, `PolicyEvaluator::evaluate_operation()` runs (if configured) for fine-grained authorization.
 
+### OpenAPI Class Policy (static, no evaluator needed)
+
+Every OpenAPI policy key is enforced by the pipeline itself (`openapi_policy::OpenApiClassPolicy`), in both `validate_javascript_code` and `validate_javascript_code_async`. A configured `PolicyEvaluator` runs afterwards and can only narrow the verdict. Before 0.7.3 the static check looked at HTTP methods only, so under `NoopPolicyEvaluator` a non-empty write allowlist allowed every write, and the read, delete, blocked-path and catalog keys did nothing.
+
+Each API call gets one class. The declared `category` of its `[[code_mode.operations]]` entry wins; otherwise GET/HEAD/OPTIONS are `read`, POST/PUT/PATCH are `write`, and DELETE is `delete`. A declared category that is not `read`, `write`, `delete` or `admin` is refused. A call whose path is only known at run time (`` `/items/${id}` ``) keeps the stricter of its declared and method class.
+
+| Class | Mode |
+|-------|------|
+| read | `openapi_reads_enabled` ? allow all : deny all |
+| write | `openapi_allow_writes = false` → deny all; non-empty `openapi_allowed_writes` → only those; else allow all |
+| delete | `openapi_allow_deletes = false` → deny all; non-empty `openapi_allowed_deletes` → only those; else allow all |
+| admin | always deny all |
+
+`openapi_blocked_writes` blocks every call it names, in any class: an HTTP method name (`"PATCH"`) blocks the method, and anything else is an operation (`"POST /users"`, `"POST:/users/{id}"` or a catalog `id`). `openapi_blocked_paths` blocks every call under a pattern (`*` matches any run of characters; a pattern without `*` covers the path and everything below it). Violations name a call by method, source line and catalog id, never by path.
+
+Validation only sees a dynamic path as a template. Wrap the executor in `openapi_policy::ClassPolicyHttpExecutor` to repeat the check on each resolved request at execution time.
+
+A caller whose own config can say more than the `openapi_*` keys (a read allowlist, an `admin` mode) builds the policy with `OpenApiClassPolicy::with_mode` / `with_blocked_operations` / `with_blocked_paths` and installs it with `ValidationPipeline::with_openapi_class_policy` and `ClassPolicyHttpExecutor::with_policy`. The policy's `Display` is a one-line summary of each class's mode, suitable for a startup log.
+
+SDK-backed Code Mode (`sdk_operations`) makes no HTTP calls and is not classified.
+
 ## Deployment Configuration (`config.toml`)
 
 When deploying with `cargo pmcp deploy`, the server's `config.toml` is automatically included in the deploy ZIP. The pmcp.run platform extracts operation metadata from this file to populate the Code Mode policy page in the admin UI — administrators can then enable/disable individual operations by category.
@@ -326,7 +347,7 @@ Each entry has four fields:
 | `id` | yes | Canonical operation name — appears in Cedar `calledOperations` and admin UI |
 | `category` | yes | Action routing: `"read"`, `"write"`, `"delete"`, `"admin"` |
 | `description` | no | Human-readable label for admin UI and LLM context |
-| `path` | no | Raw API path to match against `api.post('/...')` calls (exact match) |
+| `path` | no | API path to match against `api.post('/...')` calls. A `{param}` segment matches any one segment, and an optional method prefix (`"GET /items/{id}"`) restricts the entry to that method. The most specific entry wins. |
 
 **OpenAPI server:**
 

@@ -372,7 +372,7 @@ mod tests {
         let manager = SessionManager::new(SessionConfig::default());
 
         let session = manager.create_session(None).unwrap();
-        assert!(!session.id.is_empty());
+        assert_ne!(session.id, "");
         assert!(!session.authenticated);
         assert_eq!(manager.session_count(), 1);
     }

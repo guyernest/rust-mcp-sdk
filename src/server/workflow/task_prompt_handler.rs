@@ -1113,7 +1113,7 @@ mod tests {
         assert_eq!(meta["task_status"], "working");
 
         let steps = meta["steps"].as_array().expect("steps should be an array");
-        assert!(steps.is_empty());
+        assert_eq!(steps.as_slice(), [] as [serde_json::Value; 0]);
     }
 
     #[test]

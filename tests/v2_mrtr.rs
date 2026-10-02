@@ -2413,7 +2413,7 @@ async fn client_server_mrtr_outcome_input_required() {
         .request_state
         .as_deref()
         .expect("the continuation token reaches the caller");
-    assert!(!state.is_empty());
+    assert_ne!(state, "");
     assert_eq!(
         observed.requests.load(Ordering::SeqCst),
         1,

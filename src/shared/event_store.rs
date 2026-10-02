@@ -412,7 +412,7 @@ mod tests {
 
         // Create resumption token
         let token = manager.create_token().await.unwrap();
-        assert!(!token.token.is_empty());
+        assert_ne!(token.token, "");
 
         // Resume from token
         let events = manager.resume_from_token(&token.token).await.unwrap();

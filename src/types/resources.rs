@@ -706,8 +706,8 @@ mod tests {
     #[test]
     fn test_resource_info_default() {
         let resource = ResourceInfo::default();
-        assert!(resource.uri.is_empty());
-        assert!(resource.name.is_empty());
+        assert_eq!(resource.uri, "");
+        assert_eq!(resource.name, "");
         assert!(resource.description.is_none());
     }
 

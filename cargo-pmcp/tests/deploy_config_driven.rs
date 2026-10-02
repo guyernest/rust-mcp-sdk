@@ -56,7 +56,7 @@ fn target_entry_enum_unchanged() {
             TargetEntry::GoogleCloudRun(_) => "google-cloud-run",
             TargetEntry::CloudflareWorkers(_) => "cloudflare-workers",
         };
-        assert!(!tag.is_empty());
+        assert_ne!(tag, "");
     }
 }
 

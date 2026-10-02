@@ -956,13 +956,16 @@ async fn serve(stream: TcpStream, shared: Arc<Shared>) {
     // `checked_sub` on zero returns `None`, which makes `fetch_update` fail —
     // the decrement and the decision are therefore one atomic step and two
     // concurrent POSTs cannot both consume the same unit.
-    if shared
+    // Why: `fetch_update` is deprecated in Rust 1.99 in favour of `try_update`,
+    // which does not exist at this crate's MSRV (1.91). Same semantics.
+    #[allow(deprecated)]
+    let consumed = shared
         .unauthorized_posts_remaining
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
             remaining.checked_sub(1)
         })
-        .is_ok()
-    {
+        .is_ok();
+    if consumed {
         serve_post_unauthorized(&mut write_half, &shared).await;
         return;
     }

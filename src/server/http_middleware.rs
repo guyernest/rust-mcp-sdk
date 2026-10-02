@@ -1234,7 +1234,7 @@ pub mod adapters {
 
             let (parts, body) = req.into_parts();
             let server_req = from_axum(parts, body).await.unwrap();
-            assert!(server_req.body.is_empty());
+            assert_eq!(server_req.body, [] as [u8; 0]);
 
             // Test empty response body
             let response =

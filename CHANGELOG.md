@@ -6,6 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.22.4] - 2026-10-01
+
+Ships `pmcp-server-toolkit` **0.4.0** — **breaking**: `CodeModeSection` gains fields and is now
+`#[non_exhaustive]`, and configs that used to load are now refused (listed below). Every crate that
+pins the toolkit or its connectors moves with it, as in #389: `pmcp-openapi-server`,
+`pmcp-sql-server`, `pmcp-workbook-server`, `pmcp-workbook-compiler`, `pmcp-toolkit-postgres`,
+`-mysql` and `-athena` go to **0.4.0**, and `cargo-pmcp` to **0.27.0** (scaffold templates emit
+`"0.4"`). `pmcp` moves 2.22.3 -> 2.22.4 with no code change, to mint the tag. `pmcp-code-mode` is
+unchanged at 0.7.3.
+
+### Added — a config-only OpenAPI server can declare its own security posture
+
+Asked for by the UMLS team (a config-only, read-only server) and specified with the pmcp.run team.
+New `[code_mode]` keys for an OpenAPI server (one with a `[backend]`), in the vocabulary
+`pmcp-code-mode` and the platform already use:
+
+- `read_mode`, `write_mode`, `delete_mode`, `admin_mode`: `deny_all | allow_all | allowlist |
+  blocklist`. Defaults: read `allow_all`, the rest `deny_all` (the 0.3 behaviour).
+- `allowed_operations`, `blocked_operations`, `blocked_paths`.
+- `[[code_mode.operations]]` with `id`, `category`, `description`, `path`
+  (`"POST /search/{version}"`): the catalog's category classifies a call before its HTTP method.
+
+Enforced with no policy evaluator, through `pmcp-code-mode` 0.7.3's `OpenApiClassPolicy`:
+
+- **`validate_code`** refuses a script whose calls the policy refuses.
+- **`execute_code`** re-checks each resolved request (`HttpCodeExecutor::with_class_policy`).
+- **Curated `[[tools]]`**: when any class key is set, a tool the policy refuses fails the boot
+  (`ConfigValidationError::CuratedToolRefusedByPolicy`), and script tools are re-checked at run time.
+  With no class key set, curated tools are not classified, as before.
+- The posture is logged once at startup, with "static policy only, no policy evaluator".
+- `openapi_class_policy(&section)` returns the policy; `openapi_policy` and `ResolvedPath` are
+  re-exported from `code_mode`.
+
+### Changed — configs that now fail to load
+
+- A SQL key (`allow_writes`, `allow_deletes`, `allow_ddl`, `require_limit`, `max_limit`,
+  `blocked_tables`, `sensitive_columns`, `[code_mode.limits]`) on an OpenAPI server, and a class key
+  on a server with no `[backend]`. Each did nothing; the error names the key and its replacement.
+- An `allowlist` / `blocklist` mode with an empty list; a duplicate or empty catalog entry.
+- An unknown `auto_approve_levels` entry. It used to be skipped, so a typo read as "nothing
+  auto-approved".
+- `CodeModeSection` is `#[non_exhaustive]`: build it from `Default` and assign fields.
+
+### Fixed — `cargo pmcp deploy` and the platform catalog spelling
+
+`cargo-pmcp`'s deploy metadata read `[[code_mode.operations]]` as `name` / `operation_category`,
+while `pmcp-code-mode`, the toolkit and pmcp.run use `id` / `category`. A catalog in the second form
+failed the instance-config parse, and with it the deploy. Both spellings now load.
+
+
+Ships `pmcp-code-mode` **0.7.3** and `pmcp-server-toolkit` **0.3.3** (which only raises its
+`pmcp-code-mode` floor to 0.7.3 and corrects a comment). `pmcp` moves 2.22.2 -> 2.22.3 with no code
+change of its own, to mint the tag that carries them. `cargo-pmcp` and `pmcp-code-mode-derive` are
+not bumped. **No API break** (`cargo semver-checks` against 0.7.2: no update required). There is a
+**behaviour change**: the static check now refuses scripts it used to pass (listed below).
+
+### Fixed — the OpenAPI static policy was mostly enforced only by a policy evaluator
+
+Raised by the UMLS team while hardening a config-only, read-only server, and by the pmcp.run team
+(D1, D2). The static check in `validate_javascript_code` and `validate_javascript_code_async` looked
+at HTTP methods only. Every other OpenAPI key was passed to the `PolicyEvaluator`, and
+`NoopPolicyEvaluator`, which config-driven servers use, allows everything. So:
+
+- **A write allowlist allowed every write (D1).** A non-empty `openapi_allowed_writes` skipped the
+  method check and left the list to the evaluator.
+- **Reads could not be denied (D2).** `openapi_reads_enabled = false` only affected auto-approval.
+- **Deletes followed `openapi_allow_writes`.** `openapi_allow_deletes` and `openapi_allowed_deletes`
+  were ignored.
+- **`openapi_blocked_paths` and `[[code_mode.operations]]` categories did nothing**, and `admin` was
+  treated as write.
+
+The new `openapi_policy::OpenApiClassPolicy` enforces all of them before any evaluator runs; an
+evaluator can now only narrow the verdict. Each call gets a class (the catalog `category`, else the
+HTTP method), and each class has a mode derived from the existing keys, mirroring the `write_mode`
+already sent to Cedar. `admin` is always denied. An unknown category is refused. A dynamic path keeps
+the stricter of its declared and method class. Violations are value-free: they name the method,
+source line and catalog id, never the path.
+
+- **Catalog matching:** an operation `path` now matches templates (`/items/{id}`) and may carry a
+  method (`"GET /items/{id}"`). It was exact-match only. The Cedar entity uses the same lookup.
+- **New `openapi_policy::ClassPolicyHttpExecutor`** wraps an `HttpExecutor` and repeats the check on
+  each resolved request, so a run-time path value cannot leave the class it validated under. The
+  toolkit does not wrap its executor yet.
+- **New builder API** for callers whose config can say more than the `openapi_*` keys:
+  `OpenApiClassPolicy::with_mode` / `with_blocked_operations` / `with_blocked_paths`,
+  `ValidationPipeline::with_openapi_class_policy` and `ClassPolicyHttpExecutor::with_policy`. The
+  toolkit's `[code_mode]` class keys will use it.
+- **Fixed:** a template-literal path got a stray `{...}` after its last static part
+  (`` `/users/${id}/orders` `` was recorded as `/users/{...}/orders{...}`).
+- **Behaviour change:** `allow_writes = true` no longer permits DELETE, a non-empty allowlist no
+  longer permits writes outside it, and a blocked path, an `admin` operation or a misspelled category
+  is now refused. A server that relied on any of these needs `openapi_allow_deletes` or an updated
+  list.
+
 ## [2.22.2] - 2026-09-30
 
 Ships `pmcp-code-mode` **0.7.2**, `pmcp-code-mode-derive` **0.3.3** and `pmcp-server-toolkit`

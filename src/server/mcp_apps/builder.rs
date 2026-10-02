@@ -363,8 +363,8 @@ mod tests {
             .csp_resource("https://cdn.example.com");
 
         let csp = builder.csp();
-        assert!(!csp.connect_domains.is_empty());
-        assert!(!csp.resource_domains.is_empty());
+        assert_ne!(csp.connect_domains, [] as [std::string::String; 0]);
+        assert_ne!(csp.resource_domains, [] as [std::string::String; 0]);
     }
 
     #[test]

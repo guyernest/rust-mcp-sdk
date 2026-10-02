@@ -10059,7 +10059,7 @@ mod tests {
             let result = complete_completion(None, &request())
                 .await
                 .expect("the no-provider path is a SUCCESS, never an error");
-            assert!(result.completion.values.is_empty());
+            assert_eq!(result.completion.values, [] as [std::string::String; 0]);
             assert!(!result.completion.has_more);
             assert_eq!(result.completion.total, None);
         }

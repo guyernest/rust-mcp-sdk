@@ -85,6 +85,10 @@ pub mod cedar_validation;
 #[cfg(feature = "openapi-code-mode")]
 mod javascript;
 
+// Static class policy for OpenAPI Code Mode (enforced without an evaluator)
+#[cfg(feature = "openapi-code-mode")]
+pub mod openapi_policy;
+
 // SQL validation for SQL Code Mode (requires sqlparser)
 #[cfg(feature = "sql-code-mode")]
 pub mod sql;

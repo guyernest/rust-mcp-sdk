@@ -1501,9 +1501,9 @@ mod tests {
         let store = InMemoryTaskStore::new();
         let task = store.create("owner-1", None).await.unwrap();
         assert_eq!(task.status, TaskStatus::Working);
-        assert!(!task.task_id.is_empty());
-        assert!(!task.created_at.is_empty());
-        assert!(!task.last_updated_at.is_empty());
+        assert_ne!(task.task_id, "");
+        assert_ne!(task.created_at, "");
+        assert_ne!(task.last_updated_at, "");
     }
 
     #[tokio::test]
