@@ -5,8 +5,8 @@
 //! The task storage system has three layers:
 //!
 //! 1. **[`TaskStore`]** -- A type-erasure interface for use with
-//!    `Arc<dyn TaskStore>` in [`TaskContext`](crate::context::TaskContext)
-//!    and [`TaskRouterImpl`](crate::router::TaskRouterImpl).
+//!    `Arc<dyn TaskStore>` in [`TaskContext`]
+//!    and [`TaskRouterImpl`].
 //!
 //! 2. **[`GenericTaskStore<B>`](crate::store::generic::GenericTaskStore)** -- All domain
 //!    logic (state machine, owner isolation, variable merge, TTL, CAS-based
@@ -20,9 +20,9 @@
 //!
 //! # Backends
 //!
-//! - [`InMemoryBackend`](crate::store::memory::InMemoryBackend) -- Thread-safe
+//! - [`InMemoryBackend`] -- Thread-safe
 //!   in-memory backend using `DashMap`. Used by
-//!   [`InMemoryTaskStore`](crate::store::memory::InMemoryTaskStore).
+//!   [`InMemoryTaskStore`].
 //! - `DynamoDbBackend` -- DynamoDB backend for production AWS/Lambda
 //!   deployments. Available behind the `dynamodb` feature flag.
 //! - `RedisBackend` -- Redis backend for long-running server deployments.

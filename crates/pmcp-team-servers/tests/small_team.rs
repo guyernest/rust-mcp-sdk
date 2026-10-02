@@ -282,7 +282,10 @@ async fn team_of_one_wires_only_the_member() {
     // No dispatch/approval/opt-in servers attach.
     assert!(!rt.attachment().team_mcp);
     assert!(!rt.attachment().approval_mcp);
-    assert!(rt.attachment().opt_ins.is_empty());
+    assert_eq!(
+        rt.attachment().opt_ins,
+        [] as [pmcp_package::ComponentRef; 0]
+    );
     assert!(rt.team_mcp_client().is_none());
     assert!(rt.approval_client().is_none());
     assert!(rt.team_fs_client().is_none());

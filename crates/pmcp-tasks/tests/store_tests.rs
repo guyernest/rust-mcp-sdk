@@ -33,7 +33,7 @@ mod crud_tests {
             .unwrap();
         assert_eq!(record.task.status, TaskStatus::Working);
         assert_eq!(record.owner_id, "test-owner");
-        assert!(!record.task.task_id.is_empty());
+        assert_ne!(record.task.task_id, "");
     }
 
     #[tokio::test]

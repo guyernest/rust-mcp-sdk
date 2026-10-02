@@ -327,7 +327,7 @@ async fn one_validation_uses_one_call_id() {
     .expect("validates");
     let seen = policy.seen();
     assert_eq!(seen.len(), 2);
-    assert!(!seen[0].call_id.is_empty());
+    assert_ne!(seen[0].call_id, "");
     assert_eq!(seen[0].call_id, seen[1].call_id);
 }
 

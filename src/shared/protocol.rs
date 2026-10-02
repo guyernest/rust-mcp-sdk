@@ -290,7 +290,10 @@ mod tests {
 
         let default_options = ProtocolOptions::default();
         assert!(!default_options.enforce_strict_capabilities);
-        assert!(default_options.debounced_notification_methods.is_empty());
+        assert_eq!(
+            default_options.debounced_notification_methods,
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]

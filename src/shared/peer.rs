@@ -85,10 +85,10 @@ pub trait PeerHandle: Send + Sync {
     ///
     /// Returns a [`CreateMessageResultWithTools`], whose `content` is an array
     /// that can carry `tool_use` / `tool_result` blocks — unlike the
-    /// single-`Content` [`CreateMessageResult`] from [`PeerHandle::sample`](crate::shared::peer::PeerHandle::sample).
+    /// single-`Content` [`CreateMessageResult`] from [`PeerHandle::sample`].
     ///
     /// This is an ADDITIVE trait method with a default body that delegates to
-    /// [`PeerHandle::sample`](crate::shared::peer::PeerHandle::sample) and lifts the single result into the `WithTools`
+    /// [`PeerHandle::sample`] and lifts the single result into the `WithTools`
     /// shape (via [`CreateMessageResultWithTools::from_single`]). Existing
     /// `PeerHandle` implementors therefore keep compiling unchanged; the
     /// dispatch-backed [`crate::server::peer_impl::DispatchPeerHandle`] overrides

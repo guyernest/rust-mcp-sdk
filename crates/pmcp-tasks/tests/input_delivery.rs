@@ -963,7 +963,7 @@ async fn a_pre_114_record_still_deserializes() {
         .deliver_inputs("pre-114-task", OWNER, responses_of(&["city"]))
         .await
         .expect("a pre-extension record must still accept a delivery call");
-    assert!(accepted(&outcome).is_empty());
+    assert_eq!(accepted(&outcome), [] as [std::string::String; 0]);
     assert_eq!(ignored(&outcome), vec!["city".to_string()]);
     assert!(
         !is_complete(&outcome),

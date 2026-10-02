@@ -2941,23 +2941,22 @@ mod tests {
         expected_uri: &str,
     ) -> std::result::Result<(), proptest::test_runner::TestCaseError> {
         prop_assert_eq!(contents.len(), 1);
-        match &contents[0] {
-            Content::Resource {
-                uri,
-                text,
-                mime_type,
-                ..
-            } => {
-                prop_assert_eq!(uri, expected_uri);
-                prop_assert!(text.is_some(), "text missing for {}", expected_uri);
-                prop_assert!(mime_type.is_some(), "mime missing for {}", expected_uri);
-                Ok(())
-            },
-            other => {
-                prop_assert!(false, "expected Content::Resource, got {:?}", other);
-                Ok(())
-            },
-        }
+        let Content::Resource {
+            uri,
+            text,
+            mime_type,
+            ..
+        } = &contents[0]
+        else {
+            return Err(proptest::test_runner::TestCaseError::fail(format!(
+                "expected Content::Resource, got {:?}",
+                contents[0]
+            )));
+        };
+        prop_assert_eq!(uri, expected_uri);
+        prop_assert!(text.is_some(), "text missing for {}", expected_uri);
+        prop_assert!(mime_type.is_some(), "mime missing for {}", expected_uri);
+        Ok(())
     }
 
     proptest! {

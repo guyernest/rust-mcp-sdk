@@ -849,7 +849,7 @@ mod tests {
     fn test_parse_scopes_empty() {
         let claims = serde_json::json!({});
         let scopes = parse_scopes(&claims);
-        assert!(scopes.is_empty());
+        assert_eq!(scopes, [] as [std::string::String; 0]);
     }
 
     #[cfg(all(feature = "jwt-auth", not(target_arch = "wasm32")))]

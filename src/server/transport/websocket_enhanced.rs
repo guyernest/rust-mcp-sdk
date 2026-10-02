@@ -456,7 +456,7 @@ mod tests {
         let server = EnhancedWebSocketServer::new(config);
 
         assert_eq!(server.client_count().await, 0);
-        assert!(server.get_connected_clients().await.is_empty());
+        assert_eq!(server.get_connected_clients().await, [] as [uuid::Uuid; 0]);
     }
 
     #[tokio::test]

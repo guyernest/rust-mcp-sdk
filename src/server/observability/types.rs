@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn test_trace_context_new_root() {
         let ctx = TraceContext::new_root();
-        assert!(!ctx.trace_id.is_empty());
-        assert!(!ctx.span_id.is_empty());
+        assert_ne!(ctx.trace_id, "");
+        assert_ne!(ctx.span_id, "");
         assert!(ctx.parent_span_id.is_none());
         assert_eq!(ctx.depth, 0);
     }

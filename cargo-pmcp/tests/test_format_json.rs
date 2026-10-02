@@ -179,7 +179,7 @@ fn conformance_format_json_emits_test_failed_for_unreachable_url() {
         pdr.summary.is_some(),
         "conformance JSON branch always populates summary (5-bucket TestSummary)"
     );
-    assert!(!pdr.failures.is_empty());
+    assert_ne!(pdr.failures, [] as [mcp_tester::FailureDetail; 0]);
     assert!(pdr
         .failures
         .iter()
