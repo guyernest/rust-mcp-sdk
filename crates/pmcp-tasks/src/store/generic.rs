@@ -450,6 +450,63 @@ impl<B: StorageBackend> GenericTaskStore<B> {
         Ok(record)
     }
 
+    /// Replaces a task's status message without changing its status.
+    ///
+    /// This is how a worker reports progress ("step 2/4") on a `working`
+    /// task: [`update_status`](Self::update_status) cannot, because the state
+    /// machine rejects `working -> working`. A terminal task's message is final,
+    /// so a terminal task is refused with [`TaskError::InvalidTransition`] from
+    /// its status to itself, the same refusal pmcp's in-memory store gives.
+    ///
+    /// # Errors
+    ///
+    /// - [`TaskError::NotFound`] if the task doesn't exist or belongs to
+    ///   another owner.
+    /// - [`TaskError::Expired`] if the task's TTL has elapsed.
+    /// - [`TaskError::InvalidTransition`] if the task is terminal.
+    /// - [`TaskError::ConcurrentModification`] if another write landed between
+    ///   the read and the compare-and-set.
+    pub async fn set_status_message(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        status_message: Option<String>,
+    ) -> Result<TaskRecord, TaskError> {
+        let key = make_key(owner_id, task_id);
+        let versioned = self
+            .backend
+            .get(&key)
+            .await
+            .map_err(|e| Self::map_storage_error(e, task_id))?;
+        let mut record = Self::deserialize_record(&versioned.data)?;
+        record.version = versioned.version;
+
+        Self::check_owner(&record, task_id, owner_id, "set_status_message")?;
+        Self::check_not_expired(&record, task_id)?;
+
+        let status = record.task.status;
+        if status.is_terminal() {
+            return Err(TaskError::InvalidTransition {
+                task_id: task_id.to_string(),
+                from: status,
+                to: status,
+                suggested_action: None,
+            });
+        }
+
+        record.task.status_message = status_message;
+        Self::touch(&mut record);
+
+        let bytes = Self::serialize_record(&record)?;
+        let new_version = self
+            .backend
+            .put_if_version(&key, &bytes, versioned.version)
+            .await
+            .map_err(|e| Self::map_storage_error(e, task_id))?;
+        record.version = new_version;
+        Ok(record)
+    }
+
     /// Lists tasks for an owner with cursor-based pagination.
     ///
     /// Results are sorted by creation time (newest first). The cursor is
@@ -899,6 +956,16 @@ impl<B: StorageBackend> GenericTaskStore<B> {
     /// Returns a reference to the store's configuration.
     pub fn config(&self) -> &StoreConfig {
         &self.config
+    }
+
+    /// Returns a reference to the store's security configuration.
+    pub fn security(&self) -> &TaskSecurityConfig {
+        &self.security
+    }
+
+    /// Returns the poll interval, in milliseconds, stamped on new tasks.
+    pub fn poll_interval_ms(&self) -> u64 {
+        self.default_poll_interval
     }
 
     /// Returns a reference to the underlying storage backend.

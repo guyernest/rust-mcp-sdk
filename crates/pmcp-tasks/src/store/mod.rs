@@ -41,6 +41,7 @@ pub mod generic;
 pub mod memory;
 #[cfg(feature = "redis")]
 pub mod redis;
+pub mod server;
 
 use std::collections::HashMap;
 

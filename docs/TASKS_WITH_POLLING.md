@@ -356,9 +356,22 @@ impl TaskStore for MyDatabaseStore {
 }
 ```
 
-`InMemoryTaskStore` is the only implementation in the SDK. Its tasks don't survive a restart and aren't shared between instances, so any deployment that runs more than one instance (every Lambda deployment, any container service that scales out) needs an implementation like the one above over a shared database.
+`InMemoryTaskStore` is the only implementation in the SDK itself. Its tasks don't survive a restart and aren't shared between instances, so any deployment that runs more than one instance (every Lambda deployment, any container service that scales out) needs a store over a shared database.
 
-The DynamoDB and Redis backends in the `pmcp-tasks` crate implement that crate's **own** `TaskStore` trait and plug in only through the legacy `with_task_store(TaskRouterImpl)` path. They do not implement this trait, and `task_store(...)` doesn't accept them.
+For DynamoDB or Redis you don't need to write one. From `pmcp-tasks` 0.2, `ServerTaskStore` wraps that crate's `GenericTaskStore` over any of its backends and implements this trait:
+
+```rust,ignore
+use pmcp_tasks::{DynamoDbBackend, GenericTaskStore, ServerTaskStore};
+
+let backend = DynamoDbBackend::from_env_with_table("mcp-tasks").await;
+let store = Arc::new(ServerTaskStore::new(GenericTaskStore::new(backend)));
+let server = Server::builder()
+    // ... tools ...
+    .task_store(store as Arc<dyn TaskStore>)
+    .build()?;
+```
+
+It matches `InMemoryTaskStore`'s behaviour except that it refuses task creation for the shared unauthenticated owners unless `allow_anonymous` is set (see [Owner Resolution](#owner-resolution)). An implementation like the one above is for any other database.
 
 ## Configuration
 
@@ -431,7 +444,7 @@ The owner is never the OAuth `client_id`: that identifies the client application
 
 With OAuth, User A therefore cannot see or cancel User B's tasks. Without it, every caller shares a bucket, so anyone holding a task id can read that task's status and result. Task ids are random v4 UUIDs, but nothing else protects them. Configure an auth provider before storing results that are not public. `InMemoryTaskStore` does not refuse the shared owners.
 
-The legacy `TaskRouter` path resolves owners differently (subject, then client ID, then session ID), and `pmcp-tasks`' stores refuse the shared `"local"` owner unless `TaskSecurityConfig::with_allow_anonymous(true)` is set.
+`pmcp-tasks`' stores, including `ServerTaskStore`, refuse the shared `"local"` and `""` owners unless `TaskSecurityConfig::with_allow_anonymous(true)` is set. The legacy `TaskRouter` path also resolves owners differently (subject, then client ID, then session ID).
 
 ## Architecture
 
@@ -452,11 +465,11 @@ The legacy `TaskRouter` path resolves owners differently (subject, then client I
 +--------------------------------------------------+
 |              pmcp-tasks (extension)                |
 |                                                   |
-|  InMemoryTaskStore   TaskRouterImpl               |
+|  ServerTaskStore     TaskRouterImpl (legacy)      |
 |  DynamoDB backend    Redis backend                |
 |  Task variables      Task result storage          |
 |  Security config     Owner binding                |
 +--------------------------------------------------+
 ```
 
-The SDK provides everything needed for development and testing. `pmcp-tasks` serves the legacy `TaskRouter` path only; on the recommended `task_store(...)` path, production persistence means implementing `pmcp::server::task_store::TaskStore` over your own database.
+The SDK provides everything needed for development and testing. For production persistence on the recommended `task_store(...)` path, use `pmcp-tasks`' `ServerTaskStore` over DynamoDB or Redis, or implement `pmcp::server::task_store::TaskStore` over another database.
