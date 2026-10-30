@@ -95,17 +95,18 @@ let store = Arc::new(InMemoryTaskStore::new());
 // let store = Arc::new(MyDynamoDbTaskStore::new(client, table_name));
 ```
 
-The SDK provides `InMemoryTaskStore` for development. It is the only `TaskStore` implementation in the SDK, and its tasks don't survive a restart or reach other instances. For Lambda or any deployment that scales out, implement `pmcp::server::task_store::TaskStore` over a shared database. The required methods are `create`, `get`, `update_status`, `list`, `cancel`, `cleanup_expired` and `config`, and every lookup is scoped to the owner id.
+The SDK provides `InMemoryTaskStore` for development. It is the only `TaskStore` implementation in the SDK itself, and its tasks don't survive a restart or reach other instances. For Lambda or any deployment that scales out, use a store over a shared database. For DynamoDB or Redis, wrap `pmcp-tasks`' `GenericTaskStore` in its `ServerTaskStore` (from `pmcp-tasks` 0.2), which `task_store(...)` accepts. For any other database, implement `pmcp::server::task_store::TaskStore` yourself. The required methods are `create`, `get`, `update_status`, `list`, `cancel`, `cleanup_expired` and `config`, and every lookup is scoped to the owner id.
 
-> **What about `pmcp-tasks`?** Its DynamoDB and Redis backends implement that crate's own `TaskStore` trait. They plug into the legacy `with_task_store(TaskRouterImpl)` path, not into `task_store(...)`.
+> **`pmcp-tasks` refuses anonymous owners.** Unlike `InMemoryTaskStore`, `ServerTaskStore` refuses task creation for the shared unauthenticated owners unless `allow_anonymous` is set in its `TaskSecurityConfig`. Configure an auth provider, or opt in explicitly for a public demo.
 
 > **Recommended pattern (read the next section with this in mind).** The clean way to expose a tool as a Task is to declare `with_task_support` on the tool and register the store with `task_store(...)` on `ServerCoreBuilder`. The SDK then mints the task id, auto-advertises the `tasks` capability, and serves `tasks/get | result | list | cancel` typed from the store -- **you never hand-write `tasks/*` wire JSON**. The runnable reference is [`examples/s45_tool_as_task_lifecycle.rs`](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/s45_tool_as_task_lifecycle.rs). The high-level `Server::builder()` takes `task_store(...)` too, so the same pattern works behind `StreamableHttpServer`.
 
 | Backend | Plugs into | Use Case |
 |---------|-----------|----------|
 | `InMemoryTaskStore` (`pmcp`) | `task_store(...)` | Development, testing, single-instance servers |
-| Your own `impl TaskStore` over a shared database | `task_store(...)` | AWS Lambda, serverless, multi-instance |
-| `GenericTaskStore<DynamoDbBackend>` / `<RedisBackend>` (`pmcp-tasks`) | legacy `with_task_store(TaskRouterImpl)` only | Existing servers on the router path |
+| `ServerTaskStore` over `DynamoDbBackend` / `RedisBackend` (`pmcp-tasks` 0.2+) | `task_store(...)` | AWS Lambda, serverless, multi-instance |
+| Your own `impl TaskStore` over another database | `task_store(...)` | Firestore, Postgres, anything else shared |
+| `GenericTaskStore<DynamoDbBackend>` / `<RedisBackend>` via `TaskRouterImpl` (`pmcp-tasks`) | legacy `with_task_store(...)` | Existing servers on the router path |
 
 **Owner isolation needs authentication.** Each task is served only to its owner, the authenticated OAuth subject. Unauthenticated callers share one bucket (`"local"` on v1, `""` on a v2 server with no auth provider), so on a server without auth anyone holding a task id can read the task. Configure an auth provider before storing anything private.
 

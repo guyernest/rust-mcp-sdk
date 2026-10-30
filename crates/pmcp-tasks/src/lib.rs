@@ -18,19 +18,22 @@
 //!
 //! # Which server path this crate serves
 //!
-//! The stores here, including `DynamoDbBackend` and `RedisBackend`, implement
-//! this crate's own [`store::TaskStore`] trait. They reach a pmcp server through
-//! [`TaskRouterImpl`] and `with_task_store(...)`, the legacy experimental
-//! router path. They do **not** implement `pmcp::server::task_store::TaskStore`,
-//! the trait the recommended `task_store(...)` builder method takes. A server
-//! on that path that needs task state to survive a restart, or to be shared
-//! between instances, implements that trait over its own database.
+//! The stores here, including `DynamoDbBackend` and `RedisBackend`, serve both
+//! of pmcp's task paths:
+//!
+//! - **`task_store(...)`, the recommended path.** Wrap a [`GenericTaskStore`]
+//!   in [`ServerTaskStore`], which implements
+//!   `pmcp::server::task_store::TaskStore`. Task state then survives a restart
+//!   and is shared between instances whenever the backend is. See the
+//!   [`store::server`] module and the `durable_task_store` example.
+//! - **The legacy experimental router.** [`TaskRouterImpl`] bridges this
+//!   crate's own [`store::TaskStore`] trait to `with_task_store(...)`.
 //!
 //! # Module Organization
 //!
 //! - [`types`] - Spec-compliant wire types (Task, params, capabilities, etc.)
 //! - [`domain`] - Internal domain types (`TaskRecord`, `TaskWithVariables`)
-//! - [`store`] - `TaskStore` async trait, supporting types, and backend implementations
+//! - [`store`] - `TaskStore` async trait, supporting types, backend implementations, and the `ServerTaskStore` adapter for pmcp's `task_store(...)`
 //! - [`security`] - Security configuration and owner resolution
 //! - [`error`] - Rich error types with JSON-RPC error code mapping
 //! - [`constants`] - Meta key and method name constants
@@ -68,6 +71,7 @@ pub use store::memory::InMemoryBackend;
 pub use store::memory::InMemoryTaskStore;
 #[cfg(feature = "redis")]
 pub use store::redis::RedisBackend;
+pub use store::server::ServerTaskStore;
 pub use store::{
     ListTasksOptions, StorageBackend, StorageError, StoreConfig, TaskPage, TaskStore,
     VersionedRecord,

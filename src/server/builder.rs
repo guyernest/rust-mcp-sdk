@@ -1198,13 +1198,15 @@ impl ServerCoreBuilder {
     /// implementation in the SDK. Its tasks are lost on restart and are not
     /// shared between instances, so a task created on one instance cannot be
     /// polled on another. Any deployment that runs more than one instance
-    /// (every AWS Lambda deployment, a scaled container service) needs its own
-    /// implementation over a shared database.
+    /// (every AWS Lambda deployment, a scaled container service) needs a store
+    /// over a shared database.
     ///
-    /// The `pmcp-tasks` crate's `DynamoDbBackend` and `RedisBackend` do **not**
-    /// plug in here: they implement that crate's own `TaskStore` trait and
-    /// reach a server only through the legacy router path,
-    /// [`Self::with_task_store`].
+    /// The `pmcp-tasks` crate (0.2 and later) provides one: wrap its
+    /// `GenericTaskStore` over `DynamoDbBackend` or `RedisBackend` in
+    /// `ServerTaskStore` and pass that here. Unlike `InMemoryTaskStore`, it
+    /// refuses task creation for the shared unauthenticated owners unless its
+    /// `allow_anonymous` setting is on. For any other database, implement the
+    /// trait directly.
     ///
     /// See `examples/s45_tool_as_task_lifecycle.rs` for the full client
     /// round-trip.

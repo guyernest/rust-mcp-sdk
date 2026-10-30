@@ -16,9 +16,10 @@
 //!
 //! The `pmcp-tasks` crate defines a separate `TaskStore` trait (see
 //! <https://docs.rs/pmcp-tasks/latest/pmcp_tasks/store/trait.TaskStore.html>)
-//! for the legacy [`TaskRouter`](crate::server::tasks::TaskRouter) path. Its
-//! DynamoDB and Redis backends implement that trait, not this one, so they do
-//! not plug into `task_store(...)`. Compared with it, this trait has:
+//! for the legacy [`TaskRouter`](crate::server::tasks::TaskRouter) path. From
+//! version 0.2 its `ServerTaskStore` adapter also implements this trait over
+//! any of its backends, including DynamoDB and Redis, so those backends plug
+//! into `task_store(...)`. Compared with that crate's trait, this one has:
 //! - no `set_variables` / `complete_with_result`;
 //! - no `request_method` parameter on `create`;
 //! - `Task` (the wire type) as its return type instead of `TaskRecord`.

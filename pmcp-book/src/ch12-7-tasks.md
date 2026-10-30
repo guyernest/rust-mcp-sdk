@@ -115,9 +115,32 @@ let tool = TypedTool::new_with_schema("backtest", schema, move |_args, extra: Re
 
 ### Persistence: one instance or many
 
-`InMemoryTaskStore` is the only `TaskStore` implementation in the SDK. Its tasks are lost when the process restarts, and they are not shared between instances, so a task created on one instance cannot be polled on another. That rules it out for any deployment that runs more than one instance: every AWS Lambda deployment, and any container service that scales out. Such a server needs its own implementation of `pmcp::server::task_store::TaskStore` over a shared database such as DynamoDB, Firestore, Redis or Postgres. The trait's required methods are `create`, `get`, `update_status`, `list`, `cancel`, `cleanup_expired` and `config`. Every lookup takes the owner id and must return `NotFound` for a task that belongs to someone else.
+`InMemoryTaskStore` is the only `TaskStore` implementation in the SDK itself. Its tasks are lost when the process restarts, and they are not shared between instances, so a task created on one instance cannot be polled on another. That rules it out for any deployment that runs more than one instance: every AWS Lambda deployment, and any container service that scales out. Such a server needs a store over a shared database.
 
-> **The `pmcp-tasks` backends don't plug in here.** The DynamoDB and Redis stores in `pmcp-tasks` implement that crate's own `TaskStore` trait, which serves the [legacy router path](#legacy-setting-up-taskstore-via-pmcp-tasks) below. `task_store(...)` doesn't accept them.
+For DynamoDB or Redis, use `pmcp-tasks` 0.2 or later. Its `ServerTaskStore` wraps the crate's `GenericTaskStore` over any of its backends and implements the trait `task_store(...)` takes:
+
+```toml
+[dependencies]
+pmcp-tasks = { version = "0.2", features = ["dynamodb"] }
+```
+
+```rust
+use std::sync::Arc;
+use pmcp::server::task_store::TaskStore;
+use pmcp_tasks::{DynamoDbBackend, GenericTaskStore, ServerTaskStore};
+
+let backend = DynamoDbBackend::from_env_with_table("mcp-tasks").await;
+let store = ServerTaskStore::new(GenericTaskStore::new(backend));
+
+let server = Server::builder()
+    // ... tools ...
+    .task_store(Arc::new(store) as Arc<dyn TaskStore>)
+    .build()?;
+```
+
+`ServerTaskStore` behaves like `InMemoryTaskStore` (the tests check this operation by operation), with one deliberate difference: it refuses task creation for the shared unauthenticated owners described in the next section, unless you turn on `allow_anonymous` in its `TaskSecurityConfig`. Every write is a compare-and-set, so two instances updating one task never lose a write silently. The runnable version is `pmcp-tasks`' [`durable_task_store` example](https://github.com/paiml/rust-mcp-sdk/blob/main/crates/pmcp-tasks/examples/durable_task_store.rs).
+
+For any other database (Firestore, Postgres, ...), implement `pmcp::server::task_store::TaskStore` yourself. Its required methods are `create`, `get`, `update_status`, `list`, `cancel`, `cleanup_expired` and `config`. Every lookup takes the owner id and must return `NotFound` for a task that belongs to someone else.
 
 ### Owner isolation needs authentication
 
@@ -245,7 +268,7 @@ The client can also list all its tasks with `tasks/list` and cancel an in-progre
 
 ## Legacy: Setting Up TaskStore via `pmcp-tasks`
 
-> **Legacy / experimental path.** The sections from here through "Writing Dual-Path Tool Handlers" describe the older `pmcp-tasks` + `TaskRouter` approach, where you hand-construct the store, wire it with `with_task_store(...)`, and emit `task` JSON by hand inside the handler. New code should prefer the [Recommended Pattern](#recommended-pattern-tools-as-tasks) above (`task_store(...)` + `with_task_support`), which removes the hand-rolled JSON entirely. The material below is retained because you may encounter it in existing servers. The DynamoDB and Redis backends documented here work **only** on this legacy path: they implement `pmcp-tasks`' own `TaskStore` trait, not the one `task_store(...)` takes (see [Persistence](#persistence-one-instance-or-many)).
+> **Legacy / experimental path.** The sections from here through "Writing Dual-Path Tool Handlers" describe the older `pmcp-tasks` + `TaskRouter` approach, where you hand-construct the store, wire it with `with_task_store(...)`, and emit `task` JSON by hand inside the handler. New code should prefer the [Recommended Pattern](#recommended-pattern-tools-as-tasks) above (`task_store(...)` + `with_task_support`), which removes the hand-rolled JSON entirely. The material below is retained because you may encounter it in existing servers. The DynamoDB and Redis backends documented here also serve the recommended path, wrapped in `ServerTaskStore` (see [Persistence](#persistence-one-instance-or-many)).
 
 Tasks need persistent storage. The `pmcp-tasks` crate provides its own `TaskStore` trait and two ready-made backends for it:
 

@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`pmcp-tasks`: `ServerTaskStore`, so its DynamoDB and Redis stores plug into `task_store(...)`
+  (field report F-7).** Until now `pmcp-tasks`' stores implemented only that crate's own
+  `TaskStore` trait and served only the legacy `TaskRouter` path, so a server on the recommended
+  path that needed tasks to survive a restart, or to be shared between instances, had to write its
+  own store. `ServerTaskStore::new(GenericTaskStore::new(backend))` implements
+  `pmcp::server::task_store::TaskStore` over any `StorageBackend`, including `set_status_message`,
+  results, errors and v2 input delivery. It behaves like pmcp's `InMemoryTaskStore` (a requested
+  TTL above the maximum is clamped, expired tasks read as `Expired` and leave `list`), which a
+  differential property test checks operation by operation. One deliberate difference: like every
+  `pmcp-tasks` store, it refuses task creation for the shared unauthenticated owners (`"local"`,
+  `""`) unless `TaskSecurityConfig::with_allow_anonymous(true)` is set. Runnable example:
+  `cargo run -p pmcp-tasks --example durable_task_store`.
+- **`pmcp-tasks`: `GenericTaskStore::set_status_message`**, which updates a working task's message
+  without moving its status, and the `security()` and `poll_interval_ms()` getters.
+
+### Changed
+
+- **`pmcp-tasks` now requires `pmcp` 2.23**, the release that added
+  `TaskStore::set_status_message`.
+
+### Documentation
+
+- The `task_store(...)` rustdoc, the `task_store` module doc, the book (ch12-7), the course
+  (ch21), `docs/TASKS_WITH_POLLING.md` and the `pmcp-tasks` crate docs now show `ServerTaskStore`
+  as the way to persist tasks in DynamoDB or Redis, replacing the note that those stores don't
+  plug in.
+
 ## [2.23.0] - 2026-10-27
 
 Ships the fixes from a team's field report against pmcp 2.22.7 (MCP Tasks on Cloud Run). The
